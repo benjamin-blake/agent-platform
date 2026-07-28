@@ -150,7 +150,14 @@ _VALID_CANARY_DATA: dict[str, Any] = {
     "jobs": {
         "canary": {
             "runs-on": "ubuntu-latest",
-            "steps": [{"run": "bin/venv-python -m scripts.validate"}],
+            "steps": [
+                {"uses": "actions/cache@v6", "with": {"key": "pip-${{ hashFiles('requirements.lock') }}"}},
+                {
+                    "run": "pip install -c requirements.lock -r requirements.txt\n"
+                    "pip install -c requirements.lock -r requirements-dev.txt"
+                },
+                {"run": "bin/venv-python -m scripts.validate"},
+            ],
         }
     },
 }

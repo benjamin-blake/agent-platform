@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import runpy
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from scripts.import_governance import (
     _fast_tier_budget_breach_open,
@@ -14,6 +18,7 @@ from scripts.import_governance import (
     _read_executor_concurrency,
     check_lockfile_sync,
     evaluate_bazel_revisit_trigger,
+    main,
     run_import_contracts,
 )
 
@@ -89,11 +94,40 @@ class TestRunImportContracts:
 
 
 class TestCheckLockfileSync:
+    @pytest.fixture(autouse=True)
+    def _isolate_dev_requirements(self, tmp_path: Path) -> Iterator[None]:
+        with patch("scripts.import_governance._REQUIREMENTS_DEV", tmp_path / "requirements-dev.txt"):
+            yield
+
     def test_passes_on_committed_lockfile(self) -> None:
         """check_lockfile_sync passes when requirements.lock is in sync with requirements.txt."""
         in_sync, message = check_lockfile_sync()
         assert in_sync, f"Expected lockfile to be in sync, got: {message}"
         assert "pins all" in message
+
+    def test_committed_lockfile_covers_runtime_and_dev_requirements(self) -> None:
+        with patch("scripts.import_governance._REQUIREMENTS_DEV", ROOT / "requirements-dev.txt"):
+            in_sync, message = check_lockfile_sync()
+        assert in_sync, message
+        assert "across 2 files" in message
+
+    def test_missing_dev_pin_fails(self, tmp_path: Path) -> None:
+        req_txt = tmp_path / "requirements.txt"
+        req_txt.write_text("requests>=2.0\n", encoding="utf-8")
+        req_dev = tmp_path / "requirements-dev.txt"
+        req_dev.write_text("pytest>=9.0\n", encoding="utf-8")
+        req_lock = tmp_path / "requirements.lock"
+        req_lock.write_text("requests==2.31.0\n", encoding="utf-8")
+
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_DEV", req_dev),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", req_lock),
+        ):
+            in_sync, message = check_lockfile_sync()
+
+        assert not in_sync
+        assert "pytest" in message
 
     def test_missing_lock_fails(self, tmp_path: Path) -> None:
         """check_lockfile_sync fails when requirements.lock is absent."""
@@ -148,6 +182,32 @@ class TestCheckLockfileSync:
 
         assert in_sync, f"Expected extras-normalized package to be found; got: {msg}"
 
+    def test_incompatible_major_pin_fails(self, tmp_path: Path) -> None:
+        req_txt = tmp_path / "requirements.txt"
+        req_txt.write_text("mcp>=1.28.0,<2\n", encoding="utf-8")
+        req_lock = tmp_path / "requirements.lock"
+        req_lock.write_text("mcp==2.0.0\n", encoding="utf-8")
+
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", req_lock),
+        ):
+            in_sync, msg = check_lockfile_sync()
+
+        assert not in_sync
+        assert "mcp<2,>=1.28.0 rejects 2.0.0" in msg
+
+    @pytest.mark.parametrize("requirements_file", ["requirements.txt", "requirements-fast.txt"])
+    def test_mcp_declaration_rejects_major_two(self, requirements_file: str) -> None:
+        from packaging.requirements import Requirement
+        from packaging.version import Version
+
+        declaration = next(
+            line for line in Path(requirements_file).read_text(encoding="utf-8").splitlines() if line.startswith("mcp")
+        )
+        assert Version("1.28.1") in Requirement(declaration).specifier
+        assert Version("2.0.0") not in Requirement(declaration).specifier
+
     def test_comments_and_blanks_skipped(self, tmp_path: Path) -> None:
         """Comments and blank lines in requirements.txt are ignored."""
         req_txt = tmp_path / "requirements.txt"
@@ -162,6 +222,36 @@ class TestCheckLockfileSync:
             in_sync, msg = check_lockfile_sync()
 
         assert in_sync
+
+    @pytest.mark.parametrize("invalid_lock_line", ["not a requirement", "requests==not-a-version", "requests==1.*"])
+    def test_invalid_lock_entries_do_not_count_as_pins(self, tmp_path: Path, invalid_lock_line: str) -> None:
+        req_txt = tmp_path / "requirements.txt"
+        req_txt.write_text("requests>=2.0\n", encoding="utf-8")
+        req_lock = tmp_path / "requirements.lock"
+        req_lock.write_text(f"{invalid_lock_line}\n", encoding="utf-8")
+
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", req_lock),
+        ):
+            in_sync, msg = check_lockfile_sync()
+
+        assert not in_sync
+        assert "missing pins for: requests" in msg
+
+    def test_invalid_top_level_requirement_is_ignored(self, tmp_path: Path) -> None:
+        req_txt = tmp_path / "requirements.txt"
+        req_txt.write_text("not a requirement\nrequests>=2.0\n", encoding="utf-8")
+        req_lock = tmp_path / "requirements.lock"
+        req_lock.write_text("requests==2.31.0\n", encoding="utf-8")
+
+        with (
+            patch("scripts.import_governance._REQUIREMENTS_TXT", req_txt),
+            patch("scripts.import_governance._REQUIREMENTS_LOCK", req_lock),
+        ):
+            in_sync, msg = check_lockfile_sync()
+
+        assert in_sync, msg
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +373,16 @@ class TestKg13TierItemFiled:
         with patch("scripts.import_governance.ROOT", tmp_path):
             assert not _kg13_tier_item_filed()
 
+    def test_false_when_roadmap_read_fails(self, tmp_path: Path) -> None:
+        roadmap = tmp_path / "docs" / "ROADMAP-PLATFORM.yaml"
+        roadmap.parent.mkdir(parents=True)
+        roadmap.touch()
+        with (
+            patch("scripts.import_governance.ROOT", tmp_path),
+            patch.object(Path, "read_text", side_effect=OSError("unreadable")),
+        ):
+            assert not _kg13_tier_item_filed()
+
 
 class TestFastTierBudgetBreachOpen:
     def test_false_when_no_log(self, tmp_path: Path) -> None:
@@ -314,3 +414,52 @@ class TestFastTierBudgetBreachOpen:
         )
         with patch("scripts.import_governance.ROOT", tmp_path):
             assert not _fast_tier_budget_breach_open()
+
+    def test_invalid_json_line_is_ignored(self, tmp_path: Path) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        (log_dir / ".recommendations-log.jsonl").write_text("not-json\n", encoding="utf-8")
+        with patch("scripts.import_governance.ROOT", tmp_path):
+            assert not _fast_tier_budget_breach_open()
+
+    def test_false_when_log_read_fails(self, tmp_path: Path) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log = log_dir / ".recommendations-log.jsonl"
+        log.touch()
+        with (
+            patch("scripts.import_governance.ROOT", tmp_path),
+            patch.object(Path, "open", side_effect=OSError("unreadable")),
+        ):
+            assert not _fast_tier_budget_breach_open()
+
+
+class TestMain:
+    def test_check_contracts_dispatch(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--check-contracts"])
+        with patch("scripts.import_governance.run_import_contracts", return_value=(True, "contracts ok\n")):
+            with pytest.raises(SystemExit, match="0"):
+                main()
+        assert capsys.readouterr().out == "contracts ok\n"
+
+    def test_check_lockfile_dispatch_failure(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--check-lockfile"])
+        with patch("scripts.import_governance.check_lockfile_sync", return_value=(False, "lock drift")):
+            with pytest.raises(SystemExit, match="1"):
+                main()
+        assert capsys.readouterr().out == "lock drift\n"
+
+    def test_revisit_trigger_dispatch(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--revisit-trigger"])
+        with patch("scripts.import_governance.evaluate_bazel_revisit_trigger", return_value=(False, "dormant")):
+            with pytest.raises(SystemExit, match="0"):
+                main()
+        assert capsys.readouterr().out == "dormant\n"
+
+    @pytest.mark.filterwarnings("ignore:.*found in sys.modules.*:RuntimeWarning")
+    def test_module_entrypoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--revisit-trigger"])
+        with pytest.raises(SystemExit, match="0"):
+            runpy.run_module("scripts.import_governance", run_name="__main__")

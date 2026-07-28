@@ -14,12 +14,13 @@ from scripts.verify_ci_workflow import main
 
 
 class TestMainDispatch:
-    def test_no_args_prints_usage_and_exits_1(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    def test_no_args_runs_all_checks(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
         monkeypatch.setattr(sys, "argv", ["verify_ci_workflow.py"])
-        with pytest.raises(SystemExit) as exc_info:
+        checks = {"one": MagicMock(), "two": MagicMock()}
+        with patch.dict("scripts.verify_ci_workflow._COMMANDS", checks, clear=True):
             main()
-        assert exc_info.value.code == 1
-        assert "Usage:" in capsys.readouterr().err
+        assert all(check.call_count == 1 for check in checks.values())
+        assert capsys.readouterr().out.strip() == "OK"
 
     def test_unknown_command_prints_usage_and_exits_1(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
         monkeypatch.setattr(sys, "argv", ["verify_ci_workflow.py", "not-a-real-command"])
