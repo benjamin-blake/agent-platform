@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import runpy
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -17,6 +18,7 @@ from scripts.import_governance import (
     _read_executor_concurrency,
     check_lockfile_sync,
     evaluate_bazel_revisit_trigger,
+    main,
     run_import_contracts,
 )
 
@@ -221,7 +223,7 @@ class TestCheckLockfileSync:
 
         assert in_sync
 
-    @pytest.mark.parametrize("invalid_lock_line", ["not a requirement", "requests==not-a-version"])
+    @pytest.mark.parametrize("invalid_lock_line", ["not a requirement", "requests==not-a-version", "requests==1.*"])
     def test_invalid_lock_entries_do_not_count_as_pins(self, tmp_path: Path, invalid_lock_line: str) -> None:
         req_txt = tmp_path / "requirements.txt"
         req_txt.write_text("requests>=2.0\n", encoding="utf-8")
@@ -371,6 +373,16 @@ class TestKg13TierItemFiled:
         with patch("scripts.import_governance.ROOT", tmp_path):
             assert not _kg13_tier_item_filed()
 
+    def test_false_when_roadmap_read_fails(self, tmp_path: Path) -> None:
+        roadmap = tmp_path / "docs" / "ROADMAP-PLATFORM.yaml"
+        roadmap.parent.mkdir(parents=True)
+        roadmap.touch()
+        with (
+            patch("scripts.import_governance.ROOT", tmp_path),
+            patch.object(Path, "read_text", side_effect=OSError("unreadable")),
+        ):
+            assert not _kg13_tier_item_filed()
+
 
 class TestFastTierBudgetBreachOpen:
     def test_false_when_no_log(self, tmp_path: Path) -> None:
@@ -402,3 +414,52 @@ class TestFastTierBudgetBreachOpen:
         )
         with patch("scripts.import_governance.ROOT", tmp_path):
             assert not _fast_tier_budget_breach_open()
+
+    def test_invalid_json_line_is_ignored(self, tmp_path: Path) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        (log_dir / ".recommendations-log.jsonl").write_text("not-json\n", encoding="utf-8")
+        with patch("scripts.import_governance.ROOT", tmp_path):
+            assert not _fast_tier_budget_breach_open()
+
+    def test_false_when_log_read_fails(self, tmp_path: Path) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log = log_dir / ".recommendations-log.jsonl"
+        log.touch()
+        with (
+            patch("scripts.import_governance.ROOT", tmp_path),
+            patch.object(Path, "open", side_effect=OSError("unreadable")),
+        ):
+            assert not _fast_tier_budget_breach_open()
+
+
+class TestMain:
+    def test_check_contracts_dispatch(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--check-contracts"])
+        with patch("scripts.import_governance.run_import_contracts", return_value=(True, "contracts ok\n")):
+            with pytest.raises(SystemExit, match="0"):
+                main()
+        assert capsys.readouterr().out == "contracts ok\n"
+
+    def test_check_lockfile_dispatch_failure(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--check-lockfile"])
+        with patch("scripts.import_governance.check_lockfile_sync", return_value=(False, "lock drift")):
+            with pytest.raises(SystemExit, match="1"):
+                main()
+        assert capsys.readouterr().out == "lock drift\n"
+
+    def test_revisit_trigger_dispatch(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--revisit-trigger"])
+        with patch("scripts.import_governance.evaluate_bazel_revisit_trigger", return_value=(False, "dormant")):
+            with pytest.raises(SystemExit, match="0"):
+                main()
+        assert capsys.readouterr().out == "dormant\n"
+
+    @pytest.mark.filterwarnings("ignore:.*found in sys.modules.*:RuntimeWarning")
+    def test_module_entrypoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["import_governance", "--revisit-trigger"])
+        with pytest.raises(SystemExit, match="0"):
+            runpy.run_module("scripts.import_governance", run_name="__main__")
