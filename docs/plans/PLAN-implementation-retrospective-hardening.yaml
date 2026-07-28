@@ -1,0 +1,456 @@
+schema_version: 2
+slug: "implementation-retrospective-hardening"
+intent: >-
+  Convert the MCP implementation retrospective's externally observable failure modes into
+  deterministic planning, validation, review, session-readiness, and postflight contracts so a
+  future Codex or Claude implementation cannot hand off with an incomplete full gate or mistake
+  diagnostic output and transport access for authoritative success.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-implementation-retrospective-hardening.yaml
+phase: >-
+  Platform workflow hardening - explicit user-directed ad hoc work. No roadmap tier_item is claimed.
+  The temporary executor freeze requires this multi-surface work to remain one IMPLEMENTATION plan
+  rather than a STRATEGIC plan.
+scope:
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Surface changed-source mapped coverage before the full gate, make incomplete or timed-out full
+      validation a blocking handoff state, invoke readiness and structured postflight evidence, and
+      require agents to distinguish diagnostic output from the parent validator verdict.
+  - file: .claude/skills/code-review/SKILL.md
+    action: Modify
+    purpose: >-
+      Require any finding that claims a command or validation gate fails to include the exact command,
+      observed exit code, and final owning-validator summary; informational child diagnostics alone are
+      not failure evidence.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Move newly authored plans to the backward-compatible schema version carrying an explicit handoff
+      policy, and prohibit timeout-as-warning language where full validation is required.
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: >-
+      Make critique reject third validation tiers, incomplete-full-gate escape clauses, and plans whose
+      diagnostic commands are described as authoritative gates.
+  - file: scripts/roadmap/plan_document.py
+    action: Modify
+    purpose: >-
+      Add schema version 3 and a strict HandoffPolicy model while leaving historical schema versions 1
+      and 2 valid and unchanged.
+  - file: tests/test_plan_document.py
+    action: Modify
+    purpose: >-
+      Prove schema-version compatibility and fail-closed v3 handoff-policy semantics.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Make the existing non-authoritative changed-source diagnostic print each source, mapped owning test
+      target, module coverage argument, and final diagnostic verdict without adding a validate.py mode.
+  - file: tests/test_coverage_checker_checks.py
+    action: Modify
+    purpose: >-
+      Exercise mapped-command reporting and the existing 100% per-file behavior, including missing,
+      uncovered, timeout, and successful paths.
+  - file: scripts/checks/validation_result.py
+    action: Create
+    purpose: >-
+      Own atomic lifecycle and schema validation for the gitignored full-validation result artifact,
+      including stale-record removal at run start and completed success/failure writes at the terminal
+      parent summary.
+  - file: tests/checks/test_validation_result.py
+    action: Create
+    purpose: >-
+      Prove result records never contain secrets, are atomic and output-only, distinguish success from
+      failure, and cannot survive an incomplete run as stale proof.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Delegate full-run result evidence to the new helper and centralize parent summary emission while
+      retaining exactly two tiers: default full and --pre.
+  - file: tests/validate/test_tiers.py
+    action: Modify
+    purpose: >-
+      Assert that only terminal parent summaries emit the authoritative verdict, full runs write result
+      evidence, --pre does not, and no third validation scope or partial-run flag exists.
+  - file: scripts/session/github_readiness.py
+    action: Create
+    purpose: >-
+      Implement a secret-safe, non-mutating capability probe that reports fetch, authenticated API read,
+      branch-push dry run, MCP configuration/binary/token readiness, and PR-write certainty separately.
+  - file: tests/test_session_github_readiness.py
+    action: Create
+    purpose: >-
+      Test independent capability states, redaction, timeout/error behavior, and the rule that fetch or MCP
+      configuration never implies authenticated push or PR-write capability.
+  - file: .claude/hooks/session_start_github_readiness.sh
+    action: Create
+    purpose: >-
+      Run the shared readiness probe advisory-only at session start for Claude while preserving explicit
+      degraded statuses rather than masking them.
+  - file: .claude/settings.json
+    action: Modify
+    purpose: >-
+      Register the shared readiness hook immediately after the existing GitHub MCP self-heal hook.
+  - file: bin/setup-cloud-env.sh
+    action: Modify
+    purpose: >-
+      Invoke the same readiness hook from the tracked Codex setup path after GitHub MCP installation and
+      before handoff, preserving cross-surface parity.
+  - file: tests/test_setup_cloud_env.py
+    action: Modify
+    purpose: >-
+      Lock the readiness hook's presence and ordering in the Codex bootstrap without performing network or
+      credential operations.
+  - file: tests/test_session_start_github_readiness_hook.py
+    action: Create
+    purpose: >-
+      Parse Claude settings to prove readiness follows GitHub MCP self-heal and execute the shell hook against
+      mocked probe outcomes to prove advisory degraded/error behavior without network access.
+  - file: .gitignore
+    action: Modify
+    purpose: >-
+      Explicitly ignore `logs/debug/validation-result.json` and
+      `logs/debug/implementation-retrospective.json` so neither bounded local record can be committed or
+      confused with an authoritative repository artifact.
+  - file: scripts/session/postflight_evidence.py
+    action: Create
+    purpose: >-
+      Validate and atomically write structured implementation evidence for the retrospective's causal
+      questions using external command/review facts, with a query/render function for human summaries.
+  - file: scripts/session/postflight.py
+    action: Modify
+    purpose: >-
+      Add a postflight evidence mode and connect it to successful implementation closure without creating
+      a retrospective agent or treating the local artifact as an upstream warehouse source.
+  - file: tests/test_session_postflight_evidence.py
+    action: Create
+    purpose: >-
+      Prove required causal fields, bounded/redacted output, failure behavior, and rendering from structured
+      evidence rather than chat reconstruction.
+  - file: tests/session/postflight/test_auto.py
+    action: Modify
+    purpose: >-
+      Exercise the postflight facade and successful-close integration so helper-only tests cannot leave the
+      new evidence mode unreachable or incorrectly ordered relative to validation and commit.
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Plan schema version 3 requires `handoff_policy.full_validation_required_before_commit: true` and
+    `handoff_policy.timeout_disposition: blocked` for IMPLEMENTATION plans and forbids handoff_policy on
+    STRATEGIC and REPORT-ONLY plans; the separate active workflow freeze continues to prohibit authoring new
+    STRATEGIC plans, and schema versions 1 and 2 still load without the field.
+  - >-
+    The implementation and planning skills state that a failed, timed-out, interrupted, or otherwise
+    incomplete full validator blocks commit and PR handoff; continuation in a later turn or session is
+    required and CI is not a substitute.
+  - >-
+    The existing `bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage`
+    diagnostic displays the exact source-to-test ownership and per-module coverage work it executes and
+    retains the 100% requirement, but is never registered as a tier, scope, CI job, or overall validator.
+  - >-
+    `scripts.validate` continues to expose exactly two validation tiers - `--pre` and the unflagged full
+    suite - and has no `--full-static`, `--through`, partial-prefix, or equivalent third-tier mode.
+  - >-
+    A completed full validation writes `logs/debug/validation-result.json` containing command, scope, git head,
+    start/completion timestamps, exit code, and failed checks; it is cleared at run start, written atomically
+    only at the terminal parent summary, gitignored, and never read as validation or selection input.
+  - >-
+    Validation output and code-review policy make the parent command's exit code plus final owning summary
+    authoritative; a reviewer cannot classify informational mypy or child-process diagnostics as a gate
+    failure without that evidence.
+  - >-
+    Session readiness reports anonymous fetch, authenticated repository read, dry-run feature-branch push,
+    GitHub MCP configuration/runtime readiness, and PR-write certainty as independent states without
+    printing credentials or performing a PR mutation; unprovable PR-write access is `unknown`, never PASS.
+  - >-
+    Both Claude SessionStart and tracked Codex setup invoke the same readiness implementation after GitHub
+    MCP self-heal/install, and tests enforce ordering without accessing the network.
+  - >-
+    Postflight writes `logs/debug/implementation-retrospective.json` from structured causal evidence for first failure/fix, expensive or duplicated work,
+    ambiguous instructions, reviewer-only and validator-only findings, reviewer false positives,
+    late-discovered repository facts, possible pre-edit checks, misleading output, and guard candidates;
+    it produces a human rendering only from that record and does not create a retrospective subagent.
+  - >-
+    Focused tests, changed-source mapped coverage, the authoritative `--pre` gate, and the authoritative
+    full gate all pass before commit; full-gate timeout or incompleteness is recorded as BLOCKED and stops
+    implementation handoff.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Verify backward-compatible plan handoff-policy schema and critique semantics.
+    command: >-
+      bin/venv-python -m pytest tests/test_plan_document.py -q
+    expected: >-
+      All tests pass; v1/v2 fixtures remain valid, v3 IMPLEMENTATION plans require the exact blocking
+      policy, and invalid timeout or false full-validation values fail closed.
+    fix_if: >-
+      Preserve historical loading rather than mass-editing old plans; tighten only v3/new-plan behavior and
+      update the skill template in lockstep with the schema.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "implementation-handoff-policy-schema"
+  - step: 2
+    phase: pre-deploy
+    action: Exercise the existing mapped coverage diagnostic and its explicit ownership output.
+    command: >-
+      bin/venv-python -m pytest tests/test_coverage_checker_checks.py -q &&
+      bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage
+      --files scripts/checks/validation_result.py scripts/session/github_readiness.py
+      scripts/session/postflight_evidence.py
+    expected: >-
+      Tests pass and the diagnostic prints each source -> owning test target plus module argument, then exits
+      0 only when each changed module is exercised at 100% by its mapped target.
+    fix_if: >-
+      Fix ownership mapping or uncovered branches in the mapped tests. Do not relax 100%, fall back to
+      aggregate coverage, or add a new validate.py scope.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "mapped-coverage-diagnostic-contract"
+  - step: 3
+    phase: pre-deploy
+    action: Prove full-result evidence lifecycle and two-tier validator output ownership.
+    command: >-
+      bin/venv-python -m pytest tests/checks/test_validation_result.py tests/validate/test_tiers.py -q &&
+      git check-ignore -q logs/debug/validation-result.json
+      logs/debug/implementation-retrospective.json
+    expected: >-
+      Tests pass; stale evidence is removed before a full run, terminal full success/failure writes an atomic
+      bounded record, --pre writes none, and parser tests reject the presence of any third-tier flag.
+    fix_if: >-
+      Keep result handling in the cohesive helper and terminal summary seam. Never let artifact I/O change a
+      validation verdict or let previous evidence survive an interrupted run.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "full-validation-result-evidence"
+  - step: 4
+    phase: pre-deploy
+    action: Exercise independent, secret-safe GitHub readiness capability reporting.
+    command: >-
+      bin/venv-python -m pytest tests/test_session_github_readiness.py tests/test_setup_cloud_env.py
+      tests/test_session_start_github_readiness_hook.py -q
+    expected: >-
+      Tests pass for every independent state; output contains no token value, read/fetch success cannot imply
+      push or PR-write success, and Claude/Codex bootstrap ordering invokes the shared probe.
+    fix_if: >-
+      Replace inferred capability with explicit `unknown`; preserve non-mutating checks and advisory startup
+      behavior, and never log headers, credentials, account identifiers, or private hostnames.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "github-session-readiness-capabilities"
+  - step: 5
+    phase: pre-deploy
+    action: Validate deterministic structured postflight causal evidence and its human rendering.
+    command: >-
+      bin/venv-python -m pytest tests/test_session_postflight_evidence.py
+      tests/session/postflight/test_auto.py -q
+    expected: >-
+      Tests pass; all ten causal categories are schema-checked, secret-like or unbounded payloads fail, and
+      the rendering is derived solely from the structured record.
+    fix_if: >-
+      Keep the artifact as transient output evidence compatible with future process-event ingestion; do not
+      create a narrative companion, retrospective subagent, read-cache write source, or warehouse write.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "implementation-postflight-causal-evidence"
+  - step: 6
+    phase: pre-deploy
+    action: Run mapped changed-source coverage exactly as the full validator will own it.
+    command: >-
+      bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage
+    expected: >-
+      Exit 0 with every changed Python source mapped to its owning target and reported at 100% line coverage.
+      This is a focused diagnostic result, not an overall validation verdict.
+    fix_if: >-
+      Add tests for every executable error, CLI-dispatch, and module-entry branch shown by the owning report;
+      rerun this diagnostic before spending another full-suite run.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The changed-file diagnostic is inherently branch-diff-relative and already runs as a constituent of
+      full validation; registering the aggregate command would duplicate or recurse into existing coverage.
+  - step: 7
+    phase: pre-deploy
+    action: Run the sole authoritative fast PR/edit-loop tier.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0 and the terminal parent summary reports scope pre. Pre-commit, prompt, plan-schema, and selected
+      affected tests pass within the existing fast-tier budget.
+    fix_if: >-
+      Use the exact owning failure and final summary. Fix the defect and rerun; never introduce a third tier,
+      weaken selection, or reinterpret informational diagnostics as failure.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The authoritative aggregate fast command invokes the verification registry and cannot be registered
+      within itself without recursion; focused durable behaviors are covered in steps 1-5.
+  - step: 8
+    phase: pre-deploy
+    action: Run the sole authoritative full validation tier to completion before handoff.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0; the final parent summary reports scope all with no failed checks, and the completed structured
+      result artifact identifies this git HEAD and command. No earlier child success line is treated as final.
+    fix_if: >-
+      Diagnose and fix every failed check, then rerun from the start. Timeout, truncation without a captured
+      exit code, interruption, stale/missing result evidence, or incomplete output is BLOCKED: continue in a
+      later turn/session and do not commit, open a PR, or downgrade it to a warning.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The full aggregate command is already the authoritative full tier and recursively runs tests, verifiers,
+      DQ, and pre-commit; registry graduation would recurse and create a duplicate authority.
+constraints:
+  - >-
+    Decisions 60 and 73 are non-negotiable: exactly two validation tiers exist - unflagged full and --pre.
+    Do not add --full-static, --through, a prefix scope, an extra CI job, or any renamed equivalent. Focused
+    pytest and coverage commands are developer diagnostics only and cannot authorize handoff.
+  - >-
+    Decisions 55 and 72: failures stop loudly and receive causal diagnosis; no rescue loop, silent fallback,
+    timeout warning, CI-only handoff, auto-revert, or unrelated inline infrastructure fix is permitted.
+  - >-
+    Decision 59: the ten retrospective concerns become structured process evidence, not an LLM retrospective
+    subagent or canonical chat summary. Human prose is a rendering/query result only.
+  - >-
+    Decisions 85 and 132: add schema version 3 for the new required IMPLEMENTATION policy and retain backward
+    compatibility for historical v1/v2 plans; v3 STRATEGIC and REPORT-ONLY plans forbid the field, while the
+    separate active executor freeze continues to prohibit authoring new STRATEGIC plans. Do not rewrite the
+    archive or default old plans.
+  - >-
+    Decisions 104, 128, and 131: use cohesive helpers and mapped owning tests. Do not grow an over-budget
+    facade, raise a SLOC budget, or add validation outside the registry-backed authoritative paths.
+  - >-
+    Decisions 101 and 135: all evidence is bounded, secret-safe, gitignored, output-only, and never consumed as
+    validation, selection, cache, pass credential, or upstream warehouse input.
+  - >-
+    Decisions 38, 76, 90, 110, and 139: extend existing plan/implement/review/postflight and shared bootstrap
+    surfaces. Do not create a fifth workflow tier, Codex-only permanent instruction architecture, or standing
+    prose companion document.
+  - >-
+    GitHub readiness is non-mutating. A safe probe that cannot prove fine-grained PR-write permission reports
+    `unknown`; it must not create/delete a probe PR, push a real ref, or infer permission from token presence.
+  - >-
+    No Terraform, Lambda-packaged source, warehouse schema/write path, deployment, or data-model change is in
+    scope. No V3 build, deploy, smoke test, or data-model assessment is required.
+context:
+  - >-
+    Verified implementation outcome: the latest main push workflow run 30394892545 for commit 028afaf7
+    completed successfully. The retrospective is therefore reviewed as workflow evidence from a green fix,
+    not as an unresolved code regression.
+  - >-
+    Verified coverage behavior: scripts.test_coverage_checker already maps each changed Python source to an
+    owning test file/package and runs that target with --cov=<module>, requiring 100%. The missing improvement
+    is early workflow visibility and explicit mapping output, not a new execution tier.
+  - >-
+    Verified validator surface: scripts.validate currently has terminal summaries for scope pre and scope all;
+    no proposed partial mode is accepted. Parent exit code and final summary remain executable truth.
+  - >-
+    Verified bootstrap gap: Claude settings invoke session_start_ensure_github_mcp.sh, while tracked Codex setup
+    installs the binary directly and runs AWS/pre-commit/main hooks but has no shared capability report. This
+    plan adds a shared readiness observation, not a claim that repo config can force the Codex harness to expose
+    a particular MCP namespace.
+  - >-
+    rec-2882 is an unresolved Critical infrastructure CI-RCA for
+    terraform/bootstrap/github_ci_apply.tf. The user explicitly deferred it because another agent is handling
+    it. This plan touches neither that file nor its failure category, does not bundle/close/downgrade the rec,
+    and records this rationale to satisfy the Related-Work Check.
+  - >-
+    Complexity: more than five files and eight steps would normally suggest STRATEGIC, but STRATEGIC plans are
+    suspended while the executor is frozen. The user asked for one comprehensive plan, so this remains a larger
+    IMPLEMENTATION plan with ordered seams and blocking preconditions.
+  - >-
+    Decision-scout verdict: FLAGS_FOUND after triaging 108 of 108 Decisions. CITE Decision 38, Decision 48,
+    Decision 55, Decision 59, Decision 60, Decision 66, Decision 72, Decision 73, Decision 76, Decision 85,
+    Decision 90, Decision 101, Decision 104, Decision 110, Decision 128, Decision 131, Decision 132,
+    Decision 135, and Decision 138. The Decision 59 WARN is resolved by structured deterministic postflight
+    evidence rather than a retrospective agent or chat authority.
+  - >-
+    Plan-critique round 1 returned REVISE for nonexistent test paths, root-script placement,
+    unowned ignore/facade/hook behavior, and incomplete v3 plan-type semantics. The revision moved
+    helpers into mapped subpackages, used real concern-split tests, named both transient artifacts,
+    added hook and facade integration ownership, and bounded facade growth. Round 2 found no
+    decision conflicts or acceptance gaps and returned PROCEED.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+pre_implementation_checklist:
+  - >-
+    Codex skill loading: if no Skill tool is exposed, manually read `.claude/skills/implement/SKILL.md` and
+    `.claude/skills/code-review/SKILL.md` completely despite Claude-oriented instructions to invoke them. A
+    code-review subagent receives the same instruction and may not review from remembered summaries.
+  - Confirm the harness branch is not main; do not create an agent/ branch merely to rename Codex branch work.
+  - >-
+    Fetch origin/main and require `git merge-base HEAD origin/main` to resolve before interpreting changed-file
+    mappings. Run `bash .claude/hooks/session_start_precommit.sh`, require `.git/hooks/pre-commit` executable,
+    and run `.venv/bin/pre-commit run --all-files` before editing to expose environment drift.
+  - >-
+    Run session preflight and read its report, this plan, docs/PROJECT_CONTEXT.md, the named Decision sections,
+    every scope file, and each mapped owning test. Preserve the rec-2882 deferral without touching it.
+  - >-
+    Record baseline help output for scripts.validate and scripts.test_coverage_checker. Confirm only --pre/full
+    are tiers and the existing coverage command reproduces source-to-test ownership before altering output.
+  - >-
+    Measure SLOC for every touched Python and skill file against config/sloc_budgets.yaml. If projected growth
+    exceeds a budget, extract a cohesive helper or shorten existing prose; never raise the budget.
+  - >-
+    Run the readiness probe baseline or, before it exists, separately record origin fetch, authenticated API
+    read, dry-run feature-branch push, MCP binary/config/token presence, and whether PR-write is provable. Never
+    print token contents.
+execution_steps:
+  - >-
+    Complete the pre-implementation checklist. Treat absent origin, missing pre-commit hook, unread skills, or
+    ambiguous diff ownership as a setup defect to resolve before source edits, not as grounds to weaken gates.
+  - >-
+    Add PlanDocument schema version 3 with a strict HandoffPolicy and compatibility tests. Require it only for
+    v3 IMPLEMENTATION plans, forbid it for STRATEGIC and REPORT-ONLY, and retain the separate active
+    no-new-STRATEGIC-plan workflow freeze.
+    Update planning and critique methodology so new implementations cannot contain timeout-as-warning language
+    or a third-tier diagnostic.
+  - >-
+    Update the implementation skill to run the existing mapped coverage command before the expensive full gate,
+    explain the 100% owning-target model, and state that only full exit 0 permits commit/PR handoff. Update code
+    review with the exact-command/exit-code/final-summary evidence rule.
+  - >-
+    Improve test_coverage_checker's observable mapping without adding selection state or a validate flag. Cover
+    every output/error branch in its owning tests and keep the diagnostic's non-authoritative label explicit.
+  - >-
+    Implement scripts/checks/validation_result.py as a small atomic writer. Clear prior full evidence on entry, write only at
+    the terminal parent summary, include failed-check names without raw subprocess output, and ensure evidence
+    write errors are visible but cannot turn a failing validation green. Keep --pre entirely outside this path.
+  - >-
+    Implement the independent GitHub readiness states and shared advisory hook. Use bounded timeouts and redacted
+    diagnostics; dry-run only the current non-main branch; return unknown for any permission a safe read/dry-run
+    cannot establish. Wire Claude settings and Codex setup to the same hook and lock ordering with tests.
+  - >-
+    Add structured postflight evidence with the ten causal categories from the retrospective. Keep
+    scripts/session/postflight.py facade wiring to at most 20 added SLOC so it remains below 500; if that is not
+    possible, stop and rescope rather than raise the budget. Accept only
+    externalized command/review facts, include ambiguity and false-positive reasons, and provide deterministic
+    rendering. Keep the gitignored artifact downstream-only and migration-compatible with future process-event
+    telemetry; do not write the currently unavailable telemetry warehouse path.
+  - >-
+    Execute VP steps 1-6 and repair every mapped coverage branch before running the aggregate gates. Then run
+    steps 7 and 8. Full timeout, interruption, missing terminal result, or nonzero exit blocks all subsequent
+    commit/PR work and must be continued in a later turn or session.
+  - >-
+    After all verification passes, dispatch a fresh code-review subagent. In Codex it must manually read the
+    code-review skill, fetch origin/main, read this plan and full diff, make no edits, and return structured
+    findings. Any claimed command failure must include the exact command, exit code, and final owning summary.
+    Fix Critical/High findings and repeat focused, mapped, --pre, full, and review gates as applicable.
+  - >-
+    Emit the structured postflight causal evidence, commit with
+    `feat(implementation-retrospective-hardening): enforce evidence-backed handoff`, rebase onto origin/main,
+    and stop on conflict. Push only the feature branch and use real GitHub/MCP PR tooling only when readiness
+    proves it; report metadata-only or unknown PR capability accurately.
+  - >-
+    Report focused tests, mapped coverage, pre-commit, --pre, full exit/final-summary/artifact identity, review
+    verdict, readiness states, structured retrospective artifact, and PR URL. Do not report an incomplete run as
+    warning/success and do not mention rec-2882 as resolved.
+work_areas: []
+rollback: >-
+  Revert the implementation PR to remove schema v3, evidence/readiness helpers, hook wiring, and skill changes.
+  Historical v1/v2 plans remain valid throughout, and all artifacts are transient output, so no warehouse,
+  infrastructure, GitHub, or deployment state requires rollback. Never roll back by adding a third validation
+  tier, weakening the full-gate block, or deleting tests.
