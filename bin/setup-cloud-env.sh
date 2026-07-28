@@ -232,7 +232,8 @@ fi
 # the hook repos (pre-commit-hooks, ruff-pre-commit, detect-secrets) into
 # ~/.cache/pre-commit now -- while setup-time network is available -- so they are
 # baked into the snapshot and run offline in later sessions, mirroring the AWS CLI
-# and github-mcp-server caching above.
+# and github-mcp-server caching above. Wire the setup checkout immediately as well;
+# Claude session startup repeats this for fresh per-session clones.
 t0=$SECONDS
 if [ -x .venv/bin/pre-commit ]; then
     if .venv/bin/pre-commit install-hooks >/dev/null 2>&1; then
