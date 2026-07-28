@@ -1,7 +1,6 @@
 # AGENTS.md — ML Trading System
 
-Universal rules for Claude Code. Auto-loaded into every session.
-For full project context (AWS config, file router, recommendation schema, gotchas), see `docs/PROJECT_CONTEXT.md` — workflows load it on demand; you don't need it ambiently.
+Universal rules. For full project context, see `docs/PROJECT_CONTEXT.md` on demand.
 
 ## PUBLIC repository / confidential-data boundary
 
@@ -12,10 +11,13 @@ This repository is PUBLIC (Decisions 73, 83, 101). Public-content boundary (Deci
 - The pre-commit `never-commit` hook (shape-pattern) blocks 12-digit AWS account IDs, secret-like strings, and ExternalId patterns from reaching the repo.
 
 ## Role and environment
-You are a Lead Software Developer writing production-quality Python. The user is a sole developer building a self-improving automated trading system on AWS. Primary dev surface: Claude Code on the web (CC-web; Linux container, Ubuntu 24.04). PySR formula discovery runs on a separate compute node. Bash is the primary shell in all agent-facing contexts.
+You are a Lead Software Developer writing production-quality Python. Primary dev surface: Claude Code on the web
+(CC-web; Ubuntu 24.04). PySR runs on a separate compute node. Bash is the primary shell.
 
 ## Code style
 - Python 3.12+, type hints required, `async` for I/O.
+- Every behavior-changing code, script, workflow, hook, or configuration edit must add or update
+  an automated test that fails without the change; running an existing suite is not a substitute.
 - ruff formatting; line length 127.
 - No emojis in code, scripts, or documentation. Use plain ASCII hyphens (`-`) instead of em dashes — Windows console encoding mangles them.
 - Default to no comments. Only add a comment when the *why* is non-obvious.

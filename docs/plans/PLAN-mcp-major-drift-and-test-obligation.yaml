@@ -1,0 +1,424 @@
+schema_version: 2
+slug: "mcp-major-drift-and-test-obligation"
+intent: >-
+  Restore green main CI after an unconstrained MCP major-version resolution broke the full test
+  tier, then close the dependency-reproducibility and cross-agent test-obligation gaps that let a
+  fresh runner and an untested Codex bootstrap change escape the authoritative PR gate.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-mcp-major-drift-and-test-obligation.yaml
+phase: >-
+  Platform hardening -- CI-RCA forward fix and agent portability. Ad-hoc ci_rca exception work;
+  no roadmap tier_item. The MCP failure's Critical recommendation was not filed because both CI-RCA
+  attempts exhausted the Claude weekly quota before the portal write completed.
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add the agent-neutral test-authoring obligation: every behavior-changing code, script,
+      workflow, hook, or configuration edit adds or updates an automated test that would fail
+      without the behavior; an existing-suite run alone is not a substitute. Keep durable policy
+      harness-neutral per Decision 139.
+  - file: requirements.txt
+    action: Modify
+    purpose: >-
+      Constrain the supported MCP runtime to `mcp>=1.28.0,<2`; a deliberate MCP 2 migration is out
+      of scope until the full low-level server protocol is verified.
+  - file: requirements-fast.txt
+    action: Modify
+    purpose: >-
+      Mirror the MCP 1.x upper bound in the fast-tier dependency surface so fresh PR runners cannot
+      cross the same unsupported major boundary.
+  - file: requirements.lock
+    action: Modify
+    purpose: >-
+      Regenerate from runtime and dev requirement inputs without an upgrade and retain an exact
+      MCP 1.x resolution; this becomes the constraint authority consumed by full validation jobs.
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: >-
+      Constrain both full-tier pip installs with requirements.lock and include the lock in the
+      main-validate cache key. Do not add a workflow-only check; validate.py remains the single
+      validation authority.
+  - file: .github/workflows/main-canary.yml
+    action: Modify
+    purpose: >-
+      Keep the full-tier canary dependency install equivalent to main-validate by applying the
+      same runtime lock constraints and cache-key input.
+  - file: tests/test_agent_sdk_mcp_server.py
+    action: Modify
+    purpose: >-
+      Assert the MCP protocol's serialized `inputSchema` alias through `model_dump(by_alias=True)`
+      instead of coupling tests to a Pydantic model's version-specific Python attribute spelling.
+  - file: scripts/import_governance.py
+    action: Modify
+    purpose: >-
+      Strengthen check_lockfile_sync from package-name presence to semantic Requirement/Version
+      compatibility, including upper bounds and extras, using packaging rather than custom version
+      parsing.
+  - file: tests/test_import_governance.py
+    action: Modify
+    purpose: >-
+      Add positive and negative lock-compatibility cases, including rejection of mcp==2.0.0 under
+      `mcp>=1.28.0,<2`, while retaining the existing missing-package and extras coverage.
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      Extend the existing CI workflow guard to pin full-tier lock-constraint and cache-key parity
+      across ci.yml main-validate and main-canary; do not create a second workflow validator.
+  - file: tests/verify_ci_workflow/test_ci_data_guards.py
+    action: Modify
+    purpose: >-
+      Prove the workflow guard accepts both correctly constrained full-tier jobs and rejects a
+      missing constraint or missing requirements.lock cache-key input.
+  - file: tests/verify_ci_workflow/test_ci_rca_and_canary.py
+    action: Modify
+    purpose: >-
+      Update the existing main-canary fixtures/oracles to require the same lock constraint and cache
+      identity as main-validate; retain unrelated CI-RCA assertions unchanged.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Differentially evaluate the five focused pre-deploy candidates and register only admitted
+      checks, using stable IDs for lock semantics, workflow parity, setup bootstrap parity, and
+      existing data-edge selection. Do not register recursive aggregate validate commands.
+  - file: tests/checks/deps/affected_tests/test_derivation.py
+    action: Modify
+    purpose: >-
+      Prove the existing live data-edge channel selects tests/test_setup_cloud_env.py from its
+      literal bin/setup-cloud-env.sh reference, so no second ownership authority or selector is
+      introduced and the already-oversized affected_tests.py remains untouched.
+  - file: tests/test_setup_cloud_env.py
+    action: Create
+    purpose: >-
+      Parse the tracked setup script and assert its ordered orchestration contract covers dependency
+      sync, GitHub MCP installation, AWS verification, pre-commit wiring, and main synchronization
+      after prerequisites, without executing networked installers or exposing credentials.
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Automated tests parse both requirements.txt and requirements-fast.txt and prove neither can
+    resolve MCP 2.x; requirements.lock contains an exact MCP 1.x pin satisfying the runtime spec.
+  - >-
+    The two previously failing MCP schema assertions use protocol serialization and the complete
+    tests/test_agent_sdk_mcp_server.py suite passes under the supported MCP 1.x environment.
+  - >-
+    Full main validation and main-canary install runtime and dev requirements under
+    requirements.lock constraints, and the existing CI workflow guard rejects either job if the
+    constraint or lock-aware cache key is removed.
+  - >-
+    check_lockfile_sync rejects a lock pin outside any top-level requirement specifier, including
+    mcp==2.0.0 under `mcp>=1.28.0,<2`, while accepting the committed lock.
+  - >-
+    AGENTS.md gives every agent surface the same explicit behavior-change test obligation without
+    adding a permanent Codex-only workflow or duplicating Claude skills.
+  - >-
+    The existing Decision-135 data-edge channel selects tests/test_setup_cloud_env.py whenever
+    bin/setup-cloud-env.sh changes because the focused test carries that literal source edge; no
+    new selector, metadata authority, cache, or affected_tests.py production edit is introduced.
+  - >-
+    `bin/venv-python -m scripts.validate --pre` passes with pre-commit hooks active and reports no
+    skipped changed-file hook suite caused by an unreachable origin/main baseline.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the supported MCP major and semantic lock contract, including the exact regression that
+      admitted MCP 2.0 on the failed runner.
+    command: >-
+      bin/venv-python -m pytest tests/test_import_governance.py
+      tests/checks/deps/test_validate_lockfile_sync.py -q
+    expected: >-
+      All lock-governance tests pass; the negative mcp==2.0.0 fixture is rejected and the committed
+      requirements.lock is accepted; direct declaration tests prove both requirements files reject
+      MCP 2.x.
+    fix_if: >-
+      A false green on the incompatible fixture means specifiers are still stripped or ignored; a
+      committed-lock failure means regenerate without crossing the MCP 1.x upper bound.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "mcp-lock-major-compatibility"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Exercise the full MCP derived-tool server contract using wire aliases rather than internal
+      Pydantic attribute names.
+    command: bin/venv-python -m pytest tests/test_agent_sdk_mcp_server.py -q
+    expected: >-
+      All tests pass, including both tests that failed in GitHub Actions job 90318714673 and the
+      tools/list and tools/call behavioral coverage.
+    fix_if: >-
+      Any failure outside the two assertions may indicate MCP 2 behavior has leaked into the
+      environment; do not migrate production code opportunistically -- restore the declared 1.x
+      resolution or stop and rescope a deliberate major upgrade.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential admission rejected this check because the origin/main assertion also passes
+      under the restored MCP 1.x environment. The full suite includes a live credential-dependent
+      integration test, while the two changed wire-alias assertions do not distinguish pre-fix
+      behavior on MCP 1.x; registering either would be tautological or non-hermetic.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Verify CI and canary dependency installs are lock-constrained and protected by the existing
+      workflow guard's positive and negative tests.
+    command: >-
+      bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_data_guards.py
+      tests/verify_ci_workflow/test_ci_rca_and_canary.py -q &&
+      bin/venv-python -m scripts.verify_ci_workflow
+    expected: >-
+      Tests and the live workflow verifier pass; removing either `-c requirements.lock` or the
+      cache-key lock input from a fixture makes its negative case fail closed.
+    fix_if: >-
+      A live verifier failure means workflow and guard changed out of lockstep; a negative-fixture
+      green means the new contract is not actually enforced.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "full-ci-runtime-lock-parity"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Exercise the setup-cloud orchestration contract without running its networked installers.
+    command: >-
+      bin/venv-python -m pytest tests/test_setup_cloud_env.py -q
+    expected: >-
+      All tests pass; setup ordering pins dependency sync, GitHub MCP installation, AWS verification,
+      pre-commit wiring, and main synchronization after prerequisites.
+    fix_if: >-
+      A failure means the declared Codex/Claude bootstrap parity or ordering has drifted; fix the
+      setup orchestration or update the test only for an intentional reviewed contract change.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "setup-cloud-session-bootstrap-parity"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove Decision 135's existing live data-edge channel already selects the focused setup test,
+      eliminating the need for a second selector or ownership metadata surface.
+    command: >-
+      bin/venv-python -m pytest tests/checks/deps/affected_tests/test_derivation.py -q
+    expected: >-
+      All derivation tests pass, including a fixture where changed bin/setup-cloud-env.sh selects
+      tests/test_setup_cloud_env.py with existing `data_edge` provenance.
+    fix_if: >-
+      The setup test is absent or has wrong provenance -- retain its literal source-path reference
+      and fix the existing data-edge derivation/test fixture; do not add a parallel selector.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "setup-cloud-affected-data-edge"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run the authoritative fast gate with a resolvable origin/main so changed-file pre-commit,
+      affected tests, lock validation, setup coverage, and workflow guards all execute.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0 within the fast-tier budget; pre-commit hooks run against the changed set, the focused
+      tests are selected, and no origin/main-dependent guard advisory-skips its changed-file leg.
+    fix_if: >-
+      First verify `git rev-parse origin/main` and `.git/hooks/pre-commit`; if either is absent, run
+      the Codex bootstrap checklist instead of weakening validation. Fix any real owning-check
+      failure; do not use --ignore-budget without a documented environment-only reason.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The aggregate fast-tier command invokes the verification registry and VP replay itself;
+      graduating it would create recursive validation. Its focused durable constituents are
+      graduated in steps 1-5 and --pre already runs as the authoritative PR gate.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Run full local validation to reproduce the post-merge tier that originally failed and prove
+      the complete forward fix before handoff.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0, including Unit tests + coverage. The two MCP failures from job 90318714673 do not
+      recur and the all-files pre-commit suite passes.
+    fix_if: >-
+      Diagnose the first real failure. If the Codex execution window cannot accommodate the full
+      suite, report the exact incomplete command as BLOCKED/WARNING and do not claim success; CI is
+      still the authoritative full-tier confirmation.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The full aggregate validator recursively runs the verifier harness, unit suite, DQ, and
+      pre-commit checks; registering it inside that harness would recurse and duplicate the standing
+      main CI gate. Focused non-recursive invariants are graduated in steps 1-5.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Confirm the governed GitHub main CI run for the merged forward fix is green under a fresh
+      runner dependency resolution.
+    command: >-
+      test "$(curl -fsSL -H "Authorization: Bearer $(cat "$HOME/.config/gh-mcp/token")"
+      -H "Accept: application/vnd.github+json"
+      "https://api.github.com/repos/benjamin-blake/agent-platform/actions/runs?branch=main&event=push&per_page=1"
+      | bin/venv-python -c "import json,sys; print(json.load(sys.stdin)['workflow_runs'][0]['conclusion'])")"
+      = success
+    expected: >-
+      Exit 0: the latest main push workflow concludes success on GitHub-hosted infrastructure with
+      a fresh constrained dependency install.
+    fix_if: >-
+      Non-success requires fetching that run's failed job logs and starting a new RCA; never loop or
+      reinterpret an incomplete/null conclusion as green.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is an external post-merge GitHub Actions observation requiring a token and the future
+      merge SHA; it cannot be admitted as a hermetic pre-merge standing verifier. The lock and
+      workflow-shape invariants are permanently enforced by pre-deploy checks in this plan.
+constraints:
+  - >-
+    Decision 55/72/73: this is a forward fix for red main, not a retry, inline workaround, or
+    auto-revert. Treat MCP 2.0 as an unsupported major until a separate migration plan proves the
+    complete low-level server protocol.
+  - >-
+    Decision 73 deferral: rec-2882 remains open and untouched. This plan is limited to the second
+    observed red-main pytest regression from CI run 30372208799; its equally Critical CI-RCA rec did
+    not reach DuckLake because runs 30372421347 and 30373985669 hit Claude quota/permission limits.
+  - >-
+    Decision 135: use and test the existing live/cacheless data-edge channel for the setup script.
+    Do not create an independent selector, ownership metadata surface, persistent cache, or inline
+    growth in the already-oversized scripts/checks/deps/affected_tests.py.
+  - >-
+    Decision 139: durable cross-harness behavior belongs in AGENTS.md and ordinary enforcement.
+    Codex-only instructions stay transient in this plan; do not create a standing parallel Codex
+    workflow or duplicate Claude skills.
+  - >-
+    Decision 104/128/131: keep new tests in existing mapped homes and do not grow
+    scripts/checks/deps/affected_tests.py. Any implementation discovery requiring production edits
+    there triggers decomposition, never a budget raise or an ad-hoc oversized edit.
+  - >-
+    CI install changes constrain existing steps only. Do not add a workflow-only validation check;
+    validate.py and scripts.verify_ci_workflow remain the enforcement sources of truth.
+  - >-
+    No Terraform, Lambda-packaged file, warehouse table, operational-data write path, deployment,
+    or data-model change is in scope. No Lambda build/deploy/smoke step is required.
+  - >-
+    No rescue agents or workaround loops. A failed verification step is diagnosed, fixed with a
+    non-empty diff, and rerun according to Decision 55; an unexplained empty-diff green is reported
+    as nondeterministic, never promoted to PASS.
+context:
+  - >-
+    Failure evidence: GitHub Actions run 30372208799 job 90318714673 installed mcp==2.0.0 from the
+    unbounded `mcp>=1.28.0` declaration, then failed two tests because Tool exposes
+    `input_schema` rather than the 1.x `inputSchema` Python attribute. The committed lock and local
+    Codex venv remained at mcp==1.28.1 because full CI did not consume requirements.lock.
+  - >-
+    CI-RCA filing evidence: run 30372421347 drafted substantially the same root cause but its portal
+    call was permission-denied before quota exhaustion; run 30373985669 immediately returned HTTP
+    429 weekly-limit. Neither emitted FILED or created a warehouse row, so bundled_recommendations is
+    intentionally empty and no closure VP step can truthfully target a nonexistent rec.
+  - >-
+    Complexity: 15 scope files and more than 8 steps normally suggest STRATEGIC, but STRATEGIC plans
+    are suspended while the executor is frozen. Human explicitly selected one comprehensive
+    IMPLEMENTATION plan; execution steps therefore carry explicit preconditions and ordered gates.
+  - >-
+    Main Divergence Assessment could not run at planning time because the Codex harness checkout had
+    no origin remote (`main_freshness.status=fetch_failed`). The implementation agent must establish
+    and fetch canonical origin/main before interpreting diffs, affected tests, or pre-commit output.
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND (2 WARN, 1 NOTE, no BLOCK); CITE Decision 48,
+    Decision 55, Decision 72, Decision 73, Decision 80, Decision 85, Decision 86, Decision 104,
+    Decision 128, Decision 131, Decision 132, Decision 135, Decision 138, Decision 139. Decision 73
+    WARN is resolved by the named rec-2882 deferral above. Decision 135 WARN is resolved by reusing
+    the existing data-edge channel with no new authority. Decision 139 NOTE is resolved by keeping
+    Codex adaptations transient in this plan.
+  - >-
+    Plan-critique round 1 returned REVISE: removed the duplicate ownership subsystem and oversized
+    affected_tests.py edit, added canary-test scope and direct fast-requirements proof, and replaced
+    suspect graduation dispositions with five graduates plus recursive-command waivers.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+pre_implementation_checklist:
+  - >-
+    Codex skill loading: if no Skill tool is exposed, manually read `.claude/skills/implement/SKILL.md`
+    and `.claude/skills/code-review/SKILL.md` in full despite Claude-oriented text saying to invoke
+    them through Skill. Apply their methodology; do not merely cite the files unread.
+  - >-
+    Confirm branch is not main. The Codex harness may call its feature branch `work`; do not create
+    an `agent/` branch solely to rename it.
+  - >-
+    Establish Git baseline before any diff: if origin is absent, add the canonical public remote
+    `https://github.com/benjamin-blake/agent-platform.git`; fetch main; require
+    `git rev-parse origin/main` and `git merge-base HEAD origin/main` to succeed. Do not set `work`
+    to track or push to main.
+  - >-
+    Run `bash .claude/hooks/session_start_precommit.sh`; require `.git/hooks/pre-commit` executable;
+    run `.venv/bin/pre-commit run --all-files` once before editing to expose environment drift. A
+    native Git hook augments but does not replace Claude PreToolUse guards (Decision 138).
+  - >-
+    Run `bin/venv-python -m scripts.session.preflight`; read its report and this plan. The explicit
+    rec-2882 deferral is plan-specific and does not close, downgrade, or modify that rec.
+  - >-
+    Read docs/PROJECT_CONTEXT.md fully. Read targeted Decision sections named in this plan and every
+    file in scope. Confirm current SLOC budgets before editing large Python files.
+  - >-
+    Reproduce the MCP version divergence: record local `importlib.metadata.version('mcp')`, the
+    committed lock pin, the declared specifier, and job 90318714673's installed 2.0.0 evidence.
+  - >-
+    Confirm no scope file is Lambda-packaged with
+    `bin/venv-python -m scripts.lambda_manifest --list-patterns`; stop and reassess if the manifest
+    contract unexpectedly classifies one.
+execution_steps:
+  - >-
+    Harness gate -- complete every pre-implementation checklist item first. If GitHub MCP tools are
+    absent, use authenticated GitHub REST reads with the file-backed token without printing it; do
+    not confuse the harness `make_pr` metadata tool with real PR creation or CI visibility.
+  - >-
+    Dependency recovery -- constrain MCP to `>=1.28.0,<2` in both declaration files; regenerate
+    requirements.lock from runtime and dev inputs without `--upgrade`; prove the resolved pin is
+    1.x and every direct full-tier dependency is constrained before continuing.
+  - >-
+    MCP contract tests -- add a typed helper in tests/test_agent_sdk_mcp_server.py that reads
+    `tool.model_dump(by_alias=True)['inputSchema']`; replace both internal-attribute assertions.
+    Do not edit scripts/agent_sdk/mcp_server.py unless a supported-1.x production failure is first
+    reproduced and the plan is explicitly rescaled.
+  - >-
+    Deterministic full CI -- add `-c requirements.lock` to runtime and dev pip installs in
+    main-validate and main-canary, hash requirements.lock in both cache keys, then extend
+    scripts.verify_ci_workflow and its fixtures to enforce the exact parity and negative cases.
+  - >-
+    Semantic lock guard -- parse top-level requirements with packaging.Requirement and exact pins
+    with packaging.version.Version; reject missing or incompatible pins with package/spec/version in
+    the diagnostic; preserve URL/options handling and extras normalization; add exhaustive tests.
+  - >-
+    Cross-agent obligation -- add one concise harness-neutral AGENTS.md rule. Do not copy Claude
+    workflow prose or this plan's Codex bootstrap sequence into permanent instructions.
+  - >-
+    Setup regression -- add tests/test_setup_cloud_env.py to parse command order and prove all five
+    shared setup/SessionStart behaviors remain after prerequisites without executing installers;
+    retain a literal `bin/setup-cloud-env.sh` edge. Add a derivation test proving the existing
+    data-edge channel selects it; do not modify affected_tests.py.
+  - >-
+    Verification graduation -- after focused VP steps 1-5 pass, differentially admit their stable
+    check IDs into config/agent/verification_registry/registry.yaml using the implement skill's
+    graduation protocol. If any check fails differential admission, stop and record a substantive
+    waiver in this plan rather than weakening the command or registry gate.
+  - >-
+    Verification -- execute steps 1-7 in order. A Codex time limit may make full validation
+    incomplete, but is never grounds to omit focused tests, --pre, or truthful reporting.
+  - >-
+    Fresh code review -- deploy a zero-context subagent. Instruct it that this is Codex: manually
+    read `.claude/skills/code-review/SKILL.md` because no Skill tool may exist; fetch origin/main;
+    read this plan, PROJECT_CONTEXT, every scope file, and the complete diff; forbid edits; require
+    structured Critical/High/Medium/Low findings and final Verdict. Fix Critical/High findings,
+    rerun affected verification, and redispatch until approved or the skill's convergence limit.
+  - >-
+    Commit and handoff -- verify `git diff --check`, `git status`, `.git/hooks/pre-commit`, and the
+    commit-time hook output. Commit with `feat(mcp-major-drift-and-test-obligation): ...`; do not add
+    a Resolves trailer for the nonexistent MCP rec or for deferred rec-2882. Rebase onto origin/main
+    after commit; stop on conflict. Push only the feature branch, create a real GitHub PR with
+    github-full MCP if exposed, and distinguish any metadata-only make_pr response in the report.
+  - >-
+    Report exact dependency versions, files changed, focused/--pre/full validation outcomes,
+    pre-commit outcome, code-review verdict/rounds, real PR URL if created, and remaining rec-2882
+    deferral. Never report the plan itself as implementation.
+work_areas: []
+rollback: >-
+  Revert the implementation PR to restore the prior dependency declarations, CI install commands,
+  lock validator, verification-registry rows, and tests. No infrastructure or data state changes
+  require rollback. The plan adds no selector or ownership subsystem to unwind; do not remove the
+  MCP bound or tests merely to recover from an unrelated validation regression.

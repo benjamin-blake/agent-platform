@@ -345,3 +345,10 @@ class TestResidueChannelPriorityOrdering:
         assert set(selected).isdisjoint(deferred)
         assert compute_escape_class(deferred[0] + "::test", manifest) == "capped"
         assert compute_escape_class("tests/never_selected.py::test", manifest) == "no-edge"
+
+
+def test_setup_cloud_script_selects_contract_test_through_data_edge() -> None:
+    result = at.derive_affected_tests([("M", "bin/setup-cloud-env.sh")])
+
+    assert "tests/test_setup_cloud_env.py" in result["selected"]
+    assert result["manifest"]["provenance"]["tests/test_setup_cloud_env.py"] == "data_edge"

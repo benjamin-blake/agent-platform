@@ -21,8 +21,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.version import InvalidVersion, Version
+
 ROOT = Path(__file__).parent.parent
 _REQUIREMENTS_TXT = ROOT / "requirements.txt"
+_REQUIREMENTS_DEV = ROOT / "requirements-dev.txt"
 _REQUIREMENTS_LOCK = ROOT / "requirements.lock"
 
 
@@ -52,8 +56,7 @@ def run_import_contracts() -> tuple[bool, str]:
 def check_lockfile_sync() -> tuple[bool, str]:
     """Verify requirements.lock pins every top-level package declared in requirements.txt.
 
-    "Top-level" is every non-comment, non-empty, non-option line; version
-    constraints and extras are stripped to recover the bare package name.
+    "Top-level" is every parseable non-comment, non-empty, non-option line.
 
     Returns (in_sync, message). Source-identity of requirements.txt is recorded
     in the message so callers can surface it in audit trails.
@@ -66,33 +69,56 @@ def check_lockfile_sync() -> tuple[bool, str]:
             "regenerate with: pip-compile requirements.txt -o requirements.lock"
         )
 
-    req_text = _REQUIREMENTS_TXT.read_text(encoding="utf-8")
-    top_level: list[str] = []
+    requirement_files = [_REQUIREMENTS_TXT]
+    if _REQUIREMENTS_DEV.exists():
+        requirement_files.append(_REQUIREMENTS_DEV)
+    requirement_texts = [path.read_text(encoding="utf-8") for path in requirement_files]
+    req_text = "\n".join(requirement_texts)
+    top_level: dict[str, Requirement] = {}
     for raw_line in req_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or line.startswith("-"):
             continue
-        name = re.split(r"[>=<!\[;\s@]", line)[0].strip()
-        if name:
-            top_level.append(_normalize_pkg(name))
+        try:
+            requirement = Requirement(line)
+        except InvalidRequirement:
+            continue
+        top_level[_normalize_pkg(requirement.name)] = requirement
 
     lock_text = _REQUIREMENTS_LOCK.read_text(encoding="utf-8")
-    pinned: set[str] = set()
+    pinned: dict[str, Version] = {}
     for raw_line in lock_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         # Match both plain pins (boto3==1.x) and extras pins (pyiceberg[glue,duckdb]==0.x).
-        m = re.match(r"^([A-Za-z0-9_\-\.]+)(?:\[[^\]]*\])?==", line)
-        if m:
-            pinned.add(_normalize_pkg(m.group(1)))
+        try:
+            locked_requirement = Requirement(line)
+        except InvalidRequirement:
+            continue
+        exact_pins = [specifier.version for specifier in locked_requirement.specifier if specifier.operator == "=="]
+        if len(exact_pins) == 1:
+            try:
+                pinned[_normalize_pkg(locked_requirement.name)] = Version(exact_pins[0])
+            except InvalidVersion:
+                continue
 
     missing = [pkg for pkg in top_level if pkg not in pinned]
-    req_identity = f"{len(req_text)} bytes, {len(top_level)} top-level packages"
+    req_identity = f"{len(req_text)} bytes, {len(top_level)} top-level packages across {len(requirement_files)} files"
     if missing:
         return False, f"requirements.lock missing pins for: {', '.join(missing)} (requirements.txt: {req_identity})"
 
-    return True, f"requirements.lock pins all {len(top_level)} top-level packages (requirements.txt: {req_identity})"
+    incompatible = [
+        f"{requirement.name}{requirement.specifier} rejects {pinned[name]}"
+        for name, requirement in top_level.items()
+        if requirement.specifier and pinned[name] not in requirement.specifier
+    ]
+    if incompatible:
+        return False, f"requirements.lock incompatible pins: {', '.join(incompatible)} (requirements.txt: {req_identity})"
+
+    return True, (
+        f"requirements.lock pins all {len(top_level)} top-level packages compatibly (requirements.txt: {req_identity})"
+    )
 
 
 def _normalize_pkg(name: str) -> str:

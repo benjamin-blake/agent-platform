@@ -57,6 +57,7 @@ def _check_jobs_and_flags() -> None:
 
     assert "--pre" in pr_steps, "pr-validate steps do not contain --pre"
     assert "--pre" not in main_steps, "main-validate steps contain --pre (should not)"
+    _assert_runtime_lock(main_job, "main-validate")
 
 
 def _is_truthy_concurrency_flag(value: Any) -> bool:
@@ -172,6 +173,29 @@ def _check_canary() -> None:
     steps_text = _get_steps_text(canary_job)
     assert "scripts.validate" in steps_text, "canary steps do not reference scripts.validate"
     assert "--pre" not in steps_text, "canary steps contain --pre (should not)"
+    _assert_runtime_lock(canary_job, "main-canary")
+
+
+def _assert_runtime_lock(job: dict[str, Any], job_name: str) -> None:
+    steps_text = _get_steps_text(job)
+    for requirements_file in ("requirements.txt", "requirements-dev.txt"):
+        expected = f"pip install -c requirements.lock -r {requirements_file}"
+        assert expected in steps_text, f"{job_name} does not constrain {requirements_file} with requirements.lock"
+
+    cache_steps = [step for step in job.get("steps", []) if str(step.get("uses", "")).startswith("actions/cache")]
+    cache_keys = "\n".join(str(step.get("with", {}).get("key", "")) for step in cache_steps)
+    assert "requirements.lock" in cache_keys, f"{job_name} dependency cache key does not include requirements.lock"
+
+
+def _check_full_tier_runtime_lock() -> None:
+    ci_jobs = _load(".github/workflows/ci.yml").get("jobs", {})
+    main_job = ci_jobs.get("main-validate")
+    assert main_job is not None, "main-validate job missing from ci.yml"
+    _assert_runtime_lock(main_job, "main-validate")
+
+    canary_jobs = _load(".github/workflows/main-canary.yml").get("jobs", {})
+    assert len(canary_jobs) == 1, "main-canary.yml must contain exactly one full-tier job"
+    _assert_runtime_lock(next(iter(canary_jobs.values())), "main-canary")
 
 
 # PLAN-ci-rca-ops-plane-coverage: the required-membership floor for ci-rca.yml's
@@ -401,10 +425,16 @@ _COMMANDS = {
     "signal-green-needs": _check_signal_green_needs,
     "terraform-apply-concurrency": _check_terraform_apply_concurrency,
     "ci-rca-fetch-classification": _check_ci_rca_fetch_classification,
+    "full-tier-runtime-lock": _check_full_tier_runtime_lock,
 }
 
 
 def main() -> None:
+    if len(sys.argv) == 1:
+        for fn in _COMMANDS.values():
+            fn()
+        print("OK")
+        return
     if len(sys.argv) != 2 or sys.argv[1] not in _COMMANDS:
         print(f"Usage: verify_ci_workflow.py <{'|'.join(_COMMANDS)}>", file=sys.stderr)
         sys.exit(1)
