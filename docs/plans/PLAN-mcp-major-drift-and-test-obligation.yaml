@@ -32,8 +32,8 @@ scope:
   - file: requirements.lock
     action: Modify
     purpose: >-
-      Regenerate from requirements.txt without an upgrade and retain an exact MCP 1.x resolution;
-      this becomes the constraint authority consumed by full validation jobs.
+      Regenerate from runtime and dev requirement inputs without an upgrade and retain an exact
+      MCP 1.x resolution; this becomes the constraint authority consumed by full validation jobs.
   - file: .github/workflows/ci.yml
     action: Modify
     purpose: >-
@@ -79,9 +79,9 @@ scope:
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      Graduate the five focused pre-deploy command checks after differential admission, using stable
-      check IDs for lock semantics, MCP wire behavior, workflow lock parity, setup bootstrap parity,
-      and existing data-edge selection. Do not register recursive aggregate validate commands.
+      Differentially evaluate the five focused pre-deploy candidates and register only admitted
+      checks, using stable IDs for lock semantics, workflow parity, setup bootstrap parity, and
+      existing data-edge selection. Do not register recursive aggregate validate commands.
   - file: tests/checks/deps/affected_tests/test_derivation.py
     action: Modify
     purpose: >-
@@ -154,8 +154,12 @@ verification_plan:
       environment; do not migrate production code opportunistically -- restore the declared 1.x
       resolution or stop and rescope a deliberate major upgrade.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: "mcp-tool-wire-schema-contract"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential admission rejected this check because the origin/main assertion also passes
+      under the restored MCP 1.x environment. The full suite includes a live credential-dependent
+      integration test, while the two changed wire-alias assertions do not distinguish pre-fix
+      behavior on MCP 1.x; registering either would be tautological or non-hermetic.
   - step: 3
     phase: pre-deploy
     action: >-
@@ -365,8 +369,8 @@ execution_steps:
     not confuse the harness `make_pr` metadata tool with real PR creation or CI visibility.
   - >-
     Dependency recovery -- constrain MCP to `>=1.28.0,<2` in both declaration files; regenerate
-    requirements.lock via the established `pip-compile requirements.txt -o requirements.lock
-    --no-header` convention without `--upgrade`; prove the resolved pin is 1.x before continuing.
+    requirements.lock from runtime and dev inputs without `--upgrade`; prove the resolved pin is
+    1.x and every direct full-tier dependency is constrained before continuing.
   - >-
     MCP contract tests -- add a typed helper in tests/test_agent_sdk_mcp_server.py that reads
     `tool.model_dump(by_alias=True)['inputSchema']`; replace both internal-attribute assertions.

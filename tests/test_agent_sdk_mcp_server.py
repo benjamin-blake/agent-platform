@@ -32,6 +32,10 @@ def _verb_meta(**overrides: Any) -> dict[str, Any]:
     return meta
 
 
+def _wire_input_schema(tool: types.Tool) -> dict[str, Any]:
+    return tool.model_dump(by_alias=True)["inputSchema"]
+
+
 class _StubReader:
     """A minimal DuckLakeReader stand-in: describe() returns a canned verb map; named() records calls."""
 
@@ -85,7 +89,7 @@ class TestProjection:
         assert len(tools) == 1
         tool = tools[0]
         assert tool.name == "totally_novel_verb"
-        assert tool.inputSchema == verbs["totally_novel_verb"]["params_schema"]
+        assert _wire_input_schema(tool) == verbs["totally_novel_verb"]["params_schema"]
 
     def test_multiple_verbs_all_projected(self):
         verbs = {"verb_a": _verb_meta(), "verb_b": _verb_meta(description="second verb")}
@@ -128,7 +132,7 @@ class TestReadOnlySurface:
 
         tools = build_tool_registry(describe_named_reads())
         for tool in tools:
-            props = (tool.inputSchema or {}).get("properties", {})
+            props = (_wire_input_schema(tool) or {}).get("properties", {})
             assert "sql" not in {p.lower() for p in props}, f"{tool.name} accepts a raw sql param"
 
     def test_query_method_is_never_invoked_by_the_projection(self):
