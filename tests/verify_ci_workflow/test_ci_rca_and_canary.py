@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from scripts.ci_rca.log_evidence import main as log_evidence_main
 from scripts.verify_ci_workflow import _check_canary, _check_ci_rca_fetch_classification, _check_ci_rca_filter
 
 _REAL_RCA_IF = (
@@ -222,7 +225,10 @@ class TestCheckCanaryFailPath:
 _PASSING_FETCH_STEP_BODY = (
     'RUN_ID="${{ steps.meta.outputs.run_id }}"\n'
     'bin/venv-python -m scripts.ci_rca.fetch_logs --run-id "$RUN_ID" '
-    '--repo "${{ github.repository }}" --out /tmp/ci-rca-failed.log\n'
+    '--repo "${{ github.repository }}" --out /tmp/ci-rca-log-evidence.json\n'
+    "bin/venv-python -m scripts.ci_rca.log_evidence --validate /tmp/ci-rca-log-evidence.json "
+    "--extract-body /tmp/ci-rca-failed.log\n"
+    "test -s /tmp/ci-rca-log-evidence.json\n"
     "test -s /tmp/ci-rca-failed.log\n"
 )
 
@@ -235,6 +241,10 @@ def _rca_data_with_fetch_step(run_body: str) -> dict[str, Any]:
                     {"name": "Resolve run metadata"},
                     {"name": "Fetch failed run logs", "run": run_body},
                     {"name": "Fetch jobs JSON"},
+                    {
+                        "name": "Generate evidence bundle",
+                        "run": "bin/venv-python -m scripts.ci_rca.evidence --retrieval-envelope /tmp/ci-rca-log-evidence.json",
+                    },
                 ]
             }
         }
@@ -304,6 +314,95 @@ class TestCheckCiRcaFetchClassification:
             mock_load.return_value = _rca_data_with_fetch_step(body)
             with pytest.raises(AssertionError, match="no longer invokes scripts.ci_rca.fetch_logs"):
                 _check_ci_rca_fetch_classification()
+
+    @pytest.mark.parametrize(
+        "mutation,match",
+        [
+            ("scripts.ci_rca.log_evidence --validate", "bounded retrieval envelope"),
+            ("--extract-body /tmp/ci-rca-failed.log", "not extracted"),
+            ("test -s /tmp/ci-rca-log-evidence.json", "envelope false-green"),
+            ("test -s /tmp/ci-rca-failed.log", "body false-green"),
+        ],
+    )
+    def test_rejects_removed_bounded_retrieval_backstop(self, mutation: str, match: str) -> None:
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY.replace(mutation, "removed"))
+            with pytest.raises(AssertionError, match=match):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_historical_uncapped_whole_run_fallback(self) -> None:
+        body = _PASSING_FETCH_STEP_BODY + 'gh run view "$RUN_ID" --log > /tmp/ci-rca-failed.log\n'
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="uncapped direct log retrieval"):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_evidence_generation_without_retrieval_envelope(self) -> None:
+        data = _rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)
+        data["jobs"]["rca"]["steps"][-1]["run"] = "bin/venv-python -m scripts.ci_rca.evidence"
+        with patch("scripts.verify_ci_workflow._load", return_value=data):
+            with pytest.raises(AssertionError, match="durable evidence generation"):
+                _check_ci_rca_fetch_classification()
+
+
+class TestCiRcaBoundedRetrievalCounterfactuals:
+    @pytest.mark.parametrize(
+        "fragment",
+        [
+            "_run_log(primary_command, max_bytes, max_lines)",
+            'remaining = max_bytes - len("".join(fragments).encode("utf-8"))',
+            "remaining_lines = max_lines -",
+            "_run_log(command, remaining, remaining_lines)",
+            'selected.sort(key=lambda item: item["job_id"])',
+        ],
+    )
+    def test_rejects_retrieval_budget_and_ordering_mutations(self, fragment: str) -> None:
+        source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
+        with (
+            patch("scripts.verify_ci_workflow._load", return_value=_rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)),
+            patch("pathlib.Path.read_text", return_value=source.replace(fragment, "removed", 1)),
+            pytest.raises(AssertionError, match="bounded retrieval invariant"),
+        ):
+            _check_ci_rca_fetch_classification()
+
+    def test_rejects_per_job_budget_reset_to_configured_maxima(self) -> None:
+        source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
+        reset = source.replace("_run_log(command, remaining, remaining_lines)", "_run_log(command, max_bytes, max_lines)", 1)
+        with (
+            patch("scripts.verify_ci_workflow._load", return_value=_rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)),
+            patch("pathlib.Path.read_text", return_value=reset),
+            pytest.raises(AssertionError, match="bounded retrieval invariant"),
+        ):
+            _check_ci_rca_fetch_classification()
+
+    @pytest.mark.parametrize(
+        "fragment",
+        [
+            "scripts.ci_rca.log_evidence --validate",
+            "--extract-body /tmp/ci-rca-failed.log",
+        ],
+    )
+    def test_rejects_malformed_envelope_body_boundary(self, fragment: str) -> None:
+        with patch(
+            "scripts.verify_ci_workflow._load",
+            return_value=_rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY.replace(fragment, "removed")),
+        ):
+            with pytest.raises(AssertionError):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_missing_durable_evidence_argument(self) -> None:
+        data = _rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)
+        data["jobs"]["rca"]["steps"][-1]["run"] = "bin/venv-python -m scripts.ci_rca.evidence"
+        with patch("scripts.verify_ci_workflow._load", return_value=data):
+            with pytest.raises(AssertionError, match="durable evidence generation"):
+                _check_ci_rca_fetch_classification()
+
+    def test_real_boundary_rejects_nonempty_malformed_envelope(self, tmp_path: Path) -> None:
+        envelope = tmp_path / "malformed.json"
+        extracted = tmp_path / "body.log"
+        envelope.write_text(json.dumps({"schema": "ci-rca-log-evidence/v1", "body": "nonempty"}), encoding="utf-8")
+        assert log_evidence_main(["--validate", str(envelope), "--extract-body", str(extracted)]) == 1
+        assert not extracted.exists()
 
     def test_fails_when_step_not_found(self) -> None:
         rca_data = {"jobs": {"rca": {"steps": [{"name": "Some other step", "run": "echo hi"}]}}}
