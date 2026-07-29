@@ -194,3 +194,24 @@ class TestGetChangedSourceFiles:
             result = get_changed_source_files()
 
         assert any("pipeline.py" in str(p) for p in result)
+
+
+def test_coverage_reports_owning_target_and_module(tmp_path: Path, capsys) -> None:
+    source = ROOT / "scripts" / "checks" / "validation_result.py"
+    test_target = ROOT / "tests" / "checks" / "test_validation_result.py"
+    proc = MagicMock()
+    proc.__enter__.return_value = proc
+    proc.__exit__.return_value = False
+    proc.communicate.return_value = ("", "")
+    coverage = ROOT / ".coverage.json"
+    coverage.write_text(
+        '{"files":{"scripts/checks/validation_result.py":{"summary":{"percent_covered":100}}}}', encoding="utf-8"
+    )
+    with (
+        patch("test_coverage_checker.map_source_to_test", return_value=test_target),
+        patch("test_coverage_checker.subprocess.Popen", return_value=proc),
+    ):
+        assert checker.check_per_file_coverage([source]) == []
+    output = capsys.readouterr().out
+    assert "scripts/checks/validation_result.py -> tests/checks/test_validation_result.py" in output
+    assert "--cov=scripts.checks.validation_result" in output

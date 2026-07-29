@@ -10,7 +10,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2})
+_SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2, 3})
 _V2_PHASE_ENUM: frozenset[str] = frozenset({"pre-deploy", "post-deploy"})
 
 PlanType = Literal["IMPLEMENTATION", "STRATEGIC", "REPORT-ONLY"]
@@ -18,6 +18,13 @@ VerificationTier = Literal["V1", "V2", "V3"]
 ScopeAction = Literal["Create", "Modify", "Delete"]
 Complexity = Literal["XS", "S", "M", "L", "XL"]
 GraduationDisposition = Literal["graduate", "waive", "not-applicable"]
+
+
+class HandoffPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    full_validation_required_before_commit: Literal[True]
+    timeout_disposition: Literal["blocked"]
 
 
 class ScopeEntry(BaseModel):
@@ -107,6 +114,7 @@ class PlanDocument(BaseModel):
     work_areas: list[WorkArea] = Field(default_factory=list)
     rollback: str | None = None
     tier_waiver: str | None = None
+    handoff_policy: HandoffPolicy | None = None
 
     @field_validator("schema_version")
     @classmethod
@@ -159,12 +167,19 @@ class PlanDocument(BaseModel):
         if self.plan_type == "IMPLEMENTATION" and not self.execution_steps:
             raise ValueError("IMPLEMENTATION plans require non-empty execution_steps")
 
-        if self.schema_version == 2:
+        if self.schema_version >= 2:
             bad_phases = sorted({vp.phase for vp in self.verification_plan if vp.phase not in _V2_PHASE_ENUM})
             if bad_phases:
                 raise ValueError(
                     f"schema_version 2 verification_plan[].phase must be one of {sorted(_V2_PHASE_ENUM)}, got: {bad_phases}"
                 )
+        if self.schema_version == 3:
+            if self.plan_type == "IMPLEMENTATION" and self.handoff_policy is None:
+                raise ValueError("schema_version 3 IMPLEMENTATION plans require handoff_policy")
+            if self.plan_type != "IMPLEMENTATION" and self.handoff_policy is not None:
+                raise ValueError("handoff_policy is only valid on schema_version 3 IMPLEMENTATION plans")
+        elif self.handoff_policy is not None:
+            raise ValueError("handoff_policy is only valid with schema_version 3")
         return self
 
 
@@ -219,5 +234,5 @@ def main(argv: list[str] | None = None, plans_root: Path | None = None) -> int:
     return 1 if failures else 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - module entry point
     sys.exit(main())

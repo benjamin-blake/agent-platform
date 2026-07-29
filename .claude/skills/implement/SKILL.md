@@ -186,10 +186,6 @@ If the gate subagent errors or returns output missing the required Verdict/Recom
 - **Critical and High**: You MUST implement fixes for these findings before proceeding. They are mandatory extensions of the original plan. After fixing, re-run `bin/venv-python -m scripts.validate --pre` to confirm no regressions.
 - **Medium and Low**: File these as new recommendations using `bin/venv-python -m scripts.ops_data_portal`. Do not fix them inline -- they will be addressed in future sessions.
 
-### Rationale
-This ensures even "perfect" implementations are audited for repository-wide patterns (mock exhaustion, safety rules, scope creep) the planner might have missed, and catches regression risks before they reach `main`. The subagent dispatch (rather than `run_skill.py`) preserves the anti-bias property of fresh context while giving the reviewer enough surface area to see cross-file effects.
-
-
 ## Tier_item bookkeeping (post-verification, pre-merge)
 
 After the verification-pass gate fires and BEFORE code-review is dispatched (or GATE_REQUESTed --
@@ -340,15 +336,6 @@ Fires in the same window as Tier_item bookkeeping (after the VP Compliance Gate 
 PASS, before the commit flow in Step 7) but is a distinct action: it tries to promote this
 session's own VP steps into standing regression guards, not roadmap bookkeeping.
 
-### Rationale
-A VP step proves a feature works once, this session. Left as a throwaway, the next unrelated
-change can silently regress it. Graduating a VP step into
-`config/agent/verification_registry/registry.yaml` makes it a standing, differentially-admitted
-check (`validate_verification_registry`, both --pre and full tiers) -- but only if it genuinely
-distinguishes pre-change from post-change; a tautological check that passes on both trees would
-be worse than no check (false confidence). The differential admission gate is the guard against
-that: real, never simulated (Decision 55).
-
 **T3.21 (enforced, amends T3.18):** graduation is no longer optional-by-forgetting. If this
 plan's `verification_plan` steps carry `graduation` dispositions (mandatory on pre-deploy steps
 for any plan authored after T3.21 -- see the planning skill), the implement-PR leg of
@@ -496,7 +483,11 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 This workflow runs on Claude Code on the web: the harness assigns this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Branch protection is LIVE; the squash-merge-after-CI gate transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
 
 ### Run the full gate locally first
-The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.
+Before the expensive full gate, run `bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage`. This diagnostic exposes every changed source -> owning test target and `--cov=<module>` argument and requires 100% per-file coverage, but it is not a validator tier or handoff authority.
+
+The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR. A failed, timed-out, interrupted, truncated, or otherwise incomplete full run is BLOCKED: continue in a later turn or session. CI is not a substitute and commit/PR handoff is forbidden until the parent command exits 0, prints the terminal `Validation Summary (scope: all)`, and writes matching `logs/debug/validation-result.json` evidence. Child diagnostics and informational mypy output never override that parent verdict.
+
+After successful implementation closure, use `scripts.session.postflight --evidence` to write the bounded causal evidence record and render any human summary from that record.
 
 ### Wait-for-CI: event-driven, never polled
 Wait for the PR-tier CI (the fast `--pre` tier, ~1-3 min; Decision 73) via subscription, never polling. The wake mechanism -- `subscribe_pr_activity`, ending the turn, the `ci.yml` "CI green" comment wake signal, the `pr-conflict-signal.yml` merge-conflict wake, and the GitHub-native auto-merge successor -- is canonical in AGENTS.md `## Git-ops procedure` steps 3-5; do not restate it here.

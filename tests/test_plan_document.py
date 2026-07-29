@@ -290,8 +290,50 @@ class TestSchemaVersion2:
         assert doc.tier_waiver == "conscious V2: comment-only .tf change"
 
     def test_v2_unsupported_version_still_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="Unsupported schema_version"):
+        with pytest.raises(ValidationError, match="require handoff_policy"):
             PlanDocument.model_validate(_mutate_v2(schema_version=3))
+
+
+class TestSchemaVersion3:
+    def test_historical_version_forbids_handoff_policy(self) -> None:
+        data = _mutate_v2(handoff_policy={"full_validation_required_before_commit": True, "timeout_disposition": "blocked"})
+        with pytest.raises(ValidationError, match="only valid with schema_version 3"):
+            PlanDocument.model_validate(data)
+
+    def test_implementation_requires_blocking_handoff_policy(self) -> None:
+        data = _mutate_v2(
+            schema_version=3,
+            handoff_policy={"full_validation_required_before_commit": True, "timeout_disposition": "blocked"},
+        )
+        assert PlanDocument.model_validate(data).schema_version == 3
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            None,
+            {"full_validation_required_before_commit": False, "timeout_disposition": "blocked"},
+            {"full_validation_required_before_commit": True, "timeout_disposition": "warning"},
+        ],
+    )
+    def test_invalid_implementation_policy_fails_closed(self, policy: object) -> None:
+        data = _mutate_v2(schema_version=3)
+        if policy is not None:
+            data["handoff_policy"] = policy
+        with pytest.raises(ValidationError):
+            PlanDocument.model_validate(data)
+
+    @pytest.mark.parametrize("plan_type", ["STRATEGIC", "REPORT-ONLY"])
+    def test_non_implementation_forbids_policy(self, plan_type: str) -> None:
+        data = _mutate_v2(
+            schema_version=3,
+            plan_type=plan_type,
+            execution_steps=[],
+            handoff_policy={"full_validation_required_before_commit": True, "timeout_disposition": "blocked"},
+        )
+        if plan_type == "STRATEGIC":
+            data["work_areas"] = [{"area": "A", "scope": "files", "rationale": "why", "complexity": "S"}]
+        with pytest.raises(ValidationError, match="only valid"):
+            PlanDocument.model_validate(data)
 
 
 class TestGraduationDisposition:

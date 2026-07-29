@@ -399,6 +399,7 @@ def check_per_file_coverage(source_files: list[Path]) -> list[str]:
         if _is_empty_directory_target(test_path):
             continue
         test_path_str = str(test_path.relative_to(ROOT)).replace("\\", "/")
+        print(f"  mapping: {rel} -> {test_path_str} (--cov={module_str})")
 
         # Set _COVERAGE_SUBPROCESS=1 so any validate.py invoked transitively
         # (e.g. by a test calling subprocess) knows it's inside a coverage run
@@ -604,9 +605,11 @@ def main() -> None:
         print("\nTest coverage check FAILED:")
         for e in errors:
             print(e)
+        print("DIAGNOSTIC VERDICT: FAIL (not an authoritative validation gate)")
         sys.exit(1)
 
     print(f"\nTest coverage check: {len(source_files)} source files checked, 0 missing test files, 0 below 100% coverage")
+    print("DIAGNOSTIC VERDICT: PASS (not an authoritative validation gate)")
     sys.exit(0)
 
 

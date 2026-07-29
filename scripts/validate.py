@@ -33,7 +33,7 @@ _REPO_ROOT = _Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.checks import _common, registry  # noqa: E402
+from scripts.checks import _common, registry, validation_result  # noqa: E402
 
 # Facade re-exports: shared primitives (back-compat for `from scripts.validate import ROOT` etc.
 # and for `patch("validate.ROOT"/"validate.run"/"validate.PYTHON"/"validate.invoke_step"/
@@ -398,6 +398,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    full_started_at: str | None = None
+    if not any((args.pre, args.verifier_coverage, args.terraform_only, args.update_sloc_budgets)):
+        full_started_at = validation_result.utc_now()
+        validation_result.clear()
+
     # CI guard: --ignore-budget is forbidden in CI environments
     if args.ignore_budget and os.environ.get("CI") == "true":
         print("[ERROR] --ignore-budget cannot be used in CI. The escape hatch is for local sessions only.")
@@ -596,12 +601,18 @@ def main() -> None:
     print(f"\n=== Validation Summary (scope: {scope}) ===")
     if not failed:
         print("All checks passed.")
+        validation_result.write_completed_visible(
+            started_at=full_started_at or validation_result.utc_now(), exit_code=0, failed_checks=[]
+        )
         sys.exit(0)
     else:
         print("Failed checks:")
         for f in failed:
             print(f"  - {f}")
         print("\nFix all failures before committing.")
+        validation_result.write_completed_visible(
+            started_at=full_started_at or validation_result.utc_now(), exit_code=1, failed_checks=failed
+        )
         sys.exit(1)
 
 

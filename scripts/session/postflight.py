@@ -81,6 +81,7 @@ from scripts.postflight.housekeeping import (  # noqa: E402, F401
     run_metrics,
 )
 from scripts.postflight.remote import run_push  # noqa: E402, F401
+from scripts.session import postflight_evidence  # noqa: E402
 
 
 def _parse_scope_table(plan_content: str) -> dict[str, str]:
@@ -332,6 +333,16 @@ def run_auto(commit_message: str, steps_total: int = 0, steps_friction: int = 0)
         print(json.dumps(results, indent=2))
         return 1
 
+    try:
+        evidence = json.loads(postflight_evidence.EVIDENCE_PATH.read_text(encoding="utf-8"))
+        postflight_evidence.validate(evidence)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        results["status"] = "evidence_failed"
+        results["error_summary"] = type(exc).__name__
+        print(json.dumps(results, indent=2))
+        return 1
+    results["evidence"] = "PASS"
+
     # 3. Metrics
     print("[auto] Running --metrics...", flush=True)
     buf2 = io.StringIO()
@@ -390,6 +401,7 @@ def main() -> int:
     group.add_argument("--commit", metavar="MESSAGE", help="Commit with message")
     group.add_argument("--push", action="store_true", help="Push, create PR, poll CI, merge")
     group.add_argument("--metrics", action="store_true", help="Run session metrics + plan audit")
+    group.add_argument("--evidence", metavar="JSON_FILE", help="Write and render structured implementation evidence")
     group.add_argument("--close", action="store_true", help="Intent verification + SESSION_LOG entry + pre-commit sanity")
     group.add_argument(
         "--log-housekeeping",
@@ -447,6 +459,11 @@ def main() -> int:
         return remote.run_push()
     if args.metrics:
         return housekeeping.run_metrics(args.steps_total, args.steps_friction)
+    if args.evidence:
+        evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
+        postflight_evidence.write(evidence)
+        print(postflight_evidence.render(evidence))
+        return 0
     if args.close:
         return run_close()
     if args.log_housekeeping:

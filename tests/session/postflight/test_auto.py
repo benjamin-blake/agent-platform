@@ -8,12 +8,23 @@ source-text assertion.
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tests.fixtures.session_postflight_module import MODULE_PATH as _MODULE_PATH
 from tests.fixtures.session_postflight_module import postflight as _postflight
+
+
+@pytest.fixture(autouse=True)
+def _valid_evidence(tmp_path, monkeypatch):
+    from scripts.session import postflight_evidence
+
+    path = tmp_path / "implementation-retrospective.json"
+    path.write_text(json.dumps({category: [] for category in postflight_evidence.CATEGORIES}), encoding="utf-8")
+    monkeypatch.setattr(postflight_evidence, "EVIDENCE_PATH", path)
 
 
 class TestAutoMode:
@@ -61,6 +72,17 @@ class TestAutoMode:
         captured = capsys.readouterr()
         assert '"merged"' in captured.out
 
+    def test_evidence_mode_writes_and_renders_record(self, tmp_path, monkeypatch, capsys) -> None:
+        from scripts.session.postflight_evidence import CATEGORIES
+
+        source = tmp_path / "evidence.json"
+        source.write_text(json.dumps({category: ["observed fact"] for category in CATEGORIES}), encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", ["postflight", "--evidence", str(source)])
+        with patch("scripts.session.postflight_evidence.write") as write:
+            assert _postflight.main() == 0
+        write.assert_called_once()
+        assert "Observed Fact" not in capsys.readouterr().out
+
     def test_validate_failure_stops_early(self, capsys: pytest.CaptureFixture) -> None:
         """If --validate fails, auto stops and returns validate_failed."""
         with (
@@ -73,6 +95,19 @@ class TestAutoMode:
         mock_close.assert_not_called()
         captured = capsys.readouterr()
         assert '"validate_failed"' in captured.out
+
+    def test_missing_evidence_stops_before_commit(self, monkeypatch, capsys) -> None:
+        from scripts.session import postflight_evidence
+
+        monkeypatch.setattr(postflight_evidence, "EVIDENCE_PATH", Path("/missing/evidence.json"))
+        with (
+            patch("session_postflight.run_validate", return_value=0),
+            patch("session_postflight.run_close", side_effect=lambda: print(self._close_output()) or 0),
+            patch("session_postflight.run_commit") as commit,
+        ):
+            assert _postflight.run_auto("feat: test") == 1
+        commit.assert_not_called()
+        assert '"evidence_failed"' in capsys.readouterr().out
 
     def test_sanity_fail_stops_before_commit(self, capsys: pytest.CaptureFixture) -> None:
         """If close returns sanity_status FAIL, auto should stop and not commit."""

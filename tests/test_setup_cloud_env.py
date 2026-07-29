@@ -30,3 +30,10 @@ def test_setup_contract_uses_delegated_bootstrap_commands() -> None:
     assert script.count("bash .claude/hooks/session_start_aws.sh") == 1
     assert script.count("bash .claude/hooks/session_start_precommit.sh") == 1
     assert script.count("bash .claude/hooks/session_start_sync_main.sh") == 1
+
+
+def test_github_readiness_runs_after_mcp_install_and_before_precommit() -> None:
+    script = Path("bin/setup-cloud-env.sh").read_text(encoding="utf-8")
+    readiness = script.index("bash .claude/hooks/session_start_github_readiness.sh")
+    assert readiness > script.index("ensure-github-mcp-server.sh")
+    assert readiness < script.index("bash .claude/hooks/session_start_precommit.sh")
