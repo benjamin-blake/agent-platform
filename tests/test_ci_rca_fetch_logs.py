@@ -1,13 +1,6 @@
-"""Unit tests for scripts.ci_rca.fetch_logs (rec-2857 regression proof + full behavioural coverage).
-
-Fakes subprocess.run via dependency injection (the module's `runner` parameter) rather than
-patching the `subprocess` module globally -- each test controls exactly what gh "returns" per
-call and asserts on the exact commands issued. Sleep is injected too, so the retry tests never
-wall-clock.
-"""
-
 from __future__ import annotations
 
+import json
 import runpy
 import subprocess
 import sys
@@ -15,246 +8,243 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci_rca.fetch_logs import FetchOutcome, fetch_run_log, main
+from scripts.ci_rca.fetch_logs import _failed_jobs, _run_log, fetch_run_log, main
+from scripts.ci_rca.log_evidence import read_envelope
 
 
-def _cp(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+def _cp(code: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess([], code, stdout, stderr)
 
 
-class _ScriptedRunner:
-    """A fake `subprocess.run` returning one scripted CompletedProcess per call, in order."""
-
+class Runner:
     def __init__(self, results: list[subprocess.CompletedProcess]) -> None:
-        self._results = list(results)
+        self.results = results
         self.calls: list[list[str]] = []
 
-    def __call__(self, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-        self.calls.append(cmd)
-        assert self._results, f"ScriptedRunner exhausted: unexpected extra subprocess call {cmd!r}"
-        return self._results.pop(0)
+    def __call__(self, command: list[str], **_kwargs) -> subprocess.CompletedProcess:
+        self.calls.append(command)
+        return self.results.pop(0)
 
 
-class _RecordingSleep:
-    def __init__(self) -> None:
-        self.calls: list[int] = []
+JOBS = json.dumps(
+    {
+        "jobs": [
+            {
+                "databaseId": 22,
+                "conclusion": "failure",
+                "name": "untrusted token=secret",
+                "steps": [{"name": "setup", "conclusion": "success"}, {"name": "test", "conclusion": "failure"}],
+            }
+        ]
+    }
+)
 
-    def __call__(self, seconds: int) -> None:
-        self.calls.append(seconds)
+
+def test_primary_creates_typed_envelope_and_preserves_http_body(tmp_path: Path) -> None:
+    out = tmp_path / "evidence.json"
+    runner = Runner([_cp(stdout=JOBS), _cp(stdout="HTTP 502 in genuine log body\n")])
+    result = fetch_run_log("123", "owner/repo", out, runner=runner)
+    envelope = read_envelope(out)
+    assert result.fetched
+    assert envelope["retrieval_path"] == "primary"
+    assert envelope["failed_jobs"] == [
+        {"job_id": 22, "conclusion": "failure", "failed_steps": [{"step_index": 2, "conclusion": "failure"}]}
+    ]
+    assert envelope["body"] == "HTTP 502 in genuine log body\n"
+    assert "untrusted" not in out.read_text(encoding="utf-8")
+
+
+def test_fallback_is_per_failed_job_and_uses_shared_cap(tmp_path: Path) -> None:
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {"databaseId": 9, "conclusion": "failure", "steps": []},
+                {"databaseId": 2, "conclusion": "failure", "steps": []},
+            ]
+        }
+    )
+    runner = Runner([_cp(stdout=jobs), _cp(code=1, stderr="failed to get jobs"), _cp(stdout="abc\n"), _cp(stdout="def\n")])
+    out = tmp_path / "evidence.json"
+    result = fetch_run_log("123", "owner/repo", out, runner=runner, max_bytes=5, max_lines=10)
+    envelope = read_envelope(out)
+    assert result.fetched
+    assert envelope["body"] == "abc\n"
+    assert envelope["limits"]["complete"] is False
+    assert [call[-2] for call in runner.calls[2:]] == ["2", "9"]
+    assert all("--job" in call and "--log" in call for call in runner.calls[2:])
+    assert not any(call[-1] == "--log" and "--job" not in call for call in runner.calls)
+
+
+def test_failed_metadata_retries_and_leaves_no_output(tmp_path: Path) -> None:
+    runner = Runner([_cp(code=1, stderr="HTTP 503") for _ in range(3)])
+    out = tmp_path / "evidence.json"
+    sleeps: list[int] = []
+    result = fetch_run_log("123", "owner/repo", out, runner=runner, sleep_fn=sleeps.append)
+    assert not result.fetched
+    assert sleeps == [10, 20]
+    assert not out.exists()
+
+
+def test_main_fails_closed_with_annotation(tmp_path: Path, monkeypatch, capsys) -> None:
+    runner = Runner([_cp(code=1) for _ in range(3)])
+    monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.run", runner)
+    monkeypatch.setattr("scripts.ci_rca.fetch_logs.time.sleep", lambda _value: None)
+    assert main(["--run-id", "1", "--repo", "owner/repo", "--out", str(tmp_path / "out")]) == 1
+    assert "::error::" in capsys.readouterr().out
+
+
+def test_main_returns_success_and_converts_validation_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "scripts.ci_rca.fetch_logs.fetch_run_log", lambda *_args, **_kwargs: type("Outcome", (), {"fetched": True})()
+    )
+    assert main(["--run-id", "1", "--repo", "owner/repo", "--out", str(tmp_path / "out")]) == 0
+    monkeypatch.setattr(
+        "scripts.ci_rca.fetch_logs.fetch_run_log", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad"))
+    )
+    assert main(["--run-id", "1", "--repo", "owner/repo", "--out", str(tmp_path / "out")]) == 1
+
+
+@pytest.mark.parametrize("max_bytes,max_lines", [(0, 1), (1, 0), (-1, 1)])
+def test_invalid_limits_fail_before_any_subprocess(tmp_path: Path, max_bytes: int, max_lines: int) -> None:
+    runner = Runner([])
+    with pytest.raises(ValueError, match="positive"):
+        fetch_run_log("1", "owner/repo", tmp_path / "out", runner=runner, max_bytes=max_bytes, max_lines=max_lines)
+    assert runner.calls == []
+
+
+def test_partial_fallback_failure_fails_whole_attempt(tmp_path: Path) -> None:
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {"databaseId": 2, "conclusion": "failure", "steps": []},
+                {"databaseId": 9, "conclusion": "failure", "steps": []},
+            ]
+        }
+    )
+    runner = Runner([_cp(stdout=jobs), _cp(code=1), _cp(stdout="partial\n"), _cp(code=1, stderr="unavailable")])
+    result = fetch_run_log("1", "owner/repo", tmp_path / "out", attempts=1, runner=runner)
+    assert not result.fetched
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ("[]", "no jobs array"),
+        (json.dumps({"jobs": [{"databaseId": 1, "conclusion": "success"}]}), "no failed jobs"),
+        (json.dumps({"jobs": [{"databaseId": None, "conclusion": "failure"}]}), "numeric database id"),
+    ],
+)
+def test_failed_job_metadata_validation(payload: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _failed_jobs(payload)
+
+
+def test_invalid_json_metadata_is_reported(tmp_path: Path) -> None:
+    result = fetch_run_log("1", "owner/repo", tmp_path / "out", attempts=1, runner=Runner([_cp(stdout="{")]))
+    assert not result.fetched
+    assert result.diagnostic and "invalid failed-job metadata" in result.diagnostic
+
+
+def test_fallback_stops_before_query_when_aggregate_cap_is_consumed(tmp_path: Path) -> None:
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {"databaseId": 2, "conclusion": "failure", "steps": []},
+                {"databaseId": 9, "conclusion": "failure", "steps": []},
+            ]
+        }
+    )
+    runner = Runner([_cp(stdout=jobs), _cp(code=1), _cp(stdout="x")])
+    result = fetch_run_log("1", "owner/repo", tmp_path / "out", attempts=1, runner=runner, max_bytes=1)
+    assert result.fetched
+    assert len(runner.calls) == 3
 
 
 class TestClassification:
     def test_successful_fetch_with_5xx_in_log_body_is_accepted(self, tmp_path: Path) -> None:
-        """rec-2857 REGRESSION PROOF: a successful fetch whose log BODY contains 'HTTP 502' must
-        be accepted on attempt 1 -- the content grep that used to reject this is gone."""
-        out = tmp_path / "ci-rca-failed.log"
-        log_body = "Step failed: ducklake_writer returned HTTP 502: Bad Gateway\nsee traceback above\n"
-        runner = _ScriptedRunner([_cp(returncode=0, stdout=log_body, stderr="")])
-        sleep_fn = _RecordingSleep()
-
-        outcome = fetch_run_log("123", "o/r", out, sleep_fn=sleep_fn, runner=runner)
-
-        assert outcome == FetchOutcome(fetched=True, attempts_used=1)
-        assert out.read_text(encoding="utf-8") == log_body
-        assert len(runner.calls) == 1
-        assert sleep_fn.calls == []
+        test_primary_creates_typed_envelope_and_preserves_http_body(tmp_path)
 
     def test_successful_fetch_with_transient_signature_on_stderr_is_accepted(self, tmp_path: Path) -> None:
-        """DUAL OF rec-2857: a fetch that SUCCEEDS while gh writes a transient signature to its
-        OWN stderr must still be accepted on attempt 1 -- the stderr signature must never override
-        a successful exit status."""
-        out = tmp_path / "ci-rca-failed.log"
-        log_body = "ordinary failure log content\n"
-        runner = _ScriptedRunner(
-            [_cp(returncode=0, stdout=log_body, stderr="failed to get jobs: HTTP 503: Service Unavailable")]
-        )
-        sleep_fn = _RecordingSleep()
-
-        outcome = fetch_run_log("123", "o/r", out, sleep_fn=sleep_fn, runner=runner)
-
-        assert outcome == FetchOutcome(fetched=True, attempts_used=1)
-        assert out.read_text(encoding="utf-8") == log_body
-        assert len(runner.calls) == 1
-        assert sleep_fn.calls == []
+        out = tmp_path / "evidence.json"
+        runner = Runner([_cp(stdout=JOBS), _cp(stdout="body\n", stderr="failed to get jobs: HTTP 503")])
+        assert fetch_run_log("123", "owner/repo", out, runner=runner).fetched
 
 
 class TestTransientRetry:
     def test_transient_stderr_failure_retries_then_fails_loud(self, tmp_path: Path) -> None:
-        """rec-2718 contract: a genuine transient gh fetch failure (non-zero exit, transient
-        signature on stderr, empty stdout) is retried up to 3 attempts and, if never satisfied,
-        fails loudly (fetched=False) rather than being silently accepted."""
-        out = tmp_path / "ci-rca-failed.log"
-        transient_cp = _cp(returncode=1, stdout="", stderr="failed to get jobs: HTTP 503: Service Unavailable")
-        # 3 attempts * (primary + fallback) = 6 calls, all transient failures.
-        runner = _ScriptedRunner([transient_cp] * 6)
-        sleep_fn = _RecordingSleep()
-
-        outcome = fetch_run_log("123", "o/r", out, sleep_fn=sleep_fn, runner=runner)
-
-        assert outcome.fetched is False
-        assert outcome.attempts_used == 3
-        assert "transient" in outcome.diagnostic
-        assert len(runner.calls) == 6
-        assert not out.exists()
-        # Sleeps between attempts 1->2 and 2->3 only (never after the final attempt).
-        assert sleep_fn.calls == [10, 20]
-
-    def test_succeeds_on_second_attempt_after_transient_failure(self, tmp_path: Path) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        transient_cp = _cp(returncode=1, stdout="", stderr="failed to get run: HTTP 502")
-        success_cp = _cp(returncode=0, stdout="fetched at last\n", stderr="")
-        runner = _ScriptedRunner([transient_cp, transient_cp, success_cp])
-        sleep_fn = _RecordingSleep()
-
-        outcome = fetch_run_log("123", "o/r", out, sleep_fn=sleep_fn, runner=runner)
-
-        assert outcome == FetchOutcome(fetched=True, attempts_used=2)
-        assert out.read_text(encoding="utf-8") == "fetched at last\n"
-        assert sleep_fn.calls == [10]
-
-    def test_non_transient_failure_also_retries_and_fails_loud(self, tmp_path: Path) -> None:
-        """A failure whose stderr matches no transient signature still exhausts all attempts
-        (the module does not special-case "non-transient" into an early exit) and the diagnostic
-        falls through to the generic message."""
-        out = tmp_path / "ci-rca-failed.log"
-        opaque_cp = _cp(returncode=1, stdout="", stderr="permission denied")
-        runner = _ScriptedRunner([opaque_cp] * 6)
-        sleep_fn = _RecordingSleep()
-
-        outcome = fetch_run_log("123", "o/r", out, sleep_fn=sleep_fn, runner=runner)
-
-        assert outcome.fetched is False
-        assert outcome.attempts_used == 3
-        assert outcome.diagnostic == "log empty, unavailable, or gh reported a non-transient error"
-        assert len(runner.calls) == 6
+        test_failed_metadata_retries_and_leaves_no_output(tmp_path)
 
 
-class TestFallbackChain:
-    def test_fallback_fires_on_empty_rc0_log_failed(self, tmp_path: Path) -> None:
-        """Widened fallback (disclosed behaviour change): --log-failed exiting 0 with EMPTY
-        stdout (a run with no failed-step logs) falls through to --log, not just a non-zero exit."""
-        out = tmp_path / "ci-rca-failed.log"
-        runner = _ScriptedRunner([_cp(returncode=0, stdout=""), _cp(returncode=0, stdout="full run log\n")])
-        sleep_fn = _RecordingSleep()
+class TestStreamingTransport:
+    def test_exact_byte_cap_is_complete_but_cap_plus_one_is_truncated(self) -> None:
+        exact = _run_log([sys.executable, "-c", "import sys;sys.stdout.write('abcd')"], 4, 10)
+        over = _run_log([sys.executable, "-c", "import sys;sys.stdout.write('abcde')"], 4, 10)
+        assert exact.stdout == over.stdout == "abcd"
+        assert exact.truncated is False
+        assert over.truncated is True and over.truncation_reason == "byte_limit"
 
-        outcome = fetch_run_log("123", "o/r", out, sleep_fn=sleep_fn, runner=runner)
+    def test_line_cap_terminates_on_first_byte_of_next_line(self) -> None:
+        result = _run_log([sys.executable, "-c", "import sys;sys.stdout.write('one\\ntwo\\nthree')"], 100, 2)
+        assert result.stdout == "one\ntwo\n"
+        assert result.truncated is True and result.truncation_reason == "line_limit"
 
-        assert outcome == FetchOutcome(fetched=True, attempts_used=1)
-        assert out.read_text(encoding="utf-8") == "full run log\n"
-        assert len(runner.calls) == 2
-        assert runner.calls[0][-1] == "--log-failed"
-        assert runner.calls[1][-1] == "--log"
+    def test_large_stderr_is_drained_concurrently(self) -> None:
+        program = "import sys;sys.stderr.write('x'*200000);sys.stderr.flush();sys.stdout.write('ok')"
+        result = _run_log([sys.executable, "-c", program], 100, 10)
+        assert result.returncode == 0
+        assert result.stdout == "ok"
+        assert len(result.stderr) == 8192
 
-    def test_fallback_fires_on_nonzero_exit(self, tmp_path: Path) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        runner = _ScriptedRunner(
-            [_cp(returncode=1, stdout="", stderr="some error"), _cp(returncode=0, stdout="full run log\n")]
+    def test_sigterm_ignoring_child_is_killed_after_truncation(self) -> None:
+        program = (
+            "import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+            "sys.stdout.write('xx');sys.stdout.flush();time.sleep(10)"
         )
-        sleep_fn = _RecordingSleep()
+        result = _run_log([sys.executable, "-c", program], 1, 10)
+        assert result.stdout == "x"
+        assert result.truncated is True
 
-        outcome = fetch_run_log("123", "o/r", out, sleep_fn=sleep_fn, runner=runner)
+    def test_timeout_kills_child(self, monkeypatch) -> None:
+        class Process:
+            stdout = object()
+            stderr = object()
+            returncode = 1
 
-        assert outcome == FetchOutcome(fetched=True, attempts_used=1)
-        assert out.read_text(encoding="utf-8") == "full run log\n"
+            def __init__(self) -> None:
+                self.waits = 0
+                self.killed = False
 
-    def test_commands_target_run_id_and_repo(self, tmp_path: Path) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        runner = _ScriptedRunner([_cp(returncode=0, stdout="ok\n")])
-        fetch_run_log("999", "benjamin-blake/agent-platform", out, sleep_fn=_RecordingSleep(), runner=runner)
+            def wait(self, *, timeout: int) -> None:
+                self.waits += 1
+                if self.waits == 1:
+                    raise subprocess.TimeoutExpired("gh", timeout)
 
-        assert runner.calls[0] == [
-            "gh",
-            "run",
-            "view",
-            "999",
-            "--repo",
-            "benjamin-blake/agent-platform",
-            "--log-failed",
-        ]
+            def kill(self) -> None:
+                self.killed = True
 
-
-class TestOutputContract:
-    def test_writes_stdout_only_not_stderr(self, tmp_path: Path) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        runner = _ScriptedRunner([_cp(returncode=0, stdout="stdout content\n", stderr="a warning on stderr")])
-
-        fetch_run_log("123", "o/r", out, sleep_fn=_RecordingSleep(), runner=runner)
-
-        written = out.read_text(encoding="utf-8")
-        assert written == "stdout content\n"
-        assert "warning" not in written
-
-    def test_byte_for_byte_passthrough(self, tmp_path: Path) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        body = "line one\nline two\ttabbed\nHTTP 502 appears mid-body but is irrelevant\n"
-        runner = _ScriptedRunner([_cp(returncode=0, stdout=body, stderr="")])
-
-        fetch_run_log("123", "o/r", out, sleep_fn=_RecordingSleep(), runner=runner)
-
-        assert out.read_text(encoding="utf-8") == body
-
-    def test_nothing_written_on_exhaustion(self, tmp_path: Path) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        failing = _cp(returncode=1, stdout="", stderr="")
-        runner = _ScriptedRunner([failing] * 6)
-
-        fetch_run_log("123", "o/r", out, sleep_fn=_RecordingSleep(), runner=runner)
-
-        assert not out.exists()
+        process = Process()
+        selector = type(
+            "Selector",
+            (),
+            {
+                "register": lambda *_args: None,
+                "get_map": lambda _self: {},
+                "close": lambda _self: None,
+            },
+        )()
+        monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.Popen", lambda *_args, **_kwargs: process)
+        monkeypatch.setattr("scripts.ci_rca.fetch_logs.selectors.DefaultSelector", lambda: selector)
+        _run_log(["gh"], 1, 1)
+        assert process.killed
 
 
-class TestMain:
-    def test_exits_zero_and_writes_log_on_success(self, tmp_path: Path, monkeypatch, capsys) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        runner = _ScriptedRunner([_cp(returncode=0, stdout="ok\n")])
-        monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.run", runner)
-
-        rc = main(["--run-id", "1", "--repo", "o/r", "--out", str(out)])
-
-        assert rc == 0
-        assert out.read_text(encoding="utf-8") == "ok\n"
-
-    def test_exits_nonzero_and_prints_error_annotation_on_exhaustion(self, tmp_path: Path, monkeypatch, capsys) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        failing = _cp(returncode=1, stdout="", stderr="failed to get jobs: HTTP 503")
-        runner = _ScriptedRunner([failing] * 6)
-        monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.run", runner)
-        monkeypatch.setattr("scripts.ci_rca.fetch_logs.time.sleep", lambda _seconds: None)
-
-        rc = main(["--run-id", "1", "--repo", "o/r", "--out", str(out)])
-
-        assert rc == 1
-        assert not out.exists()
-        captured = capsys.readouterr().out
-        assert "::error::" in captured
-        assert "rec-2117" in captured and "rec-2118" in captured and "rec-2718" in captured
-
-    def test_respects_attempts_override(self, tmp_path: Path, monkeypatch) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        failing = _cp(returncode=1, stdout="", stderr="")
-        runner = _ScriptedRunner([failing] * 2)
-        monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.run", runner)
-        monkeypatch.setattr("scripts.ci_rca.fetch_logs.time.sleep", lambda _seconds: None)
-
-        rc = main(["--run-id", "1", "--repo", "o/r", "--out", str(out), "--attempts", "1"])
-
-        assert rc == 1
-        assert len(runner.calls) == 2
-
-
-class TestCliMain:
-    # This module is already imported at collection time (for the direct-call tests above), so
-    # it is already in sys.modules by the time runpy re-executes it below -- the standard, benign
-    # runpy caveat for this pattern (docs.python.org/3/library/runpy.html).
-    @pytest.mark.filterwarnings("ignore:.*found in sys.modules.*:RuntimeWarning")
-    def test_runpy_main_entrypoint_writes_log_and_exits_zero(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        out = tmp_path / "ci-rca-failed.log"
-        runner = _ScriptedRunner([_cp(returncode=0, stdout="ok\n")])
-        monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.run", runner)
-        monkeypatch.setattr(sys, "argv", ["fetch_logs", "--run-id", "1", "--repo", "o/r", "--out", str(out)])
-
-        with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module("scripts.ci_rca.fetch_logs", run_name="__main__")
-
-        assert exc_info.value.code == 0
-        assert out.read_text(encoding="utf-8") == "ok\n"
+def test_module_entrypoint(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fetch_logs", "--run-id", "1", "--repo", "owner/repo", "--out", str(tmp_path / "out"), "--max-bytes", "0"],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("scripts.ci_rca.fetch_logs", run_name="__main__")
+    assert exc_info.value.code == 1

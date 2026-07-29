@@ -142,6 +142,11 @@ class TestFingerprint:
         assert "631" not in sig
         assert "#" in sig
 
+    def test_first_error_signature_empty_log(self):
+        import scripts.ci_rca.evidence as ev_mod
+
+        assert ev_mod._normalize_first_error_signature("\n", "check") == ""
+
     def test_main_prints_fingerprint(self, log_file, taxonomy_file, capsys):
         with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
