@@ -27,6 +27,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from scripts.ci_rca.evidence_input import load_retrieval_input
 from scripts.ci_rca.fingerprint import (
     collapse_mass_failure,
     compute_fingerprint_v2,
@@ -61,8 +64,6 @@ def _resolve_bucket() -> str:
     try:
         personal_cfg = ROOT / "config" / "config.personal.yaml"
         if personal_cfg.exists():
-            import yaml
-
             with personal_cfg.open("r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
             val = cfg.get("aws", {}).get("s3_agent_logs_bucket", "")
@@ -495,6 +496,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Generate CI-RCA evidence bundles from pre-fetched logs.")
     parser.add_argument("--log-file", required=True, type=Path)
     parser.add_argument("--jobs-file", type=Path, default=None)
+    parser.add_argument("--retrieval-envelope", type=Path, default=None)
     parser.add_argument("--workflow-name", required=True)
     parser.add_argument("--workflow-run-id", required=True, type=int)
     parser.add_argument("--repo", default=None)
@@ -527,6 +529,10 @@ def main(argv: list[str] | None = None) -> None:
         print(f"ERROR: log file not found: {args.log_file}", file=sys.stderr)
         sys.exit(1)
 
+    retrieval = None
+    if args.retrieval_envelope is not None:
+        retrieval = load_retrieval_input(args.retrieval_envelope, args.log_file, args.workflow_run_id)
+
     bucket = _resolve_bucket()
     bundles = generate_bundles(
         log_file=args.log_file,
@@ -541,16 +547,18 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     for bundle in bundles:
-        sha = bundle["sha256"]
+        if retrieval is not None:
+            bundle["retrieval_evidence"] = retrieval
+            bundle["sha256"] = _sha256_of({key: value for key, value in bundle.items() if key != "sha256"})
         if args.emit_dir is not None:
             args.emit_dir.mkdir(parents=True, exist_ok=True)
-            local_path = args.emit_dir / f"{sha}.json"
+            local_path = args.emit_dir / f"{bundle['sha256']}.json"
             local_path.write_bytes(_canonical_json(bundle))
             print(f"BUNDLE_LOCAL={local_path}")
         result = upload_and_persist(bundle, bucket)
         if args.print_bundle:
             print(json.dumps({**bundle, **result}, indent=2, sort_keys=True))
-        print(f"BUNDLE_SHA={sha}")
+        print(f"BUNDLE_SHA={bundle['sha256']}")
         print(f"FINGERPRINT={bundle.get('fingerprint', '')}")
         print(f"BUNDLE_S3_URI={result['s3_uri']}")
         print(f"BUNDLE_PATH={result['pending_path']}")

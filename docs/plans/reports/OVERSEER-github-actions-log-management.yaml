@@ -1,0 +1,79 @@
+schema_version: 1
+slug: github-actions-log-management
+intent: Close GAL-01 through GAL-04 from the GitHub Actions log-management audit through three serial, independently planned, critiqued,
+  implemented, and reviewed IMPLEMENTATION slices.
+audit:
+  authoritative_record: audits/github-actions-log-management-c144530f02d1.yaml
+  navigation_report: audits/github-actions-log-management-c144530f02d1.md
+  audited_commit: c144530f02d1  # pragma: allowlist secret
+  reconciliation: 'Read-only reconciliation on the work branch found every finding still survives: fetch_logs.py still widens from
+    --log-failed to an uncapped --log body; no shared risk-based diagnostic contract or purpose-based retention classes are enforced;
+    and ci-rca.yml still attributes its test -s backstop to Decision 143.'
+wave_plan:
+- wave: 1
+  slices:
+  - bounded-ci-rca-evidence
+  dispatch: serial
+  rationale: GAL-01 is the keystone and defines the bounded evidence envelope reused by GAL-02.
+- wave: 2
+  slices:
+  - actions-diagnostic-governance
+  dispatch: serial
+  rationale: GAL-02 and GAL-04 enforce diagnostic and retention policy using Wave 1 evidence classes.
+- wave: 3
+  slices:
+  - ci-rca-authority-anchor
+  dispatch: serial
+  rationale: GAL-03 is independent but overlaps ci-rca.yml and its structural validators, so lands last.
+slices:
+- plan_slug: bounded-ci-rca-evidence
+  findings:
+  - GAL-01
+  status: plan_approved
+  plan_path: docs/plans/PLAN-bounded-ci-rca-evidence.yaml
+  current_evidence:
+  - scripts/ci_rca/fetch_logs.py widens to gh run view --log and writes stdout without a byte or line bound.
+  - .github/workflows/ci-rca.yml passes the resulting file directly to downstream CI-RCA processing.
+  plan_critique:
+    round_1: REVISE - schema/graduation, aggregate bounding, identity, confidentiality, atomic output, recovery/degraded semantics,
+      counterfactuals, rollback, and evidence.py integration required.
+    round_2: REVISE - loader schema v3, transport-time bounds, single-artifact atomicity, blocking live evidence, registry differential,
+      lifecycle SHA accuracy, and evidence.py SLOC decomposition required.
+    round_3: REVISE - literal blocking full validation, free-form metadata confidentiality adversaries, exact single-envelope AC,
+      and observed live-path evidence required.
+    round_4: 'REVISE - one HIGH contradiction: scope still allowed job name as display field despite name-omission confidentiality
+      contract.'
+    round_5: PROCEED - independent critique found no Critical/High/Medium/Low findings; scope, bounded transport, confidentiality,
+      atomicity, counterfactuals, blocking V3/full validation, rollback, and handoff are implementation-ready.
+  implementation: pending
+  code_review: pending
+  pr: pending
+  ci: pending
+  merge: pending
+- plan_slug: actions-diagnostic-governance
+  findings:
+  - GAL-02
+  - GAL-04
+  status: approved_decomposition
+  depends_on:
+  - bounded-ci-rca-evidence
+- plan_slug: ci-rca-authority-anchor
+  findings:
+  - GAL-03
+  status: approved_decomposition
+  depends_on:
+  - actions-diagnostic-governance
+finding_coverage:
+  GAL-01: bounded-ci-rca-evidence
+  GAL-02: actions-diagnostic-governance
+  GAL-03: ci-rca-authority-anchor
+  GAL-04: actions-diagnostic-governance
+gates:
+  g0_intake: confirmed
+  g1_decomposition: confirmed
+  g3_completion: pending
+autonomous_decision_log:
+- timestamp: '2026-07-29'
+  decision: Use three serial slices in keystone-first order and permit no overlapping editors.
+  rationale: The operator approved the slice graph and merge order; serial execution avoids overlap in ci-rca.yml, workflow validators,
+    tests, and verification-registry entries.
