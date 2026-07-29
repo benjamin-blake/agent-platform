@@ -26,6 +26,22 @@ _pre_glob_match = _validate._pre_glob_match
 _should_run_in_pre = _validate._should_run_in_pre
 
 
+def test_full_success_evidence_write_error_preserves_exit_zero(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["validate"])
+    monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    with (
+        patch("scripts.checks._common.run", return_value=MagicMock(stdout="work\n", returncode=0)),
+        patch("validate.run_python_checks"),
+        patch("validate.validation_result.clear"),
+        patch("validate.validation_result.write_completed", side_effect=OSError("disk full")),
+        pytest.raises(SystemExit) as exc,
+    ):
+        _validate.main()
+    assert exc.value.code == 0
+    assert "WARNING: validation evidence could not be written: OSError" in capsys.readouterr().out
+
+
 class TestLoadHelpers:
     """Tests for _load_coverage_checker and _load_prompt_compliance."""
 

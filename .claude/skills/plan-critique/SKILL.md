@@ -5,15 +5,17 @@ description: "Use when: critique a plan, challenge assumptions, review docs/plan
 
 ## Intent
 
-Challenge PLAN-*.yaml from a different perspective than the model that wrote it. Evaluate strategic alignment, decision consistency, and work area scoping before implementation begins. (Plans are YAML documents validated against the `PlanDocument` schema in `scripts/roadmap/plan_document.py` per T1.11 / CD.22; the legacy PLAN-*.md form is deprecated -- if handed a .md path, emit a deprecation warning in your output and critique it anyway for one release cycle.)
+Challenge plans independently; accept deprecated `.md` inputs.
 
-This is a BLOCKING gate. The critique must assess whether the plan is strategically sound, well-bounded, and aligned with the North Star. A superficial review that only checks formatting is unacceptable.
+This BLOCKING gate assesses strategic soundness, bounds, and North Star alignment; formatting-only review is insufficient.
 
 ---
 
 ## Steps
 
 ### Phase 1: Load Context (MANDATORY - Do Not Skip)
+
+Reject a plan that invents a third validation tier, treats mapped coverage or readiness as authoritative, or permits required full validation to time out, remain incomplete, or become a warning/CI-only handoff. A schema-v3 IMPLEMENTATION plan must carry the exact blocking handoff policy and its closure steps must distinguish readiness states, parent validator evidence, structured postflight evidence, and real push/PR outcomes.
 
 1. Read the ENTIRE plan file path provided by the caller (e.g., `docs/plans/PLAN-infra-parallel-workflow.yaml`). The caller passes this path explicitly — do not default to `docs/plans/PLAN.md`. If no path was provided, search `docs/plans/` for files matching `PLAN-*.yaml` and read the most recently modified one (fall back to `PLAN-*.md` only if no .yaml exists, and note the deprecation in your output).
 

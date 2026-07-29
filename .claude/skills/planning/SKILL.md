@@ -469,12 +469,15 @@ git branch --show-current
 ```
 If the result is `main`, STOP.
 
-Derive the plan slug from the task description (independent of the branch name). The plan filename is `docs/plans/PLAN-{slug}.yaml` (schema-validated by `scripts/roadmap/plan_document.py`; the legacy `PLAN-{slug}.md` form is DEPRECATED per T1.11 / CD.22 -- never author new .md plans; tooling warns on the .md path for one release cycle, then it is removed). After writing and approving the plan, it is merged to `main` via a GitHub MCP PR so a fresh `/implement` session can read it by explicit path.
+Derive the plan slug from the task, not the branch. Author only `docs/plans/PLAN-{slug}.yaml`; legacy `.md` plans are deprecated. Merge the approved plan before implementation.
 
 ## PLAN-{slug}.yaml Template (Workflow Step 8)
 The plan is a YAML document validated against the `PlanDocument` Pydantic schema (`scripts/roadmap/plan_document.py`, enforced by `validate.py` in both tiers). Unknown keys FAIL validation (`extra="forbid"`). Use exactly this structure -- comments document field semantics:
 ```yaml
-schema_version: 1                  # int; must be 1
+schema_version: 3                  # new plans; historical schema versions 1 and 2 remain valid
+handoff_policy:
+  full_validation_required_before_commit: true  # exact literal; commit/PR waits for completed full exit 0
+  timeout_disposition: blocked                   # exact literal; resume later and rerun full from the start
 slug: "{slug}"                     # must match the filename PLAN-{slug}.yaml
 intent: >-                         # 1-2 sentences: how this work contributes toward the North Star
   ...

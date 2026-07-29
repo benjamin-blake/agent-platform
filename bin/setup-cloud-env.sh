@@ -249,6 +249,7 @@ fi
 # The dependency and GitHub MCP SessionStart scripts delegate to the same commands
 # already run above; invoke the remaining checkout-local checks here for parity.
 bash .claude/hooks/session_start_aws.sh
+bash .claude/hooks/session_start_github_readiness.sh
 bash .claude/hooks/session_start_precommit.sh
 bash .claude/hooks/session_start_sync_main.sh
 
