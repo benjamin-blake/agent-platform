@@ -5,9 +5,9 @@ description: "Use when: critique a plan, challenge assumptions, review docs/plan
 
 ## Intent
 
-Challenge plans independently for alignment, consistency, and scope. Accept legacy `.md` inputs during deprecation.
+Challenge plans independently; accept deprecated `.md` inputs.
 
-This is a BLOCKING gate. The critique must assess whether the plan is strategically sound, well-bounded, and aligned with the North Star. A superficial review that only checks formatting is unacceptable.
+This BLOCKING gate assesses strategic soundness, bounds, and North Star alignment; formatting-only review is insufficient.
 
 ---
 
@@ -15,7 +15,7 @@ This is a BLOCKING gate. The critique must assess whether the plan is strategica
 
 ### Phase 1: Load Context (MANDATORY - Do Not Skip)
 
-Reject a plan that invents a third validation tier, treats a diagnostic command as authoritative, or permits required full validation to time out, remain incomplete, or become a warning/CI-only handoff. New schema-version 3 IMPLEMENTATION plans must carry the exact blocking handoff policy.
+Reject a plan that invents a third validation tier, treats mapped coverage or readiness as authoritative, or permits required full validation to time out, remain incomplete, or become a warning/CI-only handoff. A schema-v3 IMPLEMENTATION plan must carry the exact blocking handoff policy and its closure steps must distinguish readiness states, parent validator evidence, structured postflight evidence, and real push/PR outcomes.
 
 1. Read the ENTIRE plan file path provided by the caller (e.g., `docs/plans/PLAN-infra-parallel-workflow.yaml`). The caller passes this path explicitly — do not default to `docs/plans/PLAN.md`. If no path was provided, search `docs/plans/` for files matching `PLAN-*.yaml` and read the most recently modified one (fall back to `PLAN-*.md` only if no .yaml exists, and note the deprecation in your output).
 

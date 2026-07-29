@@ -476,8 +476,8 @@ The plan is a YAML document validated against the `PlanDocument` Pydantic schema
 ```yaml
 schema_version: 3                  # new plans; historical schema versions 1 and 2 remain valid
 handoff_policy:
-  full_validation_required_before_commit: true
-  timeout_disposition: blocked
+  full_validation_required_before_commit: true  # exact literal; commit/PR waits for completed full exit 0
+  timeout_disposition: blocked                   # exact literal; resume later and rerun full from the start
 slug: "{slug}"                     # must match the filename PLAN-{slug}.yaml
 intent: >-                         # 1-2 sentences: how this work contributes toward the North Star
   ...

@@ -483,11 +483,14 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 This workflow runs on Claude Code on the web: the harness assigns this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Branch protection is LIVE; the squash-merge-after-CI gate transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
 
 ### Run the full gate locally first
-Before the expensive full gate, run `bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage`. This diagnostic exposes every changed source -> owning test target and `--cov=<module>` argument and requires 100% per-file coverage, but it is not a validator tier or handoff authority.
+Run in order:
 
-The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR. A failed, timed-out, interrupted, truncated, or otherwise incomplete full run is BLOCKED: continue in a later turn or session. CI is not a substitute and commit/PR handoff is forbidden until the parent command exits 0, prints the terminal `Validation Summary (scope: all)`, and writes matching `logs/debug/validation-result.json` evidence. Child diagnostics and informational mypy output never override that parent verdict.
+1. Run `bin/venv-python -m scripts.session.github_readiness`. States are independent: `unknown` is unproven, never PASS; fetch/API PASS never authorizes push/PR.
+2. Run `bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage`. Repair failures; this is a diagnostic, not an overall gate.
+3. Run `bin/venv-python -m scripts.validate --pre`, then `bin/venv-python -m scripts.validate`. Handoff requires full exit 0, final `Validation Summary (scope: all)` PASS, and `logs/debug/validation-result.json` with scope `all`, exit 0, no failures, and current pre-commit HEAD. Child output, mypy, CI, and stale evidence cannot substitute. Any incomplete/mismatched result is BLOCKED; fix and rerun full from the start.
+4. Create `/tmp/implementation-retrospective.json` with the ten `scripts.session.postflight_evidence.CATEGORIES` keys. Values are bounded fact-string lists (`[]` if none); exclude credentials/raw output. Run `bin/venv-python -m scripts.session.postflight --evidence /tmp/implementation-retrospective.json` and confirm its gitignored output. `--auto` stops with `evidence_failed` before commit when invalid.
 
-After successful implementation closure, use `scripts.session.postflight --evidence` to write the bounded causal evidence record and render any human summary from that record.
+Report readiness, validator verdicts, evidence, review, and real push/PR outcome separately.
 
 ### Wait-for-CI: event-driven, never polled
 Wait for the PR-tier CI (the fast `--pre` tier, ~1-3 min; Decision 73) via subscription, never polling. The wake mechanism -- `subscribe_pr_activity`, ending the turn, the `ci.yml` "CI green" comment wake signal, the `pr-conflict-signal.yml` merge-conflict wake, and the GitHub-native auto-merge successor -- is canonical in AGENTS.md `## Git-ops procedure` steps 3-5; do not restate it here.

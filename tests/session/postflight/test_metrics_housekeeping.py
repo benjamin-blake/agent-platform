@@ -200,7 +200,11 @@ class TestStageDocumentDerivedTables:
             patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
             patch("scripts.postflight.housekeeping._stage_document_derived_tables") as mock_stage,
+            patch("scripts.session.postflight_evidence.EVIDENCE_PATH") as evidence_path,
         ):
+            evidence_path.read_text.return_value = json.dumps(
+                {category: [] for category in _postflight.postflight_evidence.CATEGORIES}
+            )
             rc = _postflight.run_auto("feat: test")
 
         assert rc == 0
