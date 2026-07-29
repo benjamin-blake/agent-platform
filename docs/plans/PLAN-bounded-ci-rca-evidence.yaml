@@ -128,7 +128,8 @@ verification_plan:
   action: 'Integration with the existing cause evidence generator and workflow: valid bounded envelope is consumed; malformed, mismatched,
     missing, and nonempty-body/invalid-envelope cases fail before evidence generation or agent dispatch; annotation and `test -s`
     backstops remain.'
-  command: bin/venv-python -m pytest tests/test_ci_rca_evidence.py tests/verify_ci_workflow/test_ci_rca_and_canary.py -q
+  command: bin/venv-python -m pytest tests/ci_rca/evidence tests/test_ci_rca_evidence_input.py tests/verify_ci_workflow/test_ci_rca_and_canary.py
+    -q
   expected: All integration and workflow mutation cases pass with no change to fingerprint/cause grouping.
   fix_if: Repair the explicit retrieval-envelope/evidence.py boundary or workflow sequencing; do not bypass schema validation or
     let the agent read an unvalidated body.
@@ -142,7 +143,8 @@ verification_plan:
     without removing prior checks, then run authoritative fast presubmit including SLOC, workflow guards, plan graduation, and registry
     validation.
   command: bin/venv-python -m ruff check scripts/ci_rca/fetch_logs.py scripts/ci_rca/log_evidence.py scripts/ci_rca/evidence.py scripts/ci_rca/evidence_input.py
-    tests/test_ci_rca_fetch_logs.py tests/test_ci_rca_log_evidence.py tests/test_ci_rca_evidence.py && git show origin/main:config/agent/verification_registry/registry.yaml
+    tests/test_ci_rca_fetch_logs.py tests/test_ci_rca_log_evidence.py tests/test_ci_rca_evidence_input.py tests/ci_rca/evidence/test_main_emit.py
+    && git show origin/main:config/agent/verification_registry/registry.yaml
     > /tmp/ci-rca-registry-base.yaml && bin/venv-python -c 'import yaml; b=yaml.safe_load(open("/tmp/ci-rca-registry-base.yaml",encoding="utf-8"));
     c=yaml.safe_load(open("config/agent/verification_registry/registry.yaml",encoding="utf-8")); ids=lambda x:{r["check_id"] for
     r in x["checks"]}; assert ids(c)-ids(b)=={"ci-rca-bounded-retrieval-envelope"}; assert not ids(b)-ids(c)' && bin/venv-python
