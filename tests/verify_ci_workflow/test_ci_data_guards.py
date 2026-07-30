@@ -37,7 +37,7 @@ _VALID_CI_DATA: dict[str, Any] = {
             "if": "github.event_name == 'push'",
             "runs-on": "ubuntu-latest",
             "steps": [
-                {"uses": "actions/checkout@v4"},
+                {"uses": "actions/checkout@v4", "with": {"fetch-depth": 2}},
                 {"uses": "actions/cache@v6", "with": {"key": "pip-${{ hashFiles('requirements.lock') }}"}},
                 {
                     "run": "pip install -c requirements.lock -r requirements.txt\n"
@@ -177,7 +177,28 @@ class TestCheckFetchDepthFailPath:
             with pytest.raises(AssertionError, match="fetch-depth"):
                 _check_fetch_depth()
 
-    def test_fails_when_main_validate_has_fetch_depth(self) -> None:
+    def test_fails_when_main_validate_missing_fetch_depth(self) -> None:
+        """Decision 159: main-validate must carry fetch-depth: 2 (HEAD~1 must resolve for the
+        push-context diff base) -- an absent `with` block is no longer accepted."""
+        data = {
+            "jobs": {
+                "pr-validate": _VALID_CI_DATA["jobs"]["pr-validate"],
+                "main-validate": {
+                    "if": "github.event_name == 'push'",
+                    "runs-on": "ubuntu-latest",
+                    "steps": [
+                        {"uses": "actions/checkout@v4"},
+                        {"run": "bin/venv-python -m scripts.validate"},
+                    ],
+                },
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = data
+            with pytest.raises(AssertionError, match="expected 2"):
+                _check_fetch_depth()
+
+    def test_fails_when_main_validate_has_wrong_fetch_depth(self) -> None:
         data = {
             "jobs": {
                 "pr-validate": _VALID_CI_DATA["jobs"]["pr-validate"],
@@ -193,7 +214,7 @@ class TestCheckFetchDepthFailPath:
         }
         with patch("scripts.verify_ci_workflow._load") as mock_load:
             mock_load.return_value = data
-            with pytest.raises(AssertionError, match="unexpected fetch-depth"):
+            with pytest.raises(AssertionError, match="expected 2"):
                 _check_fetch_depth()
 
 

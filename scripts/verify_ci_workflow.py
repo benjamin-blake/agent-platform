@@ -147,8 +147,9 @@ def _check_fetch_depth() -> None:
     assert pr_with.get("fetch-depth") == 0, f"pr-validate checkout fetch-depth is {pr_with.get('fetch-depth')!r}, expected 0"
 
     main_with = main_checkout.get("with", {}) or {}
-    assert "fetch-depth" not in main_with, (
-        f"main-validate checkout has unexpected fetch-depth: {main_with.get('fetch-depth')!r}"
+    assert main_with.get("fetch-depth") == 2, (
+        f"main-validate checkout fetch-depth is {main_with.get('fetch-depth')!r}, expected 2 "
+        "(Decision 159: HEAD~1 must resolve for the push-context diff base, squash-merge convention)"
     )
 
 

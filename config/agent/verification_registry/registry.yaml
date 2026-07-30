@@ -2447,3 +2447,47 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/checks/iam_tf/test__write_companions.py
+  - check_id: push-context-diff-base-tests
+    primitive_slot: test_selector
+    guard_target: scripts/checks/_common.py
+    guard_symbol: push_context_base
+    plan_slug: coverage-diff-base-baseline
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_checks_registry.py::TestPushContextBase
+  - check_id: coverage-baseline-gate-tests
+    primitive_slot: test_selector
+    guard_target: scripts/checks/misc/coverage_baseline.py
+    guard_symbol: null
+    plan_slug: coverage-diff-base-baseline
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/misc/test_coverage_baseline.py
+  - check_id: push-context-session-branch-guard
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/_common.py
+    guard_symbol: push_context_base
+    plan_slug: coverage-diff-base-baseline
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import sys,os,subprocess; sys.path.insert(0,'.'); os.environ.pop('GITHUB_EVENT_NAME', None); from scripts.checks import _common; b=_common.push_context_base(); br=subprocess.run(['git','branch','--show-current'],capture_output=True,text=True).stdout.strip(); assert b is None, f'false positive: expected None on branch {br!r}, got {b}'
+  - check_id: coverage-gate-live-with-baseline
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/misc/coverage_baseline.py
+    guard_symbol: measure_and_check
+    plan_slug: coverage-diff-base-baseline
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import importlib.util,sys,pathlib; sys.path.insert(0,'.'); spec=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); srcs=m.get_changed_source_files(files=['scripts/ops_writer.py','scripts/sync/ops.py']); assert len(srcs)==2, srcs; errs=m.check_per_file_coverage(srcs); assert errs==[], errs

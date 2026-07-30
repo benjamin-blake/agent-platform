@@ -68,3 +68,44 @@ class TestValidateTestCoverage:
             validate_test_coverage(failed)
 
         assert failed == []
+
+    def test_passes_when_baseline_entry_present_and_measured_meets_it(self, tmp_path: Path) -> None:
+        """Baseline-aware gate branch: an entry present means the threshold is < 100.
+
+        check_per_file_coverage() is fully delegated to (mocked) here -- its own baseline
+        compare logic is covered directly in tests/checks/misc/test_coverage_baseline.py -- so
+        this only proves validate_test_coverage() treats a non-empty return as a failure and an
+        empty return (the baseline-satisfied case) as a pass, exactly as it does for the
+        unbaselined 100% case above."""
+        source = tmp_path / "scripts" / "ops_writer.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("def foo(): pass", encoding="utf-8")
+
+        mock_checker = MagicMock()
+        mock_checker.get_changed_source_files.return_value = [source]
+        mock_checker.check_test_file_exists.return_value = (True, "test file found")
+        mock_checker.check_per_file_coverage.return_value = []  # baselined at 75.4, measured 75.5
+
+        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
+            failed: list[str] = []
+            validate_test_coverage(failed)
+
+        assert failed == []
+
+    def test_fails_when_measured_below_baseline_entry(self, tmp_path: Path) -> None:
+        """A changed file WITH a baseline entry still fails when measured < that threshold."""
+        source = tmp_path / "scripts" / "ops_writer.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("def foo(): pass", encoding="utf-8")
+
+        mock_checker = MagicMock()
+        mock_checker.get_changed_source_files.return_value = [source]
+        mock_checker.check_test_file_exists.return_value = (True, "test file found")
+        mock_checker.check_per_file_coverage.return_value = ["scripts/ops_writer.py: 70.0% line coverage (expected >= 75.4%)"]
+
+        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
+            failed: list[str] = []
+            validate_test_coverage(failed)
+
+        assert len(failed) == 1
+        assert "Coverage below 100%" in failed[0]

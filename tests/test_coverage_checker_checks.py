@@ -131,7 +131,10 @@ class TestGetChangedSourceFiles:
         mock_diff.returncode = 0
         mock_diff.stdout = "src/data/pipeline.py\nscripts/validate.py\ndocs/README.md\nterraform/main.tf\n"
 
-        with patch("test_coverage_checker.subprocess.run", side_effect=[mock_merge_base, mock_diff]):
+        with (
+            patch("scripts.checks._common.push_context_base", return_value=None),
+            patch("test_coverage_checker.subprocess.run", side_effect=[mock_merge_base, mock_diff]),
+        ):
             result = get_changed_source_files()
 
         rel_parts = [str(p.relative_to(ROOT)).replace("\\", "/") for p in result]
@@ -150,7 +153,10 @@ class TestGetChangedSourceFiles:
         mock_diff.returncode = 0
         mock_diff.stdout = "src/data/__init__.py\nsrc/data/pipeline.py\n"
 
-        with patch("test_coverage_checker.subprocess.run", side_effect=[mock_merge_base, mock_diff]):
+        with (
+            patch("scripts.checks._common.push_context_base", return_value=None),
+            patch("test_coverage_checker.subprocess.run", side_effect=[mock_merge_base, mock_diff]),
+        ):
             result = get_changed_source_files()
 
         names = [p.name for p in result]
@@ -166,7 +172,10 @@ class TestGetChangedSourceFiles:
         mock_diff.returncode = 0
         mock_diff.stdout = "tests/test_pipeline.py\nsrc/data/pipeline.py\n"
 
-        with patch("test_coverage_checker.subprocess.run", side_effect=[mock_merge_base, mock_diff]):
+        with (
+            patch("scripts.checks._common.push_context_base", return_value=None),
+            patch("test_coverage_checker.subprocess.run", side_effect=[mock_merge_base, mock_diff]),
+        ):
             result = get_changed_source_files()
 
         names = [p.name for p in result]
@@ -190,7 +199,10 @@ class TestGetChangedSourceFiles:
         mock_head_diff.returncode = 0
         mock_head_diff.stdout = "src/data/pipeline.py\n"
 
-        with patch("test_coverage_checker.subprocess.run", side_effect=[mock_fail, mock_head_diff]):
+        with (
+            patch("scripts.checks._common.push_context_base", return_value=None),
+            patch("test_coverage_checker.subprocess.run", side_effect=[mock_fail, mock_head_diff]),
+        ):
             result = get_changed_source_files()
 
         assert any("pipeline.py" in str(p) for p in result)
@@ -214,4 +226,5 @@ def test_coverage_reports_owning_target_and_module(tmp_path: Path, capsys) -> No
         assert checker.check_per_file_coverage([source]) == []
     output = capsys.readouterr().out
     assert "scripts/checks/validation_result.py -> tests/checks/test_validation_result.py" in output
-    assert "--cov=scripts.checks.validation_result" in output
+    # rec-943: --cov targets the file's PARENT DIRECTORY, not a dotted module path.
+    assert "--cov=scripts/checks" in output

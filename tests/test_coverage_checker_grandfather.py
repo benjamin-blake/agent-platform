@@ -227,12 +227,13 @@ class TestCheckPerFileCoverageDirectoryTarget:
 
 
 class TestPerFileCoverageDottedModuleForm:
-    """VTS-07 regression (rec-866/2633/2640/2681/2791/2810 cluster): check_per_file_coverage's
-    --cov argument must be a dotted module path ('.'.join(parts)), not the former slash-separated
-    posix path. The slash form makes coverage.py warn 'Module ... was never imported' / 'No data
-    was collected' and write no .coverage.json, which check_per_file_coverage's own
-    `if not coverage_json.exists(): continue` then swallows as a silent skip (empty error list)
-    instead of surfacing the shortfall -- broken for BOTH scripts/ and src/ modules alike."""
+    """VTS-07 regression (rec-866/2633/2640/2681/2791/2810 cluster), superseded by rec-943:
+    check_per_file_coverage's --cov argument was moved from a slash-separated single-.py path
+    to a dotted module path to fix VTS-07, but rec-943 found dotted single-file specs ALSO
+    silently collect no coverage data for module-level (non-package) sources -- coverage.py
+    treats --cov as an importable name or a DIRECTORY, never one file. The --cov argument is now
+    the file's PARENT DIRECTORY (verified working at plan time: 87.7% on scripts/roadmap/
+    plan_audit.py), which fixes both the original slash-path defect and the dotted-file gap."""
 
     def test_dotted_cov_form_flags_undertested_module(self, tmp_path: Path, monkeypatch) -> None:
         """Behavioral proof (rec-2791/rec-2633/rec-2681 acceptance): a REAL coverage subprocess
@@ -297,5 +298,6 @@ class TestPerFileCoverageDottedModuleForm:
         cov_args = [arg for arg in called_cmd if isinstance(arg, str) and arg.startswith("--cov=")]
         assert len(cov_args) == 1, called_cmd
         cov_value = cov_args[0].removeprefix("--cov=")
-        assert "/" not in cov_value, cov_value
-        assert cov_value == "scripts.probe", cov_value
+        # rec-943: --cov is the file's PARENT DIRECTORY, not a dotted module path or the file
+        # itself -- coverage.py silently collects no data for a single-.py-path/dotted-file spec.
+        assert cov_value == "scripts", cov_value
