@@ -78,3 +78,23 @@ admin_out_of_band:
       - "hashicorp/*-only roots (terraform/, terraform/github, terraform/bootstrap): local terraform init succeeds unconditionally, no proxy dependency."
       - "terraform/personal (third-party kislerdm/neon provider): a stock CC-web session cannot locally init it (Decision 119, direct github.com fetch 403s) -- use the CI-mediated speculative-plan + apply-the-saved-plan pipeline instead for routine changes. On an ADMIN container with the S3 filesystem_mirror synced (Decision 120 -- bin/setup-cloud-env.sh ran with INSTALL_TERRAFORM=1 and the sync succeeded, so TF_CLI_CONFIG_FILE is set), local init does succeed and this loop is available for terraform/personal."
       - "Recover the four no-default tfvars (account_id, owner_email, platform_dev_external_id, platform_admin_external_id) from the remote Terraform state in S3 regardless of which init path was used (see terraform/CLAUDE.md's remote-state recovery description); never paste their values into chat, a PR, or any committed file."
+      - >-
+        POST-APPLY, after any terraform/bootstrap apply that changes the apply role's GRANT SURFACE
+        (its inline policy, an attached customer-managed policy, or the permissions boundary), run
+        the standing live-simulate gate:
+        `bin/venv-python -m scripts.ci.iam_simulate --profile agent_platform_admin --fixture
+        docs/contracts/iam-simulate-fixture.yaml`.
+        Exit 0 with zero mismatches is the completion condition for the apply -- treat a mismatch on
+        a newly granted verb as a wrong boundary ceiling or resource scope (fix in HCL, re-apply
+        through this same human gate), and a mismatch on a `by_design` denial as a GRANT LEAK, i.e.
+        a security regression rather than a fixture error. WHY IT CANNOT BE A PR-TIME CHECK: a
+        static text check structurally cannot see condition-key evaluation (the
+        iam:PermissionsBoundary / iam:PassedToService conditions) or the identity/boundary
+        intersection -- a verb granted in the identity policy but absent from the boundary's
+        DataPlaneAllow ceiling is SILENTLY denied, and nothing in validate.py can observe that. It
+        is also deliberately not wired into `validate --pre`: between merge and this apply the code
+        legitimately declares verbs the live policy lacks, so gating the PR on it would red the very
+        PR that fixes the problem. RE-RUN IT ON ANY hashicorp/aws PROVIDER BUMP as well -- every
+        companion-verb inference in the fixture is scoped to the pinned provider version, and a
+        provider that migrates a call (e.g. logs:TagLogGroup -> logs:TagResource) silently changes
+        which verbs are load-bearing.

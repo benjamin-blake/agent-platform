@@ -143,6 +143,7 @@ from scripts.checks.iam_tf.validate_convergence_writer_isolation import (  # noq
     validate_convergence_writer_isolation,
 )
 from scripts.checks.iam_tf.validate_environment_taxonomy import validate_environment_taxonomy  # noqa: F401,E402
+from scripts.checks.iam_tf.validate_iam_policy_size import validate_iam_policy_size  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_iam_runner_policy import validate_iam_runner_policy  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_invoke_implies_resolve import (  # noqa: F401,E402
     validate_invoke_implies_resolve,

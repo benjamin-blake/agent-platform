@@ -139,6 +139,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_boundary_attached"),
         _c("validate_invoke_implies_resolve"),
         _c("validate_ci_refresh_read_coverage"),
+        _c("validate_iam_policy_size"),
         _c("validate_convergence_writer_isolation"),
         _c("validate_ci_workflow_guards"),
         _c(
@@ -245,6 +246,7 @@ def full_sequence() -> list[Step]:
         _c("validate_boundary_attached"),
         _c("validate_invoke_implies_resolve"),
         _c("validate_ci_refresh_read_coverage"),
+        _c("validate_iam_policy_size"),
         _c("validate_convergence_writer_isolation"),
         _c("validate_ducklake_version_lockstep"),
         _c("validate_import_contracts"),
