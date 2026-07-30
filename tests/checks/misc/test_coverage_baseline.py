@@ -358,6 +358,19 @@ class TestValidateCoverageBaselineEdits:
 
         assert len(failed) == 1
 
+    def test_new_entry_at_exactly_100_requires_no_marker(self, tmp_path: Path) -> None:
+        """A new entry is only a violation when it registers SUB-100 debt -- a (pointless but
+        harmless) new entry at exactly 100.0 is neither a lowering nor a sub-100 registration."""
+        self._write_current(tmp_path, "entries:\n  scripts/new.py: 100.0\n")
+        self._write_decisions(tmp_path, [])
+        base_reader = lambda rel: "entries: {}\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            coverage_baseline.validate_coverage_baseline_edits(failed, base_reader=base_reader)
+
+        assert failed == []
+
     def test_passes_new_sub100_registration_with_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/new.py: 90.0  # baseline-lowered: dec-159 newly discovered debt\n")
         self._write_decisions(tmp_path, [159])

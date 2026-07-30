@@ -234,7 +234,7 @@ def validate_coverage_baseline_edits(
     violations: list[str] = []
     for path, (new_value, marker) in sorted(current_entries.items()):
         base_entry = base_entries.get(path)
-        is_new = base_entry is None
+        is_new = base_entry is None and new_value < 100.0
         is_lowered = base_entry is not None and new_value < base_entry[0]
         if not (is_new or is_lowered):
             continue
