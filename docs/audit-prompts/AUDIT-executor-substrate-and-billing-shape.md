@@ -250,12 +250,13 @@ already-present `origin/main`, append the failure to semicolon-delimited `meta.c
 proceed. If no `origin/main` exists, STOP and report: this audit's conclusions are repository-wide
 and a substituted HEAD makes them unsound. If the preflight command fails for ANY reason -
 credentials, egress, import error, schema error, or anything else - do NOT abort: append the exact
-failure to `meta.contract_notes`, set `meta.degraded_dedup=true`, set every affected finding's
-`confidence` to HYPOTHESIS and its `roadmap_crossref.dedup_hit_count` to `null`, and proceed using
-direct reads of `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md` for dedup. If the prior audit
-named in DISAMBIGUATION TRAPS is absent or renamed, do not search for a substitute and do not treat
-its absence as a finding: note it in `meta.contract_notes` and derive every primary-source fact
-yourself.
+failure to `meta.contract_notes`, set `meta.degraded_dedup=true`, set the `confidence` to HYPOTHESIS and the
+`roadmap_crossref.dedup_hit_count` to `null` on exactly those findings whose dedup search would have
+relied on the recommendation cache - not on every finding, and proceed using
+direct reads of `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md` for dedup. If ANY prior audit file this prompt names by path - in DISAMBIGUATION TRAPS or in DEDUP DISCIPLINE -
+is absent or renamed, do not search for a substitute and do not treat its absence as a finding: note
+it in `meta.contract_notes`, record the path in `meta.stale_anchors`, and derive every primary-source
+fact yourself.
 
 For current ecosystem claims, consult at most 15 primary sources, limited to: official AWS
 documentation and pricing pages for Lambda, Lambda durable functions, the AWS Durable Execution SDK,
@@ -309,8 +310,8 @@ S3-pointer artefact pattern already externalize, and what they do not.
 
 Q2 - Where does model-latency wall-clock get billed under each candidate substrate, and can it be
 moved off billed compute? Return `movable-to-free-wait|partially-movable|not-movable|insufficient-evidence`.
-Populate the `billing_model` block with exactly one row per assessed candidate substrate: the four
-named substrates always, plus `other` only if you propose one. Separate compute (configured memory
+Populate the `billing_model` block with exactly one row per assessed CONCRETE SUBSTRATE: the five
+named in SCOPE always, plus `other` only if you propose one. Separate compute (configured memory
 multiplied by billed duration), per-durable-operation charges, durable state written and retained,
 external state-store cost, and Step Functions state transitions. Where invocation counts, loop depth,
 model latency, or memory configuration are absent from the repository, use symbolic variables and
@@ -320,7 +321,9 @@ would place that latency on a non-billed primitive instead - including whether t
 by CD.28 offer a request mode that makes such a design possible, and what the design costs in
 correlation, idempotency, and failure handling.
 
-Q3 - How does each candidate substrate stand against NS-A, and what is the exit cost? Return
+Q3 - How does each candidate substrate stand against NS-A, and what is the exit cost? Assess EVERY
+concrete substrate in `prose` and in `reversal_analysis`; the single returned verdict rates the
+substrate you recommend at Q6 (or, if Q6 is `insufficient-evidence`, the incumbent). Return
 `conformant|tension-accepted-and-priced|conformant-only-with-changes|violates`. Cover SDK
 major-version exposure on in-flight executions, availability in the project's region, observability
 and incident diagnosis of a replayed execution, and whether the fallback CD.27 already names is
@@ -335,7 +338,8 @@ incidental or contradictory, say which of the two positions governs and what wou
 reconcile them. Do not treat either position as automatically superseding the other by recency.
 
 Q5 - What is the cheapest decision-relevant experiment, and how reversible is this choice once T4.2
-lands? Return `cheaply-reversible|reversible-with-material-cost|effectively-irreversible|insufficient-evidence`.
+lands? The single returned verdict rates the substrate you recommend at Q6 (or the incumbent if Q6 is
+`insufficient-evidence`); per-substrate detail belongs in `reversal_analysis`. Return `cheaply-reversible|reversible-with-material-cost|effectively-irreversible|insufficient-evidence`.
 Price the exit at three points: after the first persona lands, after all five land, and after the
 14-day stability window closes. Distinguish contract-level from implementation-level reversibility.
 Name the experiment that would most cheaply discriminate between the leading candidates, what it
@@ -362,12 +366,15 @@ expose? What operational runbook does each substrate require that does not exist
 
 ## RUBRIC
 
-Rate every surface for VD1-VD8 as `strong|adequate|weak|absent|n/a`: VD1 capability coverage for the
+Rate every surface for VD1-VD8, emitting the COMPLETE 7 surfaces x 8 dimensions = 56 rows with no
+cell omitted. Ratings are `strong|adequate|weak|absent|n/a`: VD1 capability coverage for the
 required loop semantics; VD2 failure and recovery semantics; VD3 economic-model evidence; VD4
 portability and lock-in; VD5 operability, observability, and incident diagnosis; VD6 delivery and
 governance integration; VD7 agent-implementability and error legibility; VD8 quality of the evidence
 behind the recorded decision. `n/a` is correct and costless where a dimension does not structurally
-apply. Never create a rating or a finding merely to fill a cell. Each rating carries differentiated
+apply, and is the correct entry for an inapplicable cell - `n/a` is how you fill the matrix without
+manufacturing a judgment. Never invent a substantive rating, and never create a FINDING merely to
+fill a cell. Each rating carries differentiated
 evidence for ITS surface: an identical `note` repeated across surfaces is a contract violation, not a
 rating.
 
@@ -375,7 +382,8 @@ rating.
 
 DD-A - Project the CD.27 topology node by node under EACH assessed candidate substrate. For every
 node in T4.1's state-machine shape, plus the T4.9a callback handler, record: owning tier item,
-substrate under CD.27 as designed, and one `projections[]` entry per assessed alternative giving that
+substrate under CD.27 as designed, and one `projections[]` entry per assessed CONCRETE SUBSTRATE -
+including `durable_functions` itself, so every node's row is directly comparable - giving that
 node's role under it and the contract change at the node boundary. Feed Q1/Q4/Q6.
 
 DD-B - Trace one full persona iteration end to end under EACH assessed candidate substrate, using
@@ -496,11 +504,13 @@ single persona trace; the T4.x tier items enumerated in the GROUNDING MAP plus a
 Lambda-bearing T4.x item you re-derive; the 2 most recently committed files under `audits/` whose
 filename or report heading names executor, Lambda, or substrate; a recommendation-cache sample of at
 most 12 rows sorted by parsed `last_updated_timestamp` descending then `rec_id` ascending; and at
-most 12 external primary sources. Do NOT exceed these caps. If the recommendation cache is absent,
+most 15 external primary sources, the same ceiling SETUP pins. Do NOT exceed these caps. If the recommendation cache is absent,
 use the degraded-dedup path and skip that sample rather than substituting another source.
 
-Record `evidence_kind: observed` for executed commands, sampled records, and reproducible
-observations; repository text and code inspection are `static`. At equal severity, observed evidence
+Record `evidence_kind: observed` ONLY for commands you executed, records you sampled, and
+reproducible observations you made yourself. Repository text, code inspection, and external
+primary-source documentation are all `static` - a vendor documentation page is authoritative but it
+is not something you observed running. At equal severity, observed evidence
 outranks static evidence. Do not deploy, apply Terraform, invoke production functions, mutate AWS,
 or run any paid benchmark.
 
@@ -605,8 +615,11 @@ not emitted as placeholders.
 
 Two enums are referenced repeatedly and pinned once here.
 SURFACE = `persona_substrate|deterministic_glue|orchestration_layer|billing_shape|failure_semantics|portability_and_lockin|existing_precedents`.
-SUBSTRATE = `durable_functions|sfn_over_stateless_workers|self_checkpointed_lambda_dynamodb|hybrid_by_persona|other`.
-Every `surface:` field takes a SURFACE value; every `substrate:` field takes a SUBSTRATE value.
+CONCRETE SUBSTRATE = `durable_functions|sfn_over_stateless_workers|self_checkpointed_lambda_dynamodb|long_running_container|github_actions_runner|other`.
+SUBSTRATE = CONCRETE SUBSTRATE plus `hybrid_by_persona`.
+Every `surface:` field takes a SURFACE value. Every `substrate:` field takes a CONCRETE SUBSTRATE
+value, because `hybrid_by_persona` is an aggregate verdict and never describes a single row. Only
+Q6's verdict and `summary.overall_substrate` take the full SUBSTRATE set.
 
 Effort and cost sizes are comparative intervals in engineer-days, never delivery commitments:
 `XS`=<2, `S`=2-5, `M`=6-15, `L`=16-40, `XL`=>40. The same scale applies to `effort`,
@@ -631,7 +644,7 @@ audit:
   question_answers:
     - {q: Q1, verdict: durable-provides-materially-more|roughly-equivalent|alternatives-provide-materially-more|insufficient-evidence,
        basis: [], prose: "",
-       semantics_matrix: [{property: "", substrate: <SUBSTRATE>, surfaces: [<SURFACE>],
+       semantics_matrix: [{property: "", substrate: <CONCRETE SUBSTRATE>, surfaces: [<SURFACE>],
          provision: platform-provided|must-hand-roll|not-required, hand_roll_cost: XS|S|M|L|XL|n/a,
          existing_credit: "", evidence: "file:line|source-url"}]}
     - {q: Q2, verdict: movable-to-free-wait|partially-movable|not-movable|insufficient-evidence, basis: [], prose: ""}
@@ -642,7 +655,7 @@ audit:
        basis: [], prose: ""}
     - {q: Q7, answers: [{question: "", answer: "", basis: []}]}
   billing_model:
-    - {substrate: <SUBSTRATE>, design: "",
+    - {substrate: <CONCRETE SUBSTRATE>, design: "",
        model_latency_billed_as: billed-compute|non-billed-wait|split|not-determinable,
        compute_term: "", per_operation_term: "", state_and_retention_term: "",
        external_store_term: "", transition_term: "",
@@ -653,8 +666,10 @@ audit:
        verdict: <CONCRETE SUBSTRATE>|insufficient-evidence,
        mechanism: "", what_changes: "", exit_cost: "", rationale: "", confidence: CONFIRMED|HYPOTHESIS}
   node_projection: [{node: "", tier_item: "",
+    # a waitForTaskToken node is `lambda` (the worker), not `step_functions`; Parallel and Choice
+    # states are `step_functions`
     cd27_substrate: step_functions|lambda|lambda_durable_function|ecs_run_task,
-    projections: [{substrate: <SUBSTRATE>, role_under_substrate: "", contract_change: ""}],
+    projections: [{substrate: <CONCRETE SUBSTRATE>, role_under_substrate: "", contract_change: ""}],
     evidence: "file:line", confidence: CONFIRMED|HYPOTHESIS}]
   # exactly one row per SURFACE, all seven present; this block is the system of record for
   # decision_readiness, and summary.decision_readiness_* must mirror it exactly
@@ -665,17 +680,17 @@ audit:
   candidate_adjudications: [{candidate_id: C1|C2|C3|C4|C5|C6|C7, surface: <SURFACE>,
     adjudication: confirmed-defect|planned-insufficient|planned-unbuilt|fully-covered|not-a-defect,
     destination_ids: [], basis: ""}]
-  reversal_analysis: [{substrate: <SUBSTRATE>, exit_point: after-first-persona|after-all-five|after-stability-window,
+  reversal_analysis: [{substrate: <CONCRETE SUBSTRATE>, exit_point: after-first-persona|after-all-five|after-stability-window,
     contract_level_cost: XS|S|M|L|XL, implementation_level_cost: XS|S|M|L|XL,
     surviving_contracts: [], basis: "", confidence: CONFIRMED|HYPOTHESIS}]
   adversarial_reviews:
-    packet_evidence: [{claim: "", citation: "", evidence_kind: static|observed}]
+    packet_evidence: [{round: 1, claim: "", citation: "", evidence_kind: static|observed}]  # one set per round
     rounds: [{round: 1, reviewers: [{perspective: semantics-and-correctness-reviewer|economics-and-operations-reviewer|portability-and-reversibility-reviewer|frame-and-alternatives-challenger,
       challenges: [{claim: "", evidence_or_counterexample: "", disposition: sustain|revise|needs-evidence}],
       missing_questions: [], verdict_pressure: toward_incumbent|toward_named_alternative|toward_candidate_set_incomplete|neutral,
       pressure_target: ""}],
       reconciliation: [{challenge: "", disposition: accepted|rejected-with-basis|deferred-needs-evidence, basis: ""}], stable: true|false}]
-    unresolved: []
+    unresolved: [{issue: "", why_unresolved: "", affects: [<finding id>]}]
   findings:
     - {id: ESB-01, surface: <SURFACE>, question: Q1|Q2|Q3|Q4|Q5|Q6|Q7, dimension: VD1|VD2|VD3|VD4|VD5|VD6|VD7|VD8,
        title: "", evidence: "file:line|item-id|source-url", evidence_kind: static|observed,
@@ -684,7 +699,8 @@ audit:
        severity: critical|high|medium|low, severity_rationale: "", confidence: CONFIRMED|HYPOTHESIS,
        roadmap_crossref: {classification: novel|planned-insufficient|planned-unbuilt, item_ids: [],
          dedup_search_terms: [], dedup_hit_count: 0|null, note: ""}, effort: XS|S|M|L|XL,
-       depends_on: [], sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}}
+       depends_on: [<finding id>], sequencing: {safe_to_queue_now: true|false,
+         blocked_behind: [<finding id or roadmap item id>], note: ""}}
   rejected_candidates: [{candidate_id: C1|C2|C3|C4|C5|C6|C7, surface: <SURFACE>,
     adjudication: fully-covered|not-a-defect, why_dismissed: "", compensating_control: "",
     control_property_match: "", decision_or_item_id: ""}]  # decision_or_item_id is "" when no owning item applies
@@ -748,7 +764,9 @@ diff contains only the two deliverable files. This branch name is a DELIBERATE e
 repository's convention of working on a harness-assigned `claude/...` session branch: the audit
 session needs a clean two-file diff off the audited base, and the CI green-comment wake signal that
 the `claude/*` convention exists to serve is irrelevant here because you end your turn without
-merging and a human disposes of the PR. Do not resolve this in favour of the ambient convention.
+merging and a human disposes of the PR. Do not resolve this in favour of the ambient convention. If the branch cut fails or would carry
+unrelated uncommitted changes across, do not stash or discard them: create the temporary worktree
+described in SETUP and cut the branch there instead.
 
 Parse and structurally check the YAML with:
 
