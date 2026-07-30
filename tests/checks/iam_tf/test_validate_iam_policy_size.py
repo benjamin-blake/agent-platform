@@ -12,6 +12,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from scripts.checks.iam_tf import validate_iam_policy_size as policy_size
 from scripts.checks.iam_tf.validate_iam_policy_size import POLICY_SIZE_LIMITS, validate_iam_policy_size
 
 _INLINE_LIMIT = POLICY_SIZE_LIMITS["aws_iam_role_policy"]
@@ -195,6 +198,68 @@ def test_limit_only_in_error_message_prose_fails(tmp_path: Path) -> None:
     assert "no recognised limit constant" in failed[0]
 
 
+def test_block_commented_precondition_does_not_count(tmp_path: Path) -> None:
+    """The `/* ... */` form, with a deliberately unbalanced brace inside it.
+
+    Two failures at once if block comments were not masked: the commented precondition would count as
+    enforcement, AND its stray `{` would unbalance the resource block (the finding would read "cannot
+    parse the resource block" instead). Masking preserves offsets, so the resource still parses.
+    """
+    lifecycle = f"""
+  /* restore once the split lands:
+  lifecycle {{
+    precondition {{
+      condition = length(jsonencode(jsondecode(local.reads_policy_json))) <= {_MANAGED_LIMIT}
+    }}
+  */
+"""
+    failed = _run(tmp_path, _policy_resource("aws_iam_policy", "reads", lifecycle))
+    assert len(failed) == 1
+    assert "declares no lifecycle precondition" in failed[0]
+
+
+def test_escaped_quote_inside_a_string_does_not_end_the_string(tmp_path: Path) -> None:
+    """A `\\"` must not terminate string masking early -- the `}` living after it in the same string
+    would then be read as real HCL and truncate the resource body before its precondition."""
+    tf = f"""
+resource "aws_iam_policy" "reads" {{
+  description = "the \\" and }} characters are string content, not HCL"
+  policy      = local.reads_policy_json
+{_precondition(_MANAGED_LIMIT, "reads")}
+}}
+"""
+    assert _run(tmp_path, tf) == []
+
+
+def test_precondition_without_a_condition_expression_fails(tmp_path: Path) -> None:
+    """A precondition carrying only an error_message asserts nothing -- it must not satisfy the gate."""
+    lifecycle = """
+  lifecycle {
+    precondition {
+      error_message = "the reads policy must fit in its limit."
+    }
+  }
+"""
+    failed = _run(tmp_path, _policy_resource("aws_iam_policy", "reads", lifecycle))
+    assert len(failed) == 1
+    assert "declares no lifecycle precondition" in failed[0]
+
+
+def test_unreadable_tf_file_fails_loud_and_the_scan_continues(tmp_path: Path) -> None:
+    """An unreadable .tf is reported per-file and the sweep carries on -- one bad file cannot
+    silently disarm the gate, and it cannot mask the resources the readable files do declare."""
+    bootstrap = tmp_path / "terraform" / "bootstrap"
+    bootstrap.mkdir(parents=True, exist_ok=True)
+    (bootstrap / "unreadable.tf").mkdir()
+    tf = _policy_resource("aws_iam_policy", "reads", _precondition(_MANAGED_LIMIT, "reads"))
+    failed = _run(tmp_path, tf)
+    assert len(failed) == 1
+    assert "cannot read" in failed[0]
+    assert "unreadable.tf" in failed[0]
+    # The readable file's resource was still checked -- otherwise the vacuous-pass guard would fire.
+    assert not any("no policy resources discovered" in f for f in failed)
+
+
 def test_commented_out_precondition_does_not_count(tmp_path: Path) -> None:
     """A precondition living in a comment is not enforcement -- comment masking must ignore it."""
     lifecycle = f"""
@@ -257,3 +322,53 @@ def test_findings_are_per_resource(tmp_path: Path) -> None:
 def test_limits_are_the_aws_hard_limits() -> None:
     assert POLICY_SIZE_LIMITS["aws_iam_role_policy"] == 10240
     assert POLICY_SIZE_LIMITS["aws_iam_policy"] == 6144
+
+
+# ---------------------------------------------------------------------------
+# _condition_expressions -- the two fail-closed brace-extraction guards
+# ---------------------------------------------------------------------------
+
+_WELL_FORMED_LIFECYCLE = f"""
+  lifecycle {{
+    precondition {{
+      condition     = length(jsonencode(jsondecode(local.reads_policy_json))) <= {_MANAGED_LIMIT}
+      error_message = "the reads policy exceeds the 10240 B ceiling."
+    }}
+  }}
+"""
+
+
+def test_condition_expressions_cuts_the_expression_at_error_message() -> None:
+    """The control for the two guards below: a well-formed block yields exactly one expression, and
+    it stops at error_message so a limit quoted in the message prose can never stand in for it."""
+    exprs = policy_size._condition_expressions(_WELL_FORMED_LIFECYCLE)
+    assert len(exprs) == 1
+    assert str(_MANAGED_LIMIT) in exprs[0]
+    assert str(_INLINE_LIMIT) not in exprs[0]
+
+
+def test_condition_expressions_skips_an_unbalanced_lifecycle_block() -> None:
+    """Fail-closed: a lifecycle block whose braces never close contributes no expression instead of
+    raising, so the caller reports the loud "declares no lifecycle precondition" finding."""
+    unbalanced = f"  lifecycle {{\n    precondition {{\n      condition = x <= {_MANAGED_LIMIT}\n"
+    assert policy_size._condition_expressions(unbalanced) == []
+
+
+def test_condition_expressions_skips_a_precondition_block_it_cannot_extract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The inner guard, reached by fault injection.
+
+    Real HCL cannot produce it: _extract_block only ever returns a brace-balanced body, so every
+    `precondition {` inside an extracted lifecycle body is guaranteed a matching `}`. The ValueError
+    is therefore forced here. What is asserted is the handler's contract -- an unextractable
+    precondition is DROPPED (the resource then fails loud as "no precondition"), never propagated as
+    an exception out of the check and never counted as a satisfied assertion.
+    """
+    real_extract = policy_size._extract_block
+
+    def fake_extract(masked: str, open_brace_idx: int) -> str:
+        if masked[:open_brace_idx].rstrip().endswith("precondition"):
+            raise ValueError(f"unbalanced braces starting at index {open_brace_idx}")
+        return real_extract(masked, open_brace_idx)
+
+    monkeypatch.setattr(policy_size, "_extract_block", fake_extract)
+    assert policy_size._condition_expressions(_WELL_FORMED_LIFECYCLE) == []

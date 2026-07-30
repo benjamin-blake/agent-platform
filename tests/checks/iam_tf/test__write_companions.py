@@ -323,6 +323,28 @@ class TestBoundaryCeiling:
 
 
 class TestPassRoleCondition:
+    _CREATE_FUNCTION_STMTS = [
+        _stmt(["lambda:CreateFunction", "lambda:TagResource"], '["...function:agent-platform-*"]'),
+        _stmt(["iam:PassRole"], _ROLE_PREFIX_RESOURCE),
+    ]
+
+    def test_unreadable_bootstrap_fails_loud_on_both_re_reads(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Both boundary re-reads own their own loud failure.
+
+        The lambda create row makes iam:PassRole live, so the checker re-reads github_ci_apply.tf
+        twice -- once for the DataPlaneAllow ceiling, once for the PassRole condition. When the file
+        is unreadable NEITHER may fall through silently, and each finding must name which assertion
+        was lost, or an operator cannot tell what stopped being checked.
+        """
+        monkeypatch.setattr(_common, "ROOT", tmp_path)
+        failed: list[str] = []
+        check_lifecycle_companions(self._CREATE_FUNCTION_STMTS, failed, "k:")
+        assert len(failed) == 2, failed
+        assert all(f.startswith("k: cannot re-read") for f in failed)
+        assert any("for the boundary-ceiling check" in f for f in failed)
+        assert any("for the PassRole-condition check" in f for f in failed)
+        assert all("github_ci_apply.tf" in f for f in failed)
+
     def test_unconditioned_passrole_fails_loud(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Decision 143 worst-verb scoping: CreateFunction's PassRole companion must be conditioned."""
         monkeypatch.setattr(_common, "ROOT", tmp_path)
@@ -377,6 +399,23 @@ class TestCheckIdentityIamActionsSubsetOfBoundary:
         check_identity_iam_actions_subset_of_boundary([_stmt(["iam:TagRole"], "[...]")], failed, "k:")
         assert len(failed) == 1, failed
         assert "'iam:TagRole'" in failed[0] and "does not grant it" in failed[0]
+
+    def test_unlocatable_ceiling_reports_only_the_location_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ceiling that cannot be parsed is UNKNOWN, not empty.
+
+        The checker must report the location failure and stop -- reading an unparseable ceiling as
+        "grants nothing" would bury that one real finding under a fabricated per-action complaint
+        for every iam: action the identity policy grants.
+        """
+        monkeypatch.setattr(_common, "ROOT", tmp_path)
+        _write_bootstrap(tmp_path, _IDENTITY_WITH_CONDITION)  # identity only -- no boundary resource
+        failed: list[str] = []
+        check_identity_iam_actions_subset_of_boundary([_stmt(["iam:CreateRole", "iam:TagRole"], "[...]")], failed, "k:")
+        assert len(failed) == 1, failed
+        assert "could not locate the github_ci_apply_boundary DataPlaneAllow statement" in failed[0]
+        assert not any("does not grant it" in f for f in failed)
 
     def test_deny_only_action_absent_from_boundary_is_not_flagged(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

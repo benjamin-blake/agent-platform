@@ -285,12 +285,20 @@ acceptance_criteria:
     All three rendered policy documents are under their IAM hard limits with real headroom, verified
     by the terraform lifecycle preconditions at admin plan time (the PR-time check asserts those
     preconditions EXIST and name the right constant -- it does not re-derive the bytes): inline
-    aws_iam_role_policy 8,580 B / 10,240 (1,660 B headroom, 27 statements); managed
-    agent-platform-github-ci-apply-reads 3,998 B / 6,144 (2,146 B headroom, 11 statements); managed
+    aws_iam_role_policy 8,663 B / 10,240 (1,577 B headroom, 27 statements); managed
+    agent-platform-github-ci-apply-reads 4,227 B / 6,144 (1,917 B headroom, 12 statements); managed
     agent-platform-github-ci-apply-boundary 1,548 B / 6,144 (4,596 B headroom, 4 statements). Baseline
     reproduced this session with `terraform console` over the extracted locals (length-accurate
     placeholder account id, region eu-west-2): inline 10,156 B / 33 statements, boundary 1,373 B --
     both exact to the byte; the 11 relocated read Sids sum to 3,821 B of statement body.
+    RESTATED AFTER DECISION 157 (the Secrets Manager value-capability split, landed in this same
+    plan): the pre-157 model was inline 8,580 B / 27 and reads 3,998 B / 11. The split added the
+    SecretsManagerMetadataRead Sid to the reads document (11 -> 12 statements, +229 B) and the
+    ForceDeleteWithoutRecovery condition to the inline document (+83 B, statement count unchanged).
+    The figures above are the CURRENT measured values and are the ones to check against the admin
+    plan output; the superseded pair is recorded here only so a reviewer holding the earlier model
+    can see why it moved. The planner role's own inline policy also grew 7,242 -> 7,475 B / 10,240
+    (its own precondition) from the mirrored metadata-read statement.
   - >-
     Every confirmed gap from the sweep is closed at the recorded scope: P0-1 (iam:ListInstanceProfiles
     ForRole + iam:RemoveRoleFromInstanceProfile in BOTH layers), P0-2 (the 3 lambda function-URL config
@@ -376,15 +384,18 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
-      Assert the relocation actually happened in BOTH directions -- each of the 11 read Sids occurs
+      Assert the relocation actually happened in BOTH directions -- each relocated read Sid occurs
       EXACTLY ONCE in the file and that single occurrence is inside the reads-policy slice -- and that
       the attachment resource exists. Position-independent by construction (M1): it does not assume
       where in the file the reads locals were inserted, and it writes its temporaries to mktemp, never
-      into the working tree.
+      into the working tree. The Sid list is 12, not the 11 this plan was drafted against: the
+      Decision 157 read split replaced SecretsManagerReadOnly with SecretsManagerMetadataRead +
+      SecretsManagerValueReadEnumerated, so asserting the pre-split name would assert a Sid the tree
+      deliberately no longer has.
     command: |-
-      f=terraform/bootstrap/github_ci_apply.tf; t=$(mktemp); awk '/aws_iam_policy" "github_ci_apply_reads"/{p=1} /github_ci_apply_reads_policy_json *= *jsonencode/{p=1} p' "$f" > "$t"; rc=0; for s in IAMRolesRead SecretsManagerReadOnly DataLakeBucketManage LambdaRead SSMParameterRead EventBridgeRead SNSRead CloudWatchAlarmsRead SNSSubscriptionRead CloudWatchLogsRead SSMDescribeParameters; do all=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$f"); inr=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$t"); [ "$all" -eq 1 ] || { echo "NOT-EXACTLY-ONCE $s ($all)"; rc=1; }; [ "$inr" -eq 1 ] || { echo "NOT-IN-READS-POLICY $s"; rc=1; }; done; grep -q 'resource "aws_iam_role_policy_attachment" "github_ci_apply_reads"' "$f" || { echo "MISSING attachment"; rc=1; }; rm -f "$t"; exit $rc
+      f=terraform/bootstrap/github_ci_apply.tf; t=$(mktemp); awk '/aws_iam_policy" "github_ci_apply_reads"/{p=1} /github_ci_apply_reads_policy_json *= *jsonencode/{p=1} p' "$f" > "$t"; rc=0; for s in IAMRolesRead SecretsManagerMetadataRead SecretsManagerValueReadEnumerated DataLakeBucketManage LambdaRead SSMParameterRead EventBridgeRead SNSRead CloudWatchAlarmsRead SNSSubscriptionRead CloudWatchLogsRead SSMDescribeParameters; do all=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$f"); inr=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$t"); [ "$all" -eq 1 ] || { echo "NOT-EXACTLY-ONCE $s ($all)"; rc=1; }; [ "$inr" -eq 1 ] || { echo "NOT-IN-READS-POLICY $s"; rc=1; }; done; grep -q 'resource "aws_iam_role_policy_attachment" "github_ci_apply_reads"' "$f" || { echo "MISSING attachment"; rc=1; }; rm -f "$t"; exit $rc
     expected: >-
-      Exit 0 with no NOT-EXACTLY-ONCE / NOT-IN-READS-POLICY / MISSING lines -- all 11 Sids relocated,
+      Exit 0 with no NOT-EXACTLY-ONCE / NOT-IN-READS-POLICY / MISSING lines -- all 12 Sids relocated,
       none duplicated anywhere in the file, and the aws_iam_role_policy_attachment binding the reads
       policy to the role is declared.
     fix_if: >-
@@ -469,16 +480,18 @@ verification_plan:
       "could not locate the DataPlaneAllow statement" -- i.e. `validate --pre` goes RED on the very PR
       that fixes the problem. This step asserts the rebuilt shared locator resolves BOTH shapes.
     command: |-
-      bin/venv-python -c "from pathlib import Path; import scripts.checks.iam_tf._read_coverage as rc; t=Path('terraform/bootstrap/github_ci_apply.tf').read_text(encoding='utf-8'); b=rc._parse_boundary_dataplane_statement(t); r=rc._parse_managed_policy_statements(t,'github_ci_apply_reads'); assert b is not None and b['sid']=='DataPlaneAllow', 'boundary DataPlaneAllow not located after the hoist'; assert len(r)==11, f'reads policy parsed {len(r)} statements, expected 11'; assert rc._parse_managed_policy_statements(t,'no_such_policy')==[], 'absent-resource case must return []'; print('OK boundary=%d-actions reads=%d-statements'%(len(b['actions']),len(r)))"
+      bin/venv-python -c "from pathlib import Path; import scripts.checks.iam_tf._read_coverage as rc; t=Path('terraform/bootstrap/github_ci_apply.tf').read_text(encoding='utf-8'); b=rc._parse_boundary_dataplane_statement(t); r=rc._parse_managed_policy_statements(t,'github_ci_apply_reads'); assert b is not None and b['sid']=='DataPlaneAllow', 'boundary DataPlaneAllow not located after the hoist'; assert len(r)==12, f'reads policy parsed {len(r)} statements, expected 12'; assert rc._parse_managed_policy_statements(t,'no_such_policy')==[], 'absent-resource case must return []'; print('OK boundary=%d-actions reads=%d-statements'%(len(b['actions']),len(r)))"
     expected: >-
-      Prints "OK boundary=<n>-actions reads=11-statements" and exits 0 -- the shared locator follows the
-      hoisted-local indirection for the boundary, parses all 11 relocated read statements from the new
+      Prints "OK boundary=<n>-actions reads=12-statements" and exits 0 -- the shared locator follows the
+      hoisted-local indirection for the boundary, parses all 12 relocated read statements from the new
       named aws_iam_policy, and still returns [] for an absent resource (so the pre-existing synthetic
-      fixtures under tests/checks/iam_tf/validate_ci_refresh_read_coverage/ stay green unmodified).
+      fixtures under tests/checks/iam_tf/validate_ci_refresh_read_coverage/ stay green unmodified). The
+      count is 12, not the 11 this plan was drafted against: the Decision 157 read split turned
+      SecretsManagerReadOnly into SecretsManagerMetadataRead + SecretsManagerValueReadEnumerated.
     fix_if: >-
       Boundary None -> the locator still forward-searches from the resource match instead of resolving
       the `policy = local.<name>` indirection; generalise `_POLICY_LOCAL_REF_RE` and express BOTH
-      parsers on it. reads != 11 -> the named-aws_iam_policy branch is wrong or a Sid was not moved.
+      parsers on it. reads != 12 -> the named-aws_iam_policy branch is wrong or a Sid was not moved.
     hermetic: true
     graduation: graduate
     graduation_check_id: "iam-tf-parser-resolves-hoisted-and-inline-policy-shapes"

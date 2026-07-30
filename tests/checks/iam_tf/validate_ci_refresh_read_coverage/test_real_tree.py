@@ -1,6 +1,17 @@
 """Real-tree + synthetic-gap tests for the CI refresh-read resource coverage gate (rec-2702
 anti-recurrence, PLAN-ci-apply-grant-coupling). Concern-split module (rec-2709 Wave 1) -- see
 test_helpers.py and test_end_to_end.py for the other two modules of this package.
+
+FIXTURE CONTRACT (PLAN-iam-write-surface-completion): the synthetic apply policy below must satisfy
+every obligation the gate now orchestrates, not just read coverage -- design (a) discovery (each type
+its personal tree declares is WRITE_COVERAGE-mapped and granted at its marker), design (b) lifecycle
+companions (each granted trigger verb's declared companions are granted at their own markers, and each
+iam: companion is in the boundary DataPlaneAllow ceiling), and design (c) rule 1 tag symmetry. The one
+rule it CANNOT satisfy is design (c) rule 2 (read scope >= write scope), because the fixture pairs
+prefix WRITE grants with literal READ ARNs on purpose -- that mismatch is what makes gap_fn/gap_secret
+detectable. Rule 2 is therefore neutralised per-test by the `synthetic_parity_exempt` fixture in this
+package's conftest.py (read its comment before changing anything); the REAL tree is asserted against
+the unpatched rule by test_real_tree_passes below.
 """
 
 from __future__ import annotations
@@ -45,25 +56,34 @@ resource "aws_iam_role_policy" "github_ci_apply" {{
       {{
         Sid    = "LambdaFunctionWrite"
         Effect = "Allow"
-        Action = ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"]
+        Action = [
+          "lambda:CreateFunction", "lambda:UpdateFunctionConfiguration",
+          "lambda:TagResource", "lambda:UntagResource"
+        ]
         Resource = ["arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-*"]
       }},
       {{
         Sid    = "CloudWatchLogsWrite"
         Effect = "Allow"
-        Action = ["logs:CreateLogGroup", "logs:PutRetentionPolicy"]
+        Action = [
+          "logs:CreateLogGroup", "logs:PutRetentionPolicy",
+          "logs:TagLogGroup", "logs:UntagLogGroup", "logs:TagResource", "logs:UntagResource"
+        ]
         Resource = ["arn:aws:logs:eu-west-2:1234567890:log-group:/aws/lambda/agent-platform-*"]
       }},
       {{
         Sid    = "CloudWatchAlarmsWrite"
         Effect = "Allow"
-        Action = ["cloudwatch:PutMetricAlarm"]
+        Action = ["cloudwatch:PutMetricAlarm", "cloudwatch:TagResource", "cloudwatch:UntagResource"]
         Resource = ["arn:aws:cloudwatch:eu-west-2:1234567890:alarm:agent-platform-*"]
       }},
       {{
         Sid    = "EventBridgeWrite"
         Effect = "Allow"
-        Action = ["events:PutRule"]
+        Action = [
+          "events:PutRule", "events:TagResource", "events:UntagResource",
+          "events:EnableRule", "events:DisableRule"
+        ]
         Resource = ["arn:aws:events:eu-west-2:1234567890:rule/agent-platform-*"]
       }},
       {{
@@ -75,8 +95,23 @@ resource "aws_iam_role_policy" "github_ci_apply" {{
       {{
         Sid    = "IAMRoleMetadataWrite"
         Effect = "Allow"
-        Action = ["iam:TagRole", "iam:UntagRole", "iam:UpdateRole"]
+        Action = ["iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:UpdateRoleDescription"]
         Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+      }},
+      {{
+        Sid    = "IAMRolePolicyWrite"
+        Effect = "Allow"
+        Action = ["iam:PutRolePolicy", "iam:DeleteRolePolicy"]
+        Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+      }},
+      {{
+        Sid    = "SecretsManagerMetadataWrite"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret", "secretsmanager:DeleteSecret",
+          "secretsmanager:TagResource", "secretsmanager:UntagResource"
+        ]
+        Resource = ["arn:aws:secretsmanager:eu-west-2:1234567890:secret:agent-platform-*"]
       }},
       {{
         Sid    = "IAMPassRoleForLambda"
@@ -104,8 +139,9 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {{
         Sid      = "DataPlaneAllow"
         Effect   = "Allow"
         Action   = [
-          "lambda:*", "logs:*", "cloudwatch:*", "events:*",
-          "iam:CreateRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:PassRole"
+          "lambda:*", "logs:*", "cloudwatch:*", "events:*", "secretsmanager:*",
+          "iam:CreateRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole",
+          "iam:UpdateRoleDescription", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PassRole"
         ]
         Resource = ["*"]
       }}
@@ -206,16 +242,21 @@ class TestValidateCiRefreshReadCoverage:
         validate_ci_refresh_read_coverage(failed)
         assert failed == []
 
-    def test_synthetic_fully_covered_tree_passes(self, tmp_path: Path) -> None:
+    def test_synthetic_fully_covered_tree_passes(self, tmp_path: Path, synthetic_parity_exempt: None) -> None:
         """Sanity check on the test harness itself: a minimal, fully-covered synthetic module
-        produces zero findings (isolates 'gap' assertions below from fixture bugs)."""
+        produces zero findings (isolates 'gap' assertions below from fixture bugs).
+
+        "Fully covered" now means read-covered AND design (a)/(b)/(c)-rule-1 clean -- see the module
+        docstring for why rule 2 is the one obligation this fixture is exempted from."""
         _write_fixture(tmp_path)
         failed: list[str] = []
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_ci_refresh_read_coverage(failed)
         assert failed == []
 
-    def test_uncovered_lambda_function_and_secret_fail_with_precise_message(self, tmp_path: Path) -> None:
+    def test_uncovered_lambda_function_and_secret_fail_with_precise_message(
+        self, tmp_path: Path, synthetic_parity_exempt: None
+    ) -> None:
         """An aws_lambda_function and an aws_secretsmanager_secret with no matching grant in
         either role policy FAIL, naming the resource, its resolved name, and the role."""
         _write_fixture(
@@ -251,7 +292,7 @@ resource "aws_secretsmanager_secret" "gap_secret" {
         # No false positives on the resources that ARE covered.
         assert not any("known_fn" in f or "known_secret" in f or "known_rule" in f for f in failed)
 
-    def test_unmapped_resource_type_fails_loud(self, tmp_path: Path) -> None:
+    def test_unmapped_resource_type_fails_loud(self, tmp_path: Path, synthetic_parity_exempt: None) -> None:
         """A resource type absent from every coverage-map category (CHECKED_TYPES,
         ENUMERATED_IAM_TYPES, TRANSITIVE_TYPES, NON_AWS_TYPES, NO_GRANT_TYPES) fails loud rather
         than silently passing (Decision 55)."""

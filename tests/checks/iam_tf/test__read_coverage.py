@@ -21,6 +21,8 @@ from scripts.checks.iam_tf._read_coverage import (
     _extract_capitalized_field,
     _literal_or_prefix_match,
     _parse_bootstrap_statements,
+    _parse_boundary_dataplane_statement,
+    _parse_managed_policy_statements,
     _resolve_resource_name,
     _resolve_role_statements,
     _resolve_value,
@@ -28,6 +30,19 @@ from scripts.checks.iam_tf._read_coverage import (
     _scan_resources,
     _split_top_level_objects,
 )
+
+# A customer-managed policy in the rec-2793 hoisted-local shape: its document is assigned in a
+# `locals` block ABOVE the resource that references it, which is the shape a size precondition forces.
+_MANAGED_POLICY_TF = """
+locals {
+  boundary_policy_json = jsonencode({
+    Statement = [{ Sid = "DataPlaneAllow", Effect = "Allow", Action = ["lambda:*", "iam:PassRole"], Resource = ["*"] }]
+  })
+}
+resource "aws_iam_policy" "github_ci_apply_boundary" {
+  policy = local.boundary_policy_json
+}
+"""
 
 
 class TestReadCoverageHelpers:
@@ -154,6 +169,28 @@ resource "aws_iam_role_policy" "github_ci_apply" {
 }
 """
         assert _parse_bootstrap_statements(text, "github_ci_apply") == []
+
+    def test_parse_managed_policy_statements_absent_resource_returns_empty(self) -> None:
+        """Load-bearing: an absent managed policy yields [] rather than raising, so a
+        single-inline-policy tree stays parseable; callers that REQUIRE it assert on the length."""
+        assert _parse_managed_policy_statements("# no aws_iam_policy here", "github_ci_apply_reads") == []
+
+    def test_parse_managed_policy_statements_parses_a_declared_policy(self) -> None:
+        stmts = _parse_managed_policy_statements(_MANAGED_POLICY_TF, "github_ci_apply_boundary")
+        assert len(stmts) == 1
+        assert (stmts[0]["sid"], stmts[0]["effect"]) == ("DataPlaneAllow", "Allow")
+
+    def test_parse_boundary_dataplane_statement_follows_the_hoisted_local(self) -> None:
+        """The boundary document lives in a `locals` block ABOVE its resource, so a forward search
+        from the resource match finds nothing -- the shared locator must resolve the indirection, or
+        every boundary-ceiling check fails closed the moment the boundary grows a size precondition."""
+        stmt = _parse_boundary_dataplane_statement(_MANAGED_POLICY_TF)
+        assert stmt is not None and stmt["sid"] == "DataPlaneAllow"
+        assert stmt["actions"] == ["lambda:*", "iam:PassRole"]
+
+    def test_parse_boundary_dataplane_statement_without_that_sid_returns_none(self) -> None:
+        """A boundary policy whose statements carry some other Sid is not the DataPlaneAllow ceiling."""
+        assert _parse_boundary_dataplane_statement(_MANAGED_POLICY_TF.replace("DataPlaneAllow", "SomeOtherSid")) is None
 
     def test_resolve_value_none_input_returns_none(self) -> None:
         assert _resolve_value(None, {}, {}) is None
