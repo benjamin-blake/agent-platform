@@ -3,18 +3,20 @@
 ## TASK
 
 Audit the substrate assignment CD.27 makes for the executor's agent-persona loop in
-`docs/ROADMAP-PLATFORM.yaml`: whether Lambda Durable Functions is the right execution substrate for
-the T4.2 personas, versus the named alternatives, and where model-latency wall-clock and
+`docs/ROADMAP-PLATFORM.yaml`: whether AWS Lambda durable functions is the right execution substrate
+for the T4.2 personas, versus the named alternatives, and where model-latency wall-clock and
 per-operation charges land under each. This is a LANGUAGE-NEUTRAL audit: it decides what runs the
 persona loop, never what language it is written in. Test, rather than endorse, the hypothesis that
-Lambda Durable Functions is the correct layer-2 substrate; apply the same evidence burden to every
-alternative, including doing nothing. Answer Q1-Q7, perform the bounded recursive adversarial
+AWS Lambda durable functions is the correct layer-2 substrate; apply the same evidence burden to
+every alternative, including doing nothing. Answer Q1-Q7, perform the bounded recursive adversarial
 review specified below, and create or modify only the two tracked deliverables
 `audits/executor-substrate-and-billing-shape-<base-short-sha>.yaml` and
-`audits/executor-substrate-and-billing-shape-<base-short-sha>.md`. The ONLY files you create or
-modify in the repository tree are those two deliverables; regenerating the gitignored caches named
-in SETUP is expected and does not breach that boundary, and those caches are never staged or
-committed. You draft the assessment; the human disposes of it and makes any substrate decision.
+`audits/executor-substrate-and-billing-shape-<base-short-sha>.md`, where `<base-short-sha>` is the
+value of `BASE_SHA` derived in SETUP and is substituted literally into both filenames. The ONLY
+files you create or modify in the repository tree are those two deliverables; regenerating the
+gitignored caches named in SETUP is expected and does not breach that boundary, and those caches are
+never staged or committed. You draft the assessment; the human disposes of it and makes any
+substrate decision.
 
 ## CANDIDATE OBSERVATIONS VS VERDICTS
 
@@ -26,15 +28,21 @@ Agreement reached after that search is valid.
 The seven bullets below are candidates C1-C7 in order; do not split compound clauses into new
 candidates. Adjudicate every candidate against every named SCOPE surface as exactly one of:
 `confirmed-defect`, `planned-insufficient`, `planned-unbuilt`, `fully-covered`, or `not-a-defect`,
-and record it in `candidate_adjudications[]`. For a structurally irrelevant pair, use `not-a-defect`
-with a brief inapplicability basis; do not omit the cell. A mixed result uses multiple surface rows,
-never a sixth status. Multiple adjudication rows may point to one deduplicated finding via
-`destination_ids`; findings need not duplicate candidate rows. Map `confirmed-defect`,
-`planned-insufficient`, and `planned-unbuilt` to `findings[]`. Set classification from the dedup
-result, not the candidate status: `confirmed-defect` may be `novel`, `planned-insufficient`, or
-`planned-unbuilt`; the two planned statuses retain their namesake classification. Map
-`fully-covered` and `not-a-defect` to `rejected_candidates[]`; when a compensating control supports
-dismissal, supply the required property-match proof.
+and record it in `candidate_adjudications[]`. `candidate_adjudications[]` is the COMPLETE matrix:
+7 candidates by 7 surfaces = 49 rows, no cell omitted. For a structurally irrelevant pair use
+`not-a-defect` with a one-line inapplicability basis and nothing more; such a cell does NOT generate
+a `rejected_candidates` row. A mixed result uses multiple surface rows, never a sixth status.
+Multiple adjudication rows may point to one deduplicated finding via `destination_ids`; findings need
+not duplicate candidate rows.
+
+Map `confirmed-defect`, `planned-insufficient`, and `planned-unbuilt` to `findings[]`. Set
+classification from the dedup result, not the candidate status: `confirmed-defect` may be `novel`,
+`planned-insufficient`, or `planned-unbuilt`; the two planned statuses retain their namesake
+classification. Emit a `rejected_candidates[]` row ONLY where the dismissal is substantive: every
+`fully-covered` cell, and every `not-a-defect` cell where a compensating control or an owning
+decision is the reason for dismissal rather than structural irrelevance. `compensating_control` and
+`control_property_match` are required only on rows where a compensating control drives the
+dismissal.
 
 Expected designed-but-unbuilt work fully covered by its owning roadmap item is `fully-covered`, not
 a finding. Use `planned-unbuilt` only when a committed control required to MAKE or safely execute
@@ -51,10 +59,10 @@ Candidate hypotheses to test:
   `agent` (LLM-backed Lambda).
 - Model-latency wall-clock may be billed as compute inside a durable step, or may be movable onto a
   non-billed wait, or the answer may depend on a design choice the roadmap has not yet made.
-- Durable Functions' checkpoint/replay and completed-operation suppression may deliver semantics the
-  alternatives cannot cheaply reproduce; alternatively, T4.11's Step-Functions-state budget counters
-  and CD.27's S3-pointer artefact pattern may already externalize much of the state an alternative
-  would need.
+- AWS durable functions' checkpoint/replay and completed-operation suppression may deliver semantics
+  the alternatives cannot cheaply reproduce; alternatively, T4.11's Step-Functions-state budget
+  counters and CD.27's S3-pointer artefact pattern may already externalize much of the state an
+  alternative would need.
 - Deepening managed-service coupling may stand in tension with the NS.1 principle (storage durable,
   compute interchangeable); alternatively CD.27's named fallback may already price that risk
   adequately.
@@ -64,23 +72,30 @@ Candidate hypotheses to test:
 - The substrate choice may become effectively irreversible once the T4.2 personas land and the
   14-day stability window closes, or may remain reversible at a bounded and statable cost.
 
-Apply the same evidence burden to the incumbent: CD.27 as designed is not the zero-cost default.
-Quantify or bound its lock-in, its hand-off cost, its billing exposure, its operability, and its
-maturity risk exactly as you would for any alternative.
+Apply the same evidence burden in BOTH directions. CD.27 as designed is not the zero-cost default:
+quantify or bound its lock-in, hand-off cost, billing exposure, operability, and maturity risk. Nor
+is any alternative a free lunch: price its state store, its state transitions, its orchestration
+overhead, its operational surface, and the engineering cost of every semantic it must supply itself,
+with the same rigour.
 
 ## READ FIRST - DISAMBIGUATION TRAPS
 
 - LANGUAGE IS OUT OF SCOPE. A prior audit at `audits/rust-lambda-executor-feasibility-842ff92.yaml`
-  and `.md` answered the implementation-language question for these surfaces. Read it ONLY as a dedup
-  pointer. Do not re-litigate Rust versus Python, do not recommend a language, and do not let a
-  substrate verdict be motivated by which languages it would make available. You may observe, as a
-  consequence, that a substrate changes the set of supported runtimes; that observation is an input to
-  a later decision, never a reason for this one.
-- "Lambda Durable Functions" is the AWS Lambda feature named by CD.27 for checkpointed persona
-  execution. It is not a generic adjective for reliable Lambda functions, and it is not Step
-  Functions. Verify its current product name, execution and replay semantics, supported runtimes and
-  SDKs, regions, limits, pricing dimensions, observability, testing story, and maturity from current
-  official AWS documentation before judging any alternative against it.
+  and its companion `.md` answered the implementation-language question for these surfaces. You MAY
+  read it and MAY re-verify and reuse the primary-source FACTS it records (pricing dimensions,
+  supported runtimes, the divergence it records between CD.27's runtime list and current AWS
+  documentation) provided you re-derive each from the primary source yourself and cite that source,
+  not the audit. You MUST NOT inherit any of its verdicts, severities, or recommendations, and you
+  MUST NOT re-litigate Rust versus Python or recommend a language. You may observe, as a consequence,
+  that a substrate changes the set of supported runtimes; that observation is an input to a later
+  decision, never a reason for this one.
+- "Lambda durable functions" in this prompt means EXCLUSIVELY the AWS Lambda feature named by CD.27.
+  It is NOT Azure Durable Functions, which is the more prevalent referent for that phrase in
+  general-purpose training data. Do not import Azure's orchestrator/activity/entity model, its
+  replay-determinism constraints, its programming-model rules, or its pricing intuitions: none of them
+  are established here. Every claim you make about the AWS feature must be traced to current official
+  AWS documentation. It is also not a generic adjective for reliable Lambda functions, and it is not
+  Step Functions.
 - "Step Functions" appears in TWO roles. Role (a): the ratified umbrella orchestrator, one execution
   per rec, CD.27 layer 1, established by Decision 39. Role (a) is NOT in question. Role (b): a
   CANDIDATE substrate for the persona loop itself, in which each loop iteration is a state transition
@@ -89,40 +104,51 @@ maturity risk exactly as you would for any alternative.
 - "state machine" carries two meanings in this repository, a conflation Decision 75 names explicitly:
   a managed Step Functions state machine, versus a process-internal lifecycle encoded in code
   branches. State which you mean.
-- "checkpoint" is ambiguous: the Durable Functions checkpoint/replay mechanism, versus the
+- "checkpoint" is ambiguous: the AWS durable-functions checkpoint/replay mechanism, versus the
   execution-state checkpointing in the frozen Python executor under `scripts/executor/`. They are
   unrelated mechanisms.
 - "executor" has two states: the current, operationally frozen Python recommendation executor
   (`scripts/execute_recommendation.py` plus `scripts/executor/`), and the designed-unbuilt CD.27
   substrate. This audit is about the latter. Do not assume the CD.27 executor is a port of the frozen
   process.
-- "persona" counts differ by source. T4.2 owns five (plan_agent, plan_critic, decision_scout,
-  implement_agent, code_reviewer). T4.10 adds `rca` and `bookkeeping`, whose substrate the roadmap
-  does not state. Re-derive both counts and treat the two unassigned personas as an explicit open
-  question rather than silently assigning them.
-- "step" and "wait" are pinned Durable Functions SDK primitives with DIFFERENT billing consequences,
-  not generic English words. Whenever you use either in a billing claim, mark it as the primitive and
-  cite the documentation that establishes its billing behaviour.
+- T4.10 and T4.10a are DIFFERENT items and only one is live. T4.10a (Persona contract authoring, MVP
+  slice) is the live item; it authors contracts for SEVEN personas and is a `depends_on` of T4.2.
+  T4.10 is the deferred remnant. Two personas, `rca` and `bookkeeping`, appear in the seven-persona
+  registry but not among T4.2's five. Whether CD.27's layer-2 rule and T4.10's opening framing already
+  assign them a substrate, or whether their substrate is genuinely open, is a judgment for you to make
+  and record; this prompt does not settle it. Re-derive both persona lists.
+- `code_review` and `code_reviewer` are the same thing under two names: T4.1's state-machine shape
+  names the state `code_review`, while T4.2 and T4.10a name the persona `code_reviewer`. The output
+  schema pins `code_reviewer`. Do not file the naming difference as a substantive finding without
+  tracing an actual consequence.
+- "step" and "wait" are pinned AWS durable-execution SDK primitives with DIFFERENT billing
+  consequences, not generic English words. Whenever you use either in a billing claim, mark it as the
+  primitive and cite the documentation that establishes its billing behaviour.
 - "cost" separates at least: Lambda compute (configured memory multiplied by billed duration),
-  per-durable-operation charges, durable state written and retained, Step Functions state
-  transitions, and engineering time. Never aggregate these without naming the components.
+  per-durable-operation charges, durable state written and retained, external state-store reads,
+  writes and storage, Step Functions state transitions, and engineering time. Never aggregate these
+  without naming the components.
 - "reversible" separates contract-level reversibility (the interfaces survive a substrate swap) from
   implementation reversibility (the persona code survives). Name which you mean.
 
 ## SCOPE
 
-Assess these surfaces independently:
+Assess these surfaces independently. These seven values are the pinned enum for every `surface`
+field and for `meta.scope_surfaces`:
 
-1. `persona_substrate` - designed-unbuilt: CD.27 layer 2 and the T4.2 personas assigned to Lambda
-   Durable Functions, plus the two T4.10 personas whose substrate is unstated.
-2. `deterministic_glue` - designed-unbuilt: CD.27 layer 3 and the T4.1 regular-Lambda nodes, plus the
-   T4.9a callback handler. In scope for how a substrate change would alter their contracts and count,
-   not as migration candidates in themselves.
+1. `persona_substrate` - designed-unbuilt: CD.27 layer 2 and the T4.2 personas assigned to AWS Lambda
+   durable functions, plus the `rca` and `bookkeeping` personas of the seven-persona registry, whose substrate
+   assignment you assess rather than assume.
+2. `deterministic_glue` - designed-unbuilt: CD.27 layer 3 and the regular-Lambda nodes of T4.1's
+   state-machine shape, plus the T4.9a callback handler. Note that CD.27 layer 3 names five glue
+   Lambdas while T4.1's state-machine shape names more, including two `waitForTaskToken` states;
+   re-derive the full node list from T4.1 rather than from CD.27's prose. In scope for how a substrate
+   change would alter these nodes' contracts and count, not as migration candidates in themselves.
 3. `orchestration_layer` - designed-unbuilt: the per-rec Step Functions state machine, its Parallel
-   and Choice states, its payload limit, its waitForTaskToken states, and the T4.11 budget counters
+   and Choice states, its payload limit, its `waitForTaskToken` states, and the T4.11 budget counters
    enforced in Step Functions state. The orchestrator role itself is ratified and not in question.
 4. `billing_shape` - designed-unbuilt, cross-cutting: where model-latency wall-clock, per-operation,
-   state-write, retention, and transition charges land under each candidate substrate.
+   state-write, retention, external-store, and transition charges land under each candidate substrate.
 5. `failure_semantics` - designed-unbuilt, cross-cutting: checkpoint/replay, completed-operation
    suppression, tool-call idempotency, timeout and heartbeat behaviour, kill-switch, and conformance
    to the RCA-first constraint.
@@ -137,14 +163,17 @@ Candidate substrates, pinned. Every question that ranges over substrates uses ex
 `durable_functions` (CD.27 as designed); `sfn_over_stateless_workers` (each loop iteration is a Step
 Functions state transition, iteration state externalized); `self_checkpointed_lambda_dynamodb` (the
 fallback CD.27 itself names); `hybrid_by_persona` (different personas on different substrates,
-selected by a stated rule); `other` (only with a named, traced design, described in full).
+selected by a stated rule); `other` (only with a named, traced design). The first four are always
+assessed. `other` is assessed only if you propose one, in which case its full design goes in the
+`design` field of its `billing_model` row and it appears in every substrate-ranging collection.
 
-MVP means the milestone and status semantics in `docs/ROADMAP-PLATFORM.yaml`, not a date you guess.
+The project's AWS region is eu-west-2 (London), as recorded in CD.27's substrate-existence block.
+Re-derive it from the repository and record any divergence rather than trusting this line.
 
 Out of scope: implementation language for any surface; implementing, porting, or scaffolding code;
 changing Terraform or deployments; live benchmarking or paid experiments; the choice of Step
 Functions as the umbrella per-rec orchestrator (ratified, Decision 39); trading strategy or
-performance; anything under `terraform/` beyond reading the built precedent.
+performance; anything under `terraform/` beyond reading the built precedent named in surface 7.
 
 Obtain every file, line, and count by reading the file. Trust no number quoted in this prompt;
 re-derive it from the repository and record any non-resolving anchor in `meta.stale_anchors`.
@@ -158,31 +187,37 @@ git fetch origin main
 BASE_SHA=$(git rev-parse --short origin/main)
 git status --short
 bin/venv-python -m scripts.session.preflight --roadmap-detail full
-git ls-files 'terraform/*.tf' | head -40
+git show origin/main:terraform/data_pipeline.tf | head -60
+git ls-files 'src/data/handlers/*.py'
 ```
 
 Use `origin/main` as the audited tree for all conclusions. Before writing, inspect
-`git status --short`: preserve and do not stage any pre-existing unrelated change; if either target
-deliverable already has an uncommitted change, use a clean temporary worktree from the same base or
-stop and report the collision rather than overwrite it. Read audited source with
-`git show origin/main:<path>` or a temporary detached worktree so branch-local files never enter
-audited facts. The preflight command regenerates gitignored caches
+`git status --short`: preserve and do not stage any pre-existing unrelated change. If either target
+deliverable already has an uncommitted change, create a clean temporary worktree from the audited
+base and work there; stop and report the collision ONLY if the worktree cannot be created. Read
+audited source with `git show origin/main:<path>` or that temporary worktree so branch-local files
+never enter audited facts. The preflight command regenerates gitignored caches
 (`logs/.preflight-report.json`, `logs/.recommendations-log.jsonl`); use them only for dedup pointers
 and never commit them.
 
 Degraded paths, each of which proceeds rather than aborts. If `git fetch` fails, use the
 already-present `origin/main`, append the failure to semicolon-delimited `meta.contract_notes`, and
 proceed. If no `origin/main` exists, STOP and report: this audit's conclusions are repository-wide
-and a substituted HEAD makes them unsound. If cache generation fails because credentials or egress
-are unavailable, do NOT abort: set `meta.degraded_dedup=true`, mark every `roadmap_crossref`
-confidence HYPOTHESIS with `dedup_hit_count: null`, and proceed.
+and a substituted HEAD makes them unsound. If the preflight command fails for ANY reason -
+credentials, egress, import error, schema error, or anything else - do NOT abort: append the exact
+failure to `meta.contract_notes`, set `meta.degraded_dedup=true`, set every affected finding's
+`confidence` to HYPOTHESIS and its `roadmap_crossref.dedup_hit_count` to `null`, and proceed using
+direct reads of `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md` for dedup.
 
-For current ecosystem claims, consult at most 8 primary sources, limited to official AWS
-documentation for Lambda, Lambda durable functions, the AWS Durable Execution SDK, Step Functions,
-and the Lambda and Step Functions pricing pages. Record URLs and access dates in `external_sources[]`.
-If browsing is unavailable, set `meta.degraded_external_research=true`, restrict claims to repository
-evidence, and downgrade every ecosystem, pricing, quota, and maturity conclusion to HYPOTHESIS.
-Never rely on vendor blogs, conference talks, or unsourced benchmark aggregations.
+For current ecosystem claims, consult at most 12 primary sources, limited to: official AWS
+documentation and pricing pages for Lambda, Lambda durable functions, the AWS Durable Execution SDK,
+Step Functions, and DynamoDB; and the official API documentation of the inference providers named by
+CD.28, consulted STRICTLY for request-mode semantics relevant to Q2 (synchronous, streaming,
+asynchronous, or batch submission and retrieval) and for nothing else. Record URLs and access dates
+in `external_sources[]`, each with the claim it grounds. If browsing is unavailable, set
+`meta.degraded_external_research=true`, restrict claims to repository evidence, and downgrade every
+ecosystem, pricing, quota, and maturity conclusion to HYPOTHESIS. Never rely on vendor blogs,
+conference talks, third-party tutorials, or unsourced benchmark aggregations.
 
 ## NORTH STAR
 
@@ -198,8 +233,8 @@ a rule you pattern-match.
 - NS-D One governed delivery path. Any substrate must preserve per-Lambda manifest coverage, artefact
   provenance, deployment records, smoke gates, IAM scoping, and drift detection without a parallel
   source of truth.
-- NS-E End-to-end economics as one model. Compute, per-operation, state, retention, transition,
-  engineering, and operational-risk costs are a single model, not separate talking points.
+- NS-E End-to-end economics as one model. Compute, per-operation, state, retention, external store,
+  transition, engineering, and operational-risk costs are a single model, not separate talking points.
 - NS-F Reversibility with a stated price. A commitment is acceptable when its exit cost is named and
   the contracts that survive the exit are identified.
 - NS-G AI-agent operability. Failures must be legible, loops bounded, local testing possible, and the
@@ -209,35 +244,37 @@ a rule you pattern-match.
 
 ## THE QUESTIONS
 
-Q1 - What does Lambda Durable Functions provide for the persona loop that each alternative substrate
-would have to supply itself, and what does supplying it cost? Return
+Q1 - What does AWS Lambda durable functions provide for the persona loop that each alternative
+substrate would have to supply itself, and what does supplying it cost? Return
 `durable-provides-materially-more|roughly-equivalent|alternatives-provide-materially-more|insufficient-evidence`.
 Enumerate the required semantics as a property list (at minimum: long-run execution beyond a single
 invocation; checkpointing; completed-operation suppression on replay; replay determinism; tool-call
 idempotency; retry policy separation; local testing; observability of an in-flight loop; in-flight
-version safety). For EACH property and EACH candidate substrate, state whether it is provided by the
-platform, must be hand-rolled, or is not required, and price the hand-roll where it applies. Credit
-existing repository mechanisms only where you trace them: state explicitly what T4.11's
-Step-Functions-state budget counters and CD.27's S3-pointer artefact pattern already externalize, and
-what they do not.
+version safety). Emit one `semantics_matrix` row per property per substrate per affected surface.
+For each row state whether the property is provided by the platform, must be hand-rolled, or is not
+required, and price the hand-roll where it applies. Credit existing repository mechanisms only where
+you trace them: state explicitly what T4.11's Step-Functions-state budget counters and CD.27's
+S3-pointer artefact pattern already externalize, and what they do not.
 
 Q2 - Where does model-latency wall-clock get billed under each candidate substrate, and can it be
 moved off billed compute? Return `movable-to-free-wait|partially-movable|not-movable|insufficient-evidence`.
-Populate the `billing_model` block with exactly one row per candidate substrate. Separate compute
-(configured memory multiplied by billed duration), per-durable-operation charges, durable state
-written and retained, and Step Functions state transitions. Where invocation counts, loop depth,
+Populate the `billing_model` block with exactly one row per assessed candidate substrate: the four
+named substrates always, plus `other` only if you propose one. Separate compute (configured memory
+multiplied by billed duration), per-durable-operation charges, durable state written and retained,
+external state-store cost, and Step Functions state transitions. Where invocation counts, loop depth,
 model latency, or memory configuration are absent from the repository, use symbolic variables and
 derive break-even thresholds; do not invent values. State explicitly, with a documentation citation,
 whether an LLM call issued inside a durable step is billed for its full wall-clock, and what design
-would place that latency on a non-billed primitive instead, including what that design costs in
+would place that latency on a non-billed primitive instead - including whether the providers named
+by CD.28 offer a request mode that makes such a design possible, and what the design costs in
 correlation, idempotency, and failure handling.
 
 Q3 - How does each candidate substrate stand against NS-A, and what is the exit cost? Return
 `conformant|tension-accepted-and-priced|conformant-only-with-changes|violates`. Cover SDK
-major-version exposure on in-flight executions, region availability for the project's region,
-observability and incident diagnosis of a replayed execution, and whether the fallback CD.27 already
-names is specified sufficiently to be executed under pressure. Assess the fallback's sufficiency
-explicitly rather than treating its existence as closure.
+major-version exposure on in-flight executions, availability in the project's region, observability
+and incident diagnosis of a replayed execution, and whether the fallback CD.27 already names is
+specified sufficiently to be executed under pressure. Assess that fallback's sufficiency explicitly
+rather than treating its existence as closure.
 
 Q4 - Is the discipline point that regular Lambdas are deterministic-only load-bearing, and how does
 it stand against Decision 39's typing of Step Functions states as either deterministic `task` or
@@ -256,22 +293,21 @@ would measure, what result would favour each, and what it costs.
 Q6 - What substrate should carry the persona loop? Return exactly one of
 `keep-durable-functions|sfn-over-stateless-workers|self-checkpointed-lambda-dynamodb|hybrid-by-persona|insufficient-evidence`.
 This is the executive conclusion requested. Populate `substrate_decisions` with exactly one row per
-persona group: the five T4.2 personas named individually, plus one row for the two T4.10 personas
-whose substrate the roadmap does not state. `insufficient-evidence` is a legitimate verdict when the
-evidence does not discriminate; use it rather than manufacturing confidence, and state exactly what
-evidence would resolve it. A verdict that changes the CD.27 layer-2 assignment must state the
-migration path for the already-designed T4.1 nodes and the T4.9a callback, and must say what happens
-to the T4.2 exit criteria that name checkpoint-replay.
+persona group: the five T4.2 personas named individually, plus one row covering the `rca` and
+`bookkeeping` personas jointly. `insufficient-evidence` is a legitimate
+verdict when the evidence does not discriminate; use it rather than manufacturing confidence, and
+state exactly what evidence would resolve it. A verdict that changes the CD.27 layer-2 assignment
+must state the migration path for the already-designed T4.1 nodes and the T4.9a callback, and must
+say what happens to the T4.2 exit criteria that name checkpoint-replay.
 
 Q7 - What important questions did the requester fail to ask? At minimum answer and extend: What
-evidence would falsify the Durable Functions assignment? What happens to an in-flight execution when
+evidence would falsify the durable-functions assignment? What happens to an in-flight execution when
 the durable SDK takes a major version? Which parts of the persona loop are genuinely long-running
 versus merely waiting on a model? Does the 256 KB transition limit plus the S3-pointer pattern
-already impose the state externalization an alternative would need? Do the two unassigned T4.10
-personas change the answer? What does the built data-pipeline state machine actually demonstrate?
-What in the T4.1 or T4.9a contracts silently assumes a durable persona? Is the per-rec concurrency
-cap of 1 hiding a cost or scaling property that a different substrate would expose? What operational
-runbook does each substrate require that does not exist yet?
+already impose the state externalization an alternative would need? Do `rca` and `bookkeeping` change the answer? What does the built data-pipeline state machine actually
+demonstrate? What in the T4.1, T4.9a, or T4.10a contracts silently assumes a durable persona? Is the
+per-rec concurrency cap of 1 hiding a cost or scaling property that a different substrate would
+expose? What operational runbook does each substrate require that does not exist yet?
 
 ## RUBRIC
 
@@ -281,20 +317,20 @@ portability and lock-in; VD5 operability, observability, and incident diagnosis;
 governance integration; VD7 agent-implementability and error legibility; VD8 quality of the evidence
 behind the recorded decision. `n/a` is correct and costless where a dimension does not structurally
 apply. Never create a rating or a finding merely to fill a cell. Each rating carries differentiated
-evidence for ITS surface: an identical note repeated across surfaces is a contract violation, not a
+evidence for ITS surface: an identical `note` repeated across surfaces is a contract violation, not a
 rating.
 
 ## DEEP-DIVES
 
-DD-A - Project the CD.27 topology node by node under EACH candidate substrate. For every node in the
-per-rec state machine, plus the T4.9a callback handler, record: owning tier item, substrate under
-CD.27 as designed, substrate under each alternative, what changes, and what contract at the node
-boundary changes with it. Feed Q1/Q4/Q6.
+DD-A - Project the CD.27 topology node by node under EACH assessed candidate substrate. For every
+node in T4.1's state-machine shape, plus the T4.9a callback handler, record: owning tier item,
+substrate under CD.27 as designed, and one `projections[]` entry per assessed alternative giving that
+node's role under it and the contract change at the node boundary. Feed Q1/Q4/Q6.
 
-DD-B - Trace one full persona iteration end to end under EACH candidate substrate, using plan_agent
-as the representative: input arrival, repo read, model call, tool use, artefact write, return. At
-every point record where state lives, what is checkpointed, what is billed, and what happens if the
-invocation times out exactly there. Feed Q1/Q2/Q5.
+DD-B - Trace one full persona iteration end to end under EACH assessed candidate substrate, using
+plan_agent as the representative: input arrival, repo read, model call, tool use, artefact write,
+return. At every point record where state lives, what is checkpointed, what is billed, and what
+happens if the invocation times out exactly there. Feed Q1/Q2/Q5.
 
 DD-C - Build the hand-roll cost model. Enumerate precisely what completed-operation suppression,
 replay determinism, and tool-call idempotency require if the platform does not provide them, then
@@ -302,15 +338,19 @@ subtract what T4.11's budget counters and the S3-pointer artefact pattern alread
 residue is the hand-roll cost. Apply the counterfactual to every credit you grant: would the credited
 mechanism actually prevent the failure if the defect were real? Feed Q1/Q6.
 
-DD-D - Read the BUILT Step Functions state machine and its Lambda functions under
-`terraform/data_pipeline.tf`. Record its state graph, its state types, how it passes data between
-states, its retry and error handling, and its observability. Then state precisely what it does and
-does not demonstrate about a persona loop, naming every structural difference. This is your only
+DD-D - Read the BUILT Step Functions state machine declared at `terraform/data_pipeline.tf:457` and
+up to 3 of the 5 handler sources it wires (`src/data/handlers/fetch_handler.py`,
+`feature_handler.py`, `write_handler.py`, `discovery_handler.py`, `maintenance_handler.py`; the
+Terraform `handler` attributes at lines 217, 251, 285, 320 and 354 map functions to these modules -
+re-derive the mapping). Record its state graph, its state types, how it passes data between states,
+its retry and error handling, and its observability configuration. Then state precisely what it does
+and does not demonstrate about a persona loop, naming every structural difference. This is your only
 `observed` evidence source about how this pattern behaves in this account; do not overclaim from it.
 Feed Q1/Q6.
 
-DD-E - Reversal analysis. For each candidate substrate, price the exit at the three points named in
-Q5. Identify which contracts survive a substrate swap unchanged and which do not. Feed Q3/Q5.
+DD-E - Reversal analysis. For each assessed candidate substrate, price the exit at the three points
+named in Q5. Identify which contracts survive a substrate swap unchanged and which do not. Feed
+Q3/Q5.
 
 ## GROUNDING MAP
 
@@ -322,18 +362,18 @@ than silently trusted. Facts below are stated neutrally and carry no verdict.
   Functions execution per rec, carrying rec_id, branch_slug, plan_s3_uri and per-step verdicts as
   execution state; Parallel fans out critic personas; Choice routes critique aggregation;
   Standard Workflows support executions up to one year.
-- `docs/ROADMAP-PLATFORM.yaml:762-770` states layer 2: each named persona runs as a Lambda Durable
-  Function; iterative loops are checkpointed inside the Lambda; on timeout the next invocation replays
-  from the last completed checkpoint and skips completed tool calls; each Durable Function writes its
+- `docs/ROADMAP-PLATFORM.yaml:762-770` states layer 2: each named persona runs as a Lambda durable
+  function; iterative loops are checkpointed inside the Lambda; on timeout the next invocation replays
+  from the last completed checkpoint and skips completed tool calls; each durable function writes its
   artefact to S3 and returns the URI, keeping payload under the 256 KB transition limit.
 - `docs/ROADMAP-PLATFORM.yaml:772-776` states layer 3: regular Lambdas handle pick_rec,
   prepare_workspace, critique_gate, file_pr and emit_telemetry, each sub-15-minute by construction.
 - `docs/ROADMAP-PLATFORM.yaml:778-785` states the ECS Run Task escape hatch for deterministic steps
   exceeding 15 minutes, and that Fargate is demoted to that escape hatch.
 - `docs/ROADMAP-PLATFORM.yaml:787-795` records a substrate-existence verification block including a
-  launch date, a region-expansion date, a list of supported runtimes, a maximum execution duration,
-  and a checkpoint-replay description. Re-derive every element of this list from current official AWS
-  documentation; treat any divergence as an observation to record.
+  launch date, region-expansion dates naming the project's region, a list of supported runtimes, a
+  maximum execution duration, and a checkpoint-replay description. Re-derive every element of this
+  list from current official AWS documentation; treat any divergence as an observation to record.
 - `docs/ROADMAP-PLATFORM.yaml:805` records `gates: [T4.1, T4.2, T4.3, T4.4]` and
   `docs/ROADMAP-PLATFORM.yaml:806` records `state: pending`.
 - `docs/ROADMAP-PLATFORM.yaml:817` is the discipline point reading "Agent personas as Durable
@@ -351,20 +391,26 @@ than silently trusted. Facts below are stated neutrally and carry no verdict.
   build/deploy/smoke-test steps for the Lambdas it touches.
 - `docs/ROADMAP-PLATFORM.yaml:826-840` is CD.28, whose first discipline point states that LiteLLM is
   the only Layer-1 inference protocol surface and that direct provider-SDK imports are forbidden in
-  the executor.
+  the executor, and whose body names the inference provider tiers.
 - `docs/ROADMAP-PLATFORM.yaml:6656` begins T4.1; `6667-6680` is the state-machine shape listing each
-  node with its bracketed substrate; `6681-6690` is its `files_in_scope`; `6691-6701` is its
-  exit-criteria list including the concurrency cap, the heartbeat/timeout requirement, and the
-  kill-switch requirement.
+  node with its bracketed substrate; `6682-6690` is its `files_in_scope`; `6691-6700` is its
+  exit-criteria list, with the concurrency cap at 6696, the heartbeat/timeout requirement at 6697,
+  and the kill-switch requirement at 6700.
 - `docs/ROADMAP-PLATFORM.yaml:6735` begins T4.2; `6739-6753` names the five personas and their
   per-persona surfaces; `6755-6758` names the LLM transport tiers; `6768-6775` is its
   `files_in_scope`; `6776-6782` is its exit-criteria list including the forced-timeout
   checkpoint-replay criterion and the state-machine-enforced budget-counter criterion.
-- `docs/ROADMAP-PLATFORM.yaml:7104` begins T4.9a; `7114-7120` is its `files_in_scope` including a
-  callback handler and a Terraform file; its exit criteria address callback authentication,
-  correlation ids, head-SHA equality, and duplicate/stale-callback rejection.
-- `docs/ROADMAP-PLATFORM.yaml:7150` begins T4.10, which names two further personas beyond T4.2's five.
-  Re-derive their names and whether any substrate is stated for them.
+- `docs/ROADMAP-PLATFORM.yaml:7104` begins T4.9a; `7115-7120` is its `files_in_scope` including a
+  callback handler at 7119 and a Terraform file at 7118; its exit criteria address callback
+  authentication, correlation ids, head-SHA equality, and duplicate/stale-callback rejection.
+- `docs/ROADMAP-PLATFORM.yaml:7150` begins T4.10, the deferred remnant. Its intent at `7154` opens
+  with a blanket statement that, per CD.27, the executor's agent personas run as Lambda durable
+  functions, naming T4.2's five; `7158-7160` adds `rca` and `bookkeeping` to the same registry, and
+  an exit criterion at `7177` refers to a seven-persona registry. No per-persona substrate line
+  exists for those two. Whether that ambient framing settles their substrate is yours to judge.
+- `docs/ROADMAP-PLATFORM.yaml:7196` begins T4.10a, the live persona-contract-authoring slice; its
+  intent names seven personas and the per-persona contract fields, and states that T4.2's persona
+  implementations conform to these contracts.
 - `docs/ROADMAP-PLATFORM.yaml:7242` begins T4.11; its intent states that caps on revisions, review
   rounds, verification attempts and total LLM calls per rec are enforced by Step Functions state
   rather than by persona prompt discipline; its `files_in_scope` names a Terraform file described as
@@ -377,23 +423,24 @@ than silently trusted. Facts below are stated neutrally and carry no verdict.
 - `docs/DECISIONS.md:4353` begins Decision 55, the RCA-first executor architecture.
 - `docs/DECISIONS.md:4546` begins Decision 67, the deferral that leaves the executor operationally
   frozen.
-- `terraform/data_pipeline.tf:457` declares `aws_sfn_state_machine.data_pipeline`; the same file
-  declares five `aws_lambda_function` resources at lines 214, 248, 282, 317 and 351. Re-derive the
-  state machine's definition body and its state graph.
+- `terraform/data_pipeline.tf:457` declares `aws_sfn_state_machine.data_pipeline` with a
+  `logging_configuration` block and a `jsonencode` definition; the same file declares five
+  `aws_lambda_function` resources at lines 214, 248, 282, 317 and 351, whose `handler` attributes at
+  lines 217, 251, 285, 320 and 354 name modules under `src/data/handlers/`.
 - `docs/PROJECT_CONTEXT.md:253-255` states the NS.1-NS.5 north-star line including "storage durable /
   compute interchangeable" and the typed-verbs-over-HTTPS agent surface.
 - `audits/rust-lambda-executor-feasibility-842ff92.yaml` and its companion `.md` record a prior audit
-  of these surfaces answering a language question. Read for dedup pointers only.
+  of these surfaces answering a language question, subject to the reuse rule in DISAMBIGUATION TRAPS.
 
 ## EMPIRICAL PASS
 
-Sample no more than: the DD-D built state machine plus at most 3 of its 5 Lambda handler sources; the
-DD-B single persona trace; the T4.x tier items enumerated in the GROUNDING MAP plus any further
+Sample no more than: the DD-D built state machine plus at most 3 of its 5 handler sources; the DD-B
+single persona trace; the T4.x tier items enumerated in the GROUNDING MAP plus any further
 Lambda-bearing T4.x item you re-derive; the 2 most recently committed files under `audits/` whose
 filename or report heading names executor, Lambda, or substrate; a recommendation-cache sample of at
 most 12 rows sorted by parsed `last_updated_timestamp` descending then `rec_id` ascending; and at
-most 8 external primary sources. Do NOT exceed these caps. If the recommendation cache is absent, use
-the degraded-dedup path and skip that sample rather than substituting another source.
+most 12 external primary sources. Do NOT exceed these caps. If the recommendation cache is absent,
+use the degraded-dedup path and skip that sample rather than substituting another source.
 
 Record `evidence_kind: observed` for executed commands, sampled records, and reproducible
 observations; repository text and code inspection are `static`. At equal severity, observed evidence
@@ -403,17 +450,18 @@ or run any paid benchmark.
 ## RECURSIVE ADVERSARIAL REVIEW
 
 Before final synthesis, run adversarial review rounds with three independent fresh-context reviewers,
-each forbidden to edit files:
+each forbidden to edit files. Each reviewer challenges in BOTH directions: neither defending nor
+attacking the incumbent is any reviewer's job.
 
-1. `managed-service-advocate` challenges every claim that a platform-provided semantic can be
-   hand-rolled cheaply, and every keep-it-simple conclusion that discounts the cost of building
-   checkpointing, suppression, or idempotency by hand.
-2. `lockin-and-portability-skeptic` challenges every recommendation that deepens managed-service
-   coupling, every reversibility claim, and every treatment of a named fallback as if its existence
-   were sufficiency.
-3. `operations-and-economics-reviewer` challenges the billing and quota analysis, the cost model, the
-   incident-response and observability story, the transferability of the built precedent, and the
-   opportunity cost of the recommended path.
+1. `semantics-and-correctness-reviewer` challenges every claim about what a substrate provides and
+   every claim about what an alternative can supply itself - both "the platform gives us this" and
+   "we can hand-roll this cheaply" are its targets, equally.
+2. `economics-and-operations-reviewer` challenges the billing model, quota and limit analysis,
+   incident response, observability, and the transferability of the built precedent - in both
+   directions, including any understated cost on the recommended path.
+3. `portability-and-reversibility-reviewer` challenges lock-in claims AND claims that an alternative
+   is genuinely more portable, plus every exit-cost estimate and every treatment of a named fallback
+   as if its existence were sufficiency.
 
 Use three separate subagents or conversations; separate models are not required. Give each the same
 bounded packet: provisional Q1-Q7 answers, `candidate_adjudications`, `billing_model`,
@@ -470,27 +518,41 @@ RCA-first containment and its prohibition on LLM retry-on-bad-output; Decision 3
 Step Functions as the orchestrator; CD.28's LiteLLM-only transport rule; CD.35 / CD.38 / Decision 92
 holding apply authority outside the executor; Decision 117's self-modification boundary; Decision 79
 and CD.16 per-Lambda deploy gating; CD.24 manifest-driven packaging; the deliberate T4.9a MVP-slice
-versus T4.9 remnant split; and the prior language audit's conclusions. You may find any of these in
-tension with a substrate, or find its planned remedy insufficient, but must classify and
-cross-reference that judgment rather than filing the constraint itself as a defect.
+versus T4.9 remnant split and the parallel T4.10a versus T4.10 split; and the prior language audit's
+conclusions. You may find any of these in tension with a substrate, or find its planned remedy
+insufficient, but must classify and cross-reference that judgment rather than filing the constraint
+itself as a defect.
 
 ## OUTPUT
 
-`meta.base_branch: main` is the logical base name; `meta.audited_commit` is the exact audited commit.
-The YAML root is `audit:` with this exact shape and pinned enums. Every collection may be empty when
-its trigger produces no rows; template rows below define nonempty element shapes and are not emitted
-as placeholders.
+`meta.base_branch` is the literal string `main`. `meta.audited_commit` is the short SHA produced by
+`git rev-parse --short origin/main` in SETUP - the same value substituted into both deliverable
+filenames. The YAML root is `audit:` with this exact shape and pinned enums. Every collection may be
+empty when its trigger produces no rows; template rows below define nonempty element shapes and are
+not emitted as placeholders.
+
+Two enums are referenced repeatedly and pinned once here.
+SURFACE = `persona_substrate|deterministic_glue|orchestration_layer|billing_shape|failure_semantics|portability_and_lockin|built_sfn_precedent`.
+SUBSTRATE = `durable_functions|sfn_over_stateless_workers|self_checkpointed_lambda_dynamodb|hybrid_by_persona|other`.
+Every `surface:` field takes a SURFACE value; every `substrate:` field takes a SUBSTRATE value.
+
+Effort and cost sizes are comparative intervals in engineer-days, never delivery commitments:
+`XS`=<2, `S`=2-5, `M`=6-15, `L`=16-40, `XL`=>40. The same scale applies to `effort`,
+`hand_roll_cost`, `contract_level_cost`, and `implementation_level_cost`.
+
+Finding ids are `ESB-NN`, zero-padded to two digits, numbered from `ESB-01` in final severity order
+(most severe first), and stable for the remainder of the run once assigned.
 
 ```yaml
 audit:
   meta: {audited_commit: "", base_branch: main, model: "", methodology_version: 1,
-    scope_surfaces: [], degraded_dedup: false, degraded_external_research: false,
+    scope_surfaces: [<SURFACE>], degraded_dedup: false, degraded_external_research: false,
     degraded_adversarial_review: false, contract_notes: "", stale_anchors: []}
   external_sources: []  # empty only when degraded_external_research=true; populated row: {url, accessed: YYYY-MM-DD, claim_scope: ""}
   question_answers:
     - {q: Q1, verdict: durable-provides-materially-more|roughly-equivalent|alternatives-provide-materially-more|insufficient-evidence,
        basis: [], prose: "",
-       semantics_matrix: [{property: "", substrate: durable_functions|sfn_over_stateless_workers|self_checkpointed_lambda_dynamodb|hybrid_by_persona|other,
+       semantics_matrix: [{property: "", substrate: <SUBSTRATE>, surface: <SURFACE>,
          provision: platform-provided|must-hand-roll|not-required, hand_roll_cost: XS|S|M|L|XL|n/a,
          existing_credit: "", evidence: "file:line|source-url"}]}
     - {q: Q2, verdict: movable-to-free-wait|partially-movable|not-movable|insufficient-evidence, basis: [], prose: ""}
@@ -501,43 +563,46 @@ audit:
        basis: [], prose: ""}
     - {q: Q7, answers: [{question: "", answer: "", basis: []}]}
   billing_model:
-    - {substrate: durable_functions|sfn_over_stateless_workers|self_checkpointed_lambda_dynamodb|hybrid_by_persona|other,
+    - {substrate: <SUBSTRATE>, design: "",
        model_latency_billed_as: billed-compute|non-billed-wait|split|not-determinable,
-       compute_term: "", per_operation_term: "", state_and_retention_term: "", transition_term: "",
+       compute_term: "", per_operation_term: "", state_and_retention_term: "",
+       external_store_term: "", transition_term: "",
        symbolic_model: "", break_even: "", evidence: "file:line|source-url", confidence: CONFIRMED|HYPOTHESIS}
   substrate_decisions:
-    - {persona_group: plan_agent|plan_critic|decision_scout|implement_agent|code_reviewer|t410_unassigned_personas,
-       verdict: durable_functions|sfn_over_stateless_workers|self_checkpointed_lambda_dynamodb|other|insufficient-evidence,
+    - {persona_group: plan_agent|plan_critic|decision_scout|implement_agent|code_reviewer|rca_and_bookkeeping,
+       verdict: <SUBSTRATE>|insufficient-evidence,
        mechanism: "", what_changes: "", exit_cost: "", rationale: "", confidence: CONFIRMED|HYPOTHESIS}
-  node_projection: [{node: "", tier_item: "", cd27_substrate: step_functions|lambda|lambda_durable_function|github_actions|ecs_run_task,
-    under_sfn_workers: "", under_self_checkpointed: "", contract_change: "", evidence: "file:line", confidence: CONFIRMED|HYPOTHESIS}]
-  per_surface_assessment: [{surface: "", implementation_state: built|designed_unbuilt,
+  node_projection: [{node: "", tier_item: "",
+    cd27_substrate: step_functions|lambda|lambda_durable_function|ecs_run_task,
+    projections: [{substrate: <SUBSTRATE>, role_under_substrate: "", contract_change: ""}],
+    evidence: "file:line", confidence: CONFIRMED|HYPOTHESIS}]
+  per_surface_assessment: [{surface: <SURFACE>, implementation_state: built|designed_unbuilt,
     decision_readiness: frontier|strong|solid|nascent, strengths: "", top_gaps: []}]
-  rubric_ratings: [{surface: "", dimension: VD1|VD2|VD3|VD4|VD5|VD6|VD7|VD8,
+  rubric_ratings: [{surface: <SURFACE>, dimension: VD1|VD2|VD3|VD4|VD5|VD6|VD7|VD8,
     rating: strong|adequate|weak|absent|n/a, evidence: "file:line|item-id|source-url", note: ""}]
-  candidate_adjudications: [{candidate_id: C1|C2|C3|C4|C5|C6|C7, surface: "",
+  candidate_adjudications: [{candidate_id: C1|C2|C3|C4|C5|C6|C7, surface: <SURFACE>,
     adjudication: confirmed-defect|planned-insufficient|planned-unbuilt|fully-covered|not-a-defect,
     destination_ids: [], basis: ""}]
-  reversal_analysis: [{substrate: "", exit_point: after-first-persona|after-all-five|after-stability-window,
+  reversal_analysis: [{substrate: <SUBSTRATE>, exit_point: after-first-persona|after-all-five|after-stability-window,
     contract_level_cost: XS|S|M|L|XL, implementation_level_cost: XS|S|M|L|XL,
     surviving_contracts: [], basis: "", confidence: CONFIRMED|HYPOTHESIS}]
   adversarial_reviews:
     packet_evidence: [{claim: "", citation: "", evidence_kind: static|observed}]
-    rounds: [{round: 1, reviewers: [{perspective: managed-service-advocate|lockin-and-portability-skeptic|operations-and-economics-reviewer,
+    rounds: [{round: 1, reviewers: [{perspective: semantics-and-correctness-reviewer|economics-and-operations-reviewer|portability-and-reversibility-reviewer,
       challenges: [{claim: "", evidence_or_counterexample: "", disposition: sustain|revise|needs-evidence}],
       missing_questions: [], verdict_pressure: toward_keep_durable|toward_sfn_workers|toward_self_checkpointed|toward_hybrid|neutral}],
       reconciliation: [{challenge: "", disposition: accepted|rejected-with-basis|deferred-needs-evidence, basis: ""}], stable: true|false}]
     unresolved: []
   findings:
-    - {id: ESB-01, surface: "", question: Q1|Q2|Q3|Q4|Q5|Q6|Q7, dimension: VD1|VD2|VD3|VD4|VD5|VD6|VD7|VD8,
+    - {id: ESB-01, surface: <SURFACE>, question: Q1|Q2|Q3|Q4|Q5|Q6|Q7, dimension: VD1|VD2|VD3|VD4|VD5|VD6|VD7|VD8,
        title: "", evidence: "file:line|item-id|source-url", evidence_kind: static|observed,
        current_behavior: "", ideal_behavior: "", gap: "", compensating_controls_considered: "",
        change_type: add|rescope|enforce|unify|persist|clarify|retune_gate, proposed_change: "", acceptance: "",
        severity: critical|high|medium|low, severity_rationale: "", confidence: CONFIRMED|HYPOTHESIS,
        roadmap_crossref: {classification: novel|planned-insufficient|planned-unbuilt, item_ids: [],
-         dedup_search_terms: [], dedup_hit_count: 0|null, note: ""}, effort: XS|S|M|L,
+         dedup_search_terms: [], dedup_hit_count: 0|null, note: ""}, effort: XS|S|M|L|XL,
        depends_on: [], sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}}
-  rejected_candidates: [{candidate_id: C1|C2|C3|C4|C5|C6|C7, surface: "",
+  rejected_candidates: [{candidate_id: C1|C2|C3|C4|C5|C6|C7, surface: <SURFACE>,
     adjudication: fully-covered|not-a-defect, why_dismissed: "", compensating_control: "",
     control_property_match: "", decision_or_item_id: ""}]
   summary: {total_findings: 0, novel_count: 0, planned_insufficient_count: 0, planned_unbuilt_count: 0,
@@ -554,12 +619,11 @@ audit:
 
 COUNTING INVARIANT: `findings[]` is the SOLE enumerated list;
 `total_findings = len(findings) = novel_count + planned_insufficient_count + planned_unbuilt_count`;
-fully-covered and not-a-defect candidates live in `rejected_candidates`, NOT findings;
-`rubric_ratings`, `question_answers`, `candidate_adjudications`, `billing_model`,
-`substrate_decisions`, `node_projection`, `reversal_analysis` and `adversarial_reviews` are
-systems-of-record referenced FROM findings, never re-counted; `top_improvements` and
-`highest_leverage_change` MUST be finding ids. If there are zero findings, use an empty string for
-`highest_leverage_change`.
+substantively dismissed candidates live in `rejected_candidates`, NOT findings; `rubric_ratings`,
+`question_answers`, `candidate_adjudications`, `billing_model`, `substrate_decisions`,
+`node_projection`, `reversal_analysis` and `adversarial_reviews` are systems-of-record referenced
+FROM findings, never re-counted; `top_improvements` and `highest_leverage_change` MUST be finding
+ids. If there are zero findings, use an empty string for `highest_leverage_change`.
 
 `control_property_match` is required whenever a compensating control causes dismissal: name the
 property the control exercises, cite its mechanism or file:line, and explain why the control would
@@ -585,17 +649,22 @@ and neither is a designed-unbuilt item being unbuilt.
 Compute decision readiness LAST per surface. It rates whether the SUBSTRATE DECISION is
 evidence-ready for that surface, not whether an intentionally unbuilt implementation is complete.
 Evaluate top-down, first match wins: `frontier` = zero critical and zero high findings on that
-surface, and every Q1 `semantics_matrix` row touching that surface is `platform-provided` or has a
-priced `must-hand-roll` cost with an argued property match; `strong` = zero critical and at most one
-high; `solid` = at most one critical; `nascent` = otherwise. Frontier remains reachable where a
-hand-roll cost is argued and property-matched rather than merely asserted.
+surface, and every `semantics_matrix` row carrying that surface is either `platform-provided`,
+`not-required`, or a `must-hand-roll` with a priced `hand_roll_cost` and an argued property match in
+`existing_credit`; `strong` = zero critical and at most one high on that surface; `solid` = at most
+one critical on that surface; `nascent` = otherwise. Frontier remains reachable where a hand-roll
+cost is argued and property-matched rather than merely asserted.
 
 ## COMMIT / PR MECHANICS
 
 Derive the base once with `git fetch origin main` and `git rev-parse --short origin/main`; it is the
 audited tree and supplies both deliverable filenames and `meta.audited_commit`. Create the working
 branch with `git switch -c audit/executor-substrate-and-billing-shape-<sha> origin/main` so the PR
-diff contains only the two deliverable files.
+diff contains only the two deliverable files. This branch name is a DELIBERATE exception to this
+repository's convention of working on a harness-assigned `claude/...` session branch: the audit
+session needs a clean two-file diff off the audited base, and the CI green-comment wake signal that
+the `claude/*` convention exists to serve is irrelevant here because you end your turn without
+merging and a human disposes of the PR. Do not resolve this in favour of the ambient convention.
 
 Parse and structurally check the YAML with:
 
@@ -610,14 +679,15 @@ authoritative outside CI, and an unrelated failure is recorded in `meta.contract
 fixed, because fixing it would breach the write boundary. Commit with message
 `audit(executor-substrate-and-billing-shape): assess persona substrate and billing shape` using
 `user.name=Claude`, `user.email=noreply@anthropic.com`, and `--no-gpg-sign` if signing is
-unavailable. Push with `git push -u origin HEAD`. Open a ready-for-review PR to `main` via
-`mcp__github__create_pull_request`, title
-`audit: executor persona substrate and billing shape (Durable Functions vs alternatives)`, with a
-two-to-three sentence lede and the YAML `summary` block in a fenced yaml block. Then END THE TURN.
-Do not poll, do not merge, do not self-approve, do not subscribe, and do not edit any other file. If
-push, PR creation, or authentication fails, do not fabricate success and do not alter unrelated
-files: report the exact terminal state (commit SHA, pushed or not, PR URL if any, and the error) and
-end for human recovery.
+unavailable; an unsigned commit is expected in this environment and is not a failure. Push with
+`git push -u origin HEAD`. Open a ready-for-review PR via `mcp__github__create_pull_request` with
+`owner="benjamin-blake"`, `repo="agent-platform"`, `base="main"`, `head=<your branch>`, title
+`audit: executor persona substrate and billing shape (Durable Functions vs alternatives)`, and a body
+containing a two-to-three sentence lede followed by the YAML `summary` block in a fenced yaml block.
+Then END THE TURN. Do not poll, do not merge, do not self-approve, do not subscribe, and do not edit
+any other file. If push, PR creation, or authentication fails, do not fabricate success and do not
+alter unrelated files: report the exact terminal state (commit SHA, pushed or not, PR URL if any, and
+the error) and end for human recovery.
 
 ## GUARDRAILS
 
