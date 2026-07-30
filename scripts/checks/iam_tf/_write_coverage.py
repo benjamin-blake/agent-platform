@@ -14,26 +14,28 @@ Lambda execution role for CreateFunction to succeed, and the enumerated model ne
 check_passrole_implies_coverage() closes this: if CreateFunction is granted, both the identity
 policy AND the boundary DataPlaneAllow ceiling must grant iam:PassRole scoped to
 role/agent-platform-*. The identity-side check uses the apply_statements the facade already passes;
-the boundary-side check is SELF-CONTAINED -- it re-reads + re-parses github_ci_apply.tf's boundary
-block itself (reusing the _read_coverage HCL primitives), because the orchestrator facade
-(validate_ci_refresh_read_coverage.py) passes only the identity apply_statements, never the
-boundary policy, and stays out of scope here.
+the boundary-side check re-reads github_ci_apply.tf itself, because the orchestrator facade
+(validate_ci_refresh_read_coverage.py) passes only the identity apply_statements, never the boundary
+policy. That re-read now goes through _read_coverage._parse_boundary_dataplane_statement, which is
+built on the SHARED policy locator and therefore follows the rec-2793 hoisted-local indirection --
+the previous forward-search-from-the-resource-match implementation returned None the moment the
+boundary document was hoisted into a local to carry its own size precondition.
 
 Credential-free (pure text parsing) -- eligible for --pre and full tiers. Stays < 500 SLOC.
 """
 
 from __future__ import annotations
 
-import re
-
 from scripts.checks import _common
+
+# _parse_boundary_dataplane_statement / _parse_managed_policy_statements MOVED to _read_coverage so
+# they can be expressed on the shared, hoist-resolving policy locator (see their docstrings there).
+# Imported -- and thus still importable FROM this module -- so existing importers keep working.
 from scripts.checks.iam_tf._read_coverage import (
     _BOOTSTRAP_TF_REL,
-    _SID_CAP_RE,
     _action_matches,
-    _extract_bracket_block,
-    _extract_capitalized_field,
-    _split_top_level_objects,
+    _parse_boundary_dataplane_statement,  # noqa: F401 -- re-exported for existing importers
+    _parse_managed_policy_statements,  # noqa: F401 -- re-exported for existing importers
 )
 
 # rec-2831 / Decision 143 worst-verb scoping: the identity PassRole grant must target exactly this
@@ -59,8 +61,9 @@ _IAM_ACTION_PREFIX = "iam:"
 # must be present somewhere in the bootstrap HCL, or the identity grant is an unconditioned
 # over-grant (any service, any pass).
 _PASSROLE_CONDITION_MARKERS = ("iam:PassedToService", "lambda.amazonaws.com")
-_BOUNDARY_RESOURCE_RE = re.compile(r'resource\s+"aws_iam_policy"\s+"github_ci_apply_boundary"\s*\{')
-_STATEMENT_ARRAY_RE = re.compile(r"Statement\s*=\s*\[")
+# (_BOUNDARY_RESOURCE_RE / _STATEMENT_ARRAY_RE removed with the boundary parser they served -- the
+# forward-search-from-resource-match approach is what the hoist breaks; the replacement resolves the
+# policy-local indirection instead. See _read_coverage._locate_policy_statement_array.)
 
 # ---------------------------------------------------------------------------
 # WRITE-coverage map: managed resource type -> the write actions github_ci_apply's inline policy MUST
@@ -126,36 +129,6 @@ def _passrole_present(statements: list[dict]) -> bool:
         _action_matches((_PASSROLE_ACTION,), stmt["actions"]) and _PASSROLE_RESOURCE_MARKER in stmt["resources_raw"]
         for stmt in statements
     )
-
-
-def _parse_boundary_dataplane_statement(bootstrap_text: str) -> dict | None:
-    """Self-contained re-read: locate github_ci_apply_boundary's DataPlaneAllow statement.
-
-    The orchestrator facade (validate_ci_refresh_read_coverage.py) passes this submodule only the
-    IDENTITY apply_statements -- it never reads or passes the boundary policy. Rather than widen the
-    facade's contract, this re-reads + re-parses github_ci_apply.tf's boundary block directly, reusing
-    the same _read_coverage HCL primitives the facade itself uses for the identity policy. Returns
-    None if the boundary resource or its DataPlaneAllow statement cannot be located (HCL shape drift).
-    """
-    resource_m = _BOUNDARY_RESOURCE_RE.search(bootstrap_text)
-    if not resource_m:
-        return None
-    # The boundary's `policy = jsonencode({ Version = ..., Statement = [...] })` is inline (no
-    # rec-2793 hoisted-local indirection -- that workaround exists only for the identity policy,
-    # whose lifecycle precondition needs to self-reference the rendered JSON). A forward search for
-    # the next `Statement = [` after the resource's opening brace is therefore unambiguous: nothing
-    # else in the boundary resource body (name/description/policy-open) can contain that text.
-    stmt_m = _STATEMENT_ARRAY_RE.search(bootstrap_text, resource_m.end())
-    if not stmt_m:
-        return None
-    array_text = _extract_bracket_block(bootstrap_text, stmt_m.end() - 1)
-    for obj_body in _split_top_level_objects(array_text):
-        sid_m = _SID_CAP_RE.search(obj_body)
-        if sid_m and sid_m.group(1) == "DataPlaneAllow":
-            actions, _ = _extract_capitalized_field(obj_body, "Action")
-            _, resources_raw = _extract_capitalized_field(obj_body, "Resource")
-            return {"sid": "DataPlaneAllow", "actions": actions, "resources_raw": resources_raw}
-    return None
 
 
 def check_passrole_implies_coverage(apply_statements: list[dict], failed: list[str], key: str) -> None:

@@ -163,28 +163,46 @@ def _extract_capitalized_field(body: str, field: str) -> tuple[list[str], str]:
     return [], ""
 
 
-def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> list[dict]:
-    block_re = re.compile(rf'resource\s+"aws_iam_role_policy"\s+"{re.escape(role_policy_resource_name)}"\s*\{{')
+def _locate_policy_statement_array(text: str, resource_type: str, resource_name: str) -> str | None:
+    """Return the raw `Statement = [...]` body for a named IAM policy resource, or None.
+
+    ONE shared locator for every policy document in terraform/bootstrap. It resolves BOTH textual
+    shapes a policy attribute can take, so callers never depend on where in the file a document's
+    JSON physically lives:
+
+      inline   `policy = jsonencode({ ... Statement = [...] ... })`
+      hoisted  `policy = local.<name>` -> `locals { <name> = jsonencode({ ... Statement = [...] }) }`
+
+    The hoist is the rec-2793 lifecycle-precondition workaround (a precondition cannot reference
+    `self`, so the rendered document must exist as a local the precondition can re-render). It is NOT
+    identity-policy-specific: any document that grows a size precondition acquires the same shape.
+    Resolving the indirection here -- rather than forward-searching from a resource match -- is what
+    makes the locator position-independent, so hoisting a document no longer silently strips its
+    statements from every consumer.
+    """
+    block_re = re.compile(rf'resource\s+"{re.escape(resource_type)}"\s+"{re.escape(resource_name)}"\s*\{{')
     m = block_re.search(text)
     if not m:
-        return []
+        return None
     body = _vir._extract_block(text, m.end() - 1)
     stmt_m = re.search(r"Statement\s*=\s*\[", body)
     if stmt_m:
-        array_text = _extract_bracket_block(body, stmt_m.end() - 1)
-    else:
-        # Not inline -- try the rec-2793 hoisted-local indirection (see _POLICY_LOCAL_REF_RE).
-        local_m = _POLICY_LOCAL_REF_RE.search(body)
-        if not local_m:
-            return []
-        assign_m = re.search(rf"\b{re.escape(local_m.group(1))}\s*=\s*jsonencode\s*\(\s*\{{", text)
-        if not assign_m:
-            return []
-        local_body = _vir._extract_block(text, assign_m.end() - 1)
-        local_stmt_m = re.search(r"Statement\s*=\s*\[", local_body)
-        if not local_stmt_m:
-            return []
-        array_text = _extract_bracket_block(local_body, local_stmt_m.end() - 1)
+        return _extract_bracket_block(body, stmt_m.end() - 1)
+    local_m = _POLICY_LOCAL_REF_RE.search(body)
+    if not local_m:
+        return None
+    assign_m = re.search(rf"\b{re.escape(local_m.group(1))}\s*=\s*jsonencode\s*\(\s*\{{", text)
+    if not assign_m:
+        return None
+    local_body = _vir._extract_block(text, assign_m.end() - 1)
+    local_stmt_m = re.search(r"Statement\s*=\s*\[", local_body)
+    if not local_stmt_m:
+        return None
+    return _extract_bracket_block(local_body, local_stmt_m.end() - 1)
+
+
+def _parse_statement_array(array_text: str) -> list[dict]:
+    """Parse a `Statement = [...]` array body into the shared statement dicts."""
     statements = []
     for obj_body in _split_top_level_objects(array_text):
         sid_m = _SID_CAP_RE.search(obj_body)
@@ -206,6 +224,45 @@ def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> li
             }
         )
     return statements
+
+
+def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> list[dict]:
+    """Statements of the named inline `aws_iam_role_policy` (the identity policy). [] when absent."""
+    array_text = _locate_policy_statement_array(text, "aws_iam_role_policy", role_policy_resource_name)
+    if array_text is None:
+        return []
+    return _parse_statement_array(array_text)
+
+
+def _parse_managed_policy_statements(text: str, policy_resource_name: str) -> list[dict]:
+    """Statements of a named customer-managed `aws_iam_policy`. [] when the resource is absent.
+
+    Returning [] (never raising) on an absent resource is load-bearing: the synthetic fixtures under
+    tests/checks/iam_tf/validate_ci_refresh_read_coverage/ declare only an inline role policy, and
+    they must stay green unmodified. Callers that REQUIRE the policy assert on the parsed length.
+    """
+    array_text = _locate_policy_statement_array(text, "aws_iam_policy", policy_resource_name)
+    if array_text is None:
+        return []
+    return _parse_statement_array(array_text)
+
+
+def _parse_boundary_dataplane_statement(bootstrap_text: str) -> dict | None:
+    """Locate github_ci_apply_boundary's DataPlaneAllow statement. None on HCL shape drift.
+
+    Lives here (not in _write_coverage) because it is a policy-document parse, and it is expressed on
+    the SHARED locator above so it follows the hoisted-local indirection. The previous implementation
+    forward-searched for the next `Statement = [` after the boundary resource match and documented an
+    assumption -- "the boundary policy is inline, no rec-2793 hoisted-local indirection" -- that a
+    boundary size precondition makes false: once the boundary JSON moves into a local ABOVE the
+    resource, the forward search finds nothing (the resource is the last thing in the file) and every
+    boundary-ceiling check fails closed with "could not locate the DataPlaneAllow statement".
+    Re-exported from _write_coverage so existing importers keep working.
+    """
+    for stmt in _parse_managed_policy_statements(bootstrap_text, "github_ci_apply_boundary"):
+        if stmt.get("sid") == "DataPlaneAllow":
+            return stmt
+    return None
 
 
 # ---------------------------------------------------------------------------
