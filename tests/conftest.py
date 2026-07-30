@@ -51,6 +51,22 @@ def _clear_executor_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _clear_push_context_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip GITHUB_EVENT_NAME/GITHUB_EVENT_BEFORE for every test.
+
+    GITHUB_EVENT_NAME is a GitHub Actions default env var present for the WHOLE job
+    process (e.g. "push" throughout main-validate's push-triggered run), not just for
+    actual git operations. Left unmasked, scripts.checks._common.push_context_base()
+    would activate unconditionally for every test in a push-triggered CI run, breaking
+    mocked-subprocess tests that assume today's non-push get_changed_files() /
+    get_status_aware_diff() / get_changed_source_files() behaviour. Individual
+    push-context tests opt back in via their own monkeypatch.setenv.
+    """
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_BEFORE", raising=False)
+
+
 _NONEXISTENT_AWS_DIR_SEGMENT = "nonexistent-aws-config-dir"
 
 

@@ -27,6 +27,26 @@ The canonical corpus of ratified architectural and operational decisions, and th
 **Reversal conditions:** Re-narrow if a fresh-guard-PASS auto-apply lands a change a human would have caught, or if evidence shows the guard's in-budget classification is weaker than the Environment gate it displaces on this path. **The mechanism is a TWO-SITE change, not a one-liner** -- recorded because a later reader will otherwise assume the narrowing was declined on taste and is cheap to undo. Adding a `fresh_reason != 'guard_routed'` conjunct to `apply_fresh`/`review_fresh` ALONE strands a fresh-guard-PASS episode with NO UPLOADER: `upload_fresh_plan_sha256` and the upload-artifact step are gated on `guard_fresh.outputs.routed == 'true'`, so no artifact is produced, `fresh_plan_pending` stays false, `gated-apply-reconcile` falls back to fetch-saved-plan, and the episode ends applying the STALE saved plan -- the exact failure this entry exists to remove, reached by a longer road. A reverser needs BOTH sites plus matching updates to the `recovery-workflow-topology` guard's assertions (ii) and (iv).
 
 **Related:** Decision 77 (speculative plan / no-TOCTOU; the artifact-vs-diff distinction in point 3), Decision 92 (the `tf-gated-apply` Environment as the authorization boundary -- whose reach point 4 narrows), Decision 126 / T2.37 (one dispatch, one approval: why a second Environment approval was rejected), Decision 154 (point 5(i) pre-ratifies route (iii)'s red latch; point 2's dispatch-ref side-checkout narrowing is why the re-plan runs against the RED_SHA checkout, not the dispatch ref), Decision 150 (the significance bar this entry clears). Provenance: decision-scout judged the newly-reachable cell a durable architectural commitment with reversal-relevant consequences, and separately found that the pre-existing STALE-route substitution had never been numbered. Roadmap/queue refs (not DECISIONS.md entries): T2.47/T2.48, rec-2847.
+
+## Decision 159: push-context diff-base class fix restores the post-merge diff-aware validation layer; a bounded, tamper-guarded coverage baseline unblocks the 100%-coverage gate going live (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-30
+**Warehouse ID:** dec-159 (canonical; per Decision 84)
+
+**Problem:** `get_status_aware_diff()` and `test_coverage_checker.get_changed_source_files()` resolve their base via `merge-base(origin/main, HEAD)`, which on a clean post-merge-to-main checkout equals HEAD; `get_changed_files()` diffs `origin/main` directly, also HEAD on main. Different mechanisms, same result: every diff-aware full-tier check (`validate_vp_replay`, `validate_graduation_completeness`, `validate_verifier_same_pr_guard`, `validate_environment_taxonomy`, `validate_lambda_deploy_gating`, `validate_data_model_standard`, `validate_test_coverage`) silently no-ops post-merge. A MEASUREMENT CORRECTION (Decision 82 framing), not a relaxation.
+
+**Decision:**
+1. **`push_context_base()`** (sole home: `scripts/checks/_common.py`) returns a base ONLY in push context -- `GITHUB_EVENT_NAME == "push"`, OR (current branch == "main" AND `merge-base(origin/main, HEAD) == HEAD`) -- and `None` otherwise. The branch-name conjunct is required: `merge-base == HEAD` alone also matches every fresh harness session branch before its first commit. In push context, prefers `GITHUB_EVENT_BEFORE` when it names a non-zero, locally-present commit, else `HEAD~1`; `None` with a loud warning if `HEAD~1` doesn't resolve. Each of the three consumers tries it first and falls back to its OWN existing base on `None` -- `get_changed_files()` keeps diffing `origin/main` directly; Decision 135 pt 3's "contract unchanged for existing callers" holds for all branch/PR callers, and `get_changed_files()` newly changes behaviour ON main in push context, which is the correction itself. `main-validate` (ci.yml) and the scheduled `main-canary.yml` job both checkout `fetch-depth: 2` (squash-merge convention, Decision 76).
+2. **`config/coverage_baseline.yaml`** is a one-time grandfather roster (Decision 130 style): a changed file WITH an entry fails iff measured < entry; unbaselined files keep the 100% standard -- narrowing Decision 48's V2 row by forward reference. rec-943's parent-directory `--cov` spec fix (a single-.py-path/dotted spec silently collects no coverage data at all) makes the previously info-skipped files measurable.
+3. **Tamper guard** (Decision 128 mirror): `validate_coverage_baseline_edits` fails any lowered entry or new sub-100 registration lacking an inline `# baseline-lowered: dec-NNN <reason>` marker naming a real Decision header; raises/removals unrestricted. Missing-base (this seeding PR itself) SKIPs -- never "missing base == empty base".
+4. **Amends Decision 124's premise** by forward reference: "the merge-base diff is empty on main post-merge, so it no-ops" is corrected; the ops_portal carve-out (`map_source_to_test` returns `None` for `scripts/ops_portal/**`) is unaffected, VP-verified.
+5. **Accepted residuals:** the gate stays full-tier only (a post-merge-only tripwire, per Decision 73's two-tier design, now live rather than dormant); a multi-commit direct push to main (admin/break-glass) under-selects with a `HEAD~1` base, assuming the Decision 76 squash convention. `tests/test_checks_registry.py` takes one deliberate, marked SLOC raise (its mechanism-mirror role means the new push-context tests cannot live elsewhere without also editing `map_source_to_test` in this same PR) -- a re-introduction of test SLOC debt after the rec-2709 waves retired all 24 Decision 130 grandfathers.
+
+**Reversal / retirement conditions:** net roster growth over any 90-day window triggers a gate-design re-audit (Decision 62 alarm-not-gate, never silent weakening); when the roster empties, the baseline clauses retire and Decision 48's V2 row reads unamended; the SLOC raise retires by folding `_CHECKS_REGISTRY_MECHANISM_FILES` into a concern-split test package; a diff-line-coverage ratchet (Platform End-State section 6) would likely obsolete this per-file-100%-plus-roster mechanism outright, in which case this Decision is revisited rather than extended.
+
+**Related:** Decision 104/148 (`_common.py` sole-home), Decision 135 pt 3 (contract-unchanged invariance), Decision 73/142 (two-tier presubmit, CI-RCA), Decision 82 (measurement-correction framing), Decision 48 (100% coverage V2 row, narrowed), Decision 124 (ops_portal carve-out premise, amended), Decision 128 (SLOC budget-raise / tamper-guard mirror), Decision 130 (one-time grandfather roster precedent), Decision 76 (squash-merge convention), Decision 55/72/129 (fix the generator, not the occurrence -- supersedes rec-2903's fetch-depth-alone fix). Bundled: rec-2903, rec-943.
+
 ## Decision 157: Secrets Manager split by value-capability -- metadata verbs ride the agent-platform-* prefix, value verbs enumerated (amends Decision 129 pt 2) (Decided)
 
 **Status:** Decided
@@ -1981,6 +2001,14 @@ masked-drift observability gap are follow-on recs, never inline-patched here).
 **Status:** Decided
 **Date:** 2026-07-10
 **Warehouse ID:** dec-124 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+> **Amended by Decision 159 (2026-07-30):** the coverage-gate mapping bullet's premise --
+> "on main post-merge the merge-base diff is empty so it no-ops" -- is corrected: a
+> `push_context_base()` primitive now supplies a real post-merge diff base, so the per-file
+> coverage gate is live on main post-merge. The `scripts/ops_portal/**` carve-out itself
+> (`map_source_to_test` returns `None`, unmapped/skipped) is UNCHANGED and unaffected -- verified
+> by Decision 159's own VP step 7. This body is otherwise unedited; see Decision 159 for the
+> derivation and reversal conditions.
 
 **Problem:**
 scripts/ops_data_portal.py is the Single Portal write gateway and had accreted the entire

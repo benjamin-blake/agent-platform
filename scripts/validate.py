@@ -157,6 +157,7 @@ from scripts.checks.lambda_pkg.validate_lambda_manifest_coverage import (  # noq
     validate_lambda_manifest_coverage,
 )
 from scripts.checks.lambda_pkg.validate_lambda_manifests import validate_lambda_manifests  # noqa: F401,E402
+from scripts.checks.misc.coverage_baseline import validate_coverage_baseline_edits  # noqa: F401,E402
 from scripts.checks.misc.validate_ducklake_version_lockstep import (  # noqa: F401,E402
     validate_ducklake_version_lockstep,
 )
