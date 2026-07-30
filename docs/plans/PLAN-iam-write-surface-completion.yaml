@@ -406,8 +406,12 @@ verification_plan:
     command: |-
       f=terraform/bootstrap/github_ci_apply.tf; p=$(grep -c 'precondition {' "$f"); l1=$(grep -c 10240 "$f"); l2=$(grep -c 6144 "$f"); echo "precondition_blocks=$p limit10240=$l1 limit6144=$l2"; [ "$p" -ge 3 ] && [ "$l1" -ge 1 ] && [ "$l2" -ge 2 ]
     expected: >-
-      Exit 0: at least 3 `precondition {` blocks (was 1 -- the inline document only), the 10240
-      constant still present, and the 6144 constant present at least twice (once per managed document).
+      Exit 0, printing `precondition_blocks=3` `limit10240=1` `limit6144=2` -- three precondition
+      blocks (was 1, the inline document only), the 10240 constant still present, and the 6144
+      constant present once per managed document. The backticked literals are deliberately the
+      tokens the command actually prints: validate_vp_replay extracts every backticked literal from
+      this field and requires it in the captured output, so quoting the HCL fragment here instead
+      would demand a string the command never emits and diverge on wording rather than on behaviour.
     fix_if: >-
       Counts below threshold -- a managed policy document shipped with no size precondition, so its
       LimitExceeded would surface only as an apply-time failure with no plan-time signal (the exact
