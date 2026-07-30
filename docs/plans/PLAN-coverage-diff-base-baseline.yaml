@@ -92,10 +92,16 @@ scope:
   - file: pyproject.toml
     action: Modify
     purpose: >-
-      Add [tool.coverage.report] exclude_lines covering "pragma: no cover" (preserve
-      default) and "if __name__ == .__main__.:" - removes structurally-uncoverable
-      entry-point blocks repo-wide in one edit (ops_writer.py measured 69.6% -> 75.3%,
-      27 statements excluded) without touching any Lambda-packaged source file.
+      EXTEND the existing [tool.coverage.report] section (it already exists at lines ~35-37
+      carrying fail_under = 37 and show_missing -- do not recreate it, and do not disturb
+      those two keys) with an exclude_lines list. The list MUST include "pragma: no cover"
+      explicitly: setting exclude_lines REPLACES coverage.py's built-in default rather than
+      appending to it, so omitting that entry would silently un-exclude the 32 existing
+      pragma sites repo-wide. Second entry: "if __name__ == .__main__.:" (canonical
+      coverage.py form; the dots are regex wildcards matching the quote characters). Removes
+      structurally-uncoverable entry-point blocks repo-wide in one edit (ops_writer.py
+      measured 69.6% -> 75.3%, 27 statements excluded) without touching any Lambda-packaged
+      source file.
   - file: .github/workflows/ci.yml
     action: Modify
     purpose: >-
