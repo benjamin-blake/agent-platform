@@ -132,6 +132,7 @@ def pre_sequence() -> list[Step]:
             pre_globs=("docs/contracts/ops_*.yaml", "config/lambda/ducklake/field_semantics.static.yaml"),
         ),
         _c("validate_deploy_channel_conformance"),
+        _c("validate_outbox_staleness"),
         _c("validate_reversal_stanzas"),
         _c("validate_ci_rca_taxonomy"),
         _c("validate_ops_portal_patch_targets"),
