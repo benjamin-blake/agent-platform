@@ -36,7 +36,12 @@ from scripts.checks.iam_tf._read_coverage import (
     _scan_resources,
     _split_top_level_objects,  # noqa: F401 -- re-exported for tests
 )
+from scripts.checks.iam_tf._write_companions import (
+    check_identity_iam_actions_subset_of_boundary,
+    check_lifecycle_companions,
+)
 from scripts.checks.iam_tf._write_coverage import check_write_coverage
+from scripts.checks.iam_tf._write_symmetry import check_read_write_scope_parity, check_tag_untag_symmetry
 
 _READS_ATTACHMENT_RE = re.compile(
     r'resource\s+"aws_iam_role_policy_attachment"\s+"\w+"\s*\{(?P<body>[^}]*)\}',
@@ -144,7 +149,15 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
         if was_checked:
             checked += 1
 
+    # Design (a) discovery + (b) mandatory-declaration companions + (c) the two mechanical scope
+    # rules. Each is a sibling sub-check orchestrated HERE, not nested inside another checker: the
+    # facade is the single production entry point every guard must be reachable from (the PR #752
+    # REVISE lesson -- a checker that is defined and unit-tested but never called is dead in --pre).
     write_types = check_write_coverage(apply_statements, resources, failed, key)
+    check_lifecycle_companions(apply_statements, failed, key)
+    check_identity_iam_actions_subset_of_boundary(apply_statements, failed, key)
+    check_tag_untag_symmetry(apply_statements, failed, key)
+    check_read_write_scope_parity(apply_statements, failed, key)
 
     if not any(f.startswith(key) for f in failed):
         print(
