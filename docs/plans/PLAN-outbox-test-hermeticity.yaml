@@ -15,9 +15,13 @@ plan_path: docs/plans/PLAN-outbox-test-hermeticity.yaml
 phase: >-
   Phase Platform -- operational data backbone hygiene (Decision 84 I-4 retired-outbox invariant).
   No product-phase dependency. T2.26 is referenced as BACKGROUND ONLY (its met criterion c9 supplies
-  the retired-table set); this work advances none of T2.26's open criteria (c2/c3/c7/c8 are all
-  ops_session_log / ops_compaction / telemetry scoped), so closes_criteria is correctly empty and no
-  tier_item owns this directly.
+  the retired-table set). closes_criteria is correctly empty: c2/c3/c8 are ops_session_log /
+  ops_compaction / telemetry scoped and untouched here. c7 ("Replacement closure verified: old paths
+  dead or designed-rollback-only, no unconditional fallbacks") IS in-territory -- the out-of-scope
+  finding in execution step 10(a), OpsWriter.drain() iterating TABLE_NAMES with no migrated-table
+  skip (scripts/ops_writer.py:683), sits squarely inside it -- but is DELIBERATELY DEFERRED to a
+  filed recommendation per the AGENTS.md out-of-scope rule, so this plan does not close c7 either.
+  No tier_item owns this work directly.
 scope:
   - file: scripts/ops_writer.py
     action: Modify
@@ -35,6 +39,11 @@ scope:
   - file: tests/sync/ops/test_sync_cli.py
     action: Modify
     purpose: Update the one assertion (line 184) that references the constant by its old private name.
+  - file: tests/sync/ops/test_drain.py
+    action: Modify
+    purpose: >-
+      Update the docstring reference (line 157) to the constant's old private name. Docstring text
+      only -- no behavioural change. In scope because AGENTS.md forbids modifying files not listed here.
   - file: tests/fixtures/outbox_guard.py
     action: Create
     purpose: >-
@@ -117,9 +126,15 @@ verification_plan:
       Prove the specific leaking test no longer writes to the real outbox (the empirically confirmed
       root cause -- this exact command reproduces the defect on the pre-change tree).
     command: >-
-      rm -rf logs/.ops-outbox && bin/venv-python -m pytest tests/ops_writer/test_outbox_emit.py -q &&
-      test -z "$(find logs/.ops-outbox -type f 2>/dev/null)"
-    expected: pytest exits 0 and the find returns no files, so the test command exits 0.
+      rm -rf logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans &&
+      bin/venv-python -m pytest tests/ops_writer/test_outbox_emit.py -q &&
+      test -z "$(find logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans -type f 2>/dev/null)"
+    expected: >-
+      pytest exits 0 (measured 14 passed in ~6s, inside vp_replay's 30s per-step cap) and the find
+      returns no files, so the step exits 0. Only RETIRED dirs are deleted -- legacy staging dirs
+      (telemetry, ops_session_log) may hold legitimately-pending drain data and are never touched.
     fix_if: >-
       A .jsonl file appears under logs/.ops-outbox/ops_recommendations/. Means _write_to_outbox still
       resolves the real repo root -- check that the test patches scripts.ops_writer._OUTBOX_BASE and
@@ -139,11 +154,9 @@ verification_plan:
       A failure here means the guard would either miss real leaks or false-positive on legitimate
       legacy staging files. Fix tests/fixtures/outbox_guard.py before wiring conftest.
     hermetic: true
-    graduation: waive
-    graduation_waiver_reason: >-
-      Same enforcement surface as step 1's waiver: the autouse conftest guard these tests cover is
-      itself the permanent, always-on check. Graduating a second registry row that merely re-runs
-      this test file would duplicate the conftest guard's coverage at additional cost.
+    graduation: graduate
+    graduation_check_id: outbox_hermeticity_guard_detection
+
   - step: 3
     phase: pre-deploy
     action: >-
@@ -152,7 +165,7 @@ verification_plan:
     command: >-
       printf 'from pathlib import Path\n\n\ndef test_probe_leak():\n    d = Path("logs/.ops-outbox/ops_recommendations")\n    d.mkdir(parents=True, exist_ok=True)\n    (d / "probe.jsonl").write_text("{}")\n'
       > tests/test_zz_outbox_probe.py; bin/venv-python -m pytest tests/test_zz_outbox_probe.py -q > /tmp/probe.log 2>&1;
-      rc=$?; rm -f tests/test_zz_outbox_probe.py; rm -rf logs/.ops-outbox;
+      rc=$?; rm -f tests/test_zz_outbox_probe.py; rm -rf logs/.ops-outbox/ops_recommendations;
       test "$rc" -ne 0 && grep -q "test_probe_leak" /tmp/probe.log && grep -q "ops_recommendations" /tmp/probe.log
     expected: >-
       pytest exits non-zero (the probe is failed by the guard) AND the captured output names both
@@ -163,7 +176,7 @@ verification_plan:
       tests/conftest.py is @pytest.fixture(autouse=True) and that its check runs in teardown (after
       the yield), not only at setup. If rc is non-zero but a grep fails, the failure message is not
       attributing the leak -- include the test id and the offending path in the message.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       This step plants and deletes a throwaway test file in tests/, which is inherently non-idempotent
@@ -176,16 +189,20 @@ verification_plan:
       Run rec-2894's own acceptance command -- the full suite from a clean tree, asserting the real
       outbox stays empty. This is the authoritative proof for all three bundled recs.
     command: >-
-      rm -rf logs/.ops-outbox && bin/venv-python -m pytest tests/ -q &&
-      test -z "$(find logs/.ops-outbox -type f 2>/dev/null)"
+      rm -rf logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans &&
+      bin/venv-python -m pytest tests/ -q &&
+      test -z "$(find logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans -type f 2>/dev/null)"
     expected: >-
       All tests pass (baseline before this change is 7505 passed / 13 skipped in ~12m39s) and the
-      outbox is empty. Runtime must stay well inside the Decision 153 forced-run ceiling of 1500s.
+      retired dirs are empty. Runtime must stay well inside the Decision 153 forced-run ceiling of
+      1500s. Legacy staging dirs are never deleted -- they may hold pending drain data.
     fix_if: >-
       If a test other than the known one fails the guard, that is a second leaker this plan has now
       exposed -- fix it in scope if it is an outbox-path defect, otherwise file a rec (AGENTS.md
       out-of-scope rule) rather than weakening the guard.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       A full-suite run is the fast-tier gate's own job (VP step 8 / validate --pre); graduating a
@@ -232,6 +249,9 @@ verification_plan:
     hermetic: true
     graduation: graduate
     graduation_check_id: validate_outbox_staleness_retired_dirs
+    # Implement-time note: the registry check_spec must target a NEW test node id, not the whole
+    # file -- run_differential reverts to origin/main where this file already exists and its 3
+    # current tests pass, so a whole-file test_selector would be rejected as tautological.
   - step: 7
     phase: pre-deploy
     action: PHASE 2 only. Prove the hardened check is registered in both presubmit tiers.
@@ -262,8 +282,12 @@ verification_plan:
       A budget warning on the forced full run is expected and passes per Decision 153; only a hard
       failure above the 1500s ceiling is a real failure. Any check failure must be fixed forward,
       never by adding --ignore-budget.
-    hermetic: true
-    graduation: not-applicable
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The fast-tier gate IS the standing enforcement surface; a registry row that re-invokes
+      scripts.validate --pre would be self-referential (the gate calling itself) and costs 13-20
+      minutes per invocation. Kernel-expressible in principle, un-graduatable in practice.
   - step: 9
     phase: post-deploy
     action: >-
@@ -271,15 +295,20 @@ verification_plan:
       post-deploy smoke gates passed. Decision 126 -- observe the channel, never run a break-glass
       build_lambda --deploy.
     command: >-
-      bin/venv-python -c "import json, subprocess;
+      git fetch origin main -q && bin/venv-python -c "import json, subprocess;
       sha = subprocess.run(['git','rev-parse','origin/main'], capture_output=True, text=True).stdout.strip();
-      out = subprocess.run(['aws','s3','cp','s3://agent-platform-data-lake/deploy-records/prod/agent-platform-ops-compaction.json','-','--region','eu-west-2','--profile','agent_platform'], capture_output=True, text=True).stdout;
-      rec = json.loads(out); assert rec.get('source_git_sha') == sha, (rec.get('source_git_sha'), sha);
-      print('deploy record at merged sha', sha)"
+      fns = ['agent-platform-ops-compaction', 'agent-platform-findings-processor', 'agent-platform-scheduled-agent-dispatcher'];
+      bad = [];
+      [bad.append((f, json.loads(subprocess.run(['aws','s3','cp',f's3://agent-platform-data-lake/deploy-records/prod/{f}.json','-','--region','eu-west-2','--profile','agent_platform'], capture_output=True, text=True).stdout).get('source_git_sha'))) for f in fns];
+      stale = [(f, s) for f, s in bad if s != sha];
+      assert not stale, f'deploy records not at merged sha {sha}: {stale}';
+      print('all deploy records at merged sha', sha)"
     expected: >-
-      Prints "deploy record at merged sha <sha>" matching origin/main after the squash-merge,
-      proving the deploy job ran for this commit rather than reporting a stale or skipped no-op
-      (the workflow's own false-green guard, Decision 55).
+      Prints "all deploy records at merged sha <sha>" for the merge commit, proving the deploy job
+      ran for this commit rather than reporting a stale or skipped no-op (the workflow's own
+      false-green guard, Decision 55). The leading git fetch is REQUIRED -- the squash-merge happens
+      server-side via merge_pull_request, so the local origin/main ref is stale without it and the
+      assertion would compare against the pre-merge SHA and fail spuriously.
     fix_if: >-
       A mismatch means the deploy did not run for this commit or was skipped. Check the
       deploy-prod-lambdas run for the merge SHA; do NOT paper over it with a local
@@ -305,6 +334,25 @@ verification_plan:
       resolution as the landed fix, never as "duplicate" (Decision 103).
     hermetic: false
     graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Prove acceptance criterion 4 -- that the two tautological constructs are actually GONE. No
+      other step covers this: both write to tmp_path, so VP step 1 still passes if they survive.
+    command: >-
+      test "$(grep -c -e 'Fallback: write directly' -e 'fake_write_to_outbox' -e '__func__'
+      tests/ops_writer/test_outbox_emit.py)" -eq 0
+    expected: >-
+      grep -c returns 0 for all three markers (the self-writing fallback block, the hand-rolled
+      production-logic duplicate, and the instance-patch-bypassing .__func__ call), so the step
+      exits 0.
+    fix_if: >-
+      A non-zero count means a tautological construct survived the rewrite. Delete it -- do not
+      rename it to dodge the grep. The rewritten tests must call the real
+      OpsWriter._write_to_outbox against a patched _OUTBOX_BASE.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: outbox_emit_tautology_removed
 constraints:
   - >-
     scripts/ops_writer.py is at 569 SLOC against a 571 budget, and 571 is ALREADY a raise above the
@@ -336,6 +384,16 @@ constraints:
     The guard must short-circuit when logs/.ops-outbox does not exist (a single exists() syscall)
     rather than performing an unconditional rglob over logs/, so the per-test cost across 7518 tests
     stays negligible.
+  - >-
+    XDIST ATTRIBUTION LIMIT. Both presubmit tiers run pytest with -n auto
+    (scripts/checks/_scaffolding.py:52-54), so all workers share ONE repo working directory. A
+    snapshot-before / diff-in-teardown guard can therefore observe a file leaked by worker A while
+    tearing down a test on worker B, and two workers' cleanup can race. The guard must NOT
+    over-claim attribution: word the failure as "a test in this session leaked <path>; the reporting
+    test is <id> and may not be the writer under -n auto", or narrow the diff to files the worker can
+    actually attribute. Acceptance criterion 5's "names the test id" is satisfied by naming the
+    REPORTING test plus the path, not by guaranteeing the writer. VP step 3 runs serially and will
+    not surface this; VP step 8 and post-merge CI will.
   - >-
     Per tests/CLAUDE.md, shared test helpers live in tests/fixtures/ (exempt from the
     cross-test-import guard because its names never start with test_). Do not import the guard logic
@@ -426,6 +484,23 @@ context:
     path should be unreachable -- ASSERT that with a grep for live OpsWriter.write("ops_decisions",
     ...) callers before hardening. CI is unaffected (fresh clone, no outbox).
   - >-
+    THREE OUTBOX-HEALTH SURFACES, deliberately not unified here. After this plan there are three
+    enforcement points with three thresholds: the new conftest guard (per-test, zero tolerance),
+    validate_outbox_staleness (>24h warn; Phase 2 makes it zero-tolerance for retired dirs), and
+    scripts/verifiers/outbox_health.py (>2h ADVISORY / >24h HARD_GATE). Only the first two are made
+    to consume DUCKLAKE_MIGRATED_TABLES; the verifier keeps its own thresholds and its covers list
+    still points at the pre-RS-01 path scripts/sync_ops.py. Unifying them is out of scope --
+    execution step 10 files it.
+  - >-
+    VP REPLAY BUDGET (Decision 148 / VF-01). validate_vp_replay runs in the --pre tier and replays
+    every pre-deploy AND hermetic:true step with PER_STEP_TIMEOUT_SECONDS=30,
+    MAX_AGGREGATE_SECONDS=120, MAX_REPLAYED_STEPS=20, treating TimeoutExpired as an unconditional
+    divergence. Steps 3, 4 and 8 are therefore hermetic:false -- step 4 is the 759s full suite, step
+    8 is the 13-20min validate --pre (which the planning skill separately forbids marking hermetic,
+    for recursion), and step 3 mutates the working tree by planting a throwaway test file. The
+    remaining hermetic steps were timed on the pre-change tree: step 1 ~6s, step 6 ~2s, steps 2/5/7/11
+    ~1-3s each, so the aggregate sits far inside the 120s cap.
+  - >-
     Decision-scout verdict FLAGS_FOUND (108 of 108 decisions triaged). CITE list, verbatim ids:
     Decision 84 (I-4, governing clause), Decision 104, Decision 135, Decision 153, Decision 131,
     Decision 132, Decision 55. RELATED: Decision 70, Decision 73, Decision 148, Decision 130,
@@ -456,9 +531,12 @@ context:
     judgment call, not an explicit human instruction -- the human approved flags A and B but did not
     rule on it. Phase 1 alone fully fixes the measured defect. Dependency direction is Phase 2 ->
     Phase 1 only (the check consumes the same constant), never the reverse, so excision is a clean
-    delete of those scope entries, VP steps 6-7, execution steps 6-8, acceptance criterion 9 and the
-    rollback's second sentence. NOTE: the retired-table set lives in Phase 1's helper, so the
-    verbatim-DUCKLAKE_MIGRATED_TABLES requirement applies even if Phase 2 is dropped.
+    delete of those scope entries, VP steps 6-7, EXECUTION STEPS 7-9, acceptance criterion 9 and the
+    rollback's second sentence. (Execution-step numbering note: the sync/ops.py rename is step 1, so
+    Phase 2 is steps 7-9 -- NOT 6-8. Deleting 6-8 would remove the Phase 1 deliverable
+    tests/test_outbox_hermeticity_guard.py and orphan a Phase 2 test edit.) NOTE: the retired-table
+    set lives in Phase 1's helper, so the verbatim-DUCKLAKE_MIGRATED_TABLES requirement applies even
+    if Phase 2 is dropped.
   - >-
     CI-RCA HARD BLOCK DEFERRAL (required rationale). One unresolved ci-rca rec is open: rec-2882,
     "REGRESSION: github_ci_apply missing iam:ListInstanceProfilesForRole for IAM role destroy"
@@ -520,8 +598,10 @@ execution_steps:
     any file already exists in a RETIRED dir, naming every offending path and the exact rm
     remediation (Decision 149 -- do not baseline it away); files in legacy staging dirs may be
     baselined. Per test, snapshot before and compare in teardown (after the yield); on a new file,
-    delete it so the tree is left clean and then fail the test naming BOTH the test id and the
-    offending path. Keep the file under 500 lines (Decision 130).
+    delete it so the tree is left clean and then fail the test naming BOTH the reporting test id and
+    the offending path. Under -n auto the reporting test may not be the writer -- word the message so
+    it does not over-claim (see the XDIST ATTRIBUTION LIMIT constraint). Keep the file under 500
+    lines (Decision 130).
   - >-
     tests/ops_writer/test_outbox_emit.py -- rewrite test_write_to_outbox_directly to patch
     scripts.ops_writer._OUTBOX_BASE to tmp_path and call writer._write_to_outbox(table, entry)
@@ -560,7 +640,13 @@ execution_steps:
     resurrection shape AGENTS.md warns about. (b) scripts/ops_writer.py is 746 lines with a
     complexity waiver and 2 SLOC of headroom on an already-raised budget -- the Decision 128
     decomposition signal. (c) AGENTS.md's "ops_execution_plans = Athena, pending T2.26 disposition"
-    line is stale prose superseded by T2.26 c9 (met) and needs a doc-currency correction.
+    line is stale prose superseded by T2.26 c9 (met) and needs a doc-currency correction. (d)
+    OpsWriter.emit()'s docstring (scripts/ops_writer.py:519) still justifies its unconditional
+    _write_to_outbox call as the "local-first guarantee per Decision 51" -- Decision 51 is
+    superseded by Decision 78. emit() is the other live producer into logs/.ops-outbox. (e) The
+    three outbox-health surfaces carry three different thresholds and only two know about
+    DUCKLAKE_MIGRATED_TABLES; scripts/verifiers/outbox_health.py's covers list also still names the
+    deleted path scripts/sync_ops.py.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
     RCA (Decision 55). Steps 6-7 are Phase 2 only; steps 9-10 are post-deploy and run after the
