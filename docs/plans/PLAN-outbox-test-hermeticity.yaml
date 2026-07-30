@@ -150,11 +150,14 @@ verification_plan:
       Prove the ops_writer.py change is net-zero SLOC and did not consume the 2-line budget headroom
       or require a Decision 128 raise.
     command: >-
-      bin/venv-python -m scripts.validate --pre 2>&1 | grep -E "ops_writer.py: [0-9]+ SLOC" &&
-      git diff origin/main -- config/sloc_budgets.yaml | grep -q "ops_writer" && exit 1 || exit 0
+      bin/venv-python -c "from pathlib import Path; ls = Path('scripts/ops_writer.py').read_text().splitlines();
+      n = len([l for l in ls if l.strip() and not l.strip().startswith('#')]);
+      assert n <= 571, f'SLOC {n} exceeds budget 571'; print(f'SLOC {n} within budget 571')" &&
+      test -z "$(git diff origin/main -- config/sloc_budgets.yaml | grep ops_writer)"
     expected: >-
-      The SLOC line reports ops_writer.py at or below 571 (569 expected, unchanged), and
-      config/sloc_budgets.yaml carries no diff for ops_writer.py.
+      Prints "SLOC 569 within budget 571" (the counting formula is identical to
+      scripts/checks/sloc/sloc_limits.py: non-blank lines not starting with #), and the budget file
+      carries no diff for ops_writer.py, so the step exits 0.
     fix_if: >-
       If SLOC rose, do NOT raise the budget. Recover the line by deleting drain()'s local
       outbox_base assignment and referencing _OUTBOX_BASE at both of its use sites. If it still does
