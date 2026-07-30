@@ -2367,7 +2367,12 @@ entries:
       - bash
       - -c
       - |-
-        rc=0; for a in iam:ListInstanceProfilesForRole iam:RemoveRoleFromInstanceProfile iam:UntagOpenIDConnectProvider; do n=$(grep -cE "^[[:space:]]*\"$a\",?[[:space:]]*$" terraform/bootstrap/github_ci_apply.tf); echo "$a=$n"; [ "$n" -ge 2 ] || rc=1; done; exit $rc
+        # Both-layers assertion (identity policy + boundary DataPlaneAllow). Comment lines are
+        # stripped first so a prose mention can never satisfy it; the quoted-token match is shape-
+        # agnostic so a single-verb Sid written as `Action = ["iam:X"]` counts, which the former
+        # one-verb-per-line regex did not (iam:RemoveRoleFromInstanceProfile moved into exactly
+        # such a Sid, IAMInstanceProfileDetach, when its inert role-scoped grant was rescoped).
+        rc=0; for a in iam:ListInstanceProfilesForRole iam:RemoveRoleFromInstanceProfile iam:UntagOpenIDConnectProvider; do n=$(grep -vE '^[[:space:]]*#' terraform/bootstrap/github_ci_apply.tf | grep -cF "\"$a\""); echo "$a=$n"; [ "$n" -ge 2 ] || rc=1; done; exit $rc
   - check_id: reads-policy-relocation-complete
     primitive_slot: command_exit_zero
     guard_target: terraform/bootstrap/github_ci_apply.tf

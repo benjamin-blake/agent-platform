@@ -355,15 +355,36 @@ locals {
           # calls iam:ListInstanceProfilesForRole and then iam:RemoveRoleFromInstanceProfile for each
           # profile returned. Neither is optional and neither depends on the role actually having an
           # instance profile -- the List call happens unconditionally -- so iam:DeleteRole without
-          # these two is structurally unusable. RemoveRoleFromInstanceProfile is granted alongside
-          # the List verb deliberately: it is the second call in the SAME provider loop, and leaving
-          # a known companion ungranted is exactly the patch-one-verb-per-production-failure pattern
-          # this change exists to end. Both verbs are also added to the boundary DataPlaneAllow
+          # BOTH is structurally unusable. Only the List verb belongs in THIS Sid: it authorizes on
+          # the ROLE resource type, which is what this statement is scoped to. Its loop partner
+          # iam:RemoveRoleFromInstanceProfile authorizes on the INSTANCE-PROFILE resource type and
+          # therefore lives in its own Sid (IAMInstanceProfileDetach, immediately below) -- see that
+          # comment for the live-simulate proof. Both verbs are also in the boundary DataPlaneAllow
           # ceiling below -- a grant absent from the ceiling is silently denied by the intersection.
-          "iam:ListInstanceProfilesForRole",
-          "iam:RemoveRoleFromInstanceProfile"
+          "iam:ListInstanceProfilesForRole"
         ]
         Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
+      },
+      {
+        # rec-2882 follow-through -- A SEPARATE Sid BECAUSE THE RESOURCE AXIS DIFFERS, not for
+        # readability. iam:RemoveRoleFromInstanceProfile authorizes on the INSTANCE-PROFILE resource
+        # type, never on the role, so the grant it shipped with -- inside IAMRoleDeleteBounded at
+        # role/agent-platform-* -- was INERT: present in the policy and structurally unable to
+        # authorize anything. Live simulate against the APPLIED policy is what caught it (a 63-triple
+        # post-apply sweep; 3 mismatches): the same verb granted at instance-profile/agent-platform-*
+        # and simulated against an instance-profile ARN returns `allowed`, while the role-scoped
+        # grant simulated against a role ARN returns implicitDeny -- with its former Sid siblings
+        # iam:DeleteRole and iam:ListInstanceProfilesForRole returning `allowed` on that same role
+        # ARN, which is what isolated the axis rather than the verb. EVERY STATIC CHECK PASSED on the
+        # inert shape (the verb was literally present, at the marker the companion table declared, in
+        # both layers), which is precisely why docs/contracts/iam-simulate-fixture.yaml exists and
+        # why "the verb is in the policy" is never evidence that it can authorize. The boundary
+        # DataPlaneAllow already carries this verb at Resource ["*"] (a ceiling, not a second copy of
+        # the identity-side scoping), so no boundary change accompanies this rescope.
+        Sid      = "IAMInstanceProfileDetach"
+        Effect   = "Allow"
+        Action   = ["iam:RemoveRoleFromInstanceProfile"]
+        Resource = ["arn:aws:iam::${var.account_id}:instance-profile/agent-platform-*"]
       },
       {
         # rec-2831 (DEP-01 completion, T2.48 c1, PLAN-t248-passrole-liveproof): AWS REQUIRES
@@ -681,14 +702,30 @@ locals {
       {
         # P0-3 (gap sweep): aws_sns_topic and aws_sns_topic_subscription (sns_alerts.tf) had refresh
         # READS only (SNSRead / SNSSubscriptionRead) and no write grant at all, so creating,
-        # retiring, re-tagging or re-subscribing the alerts topic AccessDenies at apply. The eight
-        # verbs are the write half of the empirically-validated PlatformAdmin AlertsTopicManage grant
-        # (terraform/personal/platform_roles.tf) -- its four read verbs are already covered by the
-        # sns:Get*/List* read closure. SetSubscriptionAttributes covers the subscription's
-        # raw_message_delivery / filter-policy updates; TagResource is forced on create by the
-        # default_tags block. BOTH Resource entries are required: a subscription's ARN is
-        # `<topic-arn>:<subscription-uuid>`, so Subscribe/Unsubscribe/SetSubscriptionAttributes are
-        # authorized against agent-platform-alerts:* while the topic verbs match the bare topic ARN.
+        # retiring, re-tagging or re-subscribing the alerts topic AccessDenies at apply. These six
+        # verbs are the topic-scopable write half of the empirically-validated PlatformAdmin
+        # AlertsTopicManage grant (terraform/personal/platform_roles.tf) -- its four read verbs are
+        # already covered by the sns:Get*/List* read closure, and TagResource is forced on create by
+        # the default_tags block.
+        #
+        # SUBSCRIPTION-MUTATION VERBS ARE DENIED BY DESIGN (Decision 143 worst-verb enumeration).
+        # The earlier claim here -- that a subscription's `<topic-arn>:<uuid>` ARN made
+        # sns:Unsubscribe / sns:SetSubscriptionAttributes authorizable via an agent-platform-alerts:*
+        # Resource entry -- is DISPROVEN by live simulate: both actions have NO resource type in
+        # SNS's IAM model, so a wildcard grant (Resource ["*"]) simulated against `*` returns
+        # `allowed` while the SAME wildcard grant simulated against either the topic ARN or a
+        # subscription ARN returns implicitDeny. They are unscopeable: making them work requires an
+        # account-wide Resource "*" grant, which would let one approved CD apply unsubscribe or
+        # reconfigure ANY subscription in the account -- so they are dropped rather than widened.
+        # ACCEPTED CONSEQUENCE, stated so no future auditor reads the denial as a gap: destroying or
+        # REPLACING aws_sns_topic_subscription.alerts_email through CD will AccessDeny and needs an
+        # admin apply. sns:Subscribe STAYS -- it authorizes on the topic resource type (proven
+        # `allowed` at the bare topic ARN), so subscription CREATE works through CD. Recorded as
+        # by_design entries in docs/contracts/iam-simulate-fixture.yaml.
+        #
+        # ONE Resource entry, not two: with Unsubscribe/SetSubscriptionAttributes gone, no remaining
+        # verb in this Sid authorizes on anything but the topic itself, so the former
+        # agent-platform-alerts:* entry matched nothing and is removed with them.
         Sid    = "SNSTopicWrite"
         Effect = "Allow"
         Action = [
@@ -697,13 +734,10 @@ locals {
           "sns:SetTopicAttributes",
           "sns:TagResource",
           "sns:UntagResource",
-          "sns:Subscribe",
-          "sns:Unsubscribe",
-          "sns:SetSubscriptionAttributes"
+          "sns:Subscribe"
         ]
         Resource = [
           "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts",
-          "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts:*",
         ]
       },
       {
@@ -1126,8 +1160,15 @@ locals {
           "iam:PassRole",
           # rec-2882 (P0-1) + P1-4: the ceiling half of the three new iam verbs the identity policy
           # grants above -- IAMRoleDeleteBounded's iam:ListInstanceProfilesForRole and
-          # iam:RemoveRoleFromInstanceProfile (the provider's deleteRole() unconditionally calls
-          # deleteRoleInstanceProfiles(), which issues both) and OIDCProviderReconcile's
+          # IAMInstanceProfileDetach's iam:RemoveRoleFromInstanceProfile (the provider's deleteRole()
+          # unconditionally calls deleteRoleInstanceProfiles(), which issues both -- they sit in two
+          # Sids because the second authorizes on the instance-profile resource type, not the role;
+          # this ceiling is unaffected, its Resource is the bare wildcard. NOTE, and do not undo it:
+          # a comment INSIDE this Action array must contain NO square bracket of either kind -- the
+          # checks parse the array with a non-greedy Field-equals-bracket regex, so one stray closing
+          # bracket truncates the parsed ceiling; if the comment also quotes a bare star, the
+          # truncated list ends in a wildcard and EVERY boundary assertion passes vacuously. This
+          # rule cost a real debugging round.) and OIDCProviderReconcile's
           # iam:UntagOpenIDConnectProvider (tag-drift reconcile). A grant present in only ONE layer
           # is silently denied by the identity/boundary intersection -- that single-layer silence is
           # the failure mode this whole change exists to end, so these are added in the same edit as

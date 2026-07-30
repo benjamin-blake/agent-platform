@@ -24,6 +24,7 @@ from scripts.checks.iam_tf import _write_companions as companions
 from scripts.checks.iam_tf._read_coverage import (
     _BOOTSTRAP_TF_REL,
     _parse_bootstrap_statements,
+    _parse_boundary_dataplane_statement,
     _parse_managed_policy_statements,
 )
 from scripts.checks.iam_tf._write_companions import (
@@ -36,6 +37,8 @@ from scripts.checks.iam_tf._write_companions import (
 from scripts.checks.iam_tf._write_coverage import WRITE_COVERAGE
 
 _ROLE_PREFIX_RESOURCE = '["arn:aws:iam::1234567890:role/agent-platform-*"]'
+_INSTANCE_PROFILE_PREFIX_RESOURCE = '["arn:aws:iam::1234567890:instance-profile/agent-platform-*"]'
+_TOPIC_ARN_RESOURCE = '["arn:aws:sns:eu-west-2:1234567890:agent-platform-alerts"]'
 _ENUMERATED_ROLES_RESOURCE = (
     '["arn:aws:iam::1234567890:role/agent-platform-github-ci-branch", '
     '"arn:aws:iam::1234567890:role/agent-platform-github-ci-pr"]'
@@ -153,6 +156,28 @@ class TestTableShape:
         }
         assert "deleteRoleInstanceProfiles()" in row["why"]
 
+    def test_delete_role_loop_verbs_carry_different_resource_markers(self) -> None:
+        """THE INERT-GRANT REGRESSION. The two verbs of the same provider loop authorize on DIFFERENT
+        resource types: List on the role, Remove on the instance profile. Binding both to the role
+        marker is what let an inert grant pass every static check for a whole release -- the live
+        post-apply simulate was the only thing that saw it."""
+        markers = dict(LIFECYCLE_COMPANIONS["aws_iam_role"]["delete"]["companions"])
+        assert markers["iam:ListInstanceProfilesForRole"] == "role/agent-platform-*"
+        assert markers["iam:RemoveRoleFromInstanceProfile"] == "instance-profile/agent-platform-*"
+
+    def test_sns_subscription_rows_record_the_by_design_denial(self) -> None:
+        """sns:Unsubscribe / sns:SetSubscriptionAttributes have no resource type in SNS's IAM model,
+        so they are ungranted BY DESIGN. The rows survive (mandatory declaration) with no companion
+        and a justification that names the denial, never a silent deletion."""
+        rows = LIFECYCLE_COMPANIONS["aws_sns_topic_subscription"]
+        assert rows["create"]["trigger"] == "sns:Subscribe"
+        assert rows["create"]["companions"] == ()
+        assert rows["update"]["trigger"] == "sns:SetSubscriptionAttributes"
+        assert rows["delete"]["trigger"] == "sns:Unsubscribe"
+        for phase in PHASES:
+            assert "DENIED BY DESIGN" in rows[phase]["why"], phase
+            assert "admin apply" in rows[phase]["why"], phase
+
 
 class TestDeleteRolePreFixRegression:
     """THE load-bearing case (rec-2882, instance 3 of the class): the PRE-FIX policy must FAIL."""
@@ -183,14 +208,46 @@ class TestDeleteRolePreFixRegression:
                     "iam:DetachRolePolicy",
                     "iam:DeleteRolePolicy",
                     "iam:ListInstanceProfilesForRole",
+                ],
+                _ROLE_PREFIX_RESOURCE,
+            ),
+            _stmt(["iam:RemoveRoleFromInstanceProfile"], _INSTANCE_PROFILE_PREFIX_RESOURCE),
+        ]
+        failed: list[str] = []
+        check_lifecycle_companions(post_fix, failed, "k:")
+        assert failed == []
+
+    def test_remove_role_from_instance_profile_at_the_role_prefix_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """THE INERT-GRANT REGRESSION, at the checker level.
+
+        This is the shape that SHIPPED and passed every static gate: all five verbs granted in one
+        role-scoped statement. iam:RemoveRoleFromInstanceProfile authorizes on the instance-profile
+        resource type, so at role/agent-platform-* it can never authorize -- a live post-apply
+        simulate was the only thing that caught it. The checker must now reject it at review time,
+        and must NOT flag its role-scoped loop partner.
+        """
+        monkeypatch.setattr(_common, "ROOT", tmp_path)
+        _write_bootstrap(tmp_path, _IDENTITY_WITH_CONDITION + _BOUNDARY_FULL)
+        inert = [
+            _stmt(
+                [
+                    "iam:DeleteRole",
+                    "iam:DetachRolePolicy",
+                    "iam:DeleteRolePolicy",
+                    "iam:ListInstanceProfilesForRole",
                     "iam:RemoveRoleFromInstanceProfile",
                 ],
                 _ROLE_PREFIX_RESOURCE,
             )
         ]
         failed: list[str] = []
-        check_lifecycle_companions(post_fix, failed, "k:")
-        assert failed == []
+        check_lifecycle_companions(inert, failed, "k:")
+        assert len(failed) == 1, failed
+        assert "'iam:RemoveRoleFromInstanceProfile'" in failed[0]
+        assert "narrower than 'instance-profile/agent-platform-*'" in failed[0]
+        assert "aws_iam_role delete" in failed[0]
 
     def test_companion_narrowed_below_the_trigger_prefix_fails_loud(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -271,6 +328,19 @@ class TestInertRows:
         check_lifecycle_companions([_stmt(["s3:GetObject"], '["*"]')], failed, "k:")
         assert failed == []
 
+    def test_sns_subscribe_alone_imposes_no_subscription_mutation_companion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The by-design SNS denial, at the checker level: with sns:Subscribe granted at the topic ARN
+        and neither subscription-mutation verb granted anywhere, the create row must impose nothing
+        (its companion tuple is empty by design) and the update/delete rows must stay inert. The
+        pre-change table declared sns:SetSubscriptionAttributes as a create companion, so this case
+        failed loud before the denial was recorded."""
+        monkeypatch.setattr(_common, "ROOT", tmp_path)
+        failed: list[str] = []
+        check_lifecycle_companions([_stmt(["sns:Subscribe"], _TOPIC_ARN_RESOURCE)], failed, "k:")
+        assert failed == []
+
     def test_trigger_none_row_is_inert_by_declaration(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A phase that issues NO AWS call declares trigger=None -- inert by declaration rather than
         by the accident of a missing grant, so its companion tuple is never asserted."""
@@ -296,10 +366,8 @@ class TestBoundaryCeiling:
         monkeypatch.setattr(_common, "ROOT", tmp_path)
         _write_bootstrap(tmp_path, _IDENTITY_WITH_CONDITION + _BOUNDARY_WITHOUT_INSTANCE_PROFILE_VERBS)
         stmts = [
-            _stmt(
-                ["iam:DeleteRole", "iam:ListInstanceProfilesForRole", "iam:RemoveRoleFromInstanceProfile"],
-                _ROLE_PREFIX_RESOURCE,
-            )
+            _stmt(["iam:DeleteRole", "iam:ListInstanceProfilesForRole"], _ROLE_PREFIX_RESOURCE),
+            _stmt(["iam:RemoveRoleFromInstanceProfile"], _INSTANCE_PROFILE_PREFIX_RESOURCE),
         ]
         failed: list[str] = []
         check_lifecycle_companions(stmts, failed, "k:")
@@ -433,6 +501,25 @@ class TestRealTree:
         failed: list[str] = []
         check_lifecycle_companions(_real_apply_statements(), failed, "k:")
         assert failed == []
+
+    def test_real_boundary_ceiling_is_not_vacuous(self) -> None:
+        """ANTI-VACUOUS-PASS guard on the ceiling PARSE itself, not on its contents.
+
+        Every boundary assertion in this module is `_action_matches(boundary_actions, [action])`, and
+        a bare "*" entry in boundary_actions makes ALL of them pass unconditionally. That entry can
+        appear without anyone widening the boundary: `_extract_capitalized_field` reads the array with
+        a non-greedy `Action = [...]` regex, so a square bracket inside an HCL COMMENT within the
+        array truncates the parse -- and if that comment also quotes a bare star (e.g. prose about
+        `Resource ["*"]`), the truncated list ends in a wildcard. That exact edit was made and passed
+        every other check in this file. A permissions boundary whose DataPlaneAllow grants "*" is not
+        a ceiling, so this assertion is meaningful whichever way the wildcard got there.
+        """
+        boundary = _parse_boundary_dataplane_statement((_common.ROOT / _BOOTSTRAP_TF_REL).read_text(encoding="utf-8"))
+        assert boundary is not None, "the real boundary DataPlaneAllow statement no longer parses"
+        assert "*" not in boundary["actions"], boundary["actions"]
+        # The parse must also reach the END of the array: the last-declared verb is the one a
+        # truncation drops first.
+        assert "iam:UntagOpenIDConnectProvider" in boundary["actions"], boundary["actions"]
 
     def test_real_tree_passes_identity_boundary_subset(self) -> None:
         failed: list[str] = []
