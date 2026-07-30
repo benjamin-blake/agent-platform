@@ -141,6 +141,15 @@ def pre_sequence() -> list[Step]:
         _c("validate_ci_refresh_read_coverage"),
         _c("validate_convergence_writer_isolation"),
         _c("validate_ci_workflow_guards"),
+        _c(
+            "validate_actions_evidence",
+            pre_globs=(
+                ".github/workflows/**",
+                ".github/actions/**",
+                "docs/contracts/github-actions-evidence.yaml",
+                "scripts/checks/ci_guards/validate_actions_evidence.py",
+            ),
+        ),
         _c("validate_pr_conflict_signal"),
         _c("validate_composite_action_manifests"),
         _c("validate_ducklake_version_lockstep"),
@@ -181,6 +190,7 @@ def full_sequence() -> list[Step]:
         _c("validate_invariants"),
         _c("validate_ci_rca_trigger"),
         _c("validate_ci_workflow_guards"),
+        _c("validate_actions_evidence"),
         _c("validate_pr_conflict_signal"),
         _c("validate_composite_action_manifests"),
         _c("validate_claude_p_retry_wrapper"),

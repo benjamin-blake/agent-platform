@@ -61,6 +61,7 @@ from scripts.checks._scaffolding import (  # noqa: F401,E402
 )
 
 # --- Facade re-exports: every extracted check (getattr + `from scripts.validate import X`) ---
+from scripts.checks.ci_guards.validate_actions_evidence import validate_actions_evidence  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_ci_rca_taxonomy import validate_ci_rca_taxonomy  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_ci_rca_trigger import validate_ci_rca_trigger  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_ci_workflow_guards import validate_ci_workflow_guards  # noqa: F401,E402
@@ -504,7 +505,7 @@ def main() -> None:
 
         def _scaffold_budget_assertion() -> None:
             elapsed = time.monotonic() - _t0
-            dominant_phase = max(phase_times, key=phase_times.get) if phase_times else None
+            dominant_phase = max(phase_times, key=lambda phase: phase_times[phase]) if phase_times else None
             if args.ignore_budget:
                 _file_budget_bypass_rec(elapsed, diff_manifest, args.ignore_budget_reason)
                 print(f"\nBudget assertion skipped (--ignore-budget). Elapsed: {elapsed / 60:.1f} min.")
