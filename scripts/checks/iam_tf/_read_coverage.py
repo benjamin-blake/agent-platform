@@ -26,6 +26,19 @@ from scripts.checks.iam_tf import validate_invoke_implies_resolve as _vir
 #         agent-platform-* (or other) prefix, OR a bare/interpolated Terraform resource reference
 #         in the Resource list of a statement granting one of those actions. A None name_attrs
 #         means the type is covered purely by a Resource:"*" grant (no per-instance name to check).
+#
+#         "read_actions" is ANY-OF: one marker action on a covering Resource satisfies the type.
+#         The OPTIONAL "read_actions_all_of" key overrides that with an EXACT, ALL-OF requirement
+#         -- every listed action must be granted (literally, or by a wildcard grant that covers
+#         it) on a Resource covering the instance. It exists for the types whose refresh-read set
+#         is genuinely a conjunction of two DIFFERENT capability classes, where an ANY-OF marker
+#         list would let the cheap half stand in for the expensive one. Concretely: after the
+#         Secrets Manager read split (value-free metadata prefixed, GetSecretValue enumerated), a
+#         wide `secretsmanager:Describe*` statement would ANY-OF-satisfy
+#         data:aws_secretsmanager_secret_version -- a green for the wrong reason that lets a data
+#         source on a non-enumerated secret AccessDeny live at plan, which is exactly the silent
+#         deferred failure this gate exists to kill. Types WITHOUT the key are matched exactly as
+#         before (_action_matches, unchanged).
 #   (ii)  ENUMERATED_IAM_TYPES -- iam: role reads. MUST be a literal enumerated ARN (Decision
 #         35/98) -- a wildcard/prefix match never counts, unlike CHECKED_TYPES.
 #   (iii) TRANSITIVE_TYPES  -- covered by a parent/sibling resource's own grant (e.g.
@@ -42,12 +55,22 @@ CHECKED_TYPES: dict[str, dict] = {
     "aws_lambda_function": {"read_actions": ("lambda:Get*", "lambda:List*"), "name_attrs": ("function_name",)},
     "aws_lambda_layer_version": {"read_actions": ("lambda:Get*", "lambda:List*"), "name_attrs": ("layer_name",)},
     "aws_cloudwatch_event_rule": {"read_actions": ("events:Describe*", "events:List*"), "name_attrs": ("name",)},
+    # The two Secrets Manager types carry EXACT, ALL-OF refresh-read sets rather than the shared
+    # Describe*/Get* marker pair they used before the read split. hashicorp/aws v5.100.0:
+    # aws_secretsmanager_secret's refresh calls DescribeSecret + GetResourcePolicy and NEVER
+    # GetSecretValue, while the value read is issued only by aws_secretsmanager_secret_version
+    # (resource + data source). Keeping them on one shared ANY-OF pair would mean a metadata-only
+    # `secretsmanager:Describe*` grant satisfies the data source's genuine GetSecretValue need.
     "aws_secretsmanager_secret": {
-        "read_actions": ("secretsmanager:Describe*", "secretsmanager:Get*"),
+        # ANY-OF markers, retained for the scope-parity rule (_write_symmetry) which compares read
+        # and write SCOPES, not capability classes; the coverage assertion uses the all_of set.
+        "read_actions": ("secretsmanager:Describe*", "secretsmanager:GetResourcePolicy"),
+        "read_actions_all_of": ("secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"),
         "name_attrs": ("name",),
     },
     "data:aws_secretsmanager_secret_version": {
-        "read_actions": ("secretsmanager:Describe*", "secretsmanager:Get*"),
+        "read_actions": ("secretsmanager:GetSecretValue",),
+        "read_actions_all_of": ("secretsmanager:GetSecretValue",),
         "name_attrs": ("secret_id",),
     },
     "aws_sns_topic": {"read_actions": ("sns:Get*", "sns:List*"), "name_attrs": ("name",)},
@@ -404,6 +427,43 @@ def _action_matches(read_actions: tuple[str, ...], stmt_actions: list[str]) -> b
     return False
 
 
+def _action_granted(required: str, stmt_actions: list[str]) -> bool:
+    """Does `stmt_actions` grant the EXACT `required` action?
+
+    Deliberately the MIRROR IMAGE of _action_matches, and kept separate from it so no existing
+    type's behaviour shifts. _action_matches generalises on the REQUIREMENT side (a
+    `service:Verb*` marker matches a literal grant); this generalises on the GRANT side (a
+    literal requirement is satisfied by a wildcard grant that covers it). That direction is what
+    an exact ALL-OF set needs: `secretsmanager:Get*` genuinely does grant
+    `secretsmanager:GetSecretValue`, while `secretsmanager:Describe*` genuinely does not -- which
+    is precisely the distinction the shared Describe*/Get* marker pair could not draw.
+    """
+    for granted in stmt_actions:
+        if granted == required:
+            return True
+        if granted.endswith("*") and required.startswith(granted[:-1]):
+            return True
+    return False
+
+
+def _statement_covers_resource(
+    rtype: str,
+    rname: str,
+    resolved_name: str | None,
+    stmt: dict,
+    literal_only: bool,
+) -> bool:
+    """Does one statement's Resource list reach this resource instance? (Action is not consulted.)"""
+    raw = stmt["resources_raw"]
+    if not literal_only and "*" in _vir._QUOTED_RE.findall(raw):
+        return True
+    # Bare or interpolated Terraform resource reference (oidc.tf style), e.g.
+    # `aws_sns_topic.alerts.arn` or `${aws_glue_catalog_database.ops.name}`.
+    if f"{rtype}.{rname}." in raw:
+        return True
+    return bool(resolved_name and _literal_or_prefix_match(resolved_name, raw, literal_only=literal_only))
+
+
 def _resource_covered(
     rtype: str,
     rname: str,
@@ -411,18 +471,27 @@ def _resource_covered(
     read_actions: tuple[str, ...],
     statements: list[dict],
     literal_only: bool = False,
+    all_of: bool = False,
 ) -> bool:
+    """ANY-OF by default (unchanged); ALL-OF when `all_of` -- every action needs its own cover.
+
+    In ALL-OF mode each required action must be granted on a covering Resource by SOME statement,
+    not necessarily the same one: two statements each covering the instance, one granting
+    DescribeSecret and the other GetResourcePolicy, is a correct grant surface.
+    """
+    if all_of:
+        return all(
+            any(
+                _action_granted(required, stmt["actions"])
+                and _statement_covers_resource(rtype, rname, resolved_name, stmt, literal_only)
+                for stmt in statements
+            )
+            for required in read_actions
+        )
     for stmt in statements:
         if not _action_matches(read_actions, stmt["actions"]):
             continue
-        raw = stmt["resources_raw"]
-        if not literal_only and "*" in _vir._QUOTED_RE.findall(raw):
-            return True
-        # Bare or interpolated Terraform resource reference (oidc.tf style), e.g.
-        # `aws_sns_topic.alerts.arn` or `${aws_glue_catalog_database.ops.name}`.
-        if f"{rtype}.{rname}." in raw:
-            return True
-        if resolved_name and _literal_or_prefix_match(resolved_name, raw, literal_only=literal_only):
+        if _statement_covers_resource(rtype, rname, resolved_name, stmt, literal_only):
             return True
     return False
 
@@ -478,14 +547,28 @@ def _check_resource(
             "treating as uncovered until the extraction is fixed"
         ], False
 
+    # An entry declaring read_actions_all_of is asserted as an EXACT conjunction; every other entry
+    # keeps the historical ANY-OF marker semantics, byte for byte.
+    all_of_actions = spec.get("read_actions_all_of")
+    required_actions = all_of_actions or spec["read_actions"]
+    quantifier = "ALL of" if all_of_actions else "one of"
+
     findings = []
     for role_key, statements in role_statements.items():
-        if not _resource_covered(rtype, rname, resolved_name, spec["read_actions"], statements, literal_only=literal_only):
+        if not _resource_covered(
+            rtype,
+            rname,
+            resolved_name,
+            required_actions,
+            statements,
+            literal_only=literal_only,
+            all_of=bool(all_of_actions),
+        ):
             findings.append(
                 f"{key} {rtype} {rname!r}"
                 + (f" ({resolved_name!r})" if resolved_name else "")
                 + f" in {fname} is not refresh-read-covered in the {role_key} role policy "
-                f"(expected one of {spec['read_actions']} on a matching Resource ARN/reference)"
+                f"(expected {quantifier} {required_actions} on a matching Resource ARN/reference)"
             )
     return findings, True
 

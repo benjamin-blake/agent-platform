@@ -475,6 +475,21 @@ locals {
           "secretsmanager:UntagResource"
         ]
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-*"]
+        Condition = {
+          # Closes the one value-REPLACEMENT path adjacent to this otherwise metadata-only Sid:
+          # CreateSecret accepts a SecretString, so DeleteSecret + same-name CreateSecret would
+          # substitute a value inside the prefix without ever calling PutSecretValue or
+          # UpdateSecret. Forcing the recovery window to be honoured (ForceDeleteWithoutRecovery
+          # false, or absent -- BoolIfExists) keeps the deleted name reserved in the
+          # scheduled-for-deletion state for AWS's 7-30 day window, so the same-name recreate
+          # fails loudly instead of silently succeeding with a new value. Zero autonomy cost: no
+          # terraform/personal secret sets recovery_window_in_days = 0, so the provider never
+          # sends ForceDeleteWithoutRecovery=true, and BoolIfExists keeps every request that omits
+          # the key (CreateSecret / TagResource / UntagResource) allowed exactly as before.
+          BoolIfExists = {
+            "secretsmanager:ForceDeleteWithoutRecovery" = "false"
+          }
+        }
       },
       {
         # P0-6 (gap sweep), VALUE-CAPABLE half -- ENUMERATED, NEVER PREFIXED (S2). secretsmanager:
@@ -488,8 +503,8 @@ locals {
         # aws_secretsmanager_secret resources terraform/personal actually declares (the DuckLake Neon
         # DSN keeps its own SecretsManagerDuckLakeNeonDSN Sid above). A NEW secret must be added here
         # deliberately. Accepted residual: UpdateSecret can still overwrite a value on these five --
-        # marginal rather than a new capability class, since SecretsManagerReadOnly already grants
-        # Describe*/Get* on them -- and it is now bounded to a named, reviewable five.
+        # marginal rather than a new capability class, since SecretsManagerValueReadEnumerated
+        # already grants GetSecretValue on them -- and it is now bounded to a named, reviewable five.
         Sid    = "SecretsManagerUpdateEnumerated"
         Effect = "Allow"
         Action = ["secretsmanager:UpdateSecret"]
@@ -828,24 +843,62 @@ locals {
         ]
       },
       {
-        # Consolidated read-only Secrets Manager refresh-reads (Describe*/Get*) for every secret the
-        # apply role sources at plan/apply time. Merged from five per-secret statements into one
-        # (DEP-01 apply-inline-policy-size fix): the IAM inline-policy hard limit is 10,240 bytes and
-        # the enumerated five pushed the rendered policy to 10,534 B (LimitExceeded at apply, invisible
-        # to `terraform plan`). The grant set is UNCHANGED -- identical secretsmanager:Describe*/Get*
-        # actions over the union of the same ARNs, so IAM evaluates every request identically (a
-        # request is allowed iff its action is Describe*/Get* and its resource matches one ARN, in
-        # both forms). Each ARN's lifecycle is human-owned / out-of-band (Decision 37); CI reads
-        # these, never writes them. The writable DuckLake Neon DSN secret keeps its own statement
-        # above (it is not read-only). Per-service read-wildcard closure (rec-2305) is preserved.
+        # METADATA half of the deliberate two-Sid READ split (write-symmetry rule 2 / Decision 129
+        # pt 2 as amended). SecretsManagerMetadataWrite creates secrets at secret:agent-platform-*
+        # while the value-read Sid below enumerates six ARNs, so before this Sid existed the
+        # pipeline could CREATE a secret it could not then refresh-READ: the create succeeds and the
+        # NEXT plan AccessDenies on DescribeSecret -- a stranded pipeline, not a failed apply.
+        #
+        # WHY PREFIXING THESE IS NOT A WIDENING OF THE RATIFIED CONTROL: Decision 129 pt 2 keeps
+        # Secrets Manager enumerated on the ground that "secrets return VALUES". That is a
+        # GetSecretValue-class argument. Within Secrets Manager, GetSecretValue is the ONLY API that
+        # returns secret material -- note that AWS deliberately named the batch form
+        # BatchGetSecretValue rather than folding it under the Get* metadata pattern, so it too is
+        # caught by name, not missed by it. Describe*, List* and GetResourcePolicy are provably
+        # value-free, so prefixing them restores autonomy for a new agent-platform-* secret without
+        # widening anything value-capable by one byte.
+        #
+        # INVARIANT -- RE-CHECK THIS BEFORE ADDING ANY VERB HERE: every secretsmanager action
+        # matching Describe*, List* or GetResourcePolicy returns METADATA ONLY and never secret
+        # material. If AWS ever ships a value-returning verb under one of those prefixes, this Sid
+        # stops being value-free and must be re-enumerated (or that verb explicitly Denied) in the
+        # SAME change -- a prefixed grant here is fully effective over every current AND future
+        # agent-platform-* secret, with no review.
+        #
+        # Provider grounding (hashicorp/aws v5.100.0): aws_secretsmanager_secret's refresh calls
+        # exactly DescribeSecret + GetResourcePolicy and NEVER GetSecretValue; value reads come only
+        # from aws_secretsmanager_secret_version (resource + data source), which is what the
+        # enumerated Sid below serves. scripts/checks/iam_tf/_read_coverage.py encodes both as
+        # exact ALL-OF refresh-read sets so a wide Describe* here can never stand in for the value
+        # read a secret_version genuinely needs.
+        Sid    = "SecretsManagerMetadataRead"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:Describe*",
+          "secretsmanager:List*",
+          "secretsmanager:GetResourcePolicy"
+        ]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-*"]
+      },
+      {
+        # VALUE-CAPABLE half of the READ split -- ENUMERATED, NEVER PREFIXED. secretsmanager:
+        # GetSecretValue is the only Secrets Manager read that returns secret material, so it is the
+        # read Decision 129 pt 2 (as amended) actually constrains: value-capable reads stay
+        # enumerated at exactly the six ARNs below, kept VERBATIM from the pre-split
+        # SecretsManagerReadOnly Sid this replaces. The value-free metadata classes that Sid also
+        # carried moved to the prefixed SecretsManagerMetadataRead above; the only net narrowing is
+        # on neon-api-key-* (the one non-agent-platform-* ARN here), whose sole consumer is a
+        # data.aws_secretsmanager_secret_version -- a GetSecretValue call, not a metadata one.
+        # Each ARN's lifecycle is human-owned / out-of-band (Decision 37); CI reads these, never
+        # writes them. The writable DuckLake Neon DSN secret keeps its own statement above.
         #   neon-api-key-*                              : Neon provider API key (Phase 0 out-of-band).
         #   agent-platform-terraform-personal-tfvars-* : tfvars sourcing at apply time.
         #   agent-platform-deepseek/anthropic-api-key-*: inference credential envelopes (admin-applied).
         #   agent-platform-broker-*                    : Alpaca paper+live broker envelopes (T2.14).
         #   agent-platform-github-pat-*                : dispatcher/findings-processor PAT (T2.43).
-        Sid    = "SecretsManagerReadOnly"
+        Sid    = "SecretsManagerValueReadEnumerated"
         Effect = "Allow"
-        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Action = ["secretsmanager:GetSecretValue"]
         Resource = [
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*",
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*",

@@ -230,6 +230,31 @@ class TestReadWriteScopeParity:
         assert "pt 4(iii)" in why
         assert "Decision 144 pt 5" in why
 
+    def test_iam_role_is_the_SOLE_parity_exemption(self) -> None:
+        """aws_secretsmanager_secret was the obvious candidate for a second entry and deliberately
+        did NOT become one: the Secrets Manager READ split (value-free metadata prefixed to
+        secret:agent-platform-*, GetSecretValue enumerated) makes that type pass rule 2 HONESTLY.
+        An exemption would have recorded the gap instead of closing it, so this set stays at one --
+        a new entry must be a reviewed decision, never an AccessDenied remediation side effect."""
+        assert set(READ_SCOPE_PARITY_EXEMPT) == {"aws_iam_role"}
+
+    def test_secrets_manager_parity_fails_loud_without_the_metadata_read_prefix(self) -> None:
+        """NEGATIVE half of the real-tree case below: writes at secret:agent-platform-* with reads
+        only at enumerated ARNs is exactly the pre-fix tree, and it must fail loudly."""
+        base = "arn:aws:secretsmanager:eu-west-2:1234567890:secret:"
+        secret_prefix = f"{base}agent-platform-*"
+        enumerated = f"{base}agent-platform-github-pat-*"  # pragma: allowlist secret -- ARN shape
+        stmts = [
+            _stmt(["secretsmanager:CreateSecret", "secretsmanager:DeleteSecret"], [secret_prefix]),
+            _stmt(["secretsmanager:Describe*", "secretsmanager:GetResourcePolicy"], [enumerated]),
+        ]
+        failed: list[str] = []
+        check_read_write_scope_parity(stmts, failed, "k:")
+        findings = self._only(failed, "aws_secretsmanager_secret")
+        assert len(findings) == 1, failed
+        assert "no read grant covers that scope" in findings[0]
+        assert findings[0].startswith("k:")
+
 
 class TestFacadeWiring:
     """Anti-dead-code regression: both rules must be reached from the REGISTERED check."""
@@ -249,3 +274,19 @@ class TestRealTree:
         failed: list[str] = []
         check_tag_untag_symmetry(_real_apply_statements(), failed, "k:")
         assert failed == []
+
+    def test_real_tree_passes_read_write_scope_parity(self) -> None:
+        """POSITIVE half: the live github_ci_apply grant surface satisfies rule 2 for every
+        write-managed type -- including aws_secretsmanager_secret, which the Secrets Manager read
+        split fixed honestly rather than by exemption."""
+        failed: list[str] = []
+        check_read_write_scope_parity(_real_apply_statements(), failed, "k:")
+        assert failed == []
+
+    def test_real_tree_secrets_read_prefix_covers_the_metadata_write_prefix(self) -> None:
+        """The specific parity finding this change closes: the secret:agent-platform-* write scope
+        is now covered by a read grant at the SAME prefix, so a newly created secret is
+        refresh-readable on the NEXT plan instead of AccessDenying."""
+        failed: list[str] = []
+        check_read_write_scope_parity(_real_apply_statements(), failed, "k:")
+        assert [f for f in failed if "aws_secretsmanager_secret" in f] == []
