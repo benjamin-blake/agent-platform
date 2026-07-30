@@ -71,6 +71,21 @@ class TestGenerateBundles:
                 )
         assert len(bundles) == 1
 
+    def test_malformed_jobs_file_and_ast_failure_are_recorded(self, log_file, taxonomy_file, tmp_path, caplog):
+        jobs_file = tmp_path / "jobs.json"
+        jobs_file.write_text("not json", encoding="utf-8")
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value=None):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    jobs_file=jobs_file,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert bundles[0]["ast_walker_error"] == "AST parse failure -- see logs"
+        assert "Could not parse jobs file" in caplog.text
+
 
 class TestBundleToSchema:
     """Integration: bundle fields from generate_bundles() populate a valid CiRcaContext."""

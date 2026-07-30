@@ -404,8 +404,29 @@ def _check_ci_rca_fetch_classification() -> None:
     data = _load(".github/workflows/ci-rca.yml")
     job = data.get("jobs", {}).get("rca", {})
     run_text = _get_step_run_text(job, "Fetch failed run logs")
+    evidence_run_text = _get_step_run_text(job, "Generate evidence bundle")
 
     assert "scripts.ci_rca.fetch_logs" in run_text, "'Fetch failed run logs' step no longer invokes scripts.ci_rca.fetch_logs"
+    assert "--out /tmp/ci-rca-log-evidence.json" in run_text, "GAL-01: fetch output is not the typed retrieval envelope"
+    assert "scripts.ci_rca.log_evidence --validate" in run_text, "GAL-01: bounded retrieval envelope is not validated"
+    assert "--extract-body /tmp/ci-rca-failed.log" in run_text, "GAL-01: agent log is not extracted from validated evidence"
+    assert "test -s /tmp/ci-rca-log-evidence.json" in run_text, "GAL-01: retrieval envelope false-green guard is missing"
+    assert "test -s /tmp/ci-rca-failed.log" in run_text, "GAL-01: extracted body false-green guard is missing"
+    assert "--retrieval-envelope /tmp/ci-rca-log-evidence.json" in evidence_run_text, (
+        "GAL-01: durable evidence generation does not consume the validated retrieval envelope"
+    )
+    assert "gh run view" not in run_text or "--log" not in run_text, (
+        "GAL-01: workflow contains an uncapped direct log retrieval"
+    )
+    fetch_source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
+    for required in (
+        "_run_log(primary_command, max_bytes, max_lines)",
+        'remaining = max_bytes - len("".join(fragments).encode("utf-8"))',
+        "remaining_lines = max_lines -",
+        "_run_log(command, remaining, remaining_lines)",
+        'selected.sort(key=lambda item: item["job_id"])',
+    ):
+        assert required in fetch_source, f"GAL-01: bounded retrieval invariant missing: {required}"
 
     match = _PATTERN_MATCHING_CONSTRUCT_RE.search(run_text)
     assert match is None, (
