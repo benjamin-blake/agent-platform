@@ -78,8 +78,8 @@ scope:
     purpose: >-
       Add [tool.coverage.report] exclude_lines covering "pragma: no cover" (preserve
       default) and "if __name__ == .__main__.:" - removes structurally-uncoverable
-      entry-point blocks repo-wide in one edit (ops_writer.py measured 69.6% -> 75.0%)
-      without touching any Lambda-packaged source file.
+      entry-point blocks repo-wide in one edit (ops_writer.py measured 69.6% -> 75.3%,
+      27 statements excluded) without touching any Lambda-packaged source file.
   - file: .github/workflows/ci.yml
     action: Modify
     purpose: >-
@@ -134,7 +134,7 @@ acceptance_criteria:
     not change at all.
   - >-
     Structural-exclusion correctness: with the new exclude_lines,
-    scripts/ops_writer.py measures 75.0% (was 69.6%) with zero source edits, and no
+    scripts/ops_writer.py measures 75.3% (was 69.6%) with zero source edits, and no
     missing-lines entry falls inside its __main__ block (lines >= 716).
   - >-
     Baseline gate semantics: a changed file with a baseline entry fails iff measured <
@@ -208,13 +208,15 @@ verification_plan:
       Verify exclude_lines takes effect without source edits - measure ops_writer.py and
       assert no missing line falls in the __main__ block and the percentage rose to 75.0.
     command: >-
-      bin/venv-python -m pytest tests/ops_writer/ -q --no-header --cov=scripts.ops_writer
-      --cov-report=json:logs/debug/.vp-cov.json >/dev/null 2>&1;
+      mkdir -p logs/debug && bin/venv-python -m pytest tests/ops_writer/ -q --no-header
+      --cov=scripts.ops_writer --cov-report=json:logs/debug/.vp-cov.json >/dev/null 2>&1;
       bin/venv-python -c "import json; d=json.load(open('logs/debug/.vp-cov.json'));
       f=[v for k,v in d['files'].items() if 'ops_writer' in k][0];
       assert not [l for l in f['missing_lines'] if l>=716], 'main block still counted';
       pct=f['summary']['percent_covered']; assert 74.5<=pct<=76.0, pct; print(f'ops_writer.py {pct:.1f}%')"
-    expected: Prints ops_writer.py ~75.0%; no missing lines at or after 716.
+    expected: >-
+      Prints ops_writer.py 75.3% (measured at planning time via an equivalent --cov-config
+      simulation; the 74.5-76.0 band absorbs incidental drift); no missing lines at or after 716.
     fix_if: >-
       __main__ lines still missing - exclude_lines regex wrong (dots in the pattern are
       regex wildcards, keep the canonical coverage.py form).
