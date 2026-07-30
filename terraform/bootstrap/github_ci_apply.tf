@@ -116,6 +116,42 @@ locals {
         Resource = ["arn:aws:s3:::agent-platform-data-lake/convergence/personal/*"]
       },
       {
+        # P0-5 (gap sweep): terraform/personal manages the two buckets' CONFIGURATION through six
+        # aws_s3_bucket_* resource types (versioning, server_side_encryption_configuration,
+        # public_access_block, lifecycle_configuration, policy, notification) plus aws_s3_bucket
+        # itself, and the apply role held only the matching refresh READS (DataLakeBucketManage, now
+        # in the reads policy) -- every one of these Put verbs AccessDenies today. The write set
+        # mirrors, verb for verb, the empirically-validated PlatformAdmin DataLakeBucketManage /
+        # CatalogDrBucketManage grants in terraform/personal/platform_roles.tf, which is the identity
+        # that has actually applied this module. s3:PutBucketTagging is required because the
+        # provider's default_tags block (terraform/personal/main.tf) forces a tag-on-create call on
+        # every taggable resource -- the same structural coupling that caused rec-2842 for TagRole.
+        # P2 additions: s3:DeleteBucketPolicy (aws_s3_bucket_policy destroy/replace symmetry -- the
+        # provider deletes then re-puts on a policy change) and s3:CreateBucket (bucket re-create on
+        # a greenfield or replaced bucket). s3:DeleteBucket is DENIED BY DESIGN and stays admin-tier:
+        # this bucket holds tfstate, the saved tfplan artifacts AND the convergence record, so a
+        # CD-executable bucket delete would let one approved apply destroy the platform's own
+        # integrity anchor (recorded in docs/contracts/iam-simulate-fixture.yaml). Scoped to the two
+        # literal bucket ARNs -- the same Resource list the read Sid carries (never s3:* on "*").
+        Sid    = "DataLakeBucketConfigWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:PutBucketVersioning",
+          "s3:PutEncryptionConfiguration",
+          "s3:PutBucketPublicAccessBlock",
+          "s3:PutLifecycleConfiguration",
+          "s3:PutBucketPolicy",
+          "s3:DeleteBucketPolicy",
+          "s3:PutBucketNotification",
+          "s3:PutBucketTagging"
+        ]
+        Resource = [
+          "arn:aws:s3:::agent-platform-data-lake",
+          "arn:aws:s3:::agent-platform-ducklake-catalog-dr",
+        ]
+      },
+      {
         # athena:ListTagsForResource is the canonical (provider 5.x) refresh-time tag-read on
         # aws_athena_workgroup; without it `terraform plan` fails AccessDenied before the guard runs.
         # Do not prune as "unused" -- apply does not exercise it but plan does.
@@ -137,6 +173,19 @@ locals {
         Resource = "*"
       },
       {
+        # P2 destroy symmetry (gap sweep): the provider's aws_athena_workgroup destroy calls
+        # athena:DeleteWorkGroup, which the AthenaWorkgroup Sid above never granted -- a guard-gated
+        # workgroup retirement AccessDenies AFTER human approval. Deliberately a SEPARATE narrow Sid
+        # rather than another action in AthenaWorkgroup: that Sid's Resource is "*" (its refresh reads
+        # genuinely need it), so folding the delete verb in would grant deletion of ANY workgroup in
+        # the account, including `primary`. Narrowing AthenaWorkgroup's own "*" is a pre-existing
+        # Decision 143 candidate this plan deliberately does not touch (filed as a follow-on rec).
+        Sid      = "AthenaWorkgroupDelete"
+        Effect   = "Allow"
+        Action   = ["athena:DeleteWorkGroup"]
+        Resource = ["arn:aws:athena:${var.aws_region}:${var.account_id}:workgroup/agent-platform-production"]
+      },
+      {
         # glue:GetTags is a refresh-time read the provider issues on aws_glue_catalog_database every
         # plan; without it `terraform plan` fails AccessDenied before the guard runs. Do not prune.
         Sid    = "GlueCatalog"
@@ -152,6 +201,12 @@ locals {
           "glue:CreateTable",
           "glue:UpdateTable",
           "glue:DeleteTable",
+          # P2 destroy symmetry (gap sweep): the provider's aws_glue_catalog_database destroy calls
+          # glue:DeleteDatabase. CreateDatabase/UpdateDatabase were granted without their delete
+          # counterpart, so a guard-gated database retirement AccessDenies AFTER human approval --
+          # the same create-without-destroy asymmetry as the rec-2882 class. Scoped to the existing
+          # enumerated database ARN (no widening).
+          "glue:DeleteDatabase",
           "glue:GetTags"
         ]
         Resource = [
@@ -172,6 +227,10 @@ locals {
           "dynamodb:DescribeTimeToLive",
           "dynamodb:CreateTable",
           "dynamodb:UpdateTable",
+          # P2 destroy symmetry (gap sweep): the provider's aws_dynamodb_table destroy calls
+          # dynamodb:DeleteTable. CreateTable was granted without it, so a guard-gated counters-table
+          # retirement AccessDenies AFTER human approval. Scoped to the existing enumerated table ARN.
+          "dynamodb:DeleteTable",
           "dynamodb:TagResource",
           "dynamodb:UntagResource",
           "dynamodb:ListTagsOfResource",
@@ -288,7 +347,21 @@ locals {
         Action = [
           "iam:DeleteRole",
           "iam:DetachRolePolicy",
-          "iam:DeleteRolePolicy"
+          "iam:DeleteRolePolicy",
+          # rec-2882 (P0-1, the THIRD instance of the headline-verb-granted / companion-verb-missing
+          # class; it killed the live gated destroy in run 30264239445 and left the sandbox
+          # convergence record red at 99eb274): the AWS provider's resourceAwsIamRoleDelete
+          # unconditionally calls deleteRoleInstanceProfiles() BEFORE DeleteRole, and that helper
+          # calls iam:ListInstanceProfilesForRole and then iam:RemoveRoleFromInstanceProfile for each
+          # profile returned. Neither is optional and neither depends on the role actually having an
+          # instance profile -- the List call happens unconditionally -- so iam:DeleteRole without
+          # these two is structurally unusable. RemoveRoleFromInstanceProfile is granted alongside
+          # the List verb deliberately: it is the second call in the SAME provider loop, and leaving
+          # a known companion ungranted is exactly the patch-one-verb-per-production-failure pattern
+          # this change exists to end. Both verbs are also added to the boundary DataPlaneAllow
+          # ceiling below -- a grant absent from the ceiling is silently denied by the intersection.
+          "iam:ListInstanceProfilesForRole",
+          "iam:RemoveRoleFromInstanceProfile"
         ]
         Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
       },
@@ -339,13 +412,22 @@ locals {
         Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-apply"]
       },
       {
+        # P1-4 (gap sweep): iam:TagOpenIDConnectProvider was granted with no Untag counterpart, so a
+        # tag-drift reconcile on aws_iam_openid_connect_provider (default_tags removes a tag -> the
+        # provider calls iam:UntagOpenIDConnectProvider) AccessDenies. Non-escalating tag metadata at
+        # the same single enumerated provider ARN; also added to the boundary DataPlaneAllow ceiling
+        # below, since a grant absent from the ceiling is silently denied by the intersection. The
+        # three OIDC-provider LIFECYCLE verbs (Create/Delete/RemoveClientIDFrom) stay DENIED BY DESIGN
+        # and admin-tier -- destroying or replacing the provider breaks the very pipeline executing
+        # the apply (recorded in docs/contracts/iam-simulate-fixture.yaml).
         Sid    = "OIDCProviderReconcile"
         Effect = "Allow"
         Action = [
           "iam:GetOpenIDConnectProvider",
           "iam:UpdateOpenIDConnectProviderThumbprint",
           "iam:AddClientIDToOpenIDConnectProvider",
-          "iam:TagOpenIDConnectProvider"
+          "iam:TagOpenIDConnectProvider",
+          "iam:UntagOpenIDConnectProvider"
         ]
         Resource = ["arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"]
       },
@@ -365,9 +447,59 @@ locals {
           "secretsmanager:GetSecretValue",
           "secretsmanager:GetResourcePolicy",
           "secretsmanager:TagResource",
-          "secretsmanager:UntagResource"
+          "secretsmanager:UntagResource",
+          # P2 destroy symmetry (gap sweep): CreateSecret was granted here with no delete counterpart,
+          # so a guard-gated retirement or replace of the DSN secret AccessDenies AFTER human
+          # approval. DeleteSecret is recoverable by AWS design (7-30 day recovery window), so this
+          # is not an irreversible-destroy grant. Same ARN, no widening.
+          "secretsmanager:DeleteSecret"
         ]
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:ducklake-neon-catalog-dsn-*"]
+      },
+      {
+        # P0-6 (gap sweep), METADATA half of the deliberate two-Sid split. terraform/personal declares
+        # five agent-platform-* aws_secretsmanager_secret resources and the apply role could neither
+        # create, retire nor tag any of them (only the DSN secret above had a write grant), so any PR
+        # adding or retiring a secret AccessDenies. These four verbs are metadata-only: NONE of them
+        # can read or overwrite a secret VALUE, which is what makes the agent-platform-* prefix safe
+        # here while UpdateSecret below stays enumerated. TagResource is structurally required by the
+        # default_tags block (a create with inline tags calls it -- the rec-2842 coupling);
+        # UntagResource covers tag-drift reconcile; DeleteSecret has AWS's 7-30 day recovery window.
+        # secretsmanager:PutSecretValue is granted NOWHERE new by this change.
+        Sid    = "SecretsManagerMetadataWrite"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:DeleteSecret",
+          "secretsmanager:TagResource",
+          "secretsmanager:UntagResource"
+        ]
+        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-*"]
+      },
+      {
+        # P0-6 (gap sweep), VALUE-CAPABLE half -- ENUMERATED, NEVER PREFIXED (S2). secretsmanager:
+        # UpdateSecret accepts a SecretString, so it can overwrite a credential; it has no
+        # metadata-only variant and no narrowing condition key, which makes it a worst verb under
+        # Decision 143 clause 1. Critically there is NO boundary intersection available to narrow it:
+        # the boundary DataPlaneAllow already carries secretsmanager:*, so this identity statement is
+        # the SOLE control -- a secret:agent-platform-* prefix here would be fully effective over the
+        # anthropic + deepseek API keys, the GitHub PAT, BOTH Alpaca broker envelopes AND every
+        # future agent-platform-* secret, with no review. It is therefore held to exactly the five
+        # aws_secretsmanager_secret resources terraform/personal actually declares (the DuckLake Neon
+        # DSN keeps its own SecretsManagerDuckLakeNeonDSN Sid above). A NEW secret must be added here
+        # deliberately. Accepted residual: UpdateSecret can still overwrite a value on these five --
+        # marginal rather than a new capability class, since SecretsManagerReadOnly already grants
+        # Describe*/Get* on them -- and it is now bounded to a named, reviewable five.
+        Sid    = "SecretsManagerUpdateEnumerated"
+        Effect = "Allow"
+        Action = ["secretsmanager:UpdateSecret"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-deepseek-api-key-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-anthropic-api-key-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-github-pat-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-broker-alpaca-paper-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-broker-alpaca-live-*",
+        ]
       },
       {
         # DEP-01 (Decision 144, rec-2757): apply-phase CREATE / MODIFY / DESTROY of the agent-platform-*
@@ -383,7 +515,23 @@ locals {
           "logs:PutRetentionPolicy",
           "logs:DeleteRetentionPolicy",
           "logs:TagLogGroup",
-          "logs:DeleteLogGroup"
+          "logs:DeleteLogGroup",
+          # P0-4 (gap sweep): logs:TagLogGroup was granted with NO untag counterpart in either
+          # tagging family, so a default_tags drift reconcile on any agent-platform-* log group
+          # AccessDenies. CloudWatch Logs has TWO tagging families -- the legacy log-group-specific
+          # TagLogGroup/UntagLogGroup and the newer resource-generic TagResource/UntagResource -- and
+          # which one hashicorp/aws 5.100 calls on create could NOT be determined offline
+          # (cloudtrail:LookupEvents is AccessDenied to PlatformAdmin). All four are granted
+          # deliberately: that is what the empirically-validated PlatformAdmin
+          # LambdaLogGroupManagement grant does (terraform/personal/platform_roles.tf), both families
+          # are non-escalating at the same /aws/lambda/agent-platform-* prefix, and UntagLogGroup is
+          # missing regardless of which family the provider picks. Blast radius if the provider uses
+          # TagResource: EVERY new log group create -- hence every new Lambda -- fails, unexercised
+          # only because no new Lambda has landed since logs:CreateLogGroup was added at DEP-01. This
+          # over-grant is the concrete case for the CloudTrail observability follow-on.
+          "logs:TagResource",
+          "logs:UntagResource",
+          "logs:UntagLogGroup"
         ]
         Resource = ["arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/lambda/agent-platform-*"]
       },
@@ -420,7 +568,22 @@ locals {
           "lambda:TagResource",
           "lambda:UntagResource",
           "lambda:PutFunctionConcurrency",
-          "lambda:DeleteFunctionConcurrency"
+          "lambda:DeleteFunctionConcurrency",
+          # P1-2 (gap sweep): aws_lambda_function's UPDATE path calls lambda:UpdateFunctionCode
+          # whenever source_code_hash / s3_key / image_uri changes. The four DuckLake functions
+          # currently ignore_changes on source_code_hash (rec-2646/2654) and deploy through the
+          # governed code-deploy channel (Decision 125/126), which is the only reason this has not
+          # yet AccessDenied -- any function outside that arrangement, or any lift of the
+          # ignore_changes, fails at apply. Same function:agent-platform-* prefix, no widening.
+          "lambda:UpdateFunctionCode",
+          # P0-2 (gap sweep): aws_lambda_function_url is a terraform/personal resource type with NO
+          # write grant at all -- the provider calls Create/Update/DeleteFunctionUrlConfig on the
+          # FUNCTION resource ARN, so they belong on this prefix rather than a separate Sid. The
+          # matching read (lambda:GetFunctionUrlConfig) is already covered by LambdaRead's
+          # lambda:Get* wildcard, which is exactly why the gap was invisible until an apply hit it.
+          "lambda:CreateFunctionUrlConfig",
+          "lambda:UpdateFunctionUrlConfig",
+          "lambda:DeleteFunctionUrlConfig"
         ]
         Resource = [
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-*",
@@ -443,6 +606,15 @@ locals {
           "lambda:DeleteLayerVersion"
         ]
         Resource = [
+          # P1-3 (gap sweep): adopt agent-platform-* as the LAYER naming convention and grant it on
+          # the write side too, so a new agent-platform-* layer does not need a fresh out-of-band
+          # bootstrap grant edit (the rec-2702 resource-axis anti-recurrence, applied to layers). The
+          # three ducklake-* literals are RETAINED -- the existing layers are named ducklake-*, not
+          # agent-platform-*, so the prefix does not cover them. Deliberately NOT layer:* (Decision
+          # 143 worst-verb scoping): PublishLayerVersion/DeleteLayerVersion on any layer in the
+          # account is a materially wider grant than this module needs.
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:agent-platform-*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:agent-platform-*:*",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient:*",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps",
@@ -492,19 +664,60 @@ locals {
         ]
       },
       {
-        # T1.13 feature-flag SSM parameters auto-apply under terraform/personal (feature_flags.tf).
-        # Scoped to /agent-platform/feature-flags/*, NOT ssm:* and NOT all parameters.
-        Sid    = "SSMFeatureFlagsManage"
+        # P0-3 (gap sweep): aws_sns_topic and aws_sns_topic_subscription (sns_alerts.tf) had refresh
+        # READS only (SNSRead / SNSSubscriptionRead) and no write grant at all, so creating,
+        # retiring, re-tagging or re-subscribing the alerts topic AccessDenies at apply. The eight
+        # verbs are the write half of the empirically-validated PlatformAdmin AlertsTopicManage grant
+        # (terraform/personal/platform_roles.tf) -- its four read verbs are already covered by the
+        # sns:Get*/List* read closure. SetSubscriptionAttributes covers the subscription's
+        # raw_message_delivery / filter-policy updates; TagResource is forced on create by the
+        # default_tags block. BOTH Resource entries are required: a subscription's ARN is
+        # `<topic-arn>:<subscription-uuid>`, so Subscribe/Unsubscribe/SetSubscriptionAttributes are
+        # authorized against agent-platform-alerts:* while the topic verbs match the bare topic ARN.
+        Sid    = "SNSTopicWrite"
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic",
+          "sns:DeleteTopic",
+          "sns:SetTopicAttributes",
+          "sns:TagResource",
+          "sns:UntagResource",
+          "sns:Subscribe",
+          "sns:Unsubscribe",
+          "sns:SetSubscriptionAttributes"
+        ]
+        Resource = [
+          "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts",
+          "arn:aws:sns:${var.aws_region}:${var.account_id}:agent-platform-alerts:*",
+        ]
+      },
+      {
+        # P0-7 (gap sweep): RESCOPED from the old SSMFeatureFlagsManage Sid, which was pinned to
+        # /agent-platform/feature-flags/* while terraform/personal now declares aws_ssm_parameter
+        # resources elsewhere under /agent-platform/ (e.g. the T2.19 DuckLake endpoint-discovery
+        # parameters) -- those writes AccessDeny today. The prefix is widened to the SAME
+        # parameter/agent-platform/* scope the read Sid (SSMParameterRead) already carries, so read
+        # and write scope stay at parity, and the Sid is renamed to match the equivalent
+        # empirically-validated PlatformAdmin statement (SSMParameterProvisioning in
+        # terraform/personal/platform_roles.tf). ssm:DeleteParameter closes the create/destroy
+        # asymmetry: PutParameter was granted with no delete counterpart, so a parameter retirement
+        # AccessDenies after human approval. The plural ssm:DeleteParameters is deliberately NOT
+        # granted -- the provider uses the singular form for aws_ssm_parameter. The three read verbs
+        # are retained from the pre-rescope grant (redundant with SSMParameterRead's wildcards, but
+        # this statement keeps the shape of its PlatformAdmin counterpart). Still NOT ssm:* and still
+        # not all parameters.
+        Sid    = "SSMParameterProvisioning"
         Effect = "Allow"
         Action = [
           "ssm:GetParameter",
           "ssm:GetParameters",
           "ssm:PutParameter",
+          "ssm:DeleteParameter",
           "ssm:AddTagsToResource",
           "ssm:RemoveTagsFromResource",
           "ssm:ListTagsForResource"
         ]
-        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/feature-flags/*"]
+        Resource = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/agent-platform/*"]
       }
     ]
   })
@@ -565,6 +778,16 @@ locals {
         # (IAMRoleWriteBounded / IAMRoleCreateBounded) is unchanged -- in-budget role-create remains
         # gated to T2.25. New peer CI roles are admin-provisioned in terraform/personal and added
         # here as read-only grants; the pipeline does not mint them.
+        # RETIREMENT ORDERING RULE (by design -- do not "tidy" this list ahead of a destroy): when a
+        # role is retired, prune its ARN from this list ONLY AFTER its destroy has actually applied.
+        # The two obligations are asymmetric in time. validate_ci_refresh_read_coverage stops
+        # REQUIRING the ARN the moment the resource leaves terraform/personal -- i.e. in the very PR
+        # that deletes it -- but the destroy itself still issues a refresh iam:GetRole against the
+        # live role before deleting it. Pruning in the same PR therefore removes the grant the
+        # pending destroy needs, and the apply AccessDenies before the guard runs. Two PRs, in this
+        # order: (1) delete the resource, keep the ARN here; (2) after the destroy has applied,
+        # prune the ARN. The agent-platform-probe-liveproof-role entry below is a live instance of
+        # exactly this ordering.
         # T2.49 / DEP-12 (Decision 144): the four retired CI roles (plan, drift, ducklake-deploy,
         # prod-deploy) are replaced by two merged roles -- planner (plan+drift) and deploy
         # (ducklake-deploy+prod-deploy) -- so this list shrinks by two entries (net -2, helps the
@@ -647,12 +870,20 @@ locals {
         # Resource axis (Decision 129 / T2.43 rec-2702 anti-recurrence): the function
         # ARN is broadened from four enumerated ducklake-* entries to the account-wide
         # function:agent-platform-* prefix so a future agent-platform-* Lambda auto-covers without
-        # a bootstrap out-of-band grant edit. Layer ARNs stay enumerated -- layers are named
-        # ducklake-*/data-pipeline-*, not agent-platform-*, so a prefix would not help there.
+        # a bootstrap out-of-band grant edit.
+        # P1-3 (gap sweep): the layer axis gets the SAME treatment -- layer:agent-platform-* (and its
+        # :* version suffix) is added and agent-platform-* adopted as the layer naming convention,
+        # with the three ducklake-* literals RETAINED because the existing layers carry those names.
+        # This matters on the READ side too, not just the write side: _literal_or_prefix_match would
+        # let a new layer named agent-platform-mylayer match the FUNCTION prefix
+        # function:agent-platform-* and pass read coverage, so a new layer would be a SILENT read gap
+        # that surfaces only as an apply-time AccessDenied. Deliberately not layer:* (Decision 143).
         Sid    = "LambdaRead"
         Effect = "Allow"
         Action = ["lambda:Get*", "lambda:List*"]
         Resource = [
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:agent-platform-*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:agent-platform-*:*",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient:*",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps",
@@ -747,6 +978,17 @@ resource "aws_iam_role_policy" "github_ci_apply" {
   role   = aws_iam_role.github_ci_apply.id
   policy = local.github_ci_apply_policy_json
 
+  # FORWARD-APPLY ORDERING (policy-architecture split): the reads policy and this inline policy are
+  # ONE logical read surface split across two resources, and terraform has no implicit dependency
+  # between them -- both target the same role, neither references the other. Without this edge a
+  # forward apply is free to SHRINK the inline policy first; if the create-or-attach then fails, the
+  # role holds ZERO refresh-read surface and every subsequent CD plan dies AccessDenied BEFORE the
+  # guard runs, including any reconcile. With it, the worst case is the reads being granted twice
+  # for one step -- an identical allow-union, harmless. The ROLLBACK direction is the mirror image
+  # and is NOT expressible in HCL: restore the inline read Sids FIRST, then detach; never detach the
+  # reads policy alone.
+  depends_on = [aws_iam_role_policy_attachment.github_ci_apply_reads]
+
   lifecycle {
     precondition {
       # rec-2793 (DEP-01 anti-recurrence): AWS excludes whitespace from the 10,240 B inline-
@@ -758,11 +1000,12 @@ resource "aws_iam_role_policy" "github_ci_apply" {
   }
 }
 
-resource "aws_iam_policy" "github_ci_apply_boundary" {
-  name        = "agent-platform-github-ci-apply-boundary"
-  description = "Authority budget for github_ci_apply: permissive data-plane Allow + IAM escalation Deny (CD.35 Wave 4 / T2.23)."
-
-  policy = jsonencode({
+# rec-2793 (DEP-01 anti-recurrence), extended to the boundary document: hoisted out of the
+# aws_iam_policy resource's inline `policy = jsonencode({...})` attribute so the lifecycle
+# precondition below can self-reference the rendered JSON (a precondition cannot reference `self` --
+# that is postcondition-only).
+locals {
+  github_ci_apply_boundary_policy_json = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -827,7 +1070,21 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
           # Allow) -- a boundary is a ceiling, not a second copy of the identity-side scoping.
           # DenyIAMEscalation / DenyBoundaryRemoval / DenyBoundaryPolicyModification below stay
           # non-intersecting with PassRole (verified live by the bootstrap simulate-gate, VP step 10).
-          "iam:PassRole"
+          "iam:PassRole",
+          # rec-2882 (P0-1) + P1-4: the ceiling half of the three new iam verbs the identity policy
+          # grants above -- IAMRoleDeleteBounded's iam:ListInstanceProfilesForRole and
+          # iam:RemoveRoleFromInstanceProfile (the provider's deleteRole() unconditionally calls
+          # deleteRoleInstanceProfiles(), which issues both) and OIDCProviderReconcile's
+          # iam:UntagOpenIDConnectProvider (tag-drift reconcile). A grant present in only ONE layer
+          # is silently denied by the identity/boundary intersection -- that single-layer silence is
+          # the failure mode this whole change exists to end, so these are added in the same edit as
+          # the identity grants, never afterwards. None is escalation-relevant: the two role verbs
+          # only detach a role from an instance profile (this account provisions no EC2 instance
+          # profiles at all, so they are inert outside the destroy path) and the third is tag
+          # metadata. Destroys still ROUTE to gated-apply -- the guard is unchanged.
+          "iam:ListInstanceProfilesForRole",
+          "iam:RemoveRoleFromInstanceProfile",
+          "iam:UntagOpenIDConnectProvider"
         ]
         Resource = ["*"]
       },
@@ -836,6 +1093,14 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
         # StringNotEquals on iam:PermissionsBoundary: if the key is absent from the request context
         # (unbounded create/put), StringNotEquals evaluates to true -> Deny applies. Belt-and-suspenders
         # with the identity policy's conditional Allow (IAMRoleCreateBounded / IAMRoleWriteBounded).
+        # SIMULATE ARTIFACT -- NOT A GAP, DO NOT "FIX" IT (recorded so a future auditor does not
+        # chase a false positive): iam:simulate-principal-policy returns explicitDeny/implicitDeny
+        # for iam:CreateRole / iam:PutRolePolicy / iam:AttachRolePolicy / iam:PutRolePermissionsBoundary
+        # ONLY when the iam:PermissionsBoundary context entry is OMITTED from the simulate call --
+        # which is precisely this statement working as designed, because an omitted key makes
+        # StringNotEquals true. Supply the boundary ARN as a context entry and the same four verbs
+        # come back allowed. Any "completion" of these verbs based on a context-free simulate would
+        # be granting against a control that is functioning correctly.
         Sid    = "DenyIAMEscalation"
         Effect = "Deny"
         Action = [
@@ -870,8 +1135,38 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
           "iam:DeletePolicyVersion",
           "iam:SetDefaultPolicyVersion"
         ]
-        Resource = ["arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"]
+        Resource = [
+          "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary",
+          # Policy-architecture split: the 11 relocated read Sids now live in the customer-managed
+          # agent-platform-github-ci-apply-reads document. Naming it HERE is what keeps those grants
+          # behind the same EXPLICIT Deny that protects the boundary document. Without this entry the
+          # relocation would silently downgrade their protection in KIND -- from an explicit Deny to
+          # the mere ABSENCE of an iam:CreatePolicy* grant, which any later grant edit (or a widened
+          # iam verb family) could re-enable with nothing failing loudly. An explicit Deny cannot be
+          # overridden by any Allow, so a version of the reads document rewritten by the pipeline
+          # itself is impossible rather than merely un-granted. Literal ARN for the same reason as
+          # the boundary's (no circular resource reference).
+          "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-reads",
+        ]
       }
     ]
   })
+}
+
+resource "aws_iam_policy" "github_ci_apply_boundary" {
+  name        = "agent-platform-github-ci-apply-boundary"
+  description = "Authority budget for github_ci_apply: permissive data-plane Allow + IAM escalation Deny (CD.35 Wave 4 / T2.23)."
+  policy      = local.github_ci_apply_boundary_policy_json
+
+  lifecycle {
+    precondition {
+      # rec-2793, applied to the boundary document: AWS excludes whitespace from the 6,144 B
+      # customer-managed-policy limit (distinct from the 10,240 B inline-policy limit), so measure
+      # the WHITESPACE-STRIPPED/minified rendering -- a raw whitespace-inclusive length() here
+      # false-fails on the indented HCL rendering of a document that deploys fine minified. A
+      # LimitExceeded is invisible to `terraform plan` and surfaces only at apply.
+      condition     = length(jsonencode(jsondecode(local.github_ci_apply_boundary_policy_json))) <= 6144
+      error_message = "github_ci_apply boundary policy exceeds the 6,144 B managed-policy limit (whitespace-stripped measure, rec-2793). Trim grants -- never raise the constant; it is an AWS hard limit."
+    }
+  }
 }
