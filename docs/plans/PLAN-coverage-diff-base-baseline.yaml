@@ -61,7 +61,18 @@ scope:
       decimal), expose measure_per_file_coverage(paths) -> {path: pct | None} as the single
       measurement entry point that check_per_file_coverage also consumes (so the measured
       numbers are observable to callers and VP step 8 can assert a gate is actually LIVE
-      rather than merely error-free), and the @register validate_coverage_baseline_edits
+      rather than merely error-free). Contract details the VP depends on: key the returned
+      dict by str(resolved absolute path) so a caller can look up exactly what
+      get_changed_source_files() handed in; re-export the helper into
+      test_coverage_checker's namespace (one line, affordable at 470/500) because VP step 8
+      calls it on THAT module; and prefer a single pass returning (errors, pcts) over two
+      passes, so the step does not re-run every coverage subprocess. Also: the roster-seeding
+      PR adds NEW baseline entries whose "# grandfathered" markers deliberately do not match
+      the "# baseline-lowered" pattern -- rely on the base-absent SKIP that
+      validate_sloc_budget_raises' _default_base_reader models (git show
+      origin/main:<path> fails on a file that does not yet exist there -> None -> SKIP) and
+      cover that path with a test. Do NOT implement "missing base file == empty base": that
+      reading would fail this plan's own seeding PR. Then the @register validate_coverage_baseline_edits
       check - diff-aware vs
       origin/main, fails any LOWERED entry or NEW sub-100 registration lacking an inline
       "# baseline-lowered: dec-NNN <reason>" marker naming a real "## Decision NNN:" header
@@ -71,7 +82,7 @@ scope:
     action: Create
     purpose: >-
       One-time grandfather roster (Decision 130-style fixed roster) seeded at implement time
-      by measuring, with the new exclude_lines and path-spec measurement in place, every
+      by measuring, with the new exclude_also and parent-directory measurement in place, every
       known sub-100 file (scripts/ops_writer.py, scripts/sync/ops.py,
       scripts/checks/ops_governance/validate_outbox_staleness.py,
       scripts/checks/ci_guards/validate_actions_evidence.py, scripts/roadmap/plan_audit.py,
@@ -110,16 +121,18 @@ scope:
     purpose: >-
       EXTEND the existing [tool.coverage.report] section (it already exists at lines ~35-37
       carrying fail_under = 37 and show_missing -- do not recreate it, and do not disturb
-      those two keys) with an exclude_lines list. The list MUST include "pragma: no cover"
-      explicitly: setting exclude_lines REPLACES coverage.py's built-in default rather than
-      appending to it, so omitting that entry would silently un-exclude every existing pragma
-      site (34 under scripts/ + src/, 39 repo-wide at planning time) and would REGRESS
-      coverage on files that currently rely on them -- the exact opposite of this plan's
-      intent. Second entry: "if __name__ == .__main__.:" (canonical
-      coverage.py form; the dots are regex wildcards matching the quote characters). Removes
-      structurally-uncoverable entry-point blocks repo-wide in one edit (ops_writer.py
-      measured 69.6% -> 75.3%, 27 statements excluded) without touching any Lambda-packaged
-      source file.
+      those two keys) with an "exclude_also" list holding one entry:
+      "if __name__ == .__main__.:" (canonical coverage.py form; the dots are regex wildcards
+      matching the quote characters). Use exclude_also, NOT exclude_lines: exclude_also
+      APPENDS to coverage.py's built-in default pattern, whereas exclude_lines REPLACES it --
+      and the built-in default is a broader regex than any literal string, so it also catches
+      non-canonical pragma spellings a hand-written entry would miss. With exclude_lines the
+      implementer would have to re-list "pragma: no cover" by hand or silently un-exclude
+      every existing pragma site (34 under scripts/ + src/, 39 repo-wide) and REGRESS coverage
+      on files relying on them -- the exact opposite of this plan's intent. Verified on
+      coverage 7.15.2: exclude_also takes ops_writer.py from 69.58% to 75.46% (355 -> 326
+      statements, zero missing lines at or after the line-716 __main__ guard), without
+      touching any Lambda-packaged source file.
   - file: .github/workflows/ci.yml
     action: Modify
     purpose: >-
@@ -202,8 +215,8 @@ acceptance_criteria:
     get_changed_files() DOES newly change behaviour when running on main in push context,
     which is the correction this plan exists to make, not an unintended side effect.
   - >-
-    Structural-exclusion correctness: with the new exclude_lines,
-    scripts/ops_writer.py measures 75.3% (was 69.6%) with zero source edits, and no
+    Structural-exclusion correctness: with the new exclude_also entry,
+    scripts/ops_writer.py measures 75.46% (was 69.58%) with zero source edits, and no
     missing-lines entry falls inside its __main__ block (lines >= 716).
   - >-
     Baseline gate semantics: a changed file with a baseline entry fails iff measured <
@@ -305,21 +318,23 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Verify exclude_lines takes effect without source edits - measure ops_writer.py and
-      assert no missing line falls in the __main__ block and the percentage rose to ~75.3.
+      Verify exclude_also takes effect without source edits - measure ops_writer.py and
+      assert no missing line falls in the __main__ block and the percentage rose to ~75.46.
     command: >-
       mkdir -p logs/debug && bin/venv-python -m pytest tests/ops_writer/ -q --no-header
       --cov=scripts.ops_writer --cov-report=json:logs/debug/.vp-cov.json >/dev/null 2>&1;
       bin/venv-python -c "import json; d=json.load(open('logs/debug/.vp-cov.json'));
       f=[v for k,v in d['files'].items() if 'ops_writer' in k][0];
       assert not [l for l in f['missing_lines'] if l>=716], 'main block still counted';
-      pct=f['summary']['percent_covered']; assert 74.5<=pct<=76.0, pct; print(f'ops_writer.py {pct:.1f}%')"
+      pct=f['summary']['percent_covered']; assert 74.5<=pct<=76.5, pct; print(f'ops_writer.py {pct:.2f}%')"
     expected: >-
-      Prints ops_writer.py 75.3% (measured at planning time via an equivalent --cov-config
-      simulation; the 74.5-76.0 band absorbs incidental drift); no missing lines at or after 716.
+      Prints ops_writer.py 75.46% (measured at planning time via an equivalent --cov-config
+      simulation on coverage 7.15.2; the 74.5-76.5 band absorbs incidental drift); no missing
+      lines at or after 716.
     fix_if: >-
-      __main__ lines still missing - exclude_lines regex wrong (dots in the pattern are
-      regex wildcards, keep the canonical coverage.py form).
+      __main__ lines still missing - the exclude_also regex is wrong (the dots are regex
+      wildcards, keep the canonical coverage.py form). Percentage lower than the band -
+      exclude_lines was used instead of exclude_also, dropping the built-in pragma default.
     hermetic: false
     graduation: not-applicable
   - step: 6
@@ -407,9 +422,10 @@ verification_plan:
   - step: 10
     phase: pre-deploy
     action: >-
-      Full-tier presubmit - the ONLY tier validate_test_coverage and the new baseline guard
-      actually run in (both are full_sequence()-only), so without this step no VP step ever
-      exercises the plan's central claim end to end. Also satisfies
+      Full-tier presubmit - validate_test_coverage runs ONLY in full_sequence(), so without
+      this step no VP step ever exercises the plan's central claim end to end. (The new
+      validate_coverage_baseline_edits guard is registered in BOTH tiers, so step 9 already
+      covers it; this step is required for the coverage gate specifically.) Also satisfies
       handoff_policy.full_validation_required_before_commit.
     command: bin/venv-python -m scripts.validate
     expected: >-
@@ -431,12 +447,19 @@ verification_plan:
       the checker examines the merge's own files instead of an empty set.
     command: >-
       git fetch origin main && git -C . log --oneline -1 origin/main &&
-      bin/venv-python -c "import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.');
-      subprocess.run(['git','checkout','-q','main']); subprocess.run(['git','pull','-q','origin','main']);
+      git checkout -q main && git pull -q origin main &&
+      bin/venv-python -c "import importlib.util,sys,pathlib; sys.path.insert(0,'.');
       spec=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
       m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m);
-      files=m.get_changed_source_files(); assert files, 'post-merge diff base still empty'; print(sorted(str(p) for p in files))"
-    expected: Non-empty list naming this plan's merged .py files.
+      files=m.get_changed_source_files(); assert files, 'post-merge diff base still empty'; print(sorted(str(p) for p in files))";
+      rc=$?; git checkout -q -; exit $rc
+    expected: >-
+      Non-empty list naming this plan's merged .py files, and the session is returned to the
+      working branch. The trailing "git checkout -" is required, not cosmetic - this step
+      stands on main, and the .claude/hooks/never_on_main.py PreToolUse hook blocks every
+      Edit/Write/commit while HEAD is main, so leaving the session there would make a
+      failure of this step undiagnosable without a manual recovery. The exit code of the
+      assertion is preserved across the checkout.
     fix_if: Empty - push-context detection failed on real main; RCA before any further merges (Decision 55).
   - step: 12
     phase: post-deploy
@@ -578,6 +601,13 @@ context:
     Decision header is 157 at planning time -> carrying Decision drafted as 158;
     RE-CHECK the max header at implement time (numbering race).
   - >-
+    Runtime cost of the parent-directory --cov spec (measured at planning time): a
+    scripts/-root file measures ~295 modules and writes a ~1.2MB JSON per file -- about 9s
+    for tests/ops_writer/ and 66s for tests/validate/. Comfortably inside the 60-minute
+    main-validate and canary timeouts, but expect the full tier to grow by roughly a minute
+    per changed root-level source file. The fast tier is unaffected (the coverage gate is
+    full_sequence()-only), so Decision 153's 300s --pre budget is not in play.
+  - >-
     Local full-tier nuance: with the corrected base, a full run on a CLEAN main checkout
     (local or CI) examines the last merge's files - by design, that is exactly the
     post-merge contract; PR/branch runs are unchanged.
@@ -626,12 +656,13 @@ execution_steps:
     scripts/checks/misc/validate_test_coverage.py - baseline-aware gate semantics: entry
     present -> fail iff measured < entry; absent -> fail iff measured < 100.
   - >-
-    pyproject.toml - [tool.coverage.report] exclude_lines with the canonical coverage.py
-    patterns for "pragma: no cover" and the __main__ guard.
+    pyproject.toml - extend [tool.coverage.report] with exclude_also (NOT exclude_lines --
+    exclude_also appends to coverage.py's built-in pragma default instead of replacing it)
+    carrying the canonical __main__-guard pattern.
   - >-
     .github/workflows/ci.yml - fetch-depth: 2 on main-validate's actions/checkout step.
   - >-
-    Seed config/coverage_baseline.yaml: measure (post-exclude_lines, path-spec) each file
+    Seed config/coverage_baseline.yaml: measure (post-exclude_also, parent-directory) each file
     named in the scope entry's roster plus every source file in this plan's own diff; for
     each result < 100.0, record the floored-to-1-decimal value with the grandfather
     marker; files measuring 100 are omitted. Files whose mapped tests still yield no data
