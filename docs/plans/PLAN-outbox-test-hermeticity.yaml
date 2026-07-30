@@ -62,6 +62,12 @@ scope:
   - file: tests/test_outbox_hermeticity_guard.py
     action: Create
     purpose: Unit tests for the tests/fixtures/outbox_guard.py detection logic.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Carries the three graduated check rows (VP steps 2, 6, 11). The implement skill's bookkeeping
+      walk owns this write, but it is listed here so the edit is not an out-of-scope modification --
+      validate_graduation_completeness's implement-PR leg requires a new-in-diff row per graduate step.
   - file: scripts/checks/ops_governance/validate_outbox_staleness.py
     action: Modify
     purpose: >-
@@ -132,14 +138,24 @@ verification_plan:
       test -z "$(find logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
       logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans -type f 2>/dev/null)"
     expected: >-
-      pytest exits 0 (measured 14 passed in ~6s, inside vp_replay's 30s per-step cap) and the find
-      returns no files, so the step exits 0. Only RETIRED dirs are deleted -- legacy staging dirs
-      (telemetry, ops_session_log) may hold legitimately-pending drain data and are never touched.
+      pytest exits 0 (measured 14 passed in ~6s locally) and the find returns no files, so the step
+      exits 0. Only RETIRED dirs are deleted -- legacy staging dirs (telemetry, ops_session_log) may
+      hold legitimately-pending drain data and are never touched.
+      Marked hermetic: false for DEPENDENCY AVAILABILITY, not cost: tests/ops_writer/test_outbox_emit.py
+      line 15 imports boto3 at MODULE scope by design, so the fast tier's --collect-only probe defers
+      the file to the full tier. validate_vp_replay replays hermetic steps inside the venv-less
+      pr-validate job, which installs only requirements-fast.txt + requirements-dev.txt -- neither
+      contains boto3 -- so a hermetic marking would make pytest exit 2 at collection and fail the
+      authoritative --pre gate. The same invariant is covered CI-side by VP step 4 and permanently by
+      the conftest guard.
     fix_if: >-
       A .jsonl file appears under logs/.ops-outbox/ops_recommendations/. Means _write_to_outbox still
       resolves the real repo root -- check that the test patches scripts.ops_writer._OUTBOX_BASE and
       that _write_to_outbox reads the module global at call time rather than capturing it.
-    hermetic: true
+      DIFFERENT SYMPTOM, DIFFERENT CAUSE: if pytest instead exits 2 with ModuleNotFoundError at
+      collection, that is the missing-boto3 fast-tier environment, NOT a correctness bug -- do not go
+      hunting for one. Re-run from a full-requirements venv.
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       The autouse conftest hermeticity guard added by this plan IS the permanent in-suite enforcement
@@ -447,9 +463,10 @@ context:
     DELIBERATE OMISSION, stated for the reviewer. This plan does NOT add the missing _is_test_env()
     early-return to _write_to_outbox alongside its two siblings. Reasons: (a) the conftest guard is
     strictly broader -- it catches leaks from any source, not just OpsWriter; (b) the production
-    guard would cost +2 SLOC, landing scripts/ops_writer.py at exactly its already-raised 571 budget
-    with zero headroom, which per Decision 128 is the signal that this 746-line
-    complexity-waiver-carrying file wants DECOMPOSITION, not another net-zero-threaded edit.
+    guard would cost +2 SLOC, landing scripts/ops_writer.py at exactly 571 -- WITHIN its
+    already-raised budget, not over it, so this is not a gate violation -- but at zero headroom,
+    which per Decision 128 is the signal that this 746-line complexity-waiver-carrying file wants
+    DECOMPOSITION, not another net-zero-threaded edit.
     Decomposition is out of scope here; execution step 10 files it as a recommendation.
   - >-
     THIRD FILING of one defect: rec-2185 (2026-06-11), rec-2697 (2026-07-14), rec-2894 (2026-07-30).
@@ -495,11 +512,19 @@ context:
     VP REPLAY BUDGET (Decision 148 / VF-01). validate_vp_replay runs in the --pre tier and replays
     every pre-deploy AND hermetic:true step with PER_STEP_TIMEOUT_SECONDS=30,
     MAX_AGGREGATE_SECONDS=120, MAX_REPLAYED_STEPS=20, treating TimeoutExpired as an unconditional
-    divergence. Steps 3, 4 and 8 are therefore hermetic:false -- step 4 is the 759s full suite, step
-    8 is the 13-20min validate --pre (which the planning skill separately forbids marking hermetic,
-    for recursion), and step 3 mutates the working tree by planting a throwaway test file. The
-    remaining hermetic steps were timed on the pre-change tree: step 1 ~6s, step 6 ~2s, steps 2/5/7/11
-    ~1-3s each, so the aggregate sits far inside the 120s cap.
+    divergence. TWO independent reasons force hermetic:false. (i) COST/SAFETY -- step 4 is the 759s
+    full suite, step 8 is the 13-20min validate --pre (which the planning skill separately forbids
+    marking hermetic, for recursion), and step 3 mutates the working tree by planting a throwaway
+    test file. (ii) DEPENDENCY AVAILABILITY -- vp_replay executes hermetic steps inside the venv-less
+    pr-validate job, which installs ONLY requirements-fast.txt + requirements-dev.txt, and neither
+    contains boto3. Step 1 shells tests/ops_writer/test_outbox_emit.py, whose line 15 imports boto3 at
+    module scope BY DESIGN so the fast tier defers the file; replaying it there exits 2 at collection.
+    Step 1 is therefore hermetic:false too. A local timing check cannot catch this -- the dev .venv
+    installs full requirements.txt. The remaining hermetic steps (2, 5, 6, 7, 11) were checked to be
+    dependency-light: scripts/sync/ops.py is stdlib-only at module scope (boto3 is lazy-imported
+    inside drain()), so tests/fixtures/outbox_guard.py and the Phase 2 check import it safely under
+    requirements-fast.txt; steps 5/7/11 use only pathlib, git and grep. Timed at step 6 ~2s and
+    steps 2/5/7/11 ~1-3s each, far inside the 120s aggregate cap.
   - >-
     Decision-scout verdict FLAGS_FOUND (108 of 108 decisions triaged). CITE list, verbatim ids:
     Decision 84 (I-4, governing clause), Decision 104, Decision 135, Decision 153, Decision 131,
@@ -512,7 +537,11 @@ context:
     close. All three recs therefore close on DETERMINISTIC SATISFACTION -- one fix genuinely
     satisfies all three acceptance commands and the merge is the proof. Each resolution must be
     worded as the landed fix (e.g. "fixed by the _OUTBOX_BASE seam plus the conftest hermeticity
-    guard"), NEVER as "duplicate".
+    guard"), NEVER as "duplicate". NOTE for rec-2185 specifically: its stored acceptance command
+    ("pytest tests/test_sync_ops.py -q && test ! -d logs/.ops-outbox") is doubly stale -- that test
+    path moved to tests/sync/ops/ and "test ! -d" demands the directory be ABSENT, stricter than this
+    plan's "empty or absent". Do not re-run it verbatim; word the resolution to say the stale
+    acceptance was superseded by the landed guard.
   - >-
     Scout flag B resolved (Decision 149, WARN, human-approved): a plain session-start snapshot would
     absorb any already-leaked file into an uncommitted, per-machine baseline -- silent tolerance of
