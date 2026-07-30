@@ -24,6 +24,8 @@ from scripts.checks.iam_tf._read_coverage import (
     _scan_resources,
 )
 from scripts.checks.iam_tf._write_coverage import (
+    _INSTANCE_PROFILE_PREFIX,
+    _ROLE_PREFIX,
     WRITE_COVERAGE,
     WRITE_EXEMPT_TYPES,
     _write_exemption,
@@ -82,6 +84,21 @@ class TestWriteCoverageMap:
     def test_every_exemption_carries_a_justification(self) -> None:
         for rtype, why in WRITE_EXEMPT_TYPES.items():
             assert why.strip(), rtype
+
+    def test_sns_subscription_requires_only_the_topic_scopable_verb(self) -> None:
+        """sns:Unsubscribe / sns:SetSubscriptionAttributes have NO resource type in SNS's IAM model,
+        so they are unscopeable and DENIED BY DESIGN rather than granted account-wide. Requiring them
+        here would force a Resource "*" grant back into SNSTopicWrite -- the exact widening the
+        denial exists to prevent."""
+        spec = WRITE_COVERAGE["aws_sns_topic_subscription"]
+        assert spec["write_actions"] == ("sns:Subscribe",)
+        assert spec["resource_marker"] == "agent-platform-alerts"
+
+    def test_instance_profile_marker_is_not_the_role_prefix(self) -> None:
+        """The marker whose absence made a grant inert: iam:RemoveRoleFromInstanceProfile authorizes
+        on the instance-profile resource type, so its marker must never collapse into the role one."""
+        assert _INSTANCE_PROFILE_PREFIX == "instance-profile/agent-platform-*"
+        assert _INSTANCE_PROFILE_PREFIX != _ROLE_PREFIX
 
     def test_data_sources_are_exempt_by_prefix(self) -> None:
         # A terraform data source is refreshed, never written -- its obligation is read coverage.

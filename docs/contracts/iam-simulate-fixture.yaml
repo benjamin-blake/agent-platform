@@ -106,13 +106,22 @@ triples:
       the intersection denies it.
   - id: p0-1-remove-role-from-instance-profile
     verb: "iam:RemoveRoleFromInstanceProfile"
-    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    target_arn_template: "arn:aws:iam::${account_id}:instance-profile/agent-platform-simulate-probe"
     expected_decision: allowed
     required_context_keys: {}
     why: >-
-      rec-2882 companion #2: the SECOND call in the same provider loop, granted alongside the List
-      verb deliberately rather than waiting for it to fail in production (the patch-one-verb pattern
-      this plan exists to end).
+      rec-2882 companion #2: the SECOND call in the same provider loop. THE TARGET IS AN
+      INSTANCE-PROFILE ARN, NOT A ROLE ARN, AND THAT IS THE WHOLE POINT -- this verb authorizes on
+      the INSTANCE-PROFILE resource type. It shipped granted inside IAMRoleDeleteBounded at
+      role/agent-platform-*, where it was INERT: present in the policy and structurally unable to
+      authorize anything. The post-apply simulate sweep (3 mismatches / 63 triples) caught it, and
+      simulate-custom-policy isolated the axis rather than the verb -- the same grant at
+      instance-profile/agent-platform-* against an instance-profile ARN returns `allowed`, the
+      role-scoped grant against a role ARN returns implicitDeny, while its former Sid siblings
+      iam:DeleteRole and iam:ListInstanceProfilesForRole return `allowed` on that same role ARN. It
+      now lives in its own Sid, IAMInstanceProfileDetach; the boundary DataPlaneAllow already carried
+      it at Resource ["*"], so the ceiling was never the constraint. If this triple ever returns
+      implicitDeny again, check the Sid's Resource axis before adding any verb.
   - id: iam-delete-role-bounded
     verb: "iam:DeleteRole"
     target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
@@ -173,22 +182,44 @@ triples:
     target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts"
     expected_decision: allowed
     required_context_keys: {}
-    why: "aws_sns_topic_subscription create -- authorized against the bare TOPIC arn."
+    why: >-
+      aws_sns_topic_subscription create -- authorized against the bare TOPIC arn, which is why this
+      one verb of the three subscription-lifecycle verbs SURVIVES the by-design denial below:
+      sns:Subscribe genuinely takes the topic resource type.
   - id: p0-3-sns-set-subscription-attributes
     verb: "sns:SetSubscriptionAttributes"
     target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts:simulate-probe-subscription"
-    expected_decision: allowed
+    expected_decision: implicitDeny
+    by_design: >-
+      UNSCOPEABLE, THEREFORE UNGRANTED. The superseded record here claimed a subscription's
+      <topic-arn>:<uuid> ARN made this verb authorizable via SNSTopicWrite's agent-platform-alerts:*
+      Resource entry. That is DISPROVEN: sns:SetSubscriptionAttributes has NO resource type in SNS's
+      IAM model. Proof (simulate-custom-policy) -- a wildcard grant (Resource ["*"]) simulated
+      against the target `*` returns `allowed`, while the SAME wildcard grant simulated against
+      either the topic ARN or a subscription ARN returns implicitDeny; sibling verbs in the same Sid
+      (sns:CreateTopic, sns:SetTopicAttributes, sns:Subscribe) return `allowed` at the topic ARN,
+      which isolates the resource-type axis rather than the grant. Making it work therefore requires
+      an account-wide Resource "*" grant, letting one approved CD apply reconfigure ANY subscription
+      in the account -- refused under Decision 143 worst-verb enumeration. The verb and the now-inert
+      agent-platform-alerts:* Resource entry were both removed from SNSTopicWrite.
+      ACCEPTED CONSEQUENCE: a non-default raw_message_delivery / filter_policy change on
+      aws_sns_topic_subscription.alerts_email AccessDenies through CD and needs an admin apply.
     required_context_keys: {}
-    why: >-
-      A subscription's ARN is <topic-arn>:<uuid>, so this verb is authorized against the
-      agent-platform-alerts:* entry -- BOTH Resource entries in SNSTopicWrite are load-bearing, and
-      this triple is what proves the second one is not decorative.
+    why: "Subscription-mutation containment: topic-scopable verbs are granted, unscopeable ones are not."
   - id: p0-3-sns-unsubscribe
     verb: "sns:Unsubscribe"
     target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts:simulate-probe-subscription"
-    expected_decision: allowed
+    expected_decision: implicitDeny
+    by_design: >-
+      UNSCOPEABLE, THEREFORE UNGRANTED -- identical proof and identical refusal to
+      p0-3-sns-set-subscription-attributes above (no resource type in SNS's IAM model; wildcard grant
+      + wildcard target = allowed, any ARN target = implicitDeny; an account-wide Resource "*" would
+      let one approved CD apply unsubscribe ANY subscription in the account).
+      ACCEPTED CONSEQUENCE: destroying or REPLACING aws_sns_topic_subscription.alerts_email through
+      CD AccessDenies and needs an admin apply. Note this is a REPLACE hazard too, not only an
+      explicit destroy -- any diff that forces replacement of the subscription hits the destroy half.
     required_context_keys: {}
-    why: "aws_sns_topic_subscription destroy, same subscription-ARN axis."
+    why: "Subscription-destroy containment: the create half (sns:Subscribe) is topic-scoped and stays granted."
 
   # -- P0-4: the CloudWatch Logs tagging families (deliberately over-granted, see why) --
   - id: p0-4-logs-untag-log-group

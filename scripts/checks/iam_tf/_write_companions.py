@@ -39,6 +39,7 @@ from scripts.checks.iam_tf._write_coverage import (
     _COUNTERS_TABLE_ARN,
     _DATA_LAKE_BUCKET_ARN,
     _FUNCTION_PREFIX,
+    _INSTANCE_PROFILE_PREFIX,
     _LOG_GROUP_PREFIX,
     _OIDC_PROVIDER_ARN,
     _PARAMETER_PREFIX,
@@ -67,6 +68,14 @@ _NO_TAG_CALL = "default_tags forces no companion call"
 _OIDC_BY_DESIGN = "DENIED BY DESIGN -- creating or destroying the provider would break the pipeline executing the apply"
 _UNGRANTED_DESTROY = (
     "destroy calls this verb, which is deliberately NOT granted ({what} is admin-tier) -- the row is inert until it ever is"
+)
+_SNS_SUBSCRIPTION_BY_DESIGN = (
+    "sns:SetSubscriptionAttributes and sns:Unsubscribe are DENIED BY DESIGN and therefore ungranted -- neither has a "
+    'resource type in SNS\'s IAM model (live-simulate proof: a Resource ["*"] grant is allowed only against a `*` '
+    "target and implicitDeny against the topic ARN or a subscription ARN), so authorizing them would take an "
+    "account-wide wildcard letting one CD apply reconfigure ANY subscription in the account (Decision 143). Accepted "
+    "consequence: destroying or REPLACING aws_sns_topic_subscription.alerts_email through CD AccessDenies and needs "
+    "an admin apply -- see the by_design entries in docs/contracts/iam-simulate-fixture.yaml"
 )
 
 
@@ -151,9 +160,12 @@ LIFECYCLE_COMPANIONS: dict[str, dict[str, dict]] = {
         ),
         "delete": _row(
             "iam:DeleteRole",
-            _at(_ROLE_PREFIX, "iam:ListInstanceProfilesForRole", "iam:RemoveRoleFromInstanceProfile"),
+            _at(_ROLE_PREFIX, "iam:ListInstanceProfilesForRole")
+            + _at(_INSTANCE_PROFILE_PREFIX, "iam:RemoveRoleFromInstanceProfile"),
             "provider deleteRole() unconditionally calls deleteRoleInstanceProfiles() (rec-2882 -- the missing List "
-            "verb killed a live gated destroy)",
+            "verb killed a live gated destroy); the two loop verbs carry DIFFERENT markers because "
+            "RemoveRoleFromInstanceProfile authorizes on the instance-profile resource type -- at the role prefix it "
+            "is inert, which only the post-apply live simulate could see",
         ),
     },
     "aws_iam_role_policy": {
@@ -222,11 +234,13 @@ LIFECYCLE_COMPANIONS: dict[str, dict[str, dict]] = {
     "aws_sns_topic_subscription": {
         "create": _row(
             "sns:Subscribe",
-            _at(_TOPIC_ARN, "sns:SetSubscriptionAttributes"),
-            "raw-message-delivery / filter-policy attributes are applied with SetSubscriptionAttributes after Subscribe",
+            (),
+            f"sns:Subscribe is topic-scoped and creates the subscription on its own; {_SNS_SUBSCRIPTION_BY_DESIGN}, so "
+            "the raw-message-delivery / filter-policy follow-up call is NOT declared as a companion -- a non-default "
+            "attribute on create AccessDenies and needs an admin apply",
         ),
-        "update": _row("sns:SetSubscriptionAttributes", (), _SINGLE_CALL),
-        "delete": _row("sns:Unsubscribe", (), _SINGLE_CALL),
+        "update": _row("sns:SetSubscriptionAttributes", (), f"{_SINGLE_CALL}; {_SNS_SUBSCRIPTION_BY_DESIGN}"),
+        "delete": _row("sns:Unsubscribe", (), f"{_SINGLE_CALL}; {_SNS_SUBSCRIPTION_BY_DESIGN}"),
     },
     "aws_ssm_parameter": {
         "create": _row(

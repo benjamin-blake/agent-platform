@@ -53,6 +53,12 @@ _FUNCTION_PREFIX = "function:agent-platform-*"
 _LAYER_PREFIX = "layer:agent-platform-*"
 _LOG_GROUP_PREFIX = "log-group:/aws/lambda/agent-platform-*"
 _ROLE_PREFIX = "role/agent-platform-*"
+# iam:RemoveRoleFromInstanceProfile authorizes on the INSTANCE-PROFILE resource type, never on the
+# role, so its grant carries this marker and NOT _ROLE_PREFIX. A role-scoped grant of that verb is
+# INERT -- present in the policy, structurally unable to authorize -- which every static check
+# passed for, because "the verb is present" was literally true; only the post-apply live simulate
+# saw it. See the IAMInstanceProfileDetach Sid in terraform/bootstrap/github_ci_apply.tf.
+_INSTANCE_PROFILE_PREFIX = "instance-profile/agent-platform-*"
 _RULE_PREFIX = "rule/agent-platform-*"
 _ALARM_PREFIX = "alarm:"
 _TOPIC_ARN = "agent-platform-alerts"
@@ -145,7 +151,13 @@ WRITE_COVERAGE: dict[str, dict] = {
         "resource_marker": _TOPIC_ARN,
     },
     "aws_sns_topic_subscription": {
-        "write_actions": ("sns:Subscribe", "sns:Unsubscribe", "sns:SetSubscriptionAttributes"),
+        # sns:Subscribe ONLY. sns:Unsubscribe and sns:SetSubscriptionAttributes have NO resource type
+        # in SNS's IAM model (live-simulate proof: a Resource ["*"] grant is `allowed` only against a
+        # `*` target and implicitDeny against the topic ARN or a subscription ARN), so they are
+        # unscopeable and are DENIED BY DESIGN rather than granted account-wide -- see the
+        # SNSTopicWrite comment and the by_design entries in docs/contracts/iam-simulate-fixture.yaml.
+        # Accepted consequence: destroying or replacing the subscription needs an admin apply.
+        "write_actions": ("sns:Subscribe",),
         "resource_marker": _TOPIC_ARN,
     },
     "aws_ssm_parameter": {
