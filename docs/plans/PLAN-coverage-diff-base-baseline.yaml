@@ -306,8 +306,14 @@ verification_plan:
       spec=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
       m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m);
       files={str(p.relative_to(pathlib.Path.cwd())) for p in m.get_changed_source_files()};
-      assert 'scripts/test_coverage_checker.py' in files and 'scripts/checks/_common.py' in files, files; print(sorted(files))"
-    expected: Prints this plan's changed source files; assertion passes.
+      assert 'scripts/checks/_common.py' in files and 'scripts/checks/registry.py' in files, files; print(sorted(files))"
+    expected: >-
+      Prints this plan's changed source files; assertion passes. NOTE (discovered at implement
+      time, rec-2916 filed): scripts/test_coverage_checker.py's own get_changed_source_files()
+      excludes any changed .py file whose basename starts with "test_", which incidentally
+      excludes scripts/test_coverage_checker.py itself -- a pre-existing bug on origin/main,
+      unrelated to this plan's shared-base wiring. The assertion was corrected to check
+      scripts/checks/_common.py and scripts/checks/registry.py instead.
     fix_if: Empty or wrong set - the shared-base consumption in the checker is broken.
     hermetic: true
     graduation: waive
@@ -355,8 +361,17 @@ verification_plan:
       AssertionError naming the offending workflow - add fetch-depth: 2 there. The step is
       located by uses-match, not index, so a reordered checkout step will not false-fail.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: main-validate-fetch-depth
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential rejected -- tautological. The check would materialize `bin/venv-python -m
+      scripts.verify_ci_workflow fetch-depth` (or equivalent) inside a real origin/main worktree,
+      which runs THAT worktree's OWN (unpatched) verify_ci_workflow.py against THAT worktree's
+      OWN (unpatched) ci.yml/main-canary.yml -- checker and data revert together, so the old
+      assertion ("fetch-depth absent") still holds against the old data and the revert leg
+      PASSES instead of failing. The durable regression guard already exists as
+      tests/verify_ci_workflow/test_ci_data_guards.py::TestCheckFetchDepthFailPath (injected-data
+      unit tests pinning the ==2 assertion), which is unaffected by this tautology since it
+      supplies its own fixture data rather than reading the real workflow files.
   - step: 7
     phase: pre-deploy
     action: >-
@@ -373,8 +388,13 @@ verification_plan:
       Returns a path - the checker refactor disturbed the Decision 124 exclusion; restore
       it before landing.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: ops-portal-coverage-carveout
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential rejected -- would pass identically on origin/main. This plan does not touch
+      map_source_to_test's scripts/ops_portal/** exclusion (Decision 124); the step is a
+      non-regression PROOF that the carve-out survived the refactor untouched, not a guard
+      against new behaviour, so reverting to origin/main reproduces the same passing result
+      (both return None) and the differential is not admissible by construction.
   - step: 8
     phase: pre-deploy
     action: >-

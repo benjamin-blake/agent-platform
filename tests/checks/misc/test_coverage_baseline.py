@@ -327,7 +327,7 @@ class TestValidateCoverageBaselineEdits:
 
     def test_passes_lowering_with_valid_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/x.py: 60.0  # baseline-lowered: dec-159 regression, tracked\n")
-        self._write_decisions(tmp_path, [158])
+        self._write_decisions(tmp_path, [159])
         base_reader = lambda rel: "entries:\n  scripts/x.py: 80.0\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -338,7 +338,7 @@ class TestValidateCoverageBaselineEdits:
 
     def test_fails_lowering_marker_cites_nonexistent_decision(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/x.py: 60.0  # baseline-lowered: dec-999 bogus\n")
-        self._write_decisions(tmp_path, [158])
+        self._write_decisions(tmp_path, [159])
         base_reader = lambda rel: "entries:\n  scripts/x.py: 80.0\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -360,7 +360,7 @@ class TestValidateCoverageBaselineEdits:
 
     def test_passes_new_sub100_registration_with_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/new.py: 90.0  # baseline-lowered: dec-159 newly discovered debt\n")
-        self._write_decisions(tmp_path, [158])
+        self._write_decisions(tmp_path, [159])
         base_reader = lambda rel: "entries: {}\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
