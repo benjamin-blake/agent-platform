@@ -1,0 +1,1074 @@
+audit:
+  meta:
+    audited_commit: ad02653
+    base_branch: main
+    model: Claude Fable 5
+    methodology_version: 1
+    scope_surfaces: [persona_substrate, deterministic_glue, orchestration_layer, billing_shape, failure_semantics, portability_and_lockin, existing_precedents]
+    degraded_dedup: false
+    degraded_external_research: false
+    degraded_adversarial_review: false
+    contract_notes: >-
+      Working tree clean at SETUP; no worktree needed; audited on branch cut from origin/main
+      @ad02653; preflight succeeded (sanctioned outbox drain ran once); recommendation cache
+      regenerated and sampled (12 rows, observed); 15 external primary sources consumed (cap);
+      docs.github.com 503'd on first attempts and succeeded on retry within the run. NO question
+      verdict changed across the three adversarial rounds; the finding set and severities did:
+      round-1 portability-reviewer's Decision-122 challenge rewrote the routing finding
+      (undecided -> decided-with-rationale-gap) and its INTENT-Stage-4 challenge narrowed the
+      comparative-eval finding; round-2 portability-reviewer's dangling-INTENT-pointer discovery
+      (corroborated round 3 by the prior-audit C7 false dismissal) raised the fallback finding to
+      high; round-2 economics-reviewer's replay-rate-firability challenge created ESB-08 (refined
+      round 3); round-1 economics-reviewer's apply-channel trace created ESB-07. Rounds 1-3 all
+      unstable under the strict trigger rule (each established at least one factual error in the
+      draft); round 3 is the cap -- residual items are in adversarial_reviews.unresolved with
+      affected findings named, per the no-forced-convergence rule. The nine-property
+      semantics_matrix list is closed by this prompt and is invocation-boundary-shaped; the two
+      discriminators review found decisive (workspace persistence, CLI-hostability) are carried in
+      Q1 prose and Q2a per contract. hybrid_by_persona appears only as a Q6-admissible aggregate,
+      never in per-row fields, per contract. LiteLLM passthrough batch support and SFN http:invoke
+      caps are reviewer-surfaced from official docs but not auditor-verified (source cap) and are
+      marked accordingly. Enum-bearing fields manually compared against the OUTPUT contract after
+      the final edit pass (surfaces, substrates, verdict enums, effort scale, adjudication and
+      classification values, VD dimensions, readiness values, evidence_kind, dispositions).
+      validate --pre run as advisory post-authoring: all checks passed on this tree (advisory
+      only; PR CI remains authoritative). Structural check plus a full enum/counting sweep
+      (49-cell adjudication matrix, 56-cell rubric, 45-row semantics matrix, 15-row reversal
+      table, id-reference closure, severity ordering, summary mirror) passed programmatically.
+    stale_anchors:
+      - {anchor: "docs/ROADMAP-PLATFORM.yaml:791", expected: "durable runtimes Python 3.13/3.14, Node.js 22/24, Java 17+", actual: "current AWS doc also lists C# .NET 8/10 and Java 21/25; CD.27 list omits C# entirely"}
+      - {anchor: "docs/ROADMAP-PLATFORM.yaml:803-804", expected: "T4.3 (scheduled-agent loop) substrate choice open between Step Functions scheduled execution and self-hosted runner cron (Decision 68)", actual: "T4.3 was rewritten 2026-07-06 into a priority-queue producer repoint; scheduled agents moved to T4.12; the self-hosted EC2 runner was retired by CD.21, so the named cron option no longer exists"}
+      - {anchor: "docs/DECISIONS.md:4144 (Decision 75)", expected: "uses primitives already in production ... terraform/data_pipeline.tf ships a 5-Lambda Step Functions pipeline", actual: "terraform/ legacy roots incl. data_pipeline.tf are retained but no longer applied (terraform/CLAUDE.md); the precedent is a design artefact, not a running system"}
+  external_sources:
+    - {url: "https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html", accessed: 2026-07-30, claim_scope: "durable execution model; steps vs waits; waits suspend without compute charges; up to one year; SDK languages; Step Functions comparison"}
+    - {url: "https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html", accessed: 2026-07-30, claim_scope: "managed runtimes incl. C# .NET 8/10; OCI-with-SDK; SDK major-version in-flight failure warning; pin + alias guidance"}
+    - {url: "https://aws.amazon.com/lambda/pricing/", accessed: 2026-07-30, claim_scope: "durable operations $8.00/M; data written $0.25/GB; retention $0.15/GB-month (1-90d, default 14); replay sub-invocations billed as compute; Lambda GB-second rates"}
+    - {url: "https://docs.aws.amazon.com/durable-execution/", accessed: 2026-07-30, claim_scope: "SDK operation set: Step, Wait, Wait-for-Condition, Callback, Invoke, Parallel, Map, Child Context; testing runner"}
+    - {url: "https://docs.aws.amazon.com/durable-execution/sdk-reference/operations/callback/", accessed: 2026-07-30, claim_scope: "callback suspends without compute charges; SendDurableExecutionCallbackSuccess/Failure/Heartbeat APIs; timeout/heartbeat options"}
+    - {url: "https://docs.aws.amazon.com/durable-execution/patterns/best-practices/determinism/", accessed: 2026-07-30, claim_scope: "replay re-runs handler from top; all non-deterministic code must be wrapped in steps; outer-state side effects in step bodies lost on replay; env/config reads must be captured in steps"}
+    - {url: "https://aws.amazon.com/step-functions/pricing/", accessed: 2026-07-30, claim_scope: "Standard Workflows $0.000025 per state transition (us-east-1 reference); Express duration-based pricing; transitions-only billing basis for Standard"}
+    - {url: "https://platform.claude.com/docs/en/build-with-claude/batch-processing", accessed: 2026-07-30, claim_scope: "Anthropic Message Batches: asynchronous, poll for results, most batches <1h, 50% cost reduction; standard Messages API is synchronous/streaming"}
+    - {url: "https://api-docs.deepseek.com/", accessed: 2026-07-30, claim_scope: "DeepSeek API request modes: synchronous chat completion with optional streaming; no batch/async mode documented"}
+    - {url: "https://docs.litellm.ai/docs/batches", accessed: 2026-07-30, claim_scope: "LiteLLM batch support providers: OpenAI, Azure, Vertex, Bedrock, vLLM; neither Anthropic nor DeepSeek listed"}
+    - {url: "https://docs.litellm.ai/docs/providers/anthropic", accessed: 2026-07-30, claim_scope: "LiteLLM Anthropic integration: synchronous + streaming; no Message-Batches mode"}
+    - {url: "https://aws.amazon.com/fargate/pricing/", accessed: 2026-07-30, claim_scope: "Fargate per-second pricing (~$0.0405/vCPU-h + ~$0.00444/GB-h x86), 1-minute minimum, billed image-pull to task-stop"}
+    - {url: "https://aws.amazon.com/dynamodb/pricing/on-demand/", accessed: 2026-07-30, claim_scope: "DynamoDB on-demand $0.625/M writes, $0.125/M reads, ~$0.25/GB-month storage"}
+    - {url: "https://docs.github.com/en/actions/reference/limits", accessed: 2026-07-30, claim_scope: "GitHub-hosted runners: 6h max job execution; 35-day max workflow run; 20 concurrent jobs (Free plan)"}
+    - {url: "https://docs.github.com/en/billing/concepts/product-billing/github-actions", accessed: 2026-07-30, claim_scope: "Actions usage free for standard GitHub-hosted runners in public repositories; private-repo per-minute rates"}
+  question_answers:
+    - q: Q1
+      verdict: durable-provides-materially-more
+      basis: [ESB-01, ESB-06]
+      prose: >-
+        Judged against the loop semantics AS CONTRACTED (T4.2's exit criterion demands forced-timeout
+        mid-loop resume from the last completed tool call without re-issuing completed LLM calls,
+        ROADMAP:6777 -- itself a pending-CD, mechanism-named contract, recorded at ESB-05), durable
+        functions provide materially more platform-side: long-run beyond one invocation,
+        per-operation checkpointing, completed-operation suppression, a test runner, and
+        execution-history observability arrive without hand-rolling. Adversarial review sharpened
+        this in both directions. Against the incumbent: (a) suppression covers CHECKPOINTED
+        operations only -- a crash between the provider's HTTP response and the checkpoint re-issues
+        that LLM call on replay, so at-least-once applies to LLM calls too and the differential vs
+        alternatives is granularity plus managedness, never exactly-once; (b) replay determinism is
+        a discipline the platform imposes rather than removes -- concentrated in one shared loop
+        harness (S-M once, near-XS per persona) but with NO contracted signal able to detect silent
+        replay divergence (ESB-06); (c) the ECS escape hatch is an SFN-layer state that a mid-loop
+        >15-minute tool call CANNOT reach from inside a durable persona without an undesigned
+        step-starts-ECS-plus-callback bridge, while under sfn-per-iteration the tool call is already
+        an SFN-level state and composes natively. For the incumbent: (d) a third state category --
+        the conversation/message-history transcript -- is rebuilt automatically on replay from
+        stored step results under durable, but must be serialized and reloaded atomically at EVERY
+        iteration boundary under sfn_over_stateless_workers (a real hand-roll T4.11 counters and S3
+        pointers do NOT cover); (e) the sfn loss bound is per-crash, not per-failure-episode (SFN
+        deterministic retry can re-issue the same iteration's LLM call up to its cap). On workspace:
+        the durable SDK checkpoints step RETURN VALUES, not the filesystem, and Lambda /tmp does not
+        survive suspension -- but EFS-for-Lambda mounts a shared filesystem across functions and
+        invocations, so the workspace gap is a BACKING-STORE DECISION (EFS-with-VPC+NAT ~$32/month,
+        S3-sync, or container-local disk) plus unowned RESUME semantics, not a missing platform
+        capability; EFS-for-Lambda was evaluated in-repo only as DuckLake FP-A prior art
+        (docs/plans/reports/ducklake-spike-findings.md), never for the executor workspace
+        (ESB-01). T4.11's
+        SFN-state budget counters and the S3-pointer pattern (ROADMAP:818, 7242-7259) externalize
+        INTER-persona state only. Disclosure: the nine-property matrix below is closed by the audit
+        contract and is invocation-boundary-shaped; the two discriminators review found decisive --
+        workspace persistence and CLI-hostability -- live here in prose and in Q2a, per contract.
+      semantics_matrix:
+        - {property: "long-run execution beyond a single invocation", substrate: durable_functions, surfaces: [persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "", evidence: "https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html"}
+        - {property: "checkpointing", substrate: durable_functions, surfaces: [persona_substrate, failure_semantics], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Checkpoints cover step return values only; the git workspace is outside the model (ESB-01)", evidence: "https://docs.aws.amazon.com/durable-execution/patterns/best-practices/determinism/"}
+        - {property: "completed-operation suppression on replay", substrate: durable_functions, surfaces: [failure_semantics], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Suppression is per completed durable operation; a crash between side effect and checkpoint still re-runs the operation (at-least-once)", evidence: "https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html"}
+        - {property: "replay determinism", substrate: durable_functions, surfaces: [persona_substrate, failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "SDK supplies the mechanism; the wrap-every-nondeterministic-call discipline falls on agent-authored persona code; T4.10a contracts do not encode it (ESB-06)", evidence: "https://docs.aws.amazon.com/durable-execution/patterns/best-practices/determinism/"}
+        - {property: "tool-call idempotency", substrate: durable_functions, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "T4.2 intent names step-boundary idempotency under SIGTERM (ROADMAP:6760); required equally under every substrate", evidence: "docs/ROADMAP-PLATFORM.yaml:6759-6762"}
+        - {property: "retry policy separation", substrate: durable_functions, surfaces: [failure_semantics, deterministic_glue], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Per-step retry strategies + SFN layer-1 deterministic-only retries express the Decision 55 split", evidence: "docs/ROADMAP-PLATFORM.yaml:820; https://docs.aws.amazon.com/durable-execution/"}
+        - {property: "local testing", substrate: durable_functions, surfaces: [persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "SDK test runner + SAM local callback tooling", evidence: "https://docs.aws.amazon.com/durable-execution/"}
+        - {property: "observability of an in-flight loop", substrate: durable_functions, surfaces: [failure_semantics, persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "CloudWatch/X-Ray + operation history; diagnosing a REPLAYED execution is a new operator skill with no runbook yet (Q7)", evidence: "https://docs.aws.amazon.com/durable-execution/"}
+        - {property: "in-flight version safety", substrate: durable_functions, surfaces: [portability_and_lockin], provision: must-hand-roll, hand_roll_cost: XS, existing_credit: "AWS: a new SDK major version can fail in-flight executions; pin + publish versions/aliases; T4.1 concurrency=1 bounds exposure to at most one in-flight execution", evidence: "https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html"}
+        - {property: "long-run execution beyond a single invocation", substrate: sfn_over_stateless_workers, surfaces: [persona_substrate, orchestration_layer], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "SFN Standard executions run to one year; the loop is state transitions (Decision 39 primitive)", evidence: "docs/ROADMAP-PLATFORM.yaml:759-760"}
+        - {property: "checkpointing", substrate: sfn_over_stateless_workers, surfaces: [persona_substrate, failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "S3-pointer pattern (ROADMAP:818) + T4.11 counters already externalize inter-step state; residue is an iteration-state schema (loop cursor, transcript URI) at iteration granularity", evidence: "docs/ROADMAP-PLATFORM.yaml:818,7242-7259"}
+        - {property: "completed-operation suppression on replay", substrate: sfn_over_stateless_workers, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: XS, existing_credit: "SFN never re-runs completed states, giving suppression at iteration granularity free; residue: a mid-iteration crash re-issues that iteration's LLM call (~$0.005/event at DeepSeek prices)", evidence: "terraform/data_pipeline.tf:457-686"}
+        - {property: "replay determinism", substrate: sfn_over_stateless_workers, surfaces: [persona_substrate], provision: not-required, hand_roll_cost: n/a, existing_credit: "No replay: each iteration is a fresh invocation reading externalized state", evidence: "terraform/data_pipeline.tf:467-680"}
+        - {property: "tool-call idempotency", substrate: sfn_over_stateless_workers, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "Same obligation as incumbent; SFN deterministic retry re-invokes a failed iteration whole", evidence: "docs/ROADMAP-PLATFORM.yaml:820"}
+        - {property: "retry policy separation", substrate: sfn_over_stateless_workers, surfaces: [failure_semantics, deterministic_glue], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Retry/Catch per state, deterministic-error-only lists proven in the repo's own ASL precedent", evidence: "terraform/data_pipeline.tf:487-501"}
+        - {property: "local testing", substrate: sfn_over_stateless_workers, surfaces: [persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Plain Lambda handlers unit-test like the existing src/data/handlers modules", evidence: "src/data/handlers/fetch_handler.py:29-77"}
+        - {property: "observability of an in-flight loop", substrate: sfn_over_stateless_workers, surfaces: [failure_semantics, orchestration_layer], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "SFN per-state execution history; logging level ALL + include_execution_data precedent in-repo", evidence: "terraform/data_pipeline.tf:461-465"}
+        - {property: "in-flight version safety", substrate: sfn_over_stateless_workers, surfaces: [portability_and_lockin], provision: not-required, hand_roll_cost: n/a, existing_credit: "No replay dependency; a deploy affects the next iteration only", evidence: "https://aws.amazon.com/step-functions/pricing/"}
+        - {property: "long-run execution beyond a single invocation", substrate: self_checkpointed_lambda_dynamodb, surfaces: [persona_substrate], provision: must-hand-roll, hand_roll_cost: M, existing_credit: "Needs an invocation-chaining driver (SFN loop or self-invoke + watchdog) that durable functions provide natively; nothing in-repo supplies it", evidence: "docs/ROADMAP-PLATFORM.yaml:821"}
+        - {property: "checkpointing", substrate: self_checkpointed_lambda_dynamodb, surfaces: [persona_substrate, failure_semantics], provision: must-hand-roll, hand_roll_cost: M, existing_credit: "Checkpoint schema + DDB write at every step boundary + read-on-entry; S3-pointer pattern covers artefacts but not loop state", evidence: "https://aws.amazon.com/dynamodb/pricing/on-demand/"}
+        - {property: "completed-operation suppression on replay", substrate: self_checkpointed_lambda_dynamodb, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "Skip-completed logic keyed on the checkpoint table; shares machinery with the checkpointing row", evidence: "docs/ROADMAP-PLATFORM.yaml:821"}
+        - {property: "replay determinism", substrate: self_checkpointed_lambda_dynamodb, surfaces: [persona_substrate], provision: not-required, hand_roll_cost: n/a, existing_credit: "Hand-rolled resume jumps to the recorded cursor instead of re-executing from top", evidence: "docs/ROADMAP-PLATFORM.yaml:821"}
+        - {property: "tool-call idempotency", substrate: self_checkpointed_lambda_dynamodb, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "Same obligation as incumbent; crash-between-effect-and-checkpoint window identical", evidence: "docs/ROADMAP-PLATFORM.yaml:6759-6762"}
+        - {property: "retry policy separation", substrate: self_checkpointed_lambda_dynamodb, surfaces: [failure_semantics, deterministic_glue], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "SFN layer-1 Retry/Catch unchanged", evidence: "terraform/data_pipeline.tf:487-501"}
+        - {property: "local testing", substrate: self_checkpointed_lambda_dynamodb, surfaces: [persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Plain Lambda + DynamoDB Local; the resume logic itself needs bespoke tests (folded into checkpointing M)", evidence: "src/data/handlers/fetch_handler.py:29-77"}
+        - {property: "observability of an in-flight loop", substrate: self_checkpointed_lambda_dynamodb, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "No execution-history UI; dashboards over the checkpoint table must be built (T1.9 alarm pattern reusable)", evidence: "docs/ROADMAP-PLATFORM.yaml:6695"}
+        - {property: "in-flight version safety", substrate: self_checkpointed_lambda_dynamodb, surfaces: [portability_and_lockin], provision: must-hand-roll, hand_roll_cost: XS, existing_credit: "Owned checkpoint schema needs explicit versioning discipline; no vendor replay coupling", evidence: "docs/ROADMAP-PLATFORM.yaml:821"}
+        - {property: "long-run execution beyond a single invocation", substrate: long_running_container, surfaces: [persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "One task runs the whole loop; 30-90s cold start per persona invocation (CD.27's own Fargate figure)", evidence: "docs/ROADMAP-PLATFORM.yaml:315"}
+        - {property: "checkpointing", substrate: long_running_container, surfaces: [persona_substrate, failure_semantics], provision: must-hand-roll, hand_roll_cost: M, existing_credit: "Required ONLY because T4.2's exit criterion demands mid-loop resume; a restart-tolerant contract (ESB-05 rescope) would make this not-required; workspace lives naturally on task-local disk -- the one substrate class where ESB-01 vanishes", evidence: "docs/ROADMAP-PLATFORM.yaml:6777"}
+        - {property: "completed-operation suppression on replay", substrate: long_running_container, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: M, existing_credit: "Same mechanism as checkpointing row; without it a task crash restarts the loop from scratch", evidence: "docs/ROADMAP-PLATFORM.yaml:6777"}
+        - {property: "replay determinism", substrate: long_running_container, surfaces: [persona_substrate], provision: not-required, hand_roll_cost: n/a, existing_credit: "Sequential process; no replay", evidence: "https://aws.amazon.com/fargate/pricing/"}
+        - {property: "tool-call idempotency", substrate: long_running_container, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "Required for crash-rerun safety; same obligation as incumbent", evidence: "docs/ROADMAP-PLATFORM.yaml:6759-6762"}
+        - {property: "retry policy separation", substrate: long_running_container, surfaces: [failure_semantics, orchestration_layer], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "SFN runTask.sync Retry/Catch at layer 1 (already the designed ESCAPE integration)", evidence: "docs/ROADMAP-PLATFORM.yaml:778-785"}
+        - {property: "local testing", substrate: long_running_container, surfaces: [persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Container runs identically on any docker host; best local parity of the AWS-side options", evidence: "https://aws.amazon.com/fargate/pricing/"}
+        - {property: "observability of an in-flight loop", substrate: long_running_container, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "Task logs stream to CloudWatch; per-step visibility and heartbeat must be emitted by the loop itself (SFN token heartbeat available)", evidence: "docs/ROADMAP-PLATFORM.yaml:6697"}
+        - {property: "in-flight version safety", substrate: long_running_container, surfaces: [portability_and_lockin], provision: not-required, hand_roll_cost: n/a, existing_credit: "Image-pinned task; a redeploy affects the next task", evidence: "https://aws.amazon.com/fargate/pricing/"}
+        - {property: "long-run execution beyond a single invocation", substrate: hosted_cli_runner, surfaces: [persona_substrate], provision: must-hand-roll, hand_roll_cost: XS, existing_credit: "6h max job execution (CONFIRMED) covers expected persona wall-clock (minutes-to-hours); overruns need job chunking; 35-day workflow cap irrelevant at this scale", evidence: "https://docs.github.com/en/actions/reference/limits"}
+        - {property: "checkpointing", substrate: hosted_cli_runner, surfaces: [persona_substrate, failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "CLI session state (claude -p resume) exists but carries no durability guarantee; practical posture is restart-tolerance plus artefact idempotency; workspace lives on runner-local disk (ESB-01 vanishes)", evidence: ".github/workflows/claude.yml"}
+        - {property: "completed-operation suppression on replay", substrate: hosted_cli_runner, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "Job re-run must not re-issue side effects: idempotent PR creation / branch push -- machinery T4.1's file_pr already requires", evidence: "docs/ROADMAP-PLATFORM.yaml:6675"}
+        - {property: "replay determinism", substrate: hosted_cli_runner, surfaces: [persona_substrate], provision: not-required, hand_roll_cost: n/a, existing_credit: "Sequential CLI process; no replay", evidence: ".github/workflows/claude.yml"}
+        - {property: "tool-call idempotency", substrate: hosted_cli_runner, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: S, existing_credit: "Same obligation as incumbent", evidence: "docs/ROADMAP-PLATFORM.yaml:6759-6762"}
+        - {property: "retry policy separation", substrate: hosted_cli_runner, surfaces: [failure_semantics, orchestration_layer], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "Deterministic job re-run at workflow level; SFN layer-1 dispatch-and-wait (T4.9a waitForTaskToken pattern) carries Retry/Catch if orchestrated", evidence: "docs/ROADMAP-PLATFORM.yaml:6676-6678"}
+        - {property: "local testing", substrate: hosted_cli_runner, surfaces: [persona_substrate], provision: platform-provided, hand_roll_cost: n/a, existing_credit: "The CLI runs identically on CC-web/locally -- trivially the best local parity for an agentic persona", evidence: ".github/workflows/claude.yml:36-44"}
+        - {property: "observability of an in-flight loop", substrate: hosted_cli_runner, surfaces: [failure_semantics], provision: must-hand-roll, hand_roll_cost: XS, existing_credit: "Workflow logs are live and rich; per-tool-call telemetry must be emitted to the T0.8 agent_sdk shim like every other substrate", evidence: "docs/ROADMAP-PLATFORM.yaml:6779"}
+        - {property: "in-flight version safety", substrate: hosted_cli_runner, surfaces: [portability_and_lockin], provision: not-required, hand_roll_cost: n/a, existing_credit: "Action/CLI version pinned per workflow; no in-flight replay coupling", evidence: ".github/workflows/claude.yml:38"}
+    - q: Q2
+      verdict: partially-movable
+      basis: [ESB-09]
+      prose: >-
+        An LLM call issued inside a durable STEP is billed as Lambda compute for its full wall-clock:
+        AWS bills active execution and suspends charges only for waits and callbacks ("waits suspend
+        execution without incurring compute charges"; a callback "does not incur compute charges
+        while suspended"). Moving model latency onto those non-billed primitives requires a
+        submit-now/deliver-later provider mode plus a correlation route into
+        SendDurableExecutionCallbackSuccess. Under the transport and providers as mandated the move
+        is unavailable: DeepSeek (CD.28 Tier 1) documents synchronous + streaming only; LiteLLM's
+        batch support covers OpenAI/Azure/Vertex/Bedrock/vLLM -- neither Anthropic nor DeepSeek --
+        and LiteLLM's Anthropic integration exposes no batch mode; Anthropic's own Message Batches
+        API (async, polled, <1h typical, 50% discount) is therefore reachable only via a LiteLLM
+        PASSTHROUGH deployment (LiteLLM's Anthropic passthrough documents support for all Anthropic
+        endpoints -- surfaced by adversarial review from official LiteLLM docs, not independently
+        verified within this run's 15-source cap; and passthrough is a proxy feature while T4.2
+        plans the in-process SDK) or via a CD.28 amendment -- either way costing correlation ids,
+        idempotent submission, timeout handling, and minutes-to-hours added latency. One further
+        in-set mechanism exists: Step Functions' http:invoke HTTP Task holds a synchronous HTTPS
+        call in SFN itself (transitions-only billing, no held compute) and could serve
+        sfn_over_stateless_workers -- but it bypasses the LiteLLM Layer-1 discipline entirely
+        (CD.28/dec-122) and its documented timeout class (~60s) would foreclose reasoner-class
+        calls outright if confirmed -- unverified here (HYPOTHESIS).
+        Every movability path therefore runs through either a transport-discipline decision or
+        unverified limits: partially-movable. MAGNITUDE, so economics get their true weight: at the
+        repo's recorded scale (100 recs/month, ~50K input + ~10K output tokens/rec, ~80% cache-hit,
+        DeepSeek $0.252/$0.378 per 1M -- ROADMAP:288,313,840, re-derived), with per-rec total LLM
+        calls genuinely unknown (spot 20-100 across five personas), gross billed model-latency
+        compute is ~$1-8/month at 1GB; non-LLM tool/test wall-clock adds a same-order Lambda-class
+        term; durable operations $0.20-0.80/month; per-iteration SFN transitions ~$0.50-2/month;
+        replay re-runs the handler so long durable loops re-emit prior log lines by default, making
+        CloudWatch ingestion (the repo's dominant live cost line, ROADMAP:280) scale superlinearly
+        with loop length on the incumbent -- possibly correctable by a replay-indicator logging
+        guard if the AWS runtime exposes one (unverified; stated symmetrically with the hosted
+        row's correctable-by-sink-choice log exposure); implement_agent's 5.4GB dependency environment
+        (observed on this container) is DISK, exceeding the ~262MB zip cap and forcing
+        container-image packaging with billed minutes-scale init per cold environment -- CD.27's
+        "<1s cold start" premise does not hold for that persona; a possible AWS free-tier offset is
+        unmodeled (the 2026-created account may sit on the post-2025 credit plan -- unresolved).
+        Envelope: Lambda-class substrate adders land at ~$1-15/month gross, container ~$5-15/month,
+        hosted_cli_runner ~$0 in dollars plus quota terms -- against ~$5/month of inference. The
+        billing question cannot discriminate between substrates at current scale and should carry
+        near-zero weight at Q6 (ESB-09 records the absent model; the repo's one existing SFN cost
+        line overstates its own arithmetic 13-44x). The single candidate-material term is a NAT
+        gateway (~$32/month managed, ~$3-5 as a NAT instance) required by any EFS-backed Lambda
+        workspace variant. This envelope is priced at concurrency=1; T4.1 schedules its own
+        departure from that regime (raise at A2+ gates), a named re-evaluation trigger.
+    - q: Q2a
+      verdict: routing-constrains-substrate
+      basis: [ESB-03]
+      prose: >-
+        CD.28 makes LiteLLM the only Layer-1 inference surface and T4.2 pins the personas to LiteLLM
+        tiers (ROADMAP:6755-6758). Decision 116 -- amending CD.28's scheduled-agent clause -- routes
+        judgment-heavy AGENTIC tool-using agents to claude -p and routine non-agentic agents to
+        LiteLLM (DECISIONS:2295-2338), scoped to scheduled agents on its face. Decision 122
+        (2026-07-06, post-dating 116; DECISIONS:2043-2048) then ratifies CD.28 AS AMENDED and states
+        the executor steady state explicitly: Tier 1 DeepSeek-direct via LiteLLM, Tier 2
+        Anthropic-direct via LiteLLM, with 116's split confined to scheduled agents. Persona routing
+        is therefore DECIDED, not open -- a round-1 adversarial correction to this audit's own
+        draft. The verdict still stands as the structural direction of dependency: an HTTP (LiteLLM)
+        routing is runtime-agnostic, while a CLI routing demands a CLI-hosting runtime, so the
+        routing rule constrains the viable substrate set -- prospectively: reopening 116's
+        agentic/non-agentic principle for the personas (which ARE agentic tool-using loops by 116's
+        own criterion) would collapse the set to the CLI-capable class. A DISTRIBUTED rationale for
+        the executor/scheduled split exists (cost_projection prices executor volume on DeepSeek at
+        ~$0.05/rec; 116's reversal condition names executor Tier-2 and scheduled claude -p as
+        distinct competing draws on the shared Max pool; dec-122 cites Decision 47's lock-in
+        lesson); what is missing is narrower -- no recorded statement addresses 116's PRINCIPLE as
+        applied to personas, and no surface records the reopen consequence (ESB-03). Not a language
+        question: a CLI-runtime requirement is a process-shape requirement.
+      cli_hosting:
+        - {substrate: durable_functions, can_host_cli: conditional, cost: "Container-image durable function can subprocess a CLI, but checkpoint granularity collapses to the whole CLI run and the per-invocation timeout truncates it mid-run with replay restarting the subprocess from scratch -- durable semantics buy nothing; effectively degenerate (M to make tolerable, and not worth it)", evidence: "https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html"}
+        - {substrate: sfn_over_stateless_workers, can_host_cli: conditional, cost: "Viable only if the CLI can execute one bounded turn per invocation and persist session state externally between turns; claude -p is session-shaped, not turn-shaped -- M and fragile", evidence: "docs/DECISIONS.md:2310-2316"}
+        - {substrate: self_checkpointed_lambda_dynamodb, can_host_cli: conditional, cost: "Same per-invocation ceiling and subprocess shape as durable_functions; same degeneracy -- M and not worth it", evidence: "docs/ROADMAP-PLATFORM.yaml:821"}
+        - {substrate: long_running_container, can_host_cli: "yes", cost: "Natural host: install CLI in image, mount workspace on task disk, run to completion; cost is image build + OAuth secret wiring (S)", evidence: "docs/ROADMAP-PLATFORM.yaml:778-785"}
+        - {substrate: hosted_cli_runner, can_host_cli: "yes", cost: "Already live in-repo: claude.yml runs a Claude agent on ubuntu-latest with CLAUDE_CODE_OAUTH_TOKEN today; cost is orchestration integration (dispatch-and-wait via the T4.9a callback pattern, S), not CLI hosting", evidence: ".github/workflows/claude.yml:36-44"}
+    - q: Q3
+      verdict: conformant-only-with-changes
+      basis: [ESB-01, ESB-02]
+      prose: >-
+        RATED SUBSTRATE: durable_functions (the incumbent; rated because Q6 returns
+        insufficient-evidence). Anchor note: the authoritative NS.1 lives at ROADMAP:252-254
+        ("storage durable / compute interchangeable"; its detail is scoped to the lakehouse --
+        engines swap, data does not migrate), while PROJECT_CONTEXT's NS line is a declared
+        non-authoritative cache; this audit's NS-A bar is the prompt's restatement of the principle.
+        Against that bar: the design keeps substantive artefacts in owned storage (S3 pointers,
+        ROADMAP:818) -- good -- but in-flight loop state lives inside the compute layer's managed
+        durable-execution store (retention 1-90 days, default 14) and in-flight executions pin to
+        function version + SDK major version (AWS: a new major can fail in-flight executions; pin
+        and alias). On the compute-interchangeability axis the incumbent is the weakest of the five
+        candidates -- swapping compute mid-flight means migrating or abandoning state, the exact
+        inversion of the NS.1 pattern. CD.27 accepts and partially prices the tension
+        (maturity-monitoring discipline point, named fallback, 14-day window) -- but adversarial
+        review established that CD.27's claim that the fallback is "recorded as an INTENT Open
+        Question for re-eval at each T4.2 atomic-plan filing" is a DANGLING POINTER: no such Open
+        Question exists anywhere in the repo (the INTENT doc's Open Questions 1-9 contain no such
+        entry), so the re-evaluation cadence has no instantiated carrier or enforcement (ESB-02).
+        Changes required for conformance: (1) fallback specified to state-schema and
+        checkpoint-granularity level (the INTENT Stage-4 reversibility paragraph's port-claim --
+        "the agent loop code itself ports unchanged" behind an SDK-mimicking shim -- and
+        SFN-retry-as-driver are real partial design, credited; an in-flight migration path is NOT
+        required at this scale: abandon-and-refile via the T4.1 kill-switch
+        (contracted-to-be-test-proven; not yet built) is the rational exit, and the XS kill-and-refile runbook should be written); (2) an SDK
+        pin/alias policy as a delivery-path rule (CD.24 lane), not a best-practice memory; (3) the
+        workspace backing-store decision (ESB-01) so the loop's dominant state also lives in owned
+        storage. eu-west-2 availability: recorded in-repo as verified 2026-05-27 (ROADMAP:788-794);
+        the AWS pages fetched this run publish no region matrix, so CURRENT availability is
+        HYPOTHESIS pending a capability probe. Replayed-execution diagnosis is platform-provided
+        but operator-novel (no runbook; replay-duplicated log lines land on the ci-rca path). Drain
+        is trivial in COUNT today (concurrency=1) but not duration (an in-flight execution can run
+        hours; no freeze-window runbook), and T4.1 schedules the cap's raise at A2+ gates --
+        degrading drain from trivial to cheap (kill + N refiles at cents each), never material at
+        recorded scale.
+    - q: Q4
+      verdict: load-bearing
+      basis: [ESB-10]
+      prose: >-
+        The discipline point (ROADMAP:817) is load-bearing FOR ITERATIVE PERSONA LOOPS. Property
+        protected: loop survival past the per-invocation ceiling without losing in-flight state,
+        and preservation of Decision 55's separation of deterministic retry from judgment revision.
+        Mechanism that fails without it: an iterative persona in a regular Lambda dies at the
+        15-minute ceiling with all loop state; Step Functions' deterministic retry then re-runs the
+        whole persona from scratch, re-issuing completed LLM calls -- breaching T4.2's
+        checkpoint-replay exit criterion (ROADMAP:6777) and turning transport-retry into de facto
+        judgment-retry. Decision 39 (DECISIONS:4874) types states as task (deterministic Lambda) OR
+        agent (LLM-backed Lambda) -- i.e. it expressly contemplates LLM-backed REGULAR Lambdas, and
+        that typing remains correct for SINGLE-SHOT LLM states such as a scheduled agent's one
+        findings call. The two positions reconcile by scope (iterative loops vs single-shot calls);
+        neither text says so today, and the discipline point's universal phrasing ("Regular Lambdas
+        are deterministic-only") would, read literally, outlaw Decision 39's agent state type.
+        Neither supersedes the other by recency; ESB-10 records the one-line scoping fix. Two
+        scope nuances: the protected property is substrate-CLASS-specific (under
+        long_running_container or hosted_cli_runner the 15-minute ceiling does not exist, so the
+        rule's force is contingent on the Lambda-class assignment it accompanies -- a consequence
+        of the substrate choice, not an independent invariant), and at recorded scale the rule
+        BINDS only for the two heavy personas (plan_agent, implement_agent) at plausible loop
+        lengths; critics' loops rarely approach the ceiling, so the point over-generalizes even
+        within the incumbent's own frame.
+    - q: Q5
+      verdict: reversible-with-material-cost
+      basis: [ESB-05]
+      prose: >-
+        RATED SUBSTRATE: durable_functions (the incumbent). All costs on the prompt's effort scale
+        only (no calendar mixing). Contract-level reversibility is cheap and genuine: persona I/O
+        contracts (T4.10a YAML), the S3 artefact pattern, the layer-1 state machine, the T4.9a
+        callback contract, T4.11 budget counters, and the T0.8 telemetry schema all survive a
+        substrate swap unchanged. Implementation-level reversibility is material: the persona loop
+        internals (SDK step wrappings, determinism discipline) do not survive. Priced at three
+        points (reversal_analysis): after the first persona, XS contract / S implementation; after
+        all five, XS / M; after the 14-day stability window, XS / M -- adversarial review moved the
+        window-redefinition cost OFF the exit path: CD.17's grammar is not monotone (the T3.2
+        latest_run conjunct can flip) and no latch exists in code -- the no-re-arm property is a
+        GOVERNANCE fact (the AGENTS.md freeze constraint is removed on reversal with no restore
+        path; T-1.20 runtime gate evaluation is unbuilt, so the trigger is human-evaluated prose
+        today) -- and in the modal PRE-fire exit the point is moot: the 14-day window must be run
+        on whichever substrate is final regardless. T4.2's own stability criterion c5 is
+        substrate-NEUTRAL; only CD.27:822's discipline-point signal (per-persona checkpoint-replay
+        rate) is mechanism-named -- renaming it is XS paper on a pending CD. One asymmetric
+        excluded term is disclosed rather than priced: the incumbent's modal exit trigger (a
+        durable API regression inside CD.27's own 12-month maturity window) is a DISORDERLY,
+        calendar-pressured scenario -- SDK majors can fail in-flight executions -- and no
+        SELF-OWNED-LOOP alternative carries an equivalent tail (DDB, SFN state, container memory
+        are self-owned; hosted_cli_runner carries an analogous tail of its own, an unpinnable
+        vendor CLI/backend). Exit-cost symmetry, accounting convention disclosed: reversal_analysis
+        prices GROSS cost-to-leave for every candidate; hosted_cli_runner's gross exit is dominated
+        by building the in-process LiteLLM loops -- work every non-hosted destination requires
+        anyway and which the incumbent path pre-pays -- so hosted's genuinely SUNK exit delta is
+        its hosted-specific glue (CLI prompts, transcript-parse telemetry, GitHub control-plane
+        wiring), S-M net; and its cheapest capability-level exit (port the CLI harness into a
+        container) is foreclosed only by dec-122, not by engineering. Two design facts keep the incumbent out of effectively-irreversible
+        territory: concurrency=1 (drain = at most one kill+refile; erodes to cheap-not-material as
+        T4.4 raises the cap) and the contract externalization above; the mechanism-named contract
+        wording (ESB-05) is the main avoidable reversal-cost driver. CHEAPEST DISCRIMINATING PATH:
+        step (0), a workspace backing-store CRITERIA paper -- XS, deciding the decision criteria
+        only, because the store choice is itself a portability commitment the spike should inform,
+        not follow (EFS imposes the NAT term and VPC coupling AND is structurally unreachable from
+        GitHub-hosted runners, so choosing it would silently eliminate hosted_cli_runner -- if EFS
+        wins, record that elimination as an explicit decision; S3-sync is the only backing store
+        portable across the full candidate set but commits per-resume re-materialization;
+        container-local disk favors the container class) -- then (1) the
+        stub-persona spike: the same minimal loop built as a durable function and as
+        SFN-per-iteration, plus a persistent-workspace arm (EFS-mounted variant vs container-local
+        control) and a container arm for implement_agent specifically, each variant subjected to a
+        forced kill mid-loop, measuring resume-without-reissue behaviour, hand-roll residue, and
+        workspace re-materialization cost. XS-S total, mocked LLM steps, no production writes.
+        Durable is favoured if alternatives' residue exceeds S; SFN if residue <= S at acceptable
+        iteration granularity; the container class if workspace persistence dominates the failure
+        handling of both Lambda variants. The claude -p arm stays pruned (routing ratified,
+        dec-122); re-arm it if ESB-03's reopen ever fires. An escape-hatch-reachability probe is
+        optional -- review downgraded that asymmetry to weak (no contract names an in-loop >15-min
+        tool call; T4.9a c1 puts PR verification on GitHub Actions).
+    - q: Q6
+      verdict: insufficient-evidence
+      basis: [ESB-01, ESB-02, ESB-03, ESB-04]
+      prose: >-
+        The evidence does not yet discriminate to one substrate. With persona routing RATIFIED
+        (dec-122; a round-1 adversarial correction to this audit's draft), the incumbent LEADS as
+        contracted: its platform semantics fit the T4.2 property set best (Q1), its economics are
+        indistinguishable from every rival at recorded scale (Q2), and its exits are bounded (Q5).
+        The remaining opens are few, narrow, and each is a cheap, already-scoped probe -- which is
+        exactly why a named verdict now would be commitment before evidence (NS-B, Decision 75):
+        (a) the workspace backing-store decision (ESB-01, the binding open: its cost differs
+        STRUCTURALLY by class -- container-local disk erases the resume half of ESB-01 and all of
+        ESB-06, while EFS carries the NAT term and S3-sync carries per-resume re-materialization);
+        (b) the Q5 spike, now including a container arm for implement_agent -- review pressed a
+        genuine head-to-head this audit could not settle on paper: under a RESCOPED
+        restart-tolerant contract (ESB-05's remedy), long_running_container erases the two
+        replay-class findings entirely (ESB-06, ESB-08 exist only under replay) and its
+        whole-loop re-run penalty prices in cents, against costs of 30-90s cold starts, a NEW
+        non-Lambda deploy-channel class outside CD.24's per-Lambda manifest lane (NS-D), and an
+        ops surface that is INSTANTIATION-specific (the assessed ECS runTask.sync variant carries
+        it; a CodeBuild-class instantiation would shed most of it -- unresolved[]); (c) the
+        eu-west-2 capability probe and the durable per-payload-cap check (both HYPOTHESIS today).
+        Fairness note, accepted from the final review round: the incumbent's lead is measured
+        against contract text this audit itself rates defective (ESB-05 mechanism-naming; ESB-08
+        gate incoherence) -- the lead is real under the as-written contract and must be re-shown
+        under the repaired, substrate-neutral restatement before ratification. Why the other
+        in-set members are not finalists: sfn_over_stateless_workers was assessed and loses no
+        capability but wins none decisively (it shares the 15-minute wall inside iterations, adds
+        the transcript serialize/reload hand-roll, and its unique http:invoke movability mechanism
+        is barred by the LiteLLM discipline); self_checkpointed_lambda_dynamodb is IMMUNE to both
+        replay-class findings (cursor-based resume) and has the best Lambda-class NS-A profile,
+        but hand-rolls at M what the incumbent provides free -- it remains the fallback tail, not
+        a first choice; hosted_cli_runner is foreclosed by dec-122 while it stands, plus the
+        policy predicate and visibility coupling. Candidate set: the CodeBuild-class AWS-native
+        CLI runner is class-adjacent to long_running_container (its DISTINCT value -- native CLI
+        ergonomics inside AWS governance -- fires only if ESB-03's reopen fires); the
+        AgentCore-class managed runtime is genuinely unassessed -- its exclusion is a
+        SOURCE-CAP limit of this run, not an evidence judgment (assessing it needs the same
+        doc-level pass in-set members received, and its no-CPU-charge-during-I/O-wait billing
+        model would falsify Q2's in-set generalization if verified) -- so 'evaluate the
+        AgentCore class to the in-set evidence bar' is added to the resolution list; both sit in
+        unresolved[]. A heterogeneous outcome (container-class implement_agent, Lambda-class
+        critics) is admissible as hybrid_by_persona but requires amending CD.27's uniform
+        "personas as Durable Functions" discipline point first. Any verdict that changes the
+        layer-2 assignment migrates NOTHING at layer 1 or 3: the T4.1 node set, glue Lambdas, and
+        T4.9a callback survive unchanged (node_projection) -- persona states become
+        dispatch-and-wait or runTask.sync variants -- and the T4.2 checkpoint-replay exit criteria
+        must be restated as substrate-neutral resume properties (ESB-05) BEFORE the spike, so its
+        pass/fail vocabulary does not inherit the incumbent's mechanism. DISCLOSURE, accepted from
+        review: under this prompt's rules an insufficient-evidence verdict leaves the incumbent
+        RATED at Q3/Q5 and imposes migration-path burdens only on change verdicts -- a structural
+        soft default toward the incumbent; the reader should not mistake this verdict for
+        ratification of CD.27's layer 2.
+    - q: Q7
+      answers:
+        - {question: "What evidence would falsify the durable-functions assignment?", answer: "Any of: a capability probe failing in eu-west-2; a reopen of persona routing toward claude -p (Q2a collapse -- currently foreclosed by dec-122); the workspace backing-store decision (ESB-01) landing on container-local disk; the Q5 spike showing an alternative's hand-roll residue <= S; durable per-payload caps forcing the in-loop S3-pointer pattern (collapsing the transcript-rebuild differential); an AWS durable API-semantics regression inside CD.27's own 12-month window (its stated fallback trigger).", basis: [ESB-01, ESB-03]}
+        - {question: "What happens to an in-flight execution when the durable SDK takes a major version?", answer: "AWS states a new major version can fail in-flight executions; mandated mitigations are SDK pinning and numbered versions/aliases (never $LATEST). Concurrency=1 bounds exposure to one execution; a drain-then-deploy runbook (not yet written) reduces it to zero.", basis: []}
+        - {question: "Which parts of the persona loop are genuinely long-running versus merely waiting on a model?", answer: "Per-rec wall-clock decomposes into model latency (dominant, seconds-to-minutes per call), tool runs (git, grep, tests -- seconds-to-minutes), and verdict waits (minutes-to-hours, already on non-billed waitForTaskToken states at layer 1). No CONTRACT names a >15-minute atomic tool call inside a persona loop -- T4.9a c1 assigns all PR --pre verification to GitHub Actions, and the ECS escape hatch serves deterministic SFN-layer steps. If one ever arises, review established the hatch is not equally reachable: from inside a durable persona it needs a step-starts-ECS + callback-wait bridge (designed primitives, undesigned composition), and the pinned SFN variant would need tool-call hoisting out of its iteration -- a weak asymmetry, relevance unproven. The loop is long-running in AGGREGATE, not in any atomic step.", basis: [ESB-05]}
+        - {question: "Does the 256KB transition limit plus the S3-pointer pattern already impose the state externalization an alternative would need?", answer: "For INTER-persona state, yes -- artefacts already travel as S3 URIs and budgets live in SFN state (T4.11), which is most of what sfn_over_stateless_workers needs. For INTRA-loop state, no: the loop cursor/transcript would need an iteration-state schema (S), and the git workspace is externalized by NO current design under any Lambda-class substrate (ESB-01).", basis: [ESB-01]}
+        - {question: "Do rca and bookkeeping change the answer?", answer: "No -- and their absence of a substrate assignment is itself informative: T4.10's ambient framing ('per CD.27, personas run as Lambda durable functions') is prose context, not a per-persona assignment (no substrate line exists for them; T4.10 is deferred_post_mvp), so the seven-persona registry does NOT pin their substrate. Their row turns on INVOCATION TOPOLOGY before substrate: rca runs on FAILURE (Decision 55), arguably outside the per-rec lifecycle, and neither persona appears in T4.1's 13-node state-machine shape -- decide where they are invoked from before deciding what runs them. rca in particular should not share the failure modes of the substrate it diagnoses.", basis: [ESB-03]}
+        - {question: "What do the two existing precedents actually demonstrate, given their different deployment status?", answer: "data_pipeline.tf (authored, NOT applied -- terraform/CLAUDE.md confirms legacy roots are no longer applied): demonstrates the team can author SFN state machines with deterministic-only retries, Choice routing, S3-key data passing, and full logging -- design shape and skill, zero runtime evidence, and no LLM iteration or per-iteration mutable state. claude.yml (LIVE): demonstrates a CLI agent loop runs on hosted runners today under CLAUDE_CODE_OAUTH_TOKEN with contents:read -- an existence proof for hosted_cli_runner with a credential model outside AWS IAM, but its loop is @claude-mention-triggered interactive response, not queue-driven dispatch, uncorrelated to any state machine, and enforces no budget counters. Neither demonstrates a checkpointed persona loop; neither is authoritative alone.", basis: [ESB-11]}
+        - {question: "What in the T4.1, T4.9a, or T4.10a contracts silently assumes a durable persona?", answer: "T4.1's node list types the five personas '[Durable Function, T4.2]' (ROADMAP:6670-6674); T4.2's criterion c1 names forced-timeout checkpoint-replay, and CD.27:822's health signal is 'per-persona checkpoint-replay rate' -- mechanism-named rather than property-based (ESB-05; scope narrowed in review: T4.2's own stability criterion c5 is substrate-NEUTRAL). T4.9a and T4.10a are clean: callback auth/correlation and persona contract fields carry no substrate assumption -- and T4.9a's dispatch-and-wait shape is exactly what a hosted_cli_runner or container integration would reuse.", basis: [ESB-05]}
+        - {question: "Is the per-rec concurrency cap of 1 hiding a cost or scaling property that a different substrate would expose?", answer: "It hides per-invocation cold starts (30-90s Fargate; <1s Lambda for slim zips -- a premise that FAILS for implement_agent, whose 5.4GB dependency environment forces container-image packaging on any Lambda-class substrate) and every scale-dependent cost term; at cap=1 all substrates are economically indistinguishable (Q2). It also CONFERS a benefit on reversibility: at most one in-flight execution to drain. T4.1 schedules the raise (A2+ gates) -- the economics and the drain argument depart on the design's own schedule; record it as a named re-evaluation trigger.", basis: [ESB-09]}
+        - {question: "What operational runbook does each substrate require that does not exist yet?", answer: "durable_functions: replayed-execution incident diagnosis (replay-duplicated log lines land on the ci-rca path), SDK-major drain-then-deploy (kill-and-refile, XS to write), durable-state retention management. sfn_over_stateless_workers: none novel (extends the existing SFN operational surface). self_checkpointed_lambda_dynamodb: checkpoint-table repair and cursor-rewind. long_running_container: mid-task kill and image rollback. hosted_cli_runner: run-cancel/workflow-disable wiring as the kill-switch analogue (the GitHub APIs exist; the T4.1-contracted kill-switch has no authority over GitHub compute -- a control-plane split, not a capability absence), transcript sink choice (public Actions logs are default-unsafe for persona transcripts; sink-to-S3 corrects it), queue-starvation and Max-pool contention response. None is written; only the incumbent's are novel operator skills.", basis: []}
+        - {question: "Who owns Max-plan OAuth token governance if personas were ever routed via claude -p?", answer: "Unowned. The AGENTS.md runbook covers CI/scheduled-agent token setup and rotation; nothing scopes an executor-persona consumer, its blast radius on the shared Max pool (Decision 116's reversal condition), or per-persona token isolation. Moot while dec-122 stands; a precondition if ESB-03's reopen fires.", basis: [ESB-03]}
+        - {question: "Does public-repo status change hosted_cli_runner economics?", answer: "Yes, structurally: Actions usage is free for standard hosted runners in public repositories (CONFIRMED), and claude -p inference rides the Max-plan subscription at $0 marginal -- the only substrate with a near-zero marginal-dollar profile. Its real price is non-dollar: control plane outside the AWS account/IAM model, 20-concurrent-job quota shared with ALL repo workflows, 4-core standard hardware, an UNRECORDED policy predicate (whether a standing self-improvement executor loop fits GitHub's Actions usage policy for free public-repo minutes), and default-public logs. The free-minutes term dies if the repo ever goes private.", basis: [ESB-09]}
+        - {question: "Who owns persona transcript retention under each substrate?", answer: "Under durable_functions, operation payloads/results persist in the durable store 1-90 days (default 14) at $0.15/GB-month -- a SECOND retention surface beside the designed S3 artefact store, with its own encryption/retention knobs and no owner in T4.x. Alternatives keep exactly one (S3), except hosted_cli_runner where the default sink is world-readable Actions logs (correctable by sink choice). Small today; an unowned data-governance seam regardless.", basis: []}
+        - {question: "What is the deploy path for T4.1's executor infrastructure as scoped?", answer: "There is none that an agent can reach: T4.1's files_in_scope places executor_step_functions.tf / executor_lambdas_iam.tf / executor_observability.tf at the RETIRED terraform/ root (ROADMAP:6683-6685), which terraform/CLAUDE.md marks retained-but-not-applied and which the sole governed apply channel excludes (terraform-apply-sandbox.yml triggers only on terraform/personal/**); only the operator break-glass path could apply them. T4.9a (executor_callbacks.tf) and T4.11 (executor_state_machine.tf) already target terraform/personal/ -- T4.1 is the outlier. XS fix at planning time; recorded because T4.1 c1 ('deployable via terraform apply') is currently satisfiable only out-of-band.", basis: [ESB-07]}
+        - {question: "Can the 14-day stability gate fire at all on the incumbent as contracted?", answer: "Unclear, and that is the finding (ESB-08): CD.27 makes forced-timeout replay the ROUTINE long-run mechanism ('run arbitrarily long via checkpointed replay'), so a 2-hour implement_agent run is ~8 invocations of which ~7 replay -- yet INTENT:352 alarms at >5 replays/hour and CD.27:822 gates the CD.17 reversal on per-persona checkpoint-replay rate <5% over 14 days with an UNDEFINED denominator. Heavy personas either structurally breach the gate (reversal never fires) or the metric is vacuous. XS fix: define the denominator and exempt scheduled (timeout-driven) replays from failure-replay accounting.", basis: [ESB-08]}
+  billing_model:
+    - {substrate: durable_functions, design: "CD.27 as designed: persona loop checkpointed in-Lambda; LLM calls inside steps; artefacts to S3; layer-1 SFN unchanged", model_latency_billed_as: billed-compute, compute_term: "R*C*L*M*r_gbs for model latency (full call wall-clock inside steps) + same-order non-LLM tool/test wall-clock + replay sub-invocations (each resume re-runs the handler) + container-image init for the 5.4GB-env persona (minutes-scale, billed; the '<1s cold start' premise fails for implement_agent)", per_operation_term: "R*ops_per_rec*$8e-6; at 250-1000 ops/rec = $0.20-0.80/mo", state_and_retention_term: "operation results * $0.25/GB written + $0.15/GB-month retention (1-90d, default 14) -- a second retention surface beside S3; per-payload cap unverified (if MB-scale tool outputs exceed it, in-loop S3 pointers return)", external_store_term: "S3 artefacts (designed pattern; negligible); CloudWatch ingestion scales SUPERLINEARLY with loop length (replay re-emits prior log lines) -- the repo's dominant live cost line", transition_term: "layer-1 SFN ~30 transitions/rec * $0.000025 = $0.075/mo", symbolic_model: "Cost = R*[(C*L + T_tool)*M*r_gbs + ops*8e-6 + gb_written*0.25 + 30*2.5e-5] + cw_replay(loop_len); r_gbs=$1.67e-5 x86; C_total unknown (spot 20-100)", break_even: "Gross $1-8/mo at 1GB plus implement-persona uplift; free-tier offset unmodeled (2026 account may sit on the post-2025 credit plan). Wait-not-billed advantage is real only for non-model waits, which already sit on layer-1 waitForTaskToken states (non-billed under SFN Standard transitions-only pricing)", evidence: "https://aws.amazon.com/lambda/pricing/; https://aws.amazon.com/step-functions/pricing/; terraform/CLAUDE.md (zip cap); observed .venv 5.4GB", confidence: CONFIRMED}
+    - {substrate: sfn_over_stateless_workers, design: "Each loop iteration a Lambda invocation driven by SFN Map/loop states; iteration state + conversation transcript serialized via S3 pointer each iteration; budgets in SFN state (T4.11 pattern)", model_latency_billed_as: billed-compute, compute_term: "Same model-latency + tool wall-clock terms (Lambda runs during each call); same container-image packaging for the heavy persona", per_operation_term: "none", state_and_retention_term: "none (no durable store)", external_store_term: "S3 iteration-state + transcript reads/writes (negligible dollars; real cost is the serialize/reload hand-roll)", transition_term: "(30 + I*t)/rec * $0.000025 with I~20-30 iterations x 5 personas and t>=2-5 transitions/iteration: ~$0.50-2/mo (round-1 draft understated 5-10x; corrected)", symbolic_model: "Cost = R*[(C*L + T_tool)*M*r_gbs + (30 + 5*I*t)*2.5e-5 + s3_iter]", break_even: "Total $1-10/mo -- indistinguishable from incumbent at recorded scale. Unique in-set movability mechanism exists (SFN http:invoke holds a sync HTTPS call at transitions-only billing) but bypasses the LiteLLM Layer-1 discipline and its caps are unverified (HYPOTHESIS)", evidence: "https://aws.amazon.com/step-functions/pricing/; docs/ROADMAP-PLATFORM.yaml:303 (whose own arithmetic is self-inconsistent 13-44x -- ESB-09)", confidence: CONFIRMED}
+    - {substrate: self_checkpointed_lambda_dynamodb, design: "CD.27's named fallback: regular Lambda loop, checkpoint rows in DynamoDB, SFN deterministic retry-on-timeout as the structural re-invocation driver", model_latency_billed_as: billed-compute, compute_term: "Same model-latency + tool wall-clock terms", per_operation_term: "none", state_and_retention_term: "DDB on-demand: R*W writes * $6.25e-7 + ~$0.25/GB-month storage (negligible; state in OWNED storage -- the best NS-A profile in the Lambda class)", external_store_term: "DDB is the external store; S3 artefacts unchanged", transition_term: "layer-1 ~30/rec", symbolic_model: "Cost = R*[(C*L + T_tool)*M*r_gbs + W*6.25e-7 + 30*2.5e-5]", break_even: "Total $1-8/mo; the fallback's real cost is engineering (M hand-roll), never infrastructure dollars. Immune to the replay-class findings (ESB-06, ESB-08) since resume is cursor-based, not replay-based", evidence: "https://aws.amazon.com/dynamodb/pricing/on-demand/", confidence: CONFIRMED}
+    - {substrate: long_running_container, design: "Persona loop runs to completion in one container task (assessed via the in-design ECS runTask.sync instantiation; a CodeBuild-class instantiation would shed most standing ops surface -- unresolved[])", model_latency_billed_as: billed-compute, compute_term: "Task billed image-pull to stop: R * T_rec_hours * (vCPU*$0.0405 + GB*$0.00444 us-east-1 reference; eu-west-2 ~$0.057/hr at 1vCPU/2GB), INCLUDING model latency and think time -- but ZERO re-materialization: workspace, env, and transcript live in the task for the whole loop", per_operation_term: "none", state_and_retention_term: "none unless mid-run resume is contracted (then hand-rolled to S3/DDB)", external_store_term: "S3 artefacts unchanged", transition_term: "layer-1 ~30/rec", symbolic_model: "Cost = R*T_hours*(v*0.0405 + g*0.00444) + 30*2.5e-5*R", break_even: "~$5/mo at 1 task-hour/rec (asserted, not derived; x3 still immaterial). 30-90s task start is noise at ~3.3 recs/day -- and the incumbent's own heavy persona pays container-image init anyway", evidence: "https://aws.amazon.com/fargate/pricing/; docs/ROADMAP-PLATFORM.yaml:315", confidence: CONFIRMED}
+    - {substrate: hosted_cli_runner, design: "Persona runs as a CLI agent (claude -p) on a GitHub-hosted runner or the CC-web hybrid (AGENTS.md future state; adjudicated same substrate class for this audit -- shared decisive properties: CLI host, non-AWS control plane, externally-governed capacity), dispatched and awaited via the T4.9a waitForTaskToken pattern", model_latency_billed_as: non-billed-wait, compute_term: "Zero marginal dollars: Actions usage free for standard hosted runners in PUBLIC repos (this repo is public, Decisions 73/83/101); quota envelope is 6h/job, 35-day workflow, 20 concurrent jobs SHARED with all repo workflows; 4-core standard hardware; an UNRECORDED usage-policy predicate for a standing executor loop", per_operation_term: "none", state_and_retention_term: "workflow logs/artifacts within GitHub retention; default log sink is WORLD-READABLE on a public repo (correctable by sinking transcripts to S3)", external_store_term: "S3 artefacts via AWS credentials the runner must be granted (an IAM/OIDC design cost, not dollars)", transition_term: "layer-1 ~30/rec + dispatch/callback states", symbolic_model: "Dollar cost ~= layer-1 transitions; real terms are quota, queue latency, Max-pool capacity (claude -p at $0 marginal on subscription, capacity-bounded, >70% pool trigger), and a second control plane (GitHub run-cancel/workflow-disable exist -- kill authority is split, not absent)", break_even: "Dollar-cheapest at any recorded scale; binding constraints are non-dollar and structural (dec-122 currently forecloses CLI routing for personas entirely)", evidence: "https://docs.github.com/en/billing/concepts/product-billing/github-actions; https://docs.github.com/en/actions/reference/limits; .github/workflows/claude.yml", confidence: CONFIRMED}
+  substrate_decisions:
+    - {persona_group: plan_agent, verdict: insufficient-evidence, mechanism: "Iterative repo-read + plan-emit loop; moderate workspace use (read-mostly, writes PLAN artefact to S3)", what_changes: "The workspace backing-store decision (ESB-01) sizes its Lambda-class hand-roll; the spike ranks durable vs SFN-per-iteration for its loop shape; routing is settled (dec-122) unless ESB-03's reopen fires", exit_cost: "XS contract / S implementation at any point pre-stability-window", rationale: "With routing ratified, the incumbent leads for this persona as contracted; commitment waits on the workspace decision and spike (NS-B)", confidence: CONFIRMED}
+    - {persona_group: plan_critic, verdict: insufficient-evidence, mechanism: "Fresh-context critique of a plan artefact; workspace-light (reads plan + repo excerpts)", what_changes: "Only the spike result binds; workspace does not (artefact-in/verdict-out)", exit_cost: "XS / XS-S", rationale: "Nearest-decidable row: the lightest loop, where even a regular-Lambda/SFN-iteration shape suffices and the incumbent's extra semantics buy least -- deciding it ahead of the spike would pre-answer the spike", confidence: CONFIRMED}
+    - {persona_group: decision_scout, verdict: insufficient-evidence, mechanism: "Decision-contradiction grep + judgment; smallest loop; the designated spike vehicle (Q5)", what_changes: "Spike result only", exit_cost: "XS / XS", rationale: "Same shape as plan_critic; recommended as the spike vehicle precisely because its loop is minimal", confidence: CONFIRMED}
+    - {persona_group: implement_agent, verdict: insufficient-evidence, mechanism: "Edit-files + run-tests + emit-diff loop; workspace-heaviest persona; 5.4GB test env forces container-image packaging on ANY Lambda-class substrate", what_changes: "ESB-01 binds HARDEST here; the spike's container arm exists for this persona; under a rescoped restart-tolerant contract the container class becomes its head-to-head rival", exit_cost: "XS contract / S-M implementation (largest persona)", rationale: "The persona most likely to force a heterogeneous (hybrid_by_persona) outcome; deciding its substrate before the workspace decision would be commitment before evidence", confidence: CONFIRMED}
+    - {persona_group: code_reviewer, verdict: insufficient-evidence, mechanism: "Structured review verdict over a diff; workspace read-mostly (T4.1 names the state code_review, T4.2/T4.10a the persona code_reviewer -- same thing, output schema pins code_reviewer, no consequence traced)", what_changes: "Spike result; workspace binds weakly", exit_cost: "XS / XS-S", rationale: "Artefact-in/verdict-out shape like plan_critic", confidence: CONFIRMED}
+    - {persona_group: rca_and_bookkeeping, verdict: insufficient-evidence, mechanism: "Failure analysis / state reconciliation; T4.10 remnant, deferred_post_mvp; NO substrate assignment exists", what_changes: "Invocation TOPOLOGY precedes substrate: rca runs on FAILURE (Decision 55), arguably outside the per-rec lifecycle, and neither persona appears in T4.1's 13-node shape -- decide where they are invoked from first", exit_cost: "n/a (nothing built or contracted)", rationale: "Genuinely open, and rightly so: T4.10's ambient framing does not settle them, and rca should not share the failure modes of the substrate it diagnoses", confidence: CONFIRMED}
+  node_projection:
+    - {node: pick_rec, tier_item: T4.1, unchanged_note: "Layer-3 glue; admission predicate + queue poll; persona-substrate choice does not touch its contract under any candidate", cd27_substrate: lambda, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6668", confidence: CONFIRMED}
+    - {node: prepare_workspace, tier_item: T4.1, unchanged_note: "", cd27_substrate: lambda, projections: [{substrate: durable_functions, role_under_substrate: "Clones repo, creates branch/worktree, returns workspace_uri -- but no design states WHERE a workspace usable across persona invocations lives (Lambda /tmp does not survive suspension; Lambdas share no filesystem)", contract_change: "workspace_uri semantics undefined for cross-invocation use (ESB-01)"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Same role; same undefined workspace_uri semantics per iteration", contract_change: "Same ESB-01 gap at iteration granularity"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Same role; same gap", contract_change: "Same ESB-01 gap"}, {substrate: long_running_container, role_under_substrate: "Shrinks to branch-slug allocation; the task clones its own workspace onto task-local disk", contract_change: "workspace_uri becomes advisory (branch name), not a filesystem handle"}, {substrate: hosted_cli_runner, role_under_substrate: "Shrinks to branch-slug allocation; the runner checks out the repo itself (actions/checkout, as claude.yml does)", contract_change: "Same shrinkage; runner needs repo credentials, not an AWS workspace handle"}], evidence: "docs/ROADMAP-PLATFORM.yaml:6669; .github/workflows/claude.yml:31-34", confidence: CONFIRMED}
+    - {node: plan_agent, tier_item: "T4.1/T4.2", unchanged_note: "", cd27_substrate: lambda_durable_function, projections: [{substrate: durable_functions, role_under_substrate: "Checkpointed loop in one durable function; artefact to S3, URI to SFN", contract_change: "none (as designed)"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Loop unrolled into SFN iteration states over a stateless worker Lambda; cursor/transcript via S3 pointer", contract_change: "Persona node becomes a sub-loop of states; I/O contract (rec in, plan_s3_uri out) unchanged"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Regular Lambda loop with DDB checkpoint rows + re-invocation driver", contract_change: "I/O unchanged; adds checkpoint-table dependency"}, {substrate: long_running_container, role_under_substrate: "One ECS task runs the whole loop on task-local workspace", contract_change: "SFN state becomes runTask.sync; timeout semantics move from invocation-ceiling to task-timeout"}, {substrate: hosted_cli_runner, role_under_substrate: "workflow_dispatch job runs the persona (claude -p or equivalent); SFN waits on T4.9a-style callback", contract_change: "SFN state becomes dispatch + waitForTaskToken; correlation ids + callback auth reused from T4.9a"}], evidence: "docs/ROADMAP-PLATFORM.yaml:6670", confidence: CONFIRMED}
+    - {node: plan_critic, tier_item: "T4.1/T4.2", unchanged_note: "", cd27_substrate: lambda_durable_function, projections: [{substrate: durable_functions, role_under_substrate: "As designed, inside layer-1 Parallel", contract_change: "none"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Few-iteration critique fits one-to-few worker invocations inside Parallel", contract_change: "Minimal; the persona closest to a plain agent-state (Decision 39 typing)"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Regular Lambda; checkpointing arguably unnecessary at this loop size", contract_change: "none material"}, {substrate: long_running_container, role_under_substrate: "Oversized: 30-90s cold start on a minutes-long critique", contract_change: "runTask.sync inside Parallel"}, {substrate: hosted_cli_runner, role_under_substrate: "Dispatch-and-wait job inside Parallel", contract_change: "Parallel branches carry dispatch/callback correlation each"}], evidence: "docs/ROADMAP-PLATFORM.yaml:6671", confidence: CONFIRMED}
+    - {node: decision_scout, tier_item: "T4.1/T4.2", unchanged_note: "", cd27_substrate: lambda_durable_function, projections: [{substrate: durable_functions, role_under_substrate: "As designed, inside Parallel", contract_change: "none"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Same as plan_critic; smallest loop", contract_change: "Minimal"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Regular Lambda; checkpoint likely unnecessary", contract_change: "none material"}, {substrate: long_running_container, role_under_substrate: "Oversized for the loop", contract_change: "runTask.sync"}, {substrate: hosted_cli_runner, role_under_substrate: "Dispatch-and-wait job", contract_change: "As plan_critic"}], evidence: "docs/ROADMAP-PLATFORM.yaml:6671", confidence: CONFIRMED}
+    - {node: critique_gate, tier_item: T4.1, unchanged_note: "Deterministic aggregator/router; consumes critic verdict URIs regardless of what produced them", cd27_substrate: lambda, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6672", confidence: CONFIRMED}
+    - {node: implement_agent, tier_item: "T4.1/T4.2", unchanged_note: "", cd27_substrate: lambda_durable_function, projections: [{substrate: durable_functions, role_under_substrate: "Checkpointed edit/test/diff loop -- but its mutable worktree is outside the checkpoint model; resume re-materialization undesigned (ESB-01); >15-min test runs need ESCAPE under every Lambda-class option", contract_change: "none nominal; ESB-01 latent"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Iteration states; worktree must round-trip through S3/EFS per iteration (dearest persona for this substrate)", contract_change: "Iteration-state schema + workspace sync required"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Same as incumbent plus hand-rolled checkpointing", contract_change: "Checkpoint table + same ESB-01 gap"}, {substrate: long_running_container, role_under_substrate: "Natural fit: worktree lives on task disk for the loop's whole life; run-tests inline (no ESCAPE needed below task timeout)", contract_change: "runTask.sync; ESCAPE node redundant for this persona"}, {substrate: hosted_cli_runner, role_under_substrate: "Natural fit: runner disk + full toolchain; the shape claude.yml already exercises", contract_change: "Dispatch/callback; AWS-side artefact writes need granted credentials"}], evidence: "docs/ROADMAP-PLATFORM.yaml:6673", confidence: CONFIRMED}
+    - {node: code_review, tier_item: "T4.1/T4.2", unchanged_note: "", cd27_substrate: lambda_durable_function, projections: [{substrate: durable_functions, role_under_substrate: "As designed (persona named code_reviewer in T4.2/T4.10a; same thing, no consequence)", contract_change: "none"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Diff-in/verdict-out; near-single-shot", contract_change: "Minimal"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Regular Lambda suffices", contract_change: "none material"}, {substrate: long_running_container, role_under_substrate: "Oversized", contract_change: "runTask.sync"}, {substrate: hosted_cli_runner, role_under_substrate: "Dispatch-and-wait job", contract_change: "As critics"}], evidence: "docs/ROADMAP-PLATFORM.yaml:6674", confidence: CONFIRMED}
+    - {node: file_pr, tier_item: T4.1, unchanged_note: "Idempotent PR creation; consumes branch + diff artefacts; substrate-agnostic", cd27_substrate: lambda, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6675", confidence: CONFIRMED}
+    - {node: await_verdict, tier_item: "T4.1/T4.9a", unchanged_note: "Layer-1 waitForTaskToken on the CI verdict callback; heartbeat/timeout criteria (T4.1 c7) independent of persona substrate", cd27_substrate: lambda, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6676", confidence: CONFIRMED}
+    - {node: merge, tier_item: "T4.1/T4.9a", unchanged_note: "Callback-gated squash-merge on head-SHA equality; persona-substrate-independent", cd27_substrate: lambda, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6677", confidence: CONFIRMED}
+    - {node: deploy_dispatch, tier_item: T4.1, unchanged_note: "Dispatch-to-CD.35-and-wait; already the dispatch-and-wait shape a hosted_cli_runner persona integration would copy; contract unchanged under all candidates", cd27_substrate: lambda, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6678", confidence: CONFIRMED}
+    - {node: emit_telemetry, tier_item: T4.1, unchanged_note: "Final session-close emission via agent_sdk shim; substrate-agnostic", cd27_substrate: lambda, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6679", confidence: CONFIRMED}
+    - {node: ESCAPE, tier_item: T4.1, unchanged_note: "", cd27_substrate: ecs_run_task, projections: [{substrate: durable_functions, role_under_substrate: "Escape hatch for >15-min deterministic steps (as designed)", contract_change: "none"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Same role, same need (iteration Lambdas share the 15-min ceiling)", contract_change: "none"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Same role, same need", contract_change: "none"}, {substrate: long_running_container, role_under_substrate: "Largely redundant: personas already run in the escape-hatch class; long tool calls run inline", contract_change: "Node may retire into the persona task definition"}, {substrate: hosted_cli_runner, role_under_substrate: "Redundant for persona-side long steps (6h job budget); retained for AWS-side deterministic steps", contract_change: "Scope narrows"}], evidence: "docs/ROADMAP-PLATFORM.yaml:6680", confidence: CONFIRMED}
+    - {node: executor_callback_handler, tier_item: T4.9a, unchanged_note: "", cd27_substrate: lambda, projections: [{substrate: durable_functions, role_under_substrate: "Receives CI verdict callbacks for layer-1 waits (as designed)", contract_change: "none"}, {substrate: sfn_over_stateless_workers, role_under_substrate: "Unchanged", contract_change: "none"}, {substrate: self_checkpointed_lambda_dynamodb, role_under_substrate: "Unchanged", contract_change: "none"}, {substrate: long_running_container, role_under_substrate: "Unchanged for CI verdicts; optionally also receives task-completion callbacks", contract_change: "Optional scope addition"}, {substrate: hosted_cli_runner, role_under_substrate: "EXTENDED: also authenticates and correlates persona-completion callbacks from runner jobs -- reusing exactly the auth/correlation/duplicate-rejection machinery T4.9a specifies", contract_change: "Callback vocabulary gains a persona-completion type; auth model unchanged"}], evidence: "docs/ROADMAP-PLATFORM.yaml:7115-7139", confidence: CONFIRMED}
+    - {node: parallel_critics, tier_item: T4.1, unchanged_note: "Native SFN Parallel state fanning out critic personas; construct unchanged under every candidate (branch contents change per persona rows above)", cd27_substrate: step_functions, projections: [], evidence: "docs/ROADMAP-PLATFORM.yaml:6671", confidence: CONFIRMED}
+  # exactly one row per SURFACE; system of record for decision_readiness (summary mirrors it).
+  # Readiness is the prompt's mechanical top-down formula (frontier = zero critical AND zero high on
+  # the surface + priced semantics rows for the rated substrate); frontier therefore means "no
+  # high-severity blocker to DECIDING on this surface", not "nothing left to fix" -- the mediums are
+  # listed in top_gaps, and Q6's deferral rests on the two strong-rated surfaces plus unresolved[].
+  per_surface_assessment:
+    - {surface: persona_substrate, implementation_state: designed_unbuilt, decision_readiness: frontier, strengths: "Coherent three-layer decomposition; semantics enumerated and platform-verified; a real (if incomplete) comparative record at Stage 4; pending-CD status keeps re-evaluation open; routing ratified by dec-122", top_gaps: [ESB-03, ESB-04, ESB-05, ESB-06]}
+    - {surface: deterministic_glue, implementation_state: designed_unbuilt, decision_readiness: frontier, strengths: "Regular-Lambda assignment uncontested and precedented (src/data/handlers); per-Lambda IAM/manifest/observability exit criteria already written into T4.1", top_gaps: [ESB-10]}
+    - {surface: orchestration_layer, implementation_state: designed_unbuilt, decision_readiness: frontier, strengths: "Ratified primitive (Decision 39) with a genuine recorded comparative evaluation; Parallel/Choice/waitForTaskToken cover the designed flow; kill-switch and heartbeat criteria present", top_gaps: [ESB-07]}
+    - {surface: billing_shape, implementation_state: designed_unbuilt, decision_readiness: frontier, strengths: "All candidates cost single dollars monthly at recorded scale -- economics verifiably do NOT discriminate, which is itself decision-relevant knowledge; the one material contingency (NAT for EFS variants) is named", top_gaps: [ESB-09]}
+    - {surface: failure_semantics, implementation_state: designed_unbuilt, decision_readiness: strong, strengths: "RCA-first containment (Decision 55) preserved by design under every candidate; checkpoint-replay semantics platform-verified; at-least-once/idempotency obligation identified and equal across substrates", top_gaps: [ESB-01, ESB-08]}
+    - {surface: portability_and_lockin, implementation_state: designed_unbuilt, decision_readiness: strong, strengths: "S3-pointer externalization + T4.10a contracts + concurrency=1 make contract-level exit cheap at every measured point; exit accounting now symmetric across candidates", top_gaps: [ESB-02]}
+    - {surface: existing_precedents, implementation_state: mixed, decision_readiness: frontier, strengths: "One authored SFN+5-Lambda design artefact (not applied) and one LIVE hosted-runner CLI agent loop; together they cover orchestration shape and CLI hosting, cleanly separated by deployment status", top_gaps: [ESB-11]}
+  rubric_ratings:
+    - {surface: persona_substrate, dimension: VD1, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:762-770", note: "Enumerated loop semantics map to verified platform primitives; workspace capability (ESB-01) is the uncovered requirement"}
+    - {surface: persona_substrate, dimension: VD2, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:6777,822", note: "Forced-timeout resume + replay-rate health signal designed; resume is incomplete without workspace re-materialization"}
+    - {surface: persona_substrate, dimension: VD3, rating: weak, evidence: "docs/ROADMAP-PLATFORM.yaml:268-320", note: "cost_projection prices inference and transitions, never the persona-loop substrate mechanics (ESB-09)"}
+    - {surface: persona_substrate, dimension: VD4, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:818,821", note: "S3 externalization + named fallback + pending-CD status; fallback under-specified and its re-eval carrier phantom (ESB-02)"}
+    - {surface: persona_substrate, dimension: VD5, rating: weak, evidence: "https://docs.aws.amazon.com/durable-execution/", note: "Replayed-execution diagnosis is a novel operator skill; no runbook; determinism-violation failure modes are subtle (ESB-06)"}
+    - {surface: persona_substrate, dimension: VD6, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:823", note: "CD.16/CD.24 per-Lambda build/deploy/smoke lanes extend naturally; no durable-function-specific deploy step (pin/alias) is committed yet"}
+    - {surface: persona_substrate, dimension: VD7, rating: weak, evidence: "https://docs.aws.amazon.com/durable-execution/patterns/best-practices/determinism/", note: "Wrap-everything-in-steps and no-outer-state-writes rules are exactly the subtle, silent-failure class agent authors miss (ESB-06); repo's own SLOC governance names lower-tier-model comprehension as load-bearing"}
+    - {surface: persona_substrate, dimension: VD8, rating: weak, evidence: "docs/ROADMAP-PLATFORM.yaml:787-797", note: "Existence/maturity verification recorded, but the comparative record (INTENT Stage-4 table) omits the per-iteration-SFN and hosted-CLI classes (ESB-04)"}
+    - {surface: deterministic_glue, dimension: VD1, rating: strong, evidence: "docs/ROADMAP-PLATFORM.yaml:772-776", note: "Sub-15-minute deterministic tasks are regular Lambda's native case; node list complete in T4.1 (8 glue nodes vs CD.27's 5 -- re-derived)"}
+    - {surface: deterministic_glue, dimension: VD2, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:6697", note: "Heartbeat/timeout-to-ci-rca criteria on wait states; deterministic-only retry precedented in data_pipeline.tf"}
+    - {surface: deterministic_glue, dimension: VD3, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:291", note: "Glue costs sit inside line items already enumerated (transitions, CloudWatch); no gap material at scale"}
+    - {surface: deterministic_glue, dimension: VD4, rating: strong, evidence: "src/data/handlers/fetch_handler.py", note: "Plain Lambdas with JSON I/O are the most portable artefacts in the design; five near-identical precedent handlers exist"}
+    - {surface: deterministic_glue, dimension: VD5, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:6695", note: "Per-Lambda p50/p99 + alarm criteria written into T4.1 exit criteria"}
+    - {surface: deterministic_glue, dimension: VD6, rating: strong, evidence: "docs/ROADMAP-PLATFORM.yaml:6693", note: "Per-Lambda manifest + per-role IAM exit criteria; CD.16/CD.24 lanes apply unchanged"}
+    - {surface: deterministic_glue, dimension: VD7, rating: strong, evidence: "src/data/handlers/write_handler.py", note: "Small deterministic handlers with typed I/O are the easiest artefact class for agents; direct in-repo precedent"}
+    - {surface: deterministic_glue, dimension: VD8, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:6667-6680", note: "Decomposition rationale recorded; CD.27-prose/T4.1 node-count drift is a clarity defect only (ESB-11)"}
+    - {surface: orchestration_layer, dimension: VD1, rating: strong, evidence: "docs/ROADMAP-PLATFORM.yaml:754-760", note: "Parallel fan-out, Choice routing, waitForTaskToken waits, 1-year executions cover the per-rec lifecycle"}
+    - {surface: orchestration_layer, dimension: VD2, rating: strong, evidence: "docs/ROADMAP-PLATFORM.yaml:6697,6700", note: "Heartbeat/timeout-to-ci-rca on every wait state + operator kill-switch with clean-stop test"}
+    - {surface: orchestration_layer, dimension: VD3, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:303", note: "Transition costs modeled at both scales in cost_projection"}
+    - {surface: orchestration_layer, dimension: VD4, rating: n/a, evidence: "docs/DECISIONS.md:4860", note: "Orchestrator portability is out of scope: role (a) is ratified by Decision 39 and not in question"}
+    - {surface: orchestration_layer, dimension: VD5, rating: strong, evidence: "terraform/data_pipeline.tf:461-465", note: "Per-state execution history native; in-repo precedent wires level=ALL with execution data"}
+    - {surface: orchestration_layer, dimension: VD6, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:6692", note: "Smoke-with-stub-personas criterion present, but T4.1's executor .tf files sit outside the governed apply channel as scoped (ESB-07)"}
+    - {surface: orchestration_layer, dimension: VD7, rating: adequate, evidence: "terraform/data_pipeline.tf:467-680", note: "ASL-in-Terraform authored by agents already exists in-repo; jsonencode pattern reusable"}
+    - {surface: orchestration_layer, dimension: VD8, rating: strong, evidence: "docs/DECISIONS.md:4860-4888", note: "Decision 39 records a real comparative evaluation (Airflow/MWAA/custom) -- the evidentiary standard the layer-2 choice lacks"}
+    - {surface: billing_shape, dimension: VD1, rating: n/a, evidence: "n/a", note: "Capability coverage does not structurally apply to a cost surface"}
+    - {surface: billing_shape, dimension: VD2, rating: n/a, evidence: "n/a", note: "Failure/recovery semantics do not structurally apply to a cost surface"}
+    - {surface: billing_shape, dimension: VD3, rating: weak, evidence: "docs/ROADMAP-PLATFORM.yaml:268-320", note: "No per-substrate model of compute/per-op/state/retention/transition terms exists in-repo; this audit supplies the first (ESB-07)"}
+    - {surface: billing_shape, dimension: VD4, rating: adequate, evidence: "billing_model (this audit)", note: "No cost lock-in: every candidate <=~$5/month at recorded scale; hosted_cli_runner's $0 profile carries a public-repo dependency worth naming"}
+    - {surface: billing_shape, dimension: VD5, rating: adequate, evidence: ".github/workflows/cost-reconciliation.yml", note: "A standing cost-reconciliation workflow exists; per-substrate attribution would need tags but the observation surface is real"}
+    - {surface: billing_shape, dimension: VD6, rating: n/a, evidence: "n/a", note: "Delivery-path integration does not structurally apply to a cost surface"}
+    - {surface: billing_shape, dimension: VD7, rating: n/a, evidence: "n/a", note: "Agent-implementability does not structurally apply to a cost surface"}
+    - {surface: billing_shape, dimension: VD8, rating: weak, evidence: "docs/ROADMAP-PLATFORM.yaml:747-825", note: "CD.27 records no billing analysis for layer 2; the wait-vs-step distinction its economics rest on is absent from its text"}
+    - {surface: failure_semantics, dimension: VD1, rating: adequate, evidence: "https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html", note: "Checkpoint/replay/suppression platform-verified; workspace resume (ESB-01) is the uncovered case"}
+    - {surface: failure_semantics, dimension: VD2, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:820,6761", note: "Decision 55 split preserved verbatim; at-least-once window named in T4.2 intent (step-boundary idempotency under SIGTERM) but not yet a contract field"}
+    - {surface: failure_semantics, dimension: VD3, rating: n/a, evidence: "n/a", note: "Economic evidence does not structurally apply; replay-cost term is priced under billing_shape"}
+    - {surface: failure_semantics, dimension: VD4, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:7221", note: "T4.10a failure_outputs vocabulary makes failure semantics contract-portable across substrates"}
+    - {surface: failure_semantics, dimension: VD5, rating: weak, evidence: "https://docs.aws.amazon.com/durable-execution/", note: "Diagnosing a replayed execution (which invocation did the damage?) has no runbook; alternatives' failure surfaces are conventional"}
+    - {surface: failure_semantics, dimension: VD6, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:6777-6782", note: "Forced-timeout and budget-counter criteria exercise failure paths in the e2e smoke"}
+    - {surface: failure_semantics, dimension: VD7, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:7203-7206", note: "Bounded budgets + failure vocabulary are agent-legible; determinism-violation debugging is the exception (ESB-06)"}
+    - {surface: failure_semantics, dimension: VD8, rating: adequate, evidence: "docs/DECISIONS.md:4353-4386", note: "Decision 55 lineage is strong recorded evidence; durable-specific failure behaviour is doc-verified but unexercised in-repo"}
+    - {surface: portability_and_lockin, dimension: VD1, rating: n/a, evidence: "n/a", note: "Loop-capability coverage does not structurally apply to this cross-cutting surface"}
+    - {surface: portability_and_lockin, dimension: VD2, rating: weak, evidence: "https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html", note: "In-flight SDK-major failure mode is vendor-documented; no committed pin/alias/drain policy exists in the delivery path (ESB-02 adjacent)"}
+    - {surface: portability_and_lockin, dimension: VD3, rating: weak, evidence: "reversal_analysis (this audit)", note: "Exit costs were nowhere priced before this audit; now bounded (XS-S contract / S-M implementation)"}
+    - {surface: portability_and_lockin, dimension: VD4, rating: weak, evidence: "docs/ROADMAP-PLATFORM.yaml:821", note: "The portability guarantee IS the fallback: under-specified, with a phantom re-eval carrier already relied on once downstream (ESB-02)"}
+    - {surface: portability_and_lockin, dimension: VD5, rating: n/a, evidence: "n/a", note: "Operability rated under failure_semantics/persona_substrate; no distinct portability-operability question"}
+    - {surface: portability_and_lockin, dimension: VD6, rating: adequate, evidence: "docs/ROADMAP-PLATFORM.yaml:7230", note: "T4.10a contract conformance keeps one governed delivery path across a swap (NS-D holds contract-side)"}
+    - {surface: portability_and_lockin, dimension: VD7, rating: n/a, evidence: "n/a", note: "Agent-implementability rated per substrate under persona_substrate"}
+    - {surface: portability_and_lockin, dimension: VD8, rating: weak, evidence: "docs/ROADMAP-PLATFORM.yaml:821-822", note: "Tension acknowledged (maturity point) but no recorded reversal analysis existed before this audit"}
+    - {surface: existing_precedents, dimension: VD1, rating: adequate, evidence: "terraform/data_pipeline.tf:457-686; .github/workflows/claude.yml", note: "Precedents cover orchestration shape and CLI-agent hosting; neither covers a checkpointed persona loop"}
+    - {surface: existing_precedents, dimension: VD2, rating: adequate, evidence: "terraform/data_pipeline.tf:487-501,611-618", note: "Deterministic-only retry lists, non-fatal catch routing, fail-state pattern all demonstrated in the authored artefact"}
+    - {surface: existing_precedents, dimension: VD3, rating: weak, evidence: "terraform/CLAUDE.md", note: "Neither precedent yields transferable cost data: one never ran in this account, the other is free-tier public-repo usage"}
+    - {surface: existing_precedents, dimension: VD4, rating: strong, evidence: "src/data/handlers/fetch_handler.py:1-6", note: "S3-key data passing + typed dict I/O in the handlers is exactly the portable contract shape the executor design reuses"}
+    - {surface: existing_precedents, dimension: VD5, rating: adequate, evidence: "terraform/data_pipeline.tf:461-465", note: "level=ALL + include_execution_data wiring demonstrated; claude.yml relies on workflow logs only"}
+    - {surface: existing_precedents, dimension: VD6, rating: adequate, evidence: ".github/workflows/claude.yml:38-40", note: "claude.yml is governed by the repo's workflow surface (action pinned @v1, OAuth secret); data_pipeline.tf sits outside the live apply path"}
+    - {surface: existing_precedents, dimension: VD7, rating: strong, evidence: "terraform/data_pipeline.tf; .github/workflows/claude.yml", note: "Both artefacts were authored and are maintained in an agent-first workflow -- direct evidence of agent-implementability for both patterns"}
+    - {surface: existing_precedents, dimension: VD8, rating: weak, evidence: "docs/DECISIONS.md:4144; terraform/CLAUDE.md", note: "Decision 75 cites the pipeline as 'primitives already in production' while the root is no longer applied -- deployment status is not carried through the record (ESB-11)"}
+  candidate_adjudications:
+    - {candidate_id: C1, surface: persona_substrate, adjudication: planned-insufficient, destination_ids: [ESB-04], basis: "CD.27 records the Fargate-vs-decomposition comparison and substrate-existence verification, and is state:pending with per-atomic-plan re-eval; but no comparative evaluation of layer-2 alternatives for the LOOP exists anywhere -- alternatives appear only as a regression-triggered fallback"}
+    - {candidate_id: C1, surface: deterministic_glue, adjudication: not-a-defect, destination_ids: [], basis: "Layer-3 regular-Lambda assignment is uncontested; no evaluation gap alleged or found"}
+    - {candidate_id: C1, surface: orchestration_layer, adjudication: not-a-defect, destination_ids: [], basis: "Layer 1 carries a genuine recorded comparative evaluation (Decision 39) and is ratified -- structurally out of this candidate's reach"}
+    - {candidate_id: C1, surface: billing_shape, adjudication: confirmed-defect, destination_ids: [ESB-09], basis: "The choice was recorded with no billing model for layer 2; cost_projection covers inference and transitions only"}
+    - {candidate_id: C1, surface: failure_semantics, adjudication: not-a-defect, destination_ids: [], basis: "The evaluation-sufficiency question does not decompose onto failure semantics separately from persona_substrate"}
+    - {candidate_id: C1, surface: portability_and_lockin, adjudication: not-a-defect, destination_ids: [], basis: "Evaluation sufficiency of the fallback is adjudicated under C5 on this surface"}
+    - {candidate_id: C1, surface: existing_precedents, adjudication: not-a-defect, destination_ids: [], basis: "CD.27 does not rest its layer-2 case on either precedent; inapplicable"}
+    - {candidate_id: C2, surface: persona_substrate, adjudication: confirmed-defect, destination_ids: [ESB-10], basis: "The discipline point is load-bearing for iterative loops (Q4) but its universal phrasing conflicts with Decision 39's agent-state typing; unreconciled scope"}
+    - {candidate_id: C2, surface: deterministic_glue, adjudication: confirmed-defect, destination_ids: [ESB-10], basis: "Read literally the point outlaws any LLM-backed regular Lambda -- including the Decision 39 agent type a scheduled single-shot call would use; same finding"}
+    - {candidate_id: C2, surface: orchestration_layer, adjudication: not-a-defect, destination_ids: [], basis: "Decision 39's typing lives at orchestrator level and is not itself defective; the conflict is filed against the discipline point's phrasing"}
+    - {candidate_id: C2, surface: billing_shape, adjudication: not-a-defect, destination_ids: [], basis: "No billing consequence traced to the phrasing"}
+    - {candidate_id: C2, surface: failure_semantics, adjudication: not-a-defect, destination_ids: [], basis: "The protected failure property is analyzed under Q4; the defect is the phrasing, filed once"}
+    - {candidate_id: C2, surface: portability_and_lockin, adjudication: not-a-defect, destination_ids: [], basis: "No portability consequence traced"}
+    - {candidate_id: C2, surface: existing_precedents, adjudication: not-a-defect, destination_ids: [], basis: "Precedents predate the discipline point; inapplicable"}
+    - {candidate_id: C3, surface: persona_substrate, adjudication: not-a-defect, destination_ids: [], basis: "The billing fact does not itself impugn the substrate assignment; adjudicated at billing_shape"}
+    - {candidate_id: C3, surface: deterministic_glue, adjudication: not-a-defect, destination_ids: [], basis: "Glue Lambdas make no model calls; inapplicable"}
+    - {candidate_id: C3, surface: orchestration_layer, adjudication: not-a-defect, destination_ids: [], basis: "SFN Standard bills per transition, not duration; verdict waits already sit on non-billed waitForTaskToken states"}
+    - {candidate_id: C3, surface: billing_shape, adjudication: confirmed-defect, destination_ids: [ESB-09], basis: "Confirmed: model latency inside durable steps is billed compute; movability is blocked by the mandated transport (DeepSeek sync-only; LiteLLM batch covers neither named provider); unacknowledged in cost_projection; magnitude ~$1-2/month"}
+    - {candidate_id: C3, surface: failure_semantics, adjudication: not-a-defect, destination_ids: [], basis: "A submit/callback redesign's failure-handling costs are priced inside Q2 prose; no present defect"}
+    - {candidate_id: C3, surface: portability_and_lockin, adjudication: not-a-defect, destination_ids: [], basis: "No lock-in consequence traced from the billing placement"}
+    - {candidate_id: C3, surface: existing_precedents, adjudication: not-a-defect, destination_ids: [], basis: "Neither precedent exercises model-latency billing; inapplicable"}
+    - {candidate_id: C4, surface: persona_substrate, adjudication: confirmed-defect, destination_ids: [ESB-01], basis: "The semantics durable delivers do not cover the loop's dominant mutable state (git workspace); the credit CD.27's design implicitly claims is partially illusory for plan/implement personas"}
+    - {candidate_id: C4, surface: deterministic_glue, adjudication: not-a-defect, destination_ids: [], basis: "Glue nodes hold no cross-invocation state; inapplicable"}
+    - {candidate_id: C4, surface: orchestration_layer, adjudication: fully-covered, destination_ids: [], basis: "Inter-persona externalization is designed and owned: S3-pointer discipline point + T4.11 counters in SFN state"}
+    - {candidate_id: C4, surface: billing_shape, adjudication: not-a-defect, destination_ids: [], basis: "State-externalization economics are negligible at scale (billing_model); no cost defect"}
+    - {candidate_id: C4, surface: failure_semantics, adjudication: confirmed-defect, destination_ids: [ESB-01], basis: "Resume-from-checkpoint is incomplete without workspace re-materialization; the exit criterion tests tool-call resume but no criterion covers workspace state"}
+    - {candidate_id: C4, surface: portability_and_lockin, adjudication: not-a-defect, destination_ids: [], basis: "Externalization helps portability; assessed under Q3; no defect on this surface"}
+    - {candidate_id: C4, surface: existing_precedents, adjudication: not-a-defect, destination_ids: [], basis: "Precedents carry no per-iteration mutable state; inapplicable"}
+    - {candidate_id: C5, surface: persona_substrate, adjudication: not-a-defect, destination_ids: [], basis: "The NS-A tension is adjudicated on its own surface (portability_and_lockin)"}
+    - {candidate_id: C5, surface: deterministic_glue, adjudication: not-a-defect, destination_ids: [], basis: "Stateless glue has no NS-A exposure; inapplicable"}
+    - {candidate_id: C5, surface: orchestration_layer, adjudication: not-a-defect, destination_ids: [], basis: "SFN coupling is ratified (Decision 39) and out of scope"}
+    - {candidate_id: C5, surface: billing_shape, adjudication: not-a-defect, destination_ids: [], basis: "No billing consequence of the coupling at recorded scale"}
+    - {candidate_id: C5, surface: failure_semantics, adjudication: not-a-defect, destination_ids: [], basis: "Failure-semantics coupling assessed under C4/Q1; no separate NS-A defect"}
+    - {candidate_id: C5, surface: portability_and_lockin, adjudication: planned-insufficient, destination_ids: [ESB-02], basis: "CD.27 names the risk and a fallback (planned control exists) but the fallback is unspecified and the re-eval trigger re-evaluates WHETHER to fall back, not whether the fallback is executable"}
+    - {candidate_id: C5, surface: existing_precedents, adjudication: not-a-defect, destination_ids: [], basis: "Precedents carry no durable-function coupling; inapplicable"}
+    - {candidate_id: C6, surface: persona_substrate, adjudication: not-a-defect, destination_ids: [], basis: "Transfer weight is an input to Q6 prose, not a defect on the assignment itself"}
+    - {candidate_id: C6, surface: deterministic_glue, adjudication: fully-covered, destination_ids: [], basis: "The handlers + ASL patterns transfer directly to glue nodes -- same shape, same runtime class; T4.1 already embeds them"}
+    - {candidate_id: C6, surface: orchestration_layer, adjudication: fully-covered, destination_ids: [], basis: "The authored state machine demonstrates every layer-1 construct T4.1 needs except waitForTaskToken (which T4.9a specifies)"}
+    - {candidate_id: C6, surface: billing_shape, adjudication: not-a-defect, destination_ids: [], basis: "Neither precedent transfers cost evidence (one unapplied, one free-tier); noted under VD3, no defect"}
+    - {candidate_id: C6, surface: failure_semantics, adjudication: not-a-defect, destination_ids: [], basis: "data_pipeline's retry/catch patterns transfer as design idiom; no defect either way"}
+    - {candidate_id: C6, surface: portability_and_lockin, adjudication: not-a-defect, destination_ids: [], basis: "No portability inference rests on either precedent"}
+    - {candidate_id: C6, surface: existing_precedents, adjudication: confirmed-defect, destination_ids: [ESB-11], basis: "Decision 75's 'primitives already in production' premise is stale: the cited root is retained-not-applied (terraform/CLAUDE.md); deployment status is not carried through the record"}
+    - {candidate_id: C7, surface: persona_substrate, adjudication: confirmed-defect, destination_ids: [ESB-05], basis: "The mechanism by which irreversibility would creep in is real and present: T4.1's node typing, T4.2's exit criteria, and the 14-day health signal all name the incumbent's mechanism rather than substrate-neutral properties"}
+    - {candidate_id: C7, surface: deterministic_glue, adjudication: not-a-defect, destination_ids: [], basis: "Glue contracts survive any persona-substrate swap unchanged (node_projection); inapplicable"}
+    - {candidate_id: C7, surface: orchestration_layer, adjudication: not-a-defect, destination_ids: [], basis: "Layer-1 contracts survive the swap; waitForTaskToken absorbs dispatch-and-wait variants"}
+    - {candidate_id: C7, surface: billing_shape, adjudication: not-a-defect, destination_ids: [], basis: "No cost cliff at any exit point; all candidates <=~$5/month"}
+    - {candidate_id: C7, surface: failure_semantics, adjudication: not-a-defect, destination_ids: [], basis: "Failure vocabulary (T4.10a) is substrate-portable; no irreversibility traced"}
+    - {candidate_id: C7, surface: portability_and_lockin, adjudication: not-a-defect, destination_ids: [], basis: "Traced and priced: reversible-with-material-cost at every point (reversal_analysis); concurrency=1 drain + contract externalization are the property-matched controls"}
+    - {candidate_id: C7, surface: existing_precedents, adjudication: not-a-defect, destination_ids: [], basis: "Precedents impose no reversal cost; inapplicable"}
+  reversal_analysis:
+    - {substrate: durable_functions, exit_point: after-first-persona, contract_level_cost: XS, implementation_level_cost: S, surviving_contracts: [persona I/O contracts (T4.10a), S3 artefact pattern, layer-1 state machine, T4.9a callback, T4.11 counters, T0.8 telemetry schema], basis: "One persona's internals rewritten; concurrency=1 drain; contracts untouched", confidence: CONFIRMED}
+    - {substrate: durable_functions, exit_point: after-all-five, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "Five persona internals rewritten; glue/orchestration unchanged (node_projection)", confidence: CONFIRMED}
+    - {substrate: durable_functions, exit_point: after-stability-window, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "Window-redefinition moved off the exit path (round-2/3 reconciliation): T4.2 c5 is substrate-neutral; renaming CD.27:822's signal is XS paper; the excluded calendar tail (disorderly vendor-regression exit) is disclosed at Q5", confidence: CONFIRMED}
+    - {substrate: sfn_over_stateless_workers, exit_point: after-first-persona, contract_level_cost: XS, implementation_level_cost: S, surviving_contracts: [same six], basis: "Iteration states + worker Lambda replaced; ASL edits are additive/removable", confidence: CONFIRMED}
+    - {substrate: sfn_over_stateless_workers, exit_point: after-all-five, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "Five workers + their ASL sub-loops rewritten", confidence: CONFIRMED}
+    - {substrate: sfn_over_stateless_workers, exit_point: after-stability-window, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "Same evidence-reset cost as incumbent IF the health signals were rewritten substrate-neutrally; otherwise smaller (no replay-rate signal to re-key)", confidence: HYPOTHESIS}
+    - {substrate: self_checkpointed_lambda_dynamodb, exit_point: after-first-persona, contract_level_cost: XS, implementation_level_cost: S, surviving_contracts: [same six], basis: "Owned checkpoint schema ports; driver discarded", confidence: CONFIRMED}
+    - {substrate: self_checkpointed_lambda_dynamodb, exit_point: after-all-five, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six, plus the owned checkpoint schema], basis: "Hand-rolled layer is owned code -- portable but also the thing being exited", confidence: CONFIRMED}
+    - {substrate: self_checkpointed_lambda_dynamodb, exit_point: after-stability-window, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same], basis: "Same evidence-reset logic", confidence: HYPOTHESIS}
+    - {substrate: long_running_container, exit_point: after-first-persona, contract_level_cost: XS, implementation_level_cost: S, surviving_contracts: [same six], basis: "Loop code repackages from container to functions; runTask.sync state reverts to persona state", confidence: CONFIRMED}
+    - {substrate: long_running_container, exit_point: after-all-five, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "Five loops repackaged; workspace handling redesigned back to whatever the Lambda-class answer is (ESB-01 returns)", confidence: CONFIRMED}
+    - {substrate: long_running_container, exit_point: after-stability-window, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "Same evidence-reset logic", confidence: HYPOTHESIS}
+    - {substrate: hosted_cli_runner, exit_point: after-first-persona, contract_level_cost: XS, implementation_level_cost: S, surviving_contracts: [same six -- dispatch/callback contract survives INTO any successor via T4.9a], basis: "Workflow job replaced; callback vocabulary retained", confidence: CONFIRMED}
+    - {substrate: hosted_cli_runner, exit_point: after-all-five, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "GROSS cost dominated by building the in-process LiteLLM loops -- work every non-hosted destination requires anyway; the SUNK hosted-specific delta (CLI prompts, transcript telemetry, GitHub control-plane wiring) is S-M; plus OAuth unwind and IAM revocation", confidence: CONFIRMED}
+    - {substrate: hosted_cli_runner, exit_point: after-stability-window, contract_level_cost: XS, implementation_level_cost: M, surviving_contracts: [same six], basis: "Same evidence-reset logic plus external-control-plane unwind", confidence: HYPOTHESIS}
+  adversarial_reviews:
+    packet_evidence:
+      - {round: 1, claim: "CD.27 layer 2 assigns five personas to durable functions with in-Lambda checkpointed loops + S3-URI returns", citation: "ROADMAP:762-770", evidence_kind: static}
+      - {round: 1, claim: "CD.27 state:pending, gates T4.1-T4.4", citation: "ROADMAP:805-807", evidence_kind: static}
+      - {round: 1, claim: "Discipline point: personas as DFs; regular Lambdas deterministic-only", citation: "ROADMAP:817", evidence_kind: static}
+      - {round: 1, claim: "Maturity fallback + INTENT-open-question re-eval clause", citation: "ROADMAP:821", evidence_kind: static}
+      - {round: 1, claim: "14-day window incl. per-persona checkpoint-replay rate <5%", citation: "ROADMAP:822", evidence_kind: static}
+      - {round: 1, claim: "T4.1 shape: 13 nodes; 8 glue Lambdas vs CD.27 prose's 5", citation: "ROADMAP:6667-6680", evidence_kind: static}
+      - {round: 1, claim: "T4.2 c1 forced-timeout resume without re-issuing completed LLM calls", citation: "ROADMAP:6777", evidence_kind: static}
+      - {round: 1, claim: "T4.2 pins LiteLLM-only transport, DeepSeek Tier1 / Anthropic Tier2", citation: "ROADMAP:6755-6758", evidence_kind: static}
+      - {round: 1, claim: "Decision 116 routes agentic scheduled agents to claude -p; scoped to scheduled agents", citation: "DECISIONS:2295-2338", evidence_kind: static}
+      - {round: 1, claim: "Decision 39 types states task|agent (LLM-backed Lambda)", citation: "DECISIONS:4874", evidence_kind: static}
+      - {round: 1, claim: "AWS: waits suspend without compute charges; 1-year durable executions", citation: "durable-functions.html (2026-07-30)", evidence_kind: static}
+      - {round: 1, claim: "AWS callback suspends unbilled; SendDurableExecutionCallback* APIs", citation: "durable-execution callback page (2026-07-30)", evidence_kind: static}
+      - {round: 1, claim: "AWS determinism: replay from top; wrap all nondeterminism in steps; outer-state writes lost", citation: "durable-execution determinism page (2026-07-30)", evidence_kind: static}
+      - {round: 1, claim: "Durable runtimes incl. C# .NET 8/10; CD.27 list omits C#", citation: "durable-supported-runtimes.html (2026-07-30)", evidence_kind: static}
+      - {round: 1, claim: "Durable pricing $8/M ops, $0.25/GB written, $0.15/GB-mo retention; replay sub-invocations billed", citation: "aws.amazon.com/lambda/pricing (2026-07-30)", evidence_kind: static}
+      - {round: 1, claim: "SDK major versions can fail in-flight executions; pin + alias", citation: "durable-supported-runtimes.html", evidence_kind: static}
+      - {round: 1, claim: "DeepSeek sync/stream only; LiteLLM batches exclude Anthropic+DeepSeek; Anthropic Batches async/<1h/50%", citation: "api-docs.deepseek.com; docs.litellm.ai; platform.claude.com (2026-07-30)", evidence_kind: static}
+      - {round: 1, claim: "data_pipeline.tf 5-Lambda SFN pipeline authored; legacy roots NOT applied", citation: "terraform/data_pipeline.tf:457-686; terraform/CLAUDE.md", evidence_kind: static}
+      - {round: 1, claim: "claude.yml live @claude agent on hosted runners; schedule.yaml all disabled; no scheduled-agents.yml", citation: ".github/ (observed)", evidence_kind: observed}
+      - {round: 1, claim: "GH-hosted runners 6h/job, 35d/workflow, 20 concurrent; free for public repos; repo is public", citation: "docs.github.com (2026-07-30)", evidence_kind: static}
+      - {round: 2, claim: "Round-1 packet revised: dec-122 ratifies executor LiteLLM steady state; INTENT Stage-4 comparative table; T4.1 tf files outside apply channel; .venv 5.4GB observed; EFS capability; http-unverified LiteLLM passthrough", citation: "DECISIONS:2043-2048; INTENT Stage 4; terraform-apply-sandbox.yml:44-48; observed", evidence_kind: static}
+      - {round: 2, claim: "T4.9a c1: GitHub Actions is the only verifier/validation runner for PR --pre", citation: "ROADMAP:7123", evidence_kind: static}
+      - {round: 2, claim: "T4.11 files_in_scope terraform/personal/executor_state_machine.tf; T4.9a:7118 executor_callbacks.tf under personal/", citation: "ROADMAP:7258,7118", evidence_kind: static}
+      - {round: 3, claim: "Round-2 packet revised: dangling INTENT-OQ pointer behind CD.27:821; CD.17 grammar non-monotone; replay-rate gate incoherence; SFN http:invoke; per-persona harness intent (INTENT OQ2); cost_projection SFN line 13-44x self-inconsistent", citation: "ROADMAP:588-599,821-822,303; INTENT:352,439,460-470", evidence_kind: static}
+      - {round: 3, claim: "EFS FP-A prior art exists in-repo (DuckLake spike findings)", citation: "docs/plans/reports/ducklake-spike-findings.md:77,154", evidence_kind: static}
+      - {round: 3, claim: "Prior audit C7 dismissal cites the phantom per-filing fallback re-evaluation as its compensating control", citation: "audits/executor-roadmap-review-7d57a0d.yaml:794-800", evidence_kind: static}
+    rounds:
+      - round: 1
+        reviewers:
+          - perspective: semantics-and-correctness-reviewer
+            challenges:
+              - {claim: "Suppression is categorical platform property satisfying T4.2 c1", evidence_or_counterexample: "Covers CHECKPOINTED ops only; crash between LLM response and checkpoint re-issues the call; no substrate meets c1 as literally written", disposition: revise}
+              - {claim: "sfn loss bounded to one iteration's LLM call; state already externalized", evidence_or_counterexample: "Per-crash not per-episode (retry cap re-issues); conversation-transcript state is a third category durable rebuilds but sfn must serialize/reload atomically", disposition: revise}
+              - {claim: "Workspace unowned; different Lambdas share no filesystem", evidence_or_counterexample: "EFS-for-Lambda shares a filesystem across functions; prepare_workspace owns INITIAL materialization; residue = backing store + resume semantics", disposition: revise}
+              - {claim: ">15-min tool call breaks every Lambda substrate equally; ECS hatch covers", evidence_or_counterexample: "Hatch is an SFN-layer state unreachable mid-durable-persona without an undesigned bridge; composes more naturally per-iteration", disposition: revise}
+              - {claim: "Anthropic Batches unreachable through CD.28 transport", evidence_or_counterexample: "LiteLLM Anthropic PASSTHROUGH documents all endpoints incl. batches (proxy-mode; T4.2 plans in-process SDK)", disposition: revise}
+              - {claim: "LLM latency inside steps is billed full wall-clock; not movable without async provider mode", evidence_or_counterexample: "Relay-Lambda dodge merely relocates billed wall-clock; DeepSeek sync-only confirmed", disposition: sustain}
+              - {claim: "Two-variant spike is the cheapest discriminating experiment", evidence_or_counterexample: "Inconsistent with Q6's routing flip-condition; routing paper decision is cheaper; spike valid only in the LiteLLM branch", disposition: revise}
+              - {claim: "Determinism discipline is a diffuse per-persona authoring cost S", evidence_or_counterexample: "Concentrable in one shared harness -- but NO exit criterion or check enforces it and the replay-rate signal measures frequency not correctness", disposition: revise}
+              - {claim: "Q4 load-bearing with scope reconciliation", evidence_or_counterexample: "Both texts verified; reconciliation-by-scope is the only reading keeping both true", disposition: sustain}
+              - {claim: "Routing undecided; hosted free minutes confirmed", evidence_or_counterexample: "Both substantially verified with caveats (grep criterion would not catch a CLI subprocess; usage-policy predicate unrecorded)", disposition: sustain}
+            missing_questions: ["durable payload caps", "workspace_uri backing store", "determinism enforcement", "conversation-state ownership", "mid-loop ECS bridge", "LiteLLM proxy vs SDK reading of CD.28", "GH usage policy + 4-core fit", "CD.16 deploys vs in-flight executions at raised concurrency"]
+            verdict_pressure: neutral
+            pressure_target: ""
+          - perspective: economics-and-operations-reviewer
+            challenges:
+              - {claim: "Durable billing row symbolically complete at ~$1-2/mo CONFIRMED", evidence_or_counterexample: "Missing replay sub-invocation, workspace re-materialization (5.4GB env > 262MB zip cap => container-image init), and memory-config terms", disposition: revise}
+              - {claim: "$1-2/mo is the net compute figure", evidence_or_counterexample: "Gross; AWS free tier may zero net -- unverified for a 2026 account", disposition: needs-evidence}
+              - {claim: "No observability cost term needed", evidence_or_counterexample: "CloudWatch logs are the repo's dominant live line; replay duplicates log lines on durable; public Actions logs world-readable on hosted", disposition: revise}
+              - {claim: "sfn transitions +$0.01-0.10/mo", evidence_or_counterexample: "5-10x understatement: ~20-30K transitions/mo = $0.50-0.75", disposition: revise}
+              - {claim: "Container 30-90s cold start itemized as first-class cost", evidence_or_counterexample: "Asymmetric accounting: noise at 3.3 recs/day while the incumbent's per-resume costs were omitted; <1s premise fails for the 5.4GB persona anyway", disposition: revise}
+              - {claim: "Hosted row CONFIRMED at free-public-minutes", evidence_or_counterexample: "Understates 6h-cap interaction, shared 20-job quota, Max-pool contention, public-log exposure", disposition: revise}
+              - {claim: "data_pipeline precedent weighting complete", evidence_or_counterexample: "T4.1's OWN files_in_scope targets the same dead root; apply channel filters terraform/personal/** -- executor infra has no governed deploy path as scoped", disposition: revise}
+              - {claim: "Concurrency=1 makes drain trivial", evidence_or_counterexample: "Trivial in count, not duration; replay-noisy logs reach ci-rca; freeze-window runbook unowned", disposition: revise}
+              - {claim: "Economics do not discriminate at recorded scale", evidence_or_counterexample: "Survives all corrections; deltas stay <= ~$10-15/mo", disposition: sustain}
+            missing_questions: ["free-tier consumption", "re-materialization cost as spike metric", "transcript/log landing + Decision-101 exposure", "6h cap vs umbrella waits", "executor tf deploy path", "Max-pool monitoring", "drain procedure ownership"]
+            verdict_pressure: toward_named_alternative
+            pressure_target: long_running_container
+          - perspective: portability-and-reversibility-reviewer
+            challenges:
+              - {claim: "No repo surface decides persona routing", evidence_or_counterexample: "Decision 122 ratifies executor steady state as LiteLLM tiers and confines 116 to scheduled agents -- rationale gap, not unmade decision", disposition: revise}
+              - {claim: "Concurrency=1 drain triviality unconditional", evidence_or_counterexample: "T4.1 raises the cap at A2+ -- conditional at the post-window exit point", disposition: revise}
+              - {claim: "Post-window swap resets CD.17 evidence (M-L)", evidence_or_counterexample: "Trigger grammar does not re-arm; only CD.27:822's signal is substrate-specific; effort/calendar units mixed", disposition: needs-evidence}
+              - {claim: "Fallback is a NAME with no design; exits S/M", evidence_or_counterexample: "INTENT:439 records a port-claim (loop code ports unchanged); SFN retry is a structural driver; residue narrower", disposition: revise}
+              - {claim: "sfn loss bounded to one LLM call; reproduces most semantics", evidence_or_counterexample: "ASL scaffolding is the least portable artifact; per-iteration workspace round-trips for implement_agent; only the incumbent's exit was costed", disposition: revise}
+              - {claim: ">15-min tool calls break substrates equally", evidence_or_counterexample: "Hatch unreachable from inside a durable loop; sfn composes natively -- named-fallback-as-sufficiency pattern committed by the draft itself", disposition: revise}
+              - {claim: "Workspace re-materialization unowned by any tier item", evidence_or_counterexample: "prepare_workspace owns initial materialization; git-as-store shrinks the hand-roll; residue = resume-time policy", disposition: revise}
+              - {claim: "hosted_cli_runner rated 'yes' with favorable portability", evidence_or_counterexample: "Cross-boundary bridge (dispatch, heartbeat mapping, kill-switch reach) never costed; claude.yml is interactive, not queue-driven", disposition: revise}
+              - {claim: "NO comparative layer-2 evaluation exists anywhere", evidence_or_counterexample: "INTENT Stage-4 'Runtimes evaluated and not selected' table exists; genuinely unevaluated: sfn-per-iteration + hosted-CLI for personas", disposition: revise}
+              - {claim: "Q3 conformant-only-with-changes too harsh?", evidence_or_counterexample: "Not too harsh: T4.2 c1 contracts load-bearing state into a non-interchangeable compute service", disposition: sustain}
+            missing_questions: ["dec-122 reopen instrument", "symmetric alternative exit costs", "fallback driver vs deterministic-retry discipline", "health-signal replacement under swap", "intra-loop ECS reachability ownership"]
+            verdict_pressure: toward_incumbent
+            pressure_target: durable_functions
+          - perspective: frame-and-alternatives-challenger
+            challenges:
+              - {claim: "Closed nine-property matrix is neutral", evidence_or_counterexample: "Six of nine presuppose invocation-boundary replay; the two decisive discriminators (workspace, CLI-hostability) are structurally excluded -- Decision 75 bias restated", disposition: revise}
+              - {claim: "T4.2 exit criteria are a fixed exogenous spec for Q1", evidence_or_counterexample: "Endogenous, unratified, mechanism-named; substrate-neutral property restatement changes the scoring", disposition: revise}
+              - {claim: "Q6 insufficiency verdict is neutral", evidence_or_counterexample: "Prompt defaults RATED SUBSTRATE to the incumbent with no symmetric justification burden -- soft ratification undisclosed", disposition: sustain}
+              - {claim: "Q5 spike discriminates the Q6 flip conditions", evidence_or_counterexample: "Both arms are Lambda-class LiteLLM shapes; no claude -p arm, no workspace arm", disposition: revise}
+              - {claim: "Candidate set complete", evidence_or_counterexample: "CodeBuild-class AWS-native CLI runner (SFN startBuild.sync) traced; zero repo mentions; robust to both flip conditions", disposition: needs-evidence}
+              - {claim: "'Different Lambdas share no filesystem'", evidence_or_counterexample: "EFS-for-Lambda exists; EFS variant forces VPC+NAT (~$32/mo) -- would top the billing model", disposition: revise}
+              - {claim: "hosted_cli_runner one row covers both variants", evidence_or_counterexample: "GH-Actions vs CC-web differ on trigger/permission/capacity/autonomy axes; prompt required a materiality adjudication", disposition: revise}
+              - {claim: "Latency movability requires an async provider mode (universal)", evidence_or_counterexample: "Managed agent-runtime class (AgentCore-style) bills no CPU during I/O wait; never evaluated in-repo", disposition: needs-evidence}
+              - {claim: "self_checkpointed assessed as live candidate", evidence_or_counterexample: "Functions as near-straw: identical billing row, conditional CLI, unexecutable fallback -- but wins the owned-state NS-A axis which the rated-substrate structure hides", disposition: revise}
+              - {claim: "Layer-1 out-of-scope pin is cost-neutral", evidence_or_counterexample: "Pin pre-loads hosted's two-control-plane penalty; Decision 39 ratified SFN for the data pipeline; executor extension is CD.27-pending", disposition: sustain}
+            missing_questions: ["substrate-neutral criterion restatement before scoring", "spike arms for the binding branches", "EFS/NAT billing inversion", "single-other-slot adequacy", "Max-plan capacity model", "umbrella ratification scope", "workspace GC/handoff ownership"]
+            verdict_pressure: toward_candidate_set_incomplete
+            pressure_target: "aws_native_codebuild_runner (SFN-orchestrated CodeBuild run-to-completion CLI job)"
+        reconciliation:
+          - {challenge: "Suppression categorical/at-least-once for LLM calls", disposition: accepted, basis: "Q1 prose + matrix credits corrected: granularity + managedness, never exactly-once"}
+          - {challenge: "Conversation-transcript third state category", disposition: accepted, basis: "Added to Q1; strengthens durable vs sfn; conditional on unverified payload caps (unresolved)"}
+          - {challenge: "EFS exists / workspace ownership narrower", disposition: accepted, basis: "ESB-01 rewritten: backing-store decision + resume semantics; prepare_workspace credited"}
+          - {challenge: "ECS hatch asymmetry", disposition: accepted, basis: "Q1/Q7 revised -- then further softened in rounds 2-3 to weak asymmetry with unproven relevance"}
+          - {challenge: "LiteLLM passthrough reachability", disposition: accepted, basis: "Q2 mechanism inventory corrected; passthrough unverified within source cap (noted)"}
+          - {challenge: "Spike/routing ordering inconsistency", disposition: accepted, basis: "Q5 reordered; claude -p arm pruned after dec-122 with named re-arm condition"}
+          - {challenge: "Determinism enforcement gap", disposition: accepted, basis: "ESB-06 re-targeted to the missing detection/enforcement; silent divergence invisible to contracted signals"}
+          - {challenge: "Decision 122 settles routing", disposition: accepted, basis: "Q2a/ESB-03 rewritten: decided-with-rationale-gap, not unmade -- the round's largest factual correction"}
+          - {challenge: "INTENT Stage-4 comparative table exists", disposition: accepted, basis: "ESB-04 narrowed to the two unevaluated classes"}
+          - {challenge: "Fallback port-claim + SFN-retry driver", disposition: accepted, basis: "ESB-02 credits the partial design; in-flight migration dropped from required changes (round-2 refinement)"}
+          - {challenge: "Billing terms incomplete / arithmetic slips", disposition: accepted, basis: "All rows rebuilt: replay, re-materialization, tool wall-clock, CloudWatch, corrected transitions"}
+          - {challenge: "Free-tier net offset", disposition: deferred-needs-evidence, basis: "Unresolved: account plan unverified; gross figures published"}
+          - {challenge: "T4.1 tf files outside apply channel", disposition: accepted, basis: "Verified end-to-end; filed as new finding ESB-07"}
+          - {challenge: "6h cap vs umbrella lifecycle", disposition: rejected-with-basis, basis: "Mis-scoped: the umbrella stays on SFN layer 1 under hosted personas; waits are not runner-hosted; concurrency contention accepted"}
+          - {challenge: "Nine-property matrix incumbent-shaped", disposition: accepted, basis: "Property list is pinned by the audit contract; bias disclosed in Q1 prose and contract_notes"}
+          - {challenge: "CodeBuild-class missing member", disposition: deferred-needs-evidence, basis: "Traced but unverifiable within the exhausted 15-source cap; recorded in unresolved[] as class-adjacent to long_running_container"}
+          - {challenge: "AgentCore-class falsifies Q2 universal", disposition: deferred-needs-evidence, basis: "Q2 scoped to the assessed set; unresolved[] row added"}
+          - {challenge: "CC-web variant promotion", disposition: rejected-with-basis, basis: "Materiality adjudicated: shared decisive properties (CLI host, non-AWS control plane, external capacity); differences recorded in the row; each variant fails executor duty on its own axis"}
+          - {challenge: "Incumbent-default disclosure", disposition: accepted, basis: "Disclosed at Q6"}
+          - {challenge: "self_checkpointed near-straw", disposition: accepted, basis: "Owned-state NS-A axis and replay-immunity developed in billing row and Q6 elimination note"}
+        stable: false
+      - round: 2
+        reviewers:
+          - perspective: semantics-and-correctness-reviewer
+            challenges:
+              - {claim: "Latency immovable in-set (relay argument)", evidence_or_counterexample: "SFN http:invoke holds a sync HTTPS call at transitions-only billing -- in-set counterexample; barred by LiteLLM discipline, caps unverified", disposition: needs-evidence}
+              - {claim: "Determinism discipline concentrates in one shared harness", evidence_or_counterexample: "INTENT OQ2 commits to a hand-rolled loop PER persona; surface is 5-7x", disposition: revise}
+              - {claim: "Durable rebuilds transcript automatically (strengthens durable)", evidence_or_counterexample: "Conditional on unverified per-payload caps; MB-scale tool outputs may force in-loop S3 pointers", disposition: needs-evidence}
+              - {claim: "ECS-hatch asymmetry favors sfn (first-class axis)", evidence_or_counterexample: "No contract names an in-loop >15-min call (T4.9a c1); pinned sfn shares the 15-min wall -- both need bridges", disposition: revise}
+              - {claim: "Routing ratified WITHOUT recorded rationale", evidence_or_counterexample: "Distributed rationale exists (cost_projection, 116 reversal condition, D47 cite); residue narrower", disposition: revise}
+              - {claim: "T4.1 tf files have NO deploy path", evidence_or_counterexample: "Verified; precision: no AGENT-REACHABLE governed path (break-glass exists); T4.9a:7118 corroborates", disposition: sustain}
+              - {claim: "Hosted kill-switch cannot stop a runner job; public logs inherent exposure", evidence_or_counterexample: "run-cancel/workflow-disable APIs exist (XS); logs correctable by sink choice -- symmetric with the incumbent's backing-store framing", disposition: revise}
+              - {claim: "CD.17 monotone grammar; post-window amendment off exit path", evidence_or_counterexample: "Grammar verified non-monotone via latest_run conjunct; no-re-arm holds by other means; window-signal analysis verified", disposition: sustain}
+            missing_questions: ["durable payload cap vs implement outputs", "http:invoke viability/prohibition", "does any contract place >15-min calls in-loop", "shared vs per-persona harness", "concurrency-raise regime", "rca/bookkeeping invocation topology"]
+            verdict_pressure: neutral
+            pressure_target: ""
+          - perspective: economics-and-operations-reviewer
+            challenges:
+              - {claim: "Compute magnitude $1-2/mo; 2-10x implement uplift; deltas <= $10-15", evidence_or_counterexample: "Internally inconsistent with sfn row's own iteration counts ($2.50-7.50 at 1GB); tool wall-clock unnamed; 5.4GB is disk not RAM", disposition: revise}
+              - {claim: "Replay-rate signal defect = frequency-not-correctness", evidence_or_counterexample: "Sharper defect: arithmetic firability -- routine replay vs <5% gate with undefined denominator; CloudWatch replay duplication structural on durable", disposition: revise}
+              - {claim: "Free-tier hedge as stated", evidence_or_counterexample: "2026 account may sit on post-2025 credit plan; hedge checkable and plausibly inapplicable", disposition: needs-evidence}
+              - {claim: "cost_projection usable as baseline record", evidence_or_counterexample: "Its SFN line overstates own arithmetic 13-44x; retired-runner line persists -- record cannot cross-check the audit", disposition: revise}
+              - {claim: "Hosted kill incapability", evidence_or_counterexample: "Cancel APIs exist; restate as control-plane split", disposition: revise}
+              - {claim: "Non-discrimination headline + NAT as the one material term", evidence_or_counterexample: "Survives; NAT-instance variant ~$3-5/mo softens even that; durable ops 3-10x understated but immaterial", disposition: sustain}
+              - {claim: "T4.1 deploy-path finding", evidence_or_counterexample: "Independently verified; medium either way", disposition: sustain}
+            missing_questions: ["replay-rate denominator/firability", "account free-tier plan", "implement memory config + tool wall-clock share", "replay log duplication factor", "NAT-instance variant", "hosted cancel credential + latency"]
+            verdict_pressure: toward_incumbent
+            pressure_target: durable_functions
+          - perspective: portability-and-reversibility-reviewer
+            challenges:
+              - {claim: "NS-A anchored at PROJECT_CONTEXT:253-255", evidence_or_counterexample: "That file self-declares non-authoritative; authoritative NS.1 at ROADMAP:252-254 is lakehouse-scoped; on compute-interchangeability the incumbent is worst-in-set", disposition: revise}
+              - {claim: "Fallback re-eval clause is a credited planned control", evidence_or_counterexample: "The promised INTENT Open Question DOES NOT EXIST (OQ1-9 checked; repo grep) -- dangling pointer, no carrier, no enforcement", disposition: revise}
+              - {claim: "Fallback requires an in-flight migration path", evidence_or_counterexample: "At this scale abandon-and-refile via the contracted kill-switch is the rational exit; migration path not load-bearing", disposition: revise}
+              - {claim: "Exit costs symmetric (effort-only)", evidence_or_counterexample: "Symmetric in units, not exposure: incumbent's modal exit is a disorderly vendor-regression tail no self-owned-loop alternative carries", disposition: revise}
+              - {claim: "Hosted exit priced by bridge alone", evidence_or_counterexample: "CLI-harness -> in-process-SDK rewrite plausibly L across five personas; unverified in packet", disposition: needs-evidence}
+              - {claim: "Post-window S on exit path", evidence_or_counterexample: "Redefinition is post-exit hygiene; only one of four signals substrate-specific; T4.2 c5 neutral -- XS paper", disposition: revise}
+              - {claim: "Drain triviality erodes at A2+", evidence_or_counterexample: "Verified; degrades trivial -> cheap, never material at this scale", disposition: sustain}
+              - {claim: "sfn escape-hatch native composition", evidence_or_counterexample: "False dichotomy at pinned granularity: hoisting is also a bridge; weak asymmetry only", disposition: revise}
+            missing_questions: ["re-eval carrier instantiation", "CD.17 one-shot vs standing predicate", "prior-audit C7 annotation", "EFS-forecloses-hosted disclosure"]
+            verdict_pressure: toward_incumbent
+            pressure_target: durable_functions
+          - perspective: frame-and-alternatives-challenger
+            challenges:
+              - {claim: "Q1 anchor (T4.2 c1) used for scoring after flagging its bias", evidence_or_counterexample: "Scoring through a contaminated criterion is not cured by flagging it; substrate-neutral re-derivation required", disposition: revise}
+              - {claim: "Incumbent-leads designation", evidence_or_counterexample: "The container head-to-head on corrected axes was never run; container erases ESB-01-resume and ESB-06 and its penalty prices in cents", disposition: revise}
+              - {claim: "Q6 insufficiency after dec-122", evidence_or_counterexample: "Opens are already-scoped priced probes -- deferral of judgment; commit conditionally or rate the runner-up symmetrically", disposition: revise}
+              - {claim: "CodeBuild deferral buries a leading option", evidence_or_counterexample: "Sound in outcome: class-adjacent to long_running_container while dec-122 stands; record the adjacency", disposition: sustain}
+              - {claim: "Frame-lock reproduced at candidate layer", evidence_or_counterexample: "Not at candidate layer (set spans the boundaries); partially at scoring layer via contract vocabulary", disposition: revise}
+              - {claim: "EFS mentioned nowhere in repo", evidence_or_counterexample: "ducklake-spike-findings.md:77,154 evaluates EFS-backed Lambda persistence (FP-A) -- factual error", disposition: revise}
+              - {claim: "CC-web non-promotion", evidence_or_counterexample: "Sound: each variant fails executor duty on its own distinct fatal axis; class treatment with row-recorded differences suffices", disposition: sustain}
+              - {claim: "claude -p spike arm pruned", evidence_or_counterexample: "Defensible under dec-122 + 116 reversal condition; state the re-arm condition explicitly", disposition: sustain}
+            missing_questions: ["neutral criteria before spike", "findings intrinsic vs replay-induced as scoring dimension", "hybrid_by_persona admissibility vs CD.27 uniform point", "container arm as candidate for implement_agent"]
+            verdict_pressure: toward_named_alternative
+            pressure_target: long_running_container
+        reconciliation:
+          - {challenge: "http:invoke counterexample", disposition: accepted, basis: "Added to Q2 as in-set mechanism barred by LiteLLM discipline; caps HYPOTHESIS (round-3: ~60s class would foreclose reasoner calls)"}
+          - {challenge: "Per-persona harness (INTENT OQ2)", disposition: accepted, basis: "ESB-06 strengthened; Q1 amortization claim withdrawn"}
+          - {challenge: "Transcript differential conditional on payload caps", disposition: deferred-needs-evidence, basis: "unresolved[]: durable quota page unreachable this run"}
+          - {challenge: "Escape-hatch relevance + symmetry", disposition: accepted, basis: "Downgraded to weak asymmetry, optional spike probe"}
+          - {challenge: "Distributed routing rationale", disposition: accepted, basis: "ESB-03 narrowed to principle-and-consequence gap"}
+          - {challenge: "NS-A anchor authority", disposition: accepted, basis: "Q3 re-anchored to ROADMAP:252-254 with scoping note; worst-in-set observation added"}
+          - {challenge: "Dangling INTENT-OQ pointer", disposition: accepted, basis: "ESB-02 upgraded to high (with round-3 prior-audit-false-dismissal corroboration)"}
+          - {challenge: "In-flight migration not load-bearing", disposition: accepted, basis: "Q3 changes list revised; kill-and-refile runbook named"}
+          - {challenge: "Asymmetric vendor-regression tail", disposition: accepted, basis: "Disclosed at Q5; scoped to self-owned-loop alternatives in round 3"}
+          - {challenge: "Hosted exit L-scale", disposition: accepted, basis: "Repriced -- then netted in round 3 (gross L / sunk delta S-M with netting convention disclosed)"}
+          - {challenge: "Post-window cost placement", disposition: accepted, basis: "Moved off exit path; reversal rows set to XS contract at after-stability-window"}
+          - {challenge: "Compute magnitude inconsistencies", disposition: accepted, basis: "Envelope rebuilt: $1-8/mo base, tool wall-clock term, disk-vs-RAM distinction, per-iteration transitions corrected"}
+          - {challenge: "Replay-rate firability", disposition: accepted, basis: "New finding ESB-08 (refined round 3: 822-leg carries; INTENT:352 leg semantic)"}
+          - {challenge: "cost_projection self-inconsistency", disposition: accepted, basis: "Folded into ESB-09"}
+          - {challenge: "Free-tier plan applicability", disposition: deferred-needs-evidence, basis: "unresolved[]"}
+          - {challenge: "Hosted kill/logging restatement", disposition: accepted, basis: "Control-plane split + sink-choice framing adopted symmetrically"}
+          - {challenge: "Q1 scoring anchor contamination", disposition: accepted, basis: "Q1 made explicitly contract-conditional; ESB-05 remedy sequenced BEFORE the spike"}
+          - {challenge: "Container head-to-head", disposition: accepted, basis: "Run qualitatively in Q6; spike container arm added; full head-to-head is the spike's job"}
+          - {challenge: "Commit conditionally at Q6", disposition: rejected-with-basis, basis: "Output contract admits no conditional verdict; a named verdict pre-spike/pre-probe manufactures confidence (NS-B); soft-default disclosed instead"}
+          - {challenge: "EFS-nowhere factual error", disposition: accepted, basis: "Corrected to DuckLake FP-A prior art, never-for-executor-workspace"}
+        stable: false
+      - round: 3
+        reviewers:
+          - perspective: semantics-and-correctness-reviewer
+            challenges:
+              - {claim: "Container trivially satisfies the neutral restatement", evidence_or_counterexample: "Crash/deploy interruptions re-issue EVERY completed call; container satisfies only an expected-loss-bounded contract", disposition: revise}
+              - {claim: "ESB-08 INTENT:352 arithmetic breach", evidence_or_counterexample: "900s ceiling caps forced replays at ~4/hr < the >5/hr alarm; 822-leg (undefined denominator, 87.5% natural reading) carries the finding", disposition: revise}
+              - {claim: "Artifact still says EFS appears nowhere", evidence_or_counterexample: "Publish-blocking lag vs corrected packet wording", disposition: revise}
+              - {claim: "One-shot fire semantics", evidence_or_counterexample: "No latch exists in code; publish as inferred-from-ratification-mechanics", disposition: needs-evidence}
+              - {claim: "Load-bearing anchors (13-44x, dangling pointer, deploy gap, NS.1 authority, cron rot, c1 naming, D39 typing)", evidence_or_counterexample: "All independently re-verified; safe at CONFIRMED", disposition: sustain}
+            missing_questions: ["http:invoke 60s cap check", "per-persona timeout/memory config obligation", "822 denominator one-line fix", "packet-to-artifact reconciliation gate"]
+            verdict_pressure: toward_incumbent
+            pressure_target: durable_functions
+          - perspective: economics-and-operations-reviewer
+            challenges:
+              - {claim: "ESB-08 dual-leg arithmetic incoherence", evidence_or_counterexample: "INTENT:352 leg is semantic tension only (peak ~4/hr); 822 leg sound; baseline-window sibling defect added", disposition: revise}
+              - {claim: "Hosted $0 + NAT-only materiality", evidence_or_counterexample: "Visibility coupling (private flip => $0.008/min => order $50-150/mo, plausibly worst-in-set) and usage-policy exposure unnamed", disposition: revise}
+              - {claim: "Test-proven kill-switch", evidence_or_counterexample: "T4.1 not_started; contracted-to-be-test-proven", disposition: revise}
+              - {claim: "Replay log duplication structural on durable", evidence_or_counterexample: "Possibly correctable by a replay-indicator guard if the runtime exposes one (unverified); restate symmetrically", disposition: needs-evidence}
+              - {claim: "13-44x SFN line + retired lines", evidence_or_counterexample: "Independently verified; headline total also sums retired lines", disposition: sustain}
+            missing_questions: ["ECR image-storage line", "http:invoke caps", "durable-ops pricing fold-in to payload-cap probe", "cost-per-rec baseline computability"]
+            verdict_pressure: toward_incumbent
+            pressure_target: durable_functions
+          - perspective: portability-and-reversibility-reviewer
+            challenges:
+              - {claim: "Hosted exit L", evidence_or_counterexample: "No netting convention: the in-process loop build is pre-paid on the incumbent path and avoided at hosted adoption; sunk delta S-M; L conditional on dec-122", disposition: revise}
+              - {claim: "Dangling-pointer finding", evidence_or_counterexample: "Verified AND strengthened: prior audit C7 dismissal relied on the phantom control; scope-corrected (tracking carriers exist; the CADENCE carrier is missing)", disposition: sustain}
+              - {claim: "One-shot fire semantics", evidence_or_counterexample: "Not in the tree; no-re-arm is governance-process fact; pre-fire modal exit makes it moot anyway", disposition: revise}
+              - {claim: "Step (0) workspace decision then spike", evidence_or_counterexample: "Sequencing inversion + EFS silently eliminates hosted (no VPC path); rescope (0) to criteria; S3-sync is the only full-set-portable store", disposition: revise}
+              - {claim: "No alternative carries a vendor-regression tail", evidence_or_counterexample: "hosted carries an analogous unpinnable-vendor-CLI tail; rescope to self-owned-loop alternatives", disposition: revise}
+            missing_questions: ["exit-cost netting convention uniformity", "CD.17 evaluator identity (T-1.20 unbuilt)", "prior-audit C7 annotation", "EFS-elimination recording"]
+            verdict_pressure: neutral
+            pressure_target: ""
+          - perspective: frame-and-alternatives-challenger
+            challenges:
+              - {claim: "Q6 headline vs ESB-08/ESB-05 consistency", evidence_or_counterexample: "'Leads as contracted' quietly adopts contract text the audit rates defective; state the dual reading at the verdict site", disposition: revise}
+              - {claim: "AgentCore exclusion rationale", evidence_or_counterexample: "'Never evaluated in-repo' is not an applied membership criterion (hosted is in-set despite ESB-04); resolution list could not discharge the deferral -- add a scoping item", disposition: revise}
+              - {claim: "Container rival priced at ECS instantiation", evidence_or_counterexample: "Ops-surface term is instantiation-specific; the class's cheapest member sheds it", disposition: revise}
+              - {claim: "Two-horse disclosure drops members silently", evidence_or_counterexample: "self_checkpointed absent from verdict reasoning despite replay-immunity; add elimination one-liners", disposition: revise}
+              - {claim: "Insufficiency verdict itself", evidence_or_counterexample: "Sound: no conditional verdict expressible; NS-B; arms on both sides; soft default disclosed", disposition: sustain}
+            missing_questions: ["dual-reading survival of the lead", "membership evidence standard", "class vs instantiation costing", "resolution-list scope limits"]
+            verdict_pressure: toward_candidate_set_incomplete
+            pressure_target: "AgentCore-class managed runtime (CodeBuild-class as the container rival's ops-free instantiation)"
+        reconciliation:
+          - {challenge: "Neutral-restatement container wording", disposition: accepted, basis: "Q6 phrases the container case as expected-loss-bounded, never no-reissue"}
+          - {challenge: "ESB-08 leg split", disposition: accepted, basis: "Finding restated: 822-leg carries; INTENT:352 semantic tension; baseline sibling added; human-evaluated caveat included"}
+          - {challenge: "Artifact EFS line", disposition: accepted, basis: "Deliverable corrected before publication"}
+          - {challenge: "One-shot semantics attribution", disposition: accepted, basis: "Republished as governance-process inference (no coded latch; T-1.20 unbuilt)"}
+          - {challenge: "Hosted exit netting", disposition: accepted, basis: "Q5 + reversal basis disclose gross-vs-sunk convention"}
+          - {challenge: "Step-0 sequencing + EFS foreclosure", disposition: accepted, basis: "Step 0 rescoped to criteria paper; EFS-eliminates-hosted disclosure added"}
+          - {challenge: "Vendor-tail scope", disposition: accepted, basis: "Rescoped to self-owned-loop alternatives"}
+          - {challenge: "Hosted $0 conditioning", disposition: accepted, basis: "Visibility coupling + policy predicate added to ESB-09 and the hosted row"}
+          - {challenge: "Kill-switch tense", disposition: accepted, basis: "Contracted-to-be-test-proven phrasing"}
+          - {challenge: "Replay-log structural labeling", disposition: deferred-needs-evidence, basis: "Restated symmetrically; runtime replay-indicator surface unresolved[]"}
+          - {challenge: "Q6 headline dual reading", disposition: accepted, basis: "Fairness note added at the verdict site"}
+          - {challenge: "AgentCore rationale + resolution item", disposition: accepted, basis: "unresolved[] reworded (source-cap limit, not evidence judgment); scoping item added to Q6 resolution list"}
+          - {challenge: "Instantiation-specific ops surface", disposition: accepted, basis: "Q6 and billing row mark the ECS-variant specificity"}
+          - {challenge: "Member elimination one-liners", disposition: accepted, basis: "Added to Q6 (sfn, self_checkpointed incl. replay-immunity, hosted)"}
+          - {challenge: "ECR storage line", disposition: accepted, basis: "Noted as enumerable, roughly symmetric, non-discriminating"}
+          - {challenge: "http:invoke 60s foreclosure", disposition: deferred-needs-evidence, basis: "Added as HYPOTHESIS-strengthening caveat; verification in unresolved[]"}
+        stable: false
+    unresolved:
+      - {issue: "CodeBuild-class AWS-native CLI runner (SFN startBuildBatch/startBuild.sync per persona; native checkout workspace; IAM/Secrets control plane) -- traced in review, zero repo mentions, ecosystem facts unverifiable within the exhausted 15-source cap; class-adjacent to long_running_container while dec-122 stands, distinct if ESB-03 reopens", why_unresolved: "Source cap; assessing it to the in-set evidence bar needs its own doc-level pass", affects: [ESB-04]}
+      - {issue: "AgentCore-class managed agent runtime (no CPU charge during I/O wait) -- would falsify Q2's in-set async-mode generalization if verified; never evaluated in-repo (CD.28's Bedrock retirement was inference-pricing-scoped, not runtime-scoped)", why_unresolved: "Source cap; needs the same doc-level pass in-set members received", affects: [ESB-04, ESB-09]}
+      - {issue: "Durable per-payload/step-result caps and current durable-ops pricing -- conditions the transcript-rebuild differential and the ops cost line", why_unresolved: "Quota page unreachable this run (404); fold into the eu-west-2 capability probe", affects: [ESB-01, ESB-09]}
+      - {issue: "AWS free-tier applicability for the 2026-created account (post-2025 credit plan?) and remaining Lambda allowance after live DuckLake Lambdas", why_unresolved: "Account-plan check not performable read-only this run; gross figures published", affects: [ESB-09]}
+      - {issue: "SFN http:invoke hard caps (~60s-class timeout, 256KB response) -- would foreclose the in-set movability path outright for reasoner calls", why_unresolved: "Source cap", affects: [ESB-09]}
+      - {issue: "GitHub Actions usage-policy fit for a standing self-improvement executor loop on free public-repo minutes", why_unresolved: "Policy-interpretation question; unrecorded predicate", affects: [ESB-09]}
+      - {issue: "Whether the AWS durable runtime exposes a replay indicator usable as a logging guard (determines whether replay log duplication is structural or config hygiene)", why_unresolved: "Runtime surface unverified within source cap", affects: [ESB-09]}
+  findings:
+    - id: ESB-01
+      surface: failure_semantics
+      question: Q1
+      dimension: VD2
+      title: "The workspace backing store is undecided and resume re-materialization is unowned: checkpoint/replay covers step return values, not the git worktree the heavy personas mutate"
+      evidence: "https://docs.aws.amazon.com/durable-execution/patterns/best-practices/determinism/; docs/ROADMAP-PLATFORM.yaml:6669,6673,6777; docs/plans/reports/ducklake-spike-findings.md:77,154"
+      evidence_kind: static
+      current_behavior: "T4.1's prepare_workspace owns INITIAL materialization (clone, branch, worktree, return workspace_uri) -- but no surface states what backs workspace_uri across persona invocations (Lambda /tmp does not survive suspension) or how a workspace is re-materialized on resume. EFS-for-Lambda would make it a shared mount (evaluated in-repo only as DuckLake FP-A prior art, never for the executor workspace; it carries VPC coupling and a NAT term -- ~$32/month managed, ~$3-5 as a NAT instance -- and is structurally unreachable from GitHub-hosted runners). Inter-persona workspace HANDOFF (plan_agent branch to implement_agent worktree) and persona-to-ECS-task handoff are equally uncovered. The conversation-transcript state category is related but distinct: durable rebuilds it on replay from stored step results (conditional on unverified per-payload caps); iteration-granular alternatives must serialize/reload it atomically each iteration."
+      ideal_behavior: "A named backing store (EFS mount / S3-sync / container-local disk / git-as-store with commit-at-step-boundaries) chosen against recorded criteria, an owned resume-re-materialization semantics, and a resume criterion covering workspace state beside the tool-call-resume criterion."
+      gap: "T4.2's forced-timeout criterion verifies tool-call resume but is silent on the loop's dominant mutable state; a green e2e smoke with stub personas would not prove a resumable implement_agent."
+      compensating_controls_considered: "S3-pointer pattern (ROADMAP:818) covers ARTEFACTS, not the working tree; prepare_workspace covers initial materialization only; git itself can serve as the durable store IF a commit-at-step-boundaries discipline is adopted -- that discipline is exactly the undesigned piece."
+      change_type: add
+      proposed_change: "Author the backing-store decision paper (criteria first -- the choice is a portability commitment: EFS forecloses hosted_cli_runner; S3-sync is the only full-set-portable store), let the Q5 spike's persistent-workspace arm inform the final choice, and add a workspace-resume exit criterion to T4.2."
+      acceptance: "A tier item names the mechanism and its criteria; T4.2 gains a workspace-resume criterion; the spike exercises it at the observed 5.4GB env scale."
+      severity: high
+      severity_rationale: "Without it the substrate's headline guarantee (resume without redoing work) is unprovable for the two personas that justify the substrate, and the gap's COST DIFFERS STRUCTURALLY BY CLASS -- it is the single largest open discriminator in the substrate decision."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [T4.1, T4.2], dedup_search_terms: ["workspace", "workspace_uri", "EFS", "re-materializ", "worktree"], dedup_hit_count: 6, note: "ROADMAP hits are prepare_workspace's own line + unrelated CC-web mentions; rec-cache hits (19) are CLI prompt-injection workspace files, unrelated; EFS prior art found at ducklake-spike-findings.md (round-3 review correction of this audit's own 'nowhere in repo' overclaim)"}
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Criteria paper is XS and unblocked; the mechanism decision lands with the spike"}
+    - id: ESB-02
+      surface: portability_and_lockin
+      question: Q3
+      dimension: VD4
+      title: "The named fallback is under-specified AND its promised re-evaluation carrier does not exist -- and the phantom control has already produced a false dismissal in a prior audit"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:821; docs/INTENT-provider-agnostic-executor.md (Open Questions contain no fallback entry; :439 reversibility paragraph); audits/executor-roadmap-review-7d57a0d.yaml:794-800"
+      evidence_kind: static
+      current_behavior: "CD.27:821 names the fallback (self-checkpointed Lambda + DynamoDB) and claims it is 'recorded as an INTENT Open Question for re-eval at each T4.2 atomic-plan filing'. No such Open Question exists anywhere (INTENT OQ1-9 and ROADMAP OQ.1-15 checked; repo-wide grep confirms). The prior executor audit's C7 maturity-risk challenge was DISMISSED citing exactly that per-filing re-evaluation as the compensating control (7d57a0d:794-800) -- the phantom control has already been trusted once. What DOES exist: T4.2 c1 checkpoint-replay tracking, the INTENT:352 replay alarm, and INTENT:439's port-claim ('the agent loop code itself ports unchanged' behind an SDK-mimicking shim) plus SFN-retry-as-driver -- real partial design, credited. Missing: state schema, checkpoint-granularity spec, and the re-eval cadence carrier; an in-flight migration path is NOT required at this scale (abandon-and-refile via the T4.1 kill-switch -- contracted-to-be-test-proven, not yet built -- is the rational exit; the XS runbook is unwritten)."
+      ideal_behavior: "A fallback specified to state-schema + granularity level with an instantiated, enforced re-evaluation carrier (planning-skill gate or validate.py check on T4.2 atomic plans), and an annotation on the prior audit's C7 dismissal."
+      gap: "Under the regression scenario the fallback is design-from-scratch under calendar pressure; the maturity hedge CD.27 presents as recorded does not operate."
+      compensating_controls_considered: "T4.2 c1 + INTENT:352 track replay HEALTH (real controls for detecting regression) but do not carry the re-evaluation cadence; the INTENT:439 port-claim is an assertion, not a tested property."
+      change_type: enforce
+      proposed_change: "File the fallback spec (one page: schema, driver, cutover-by-refile, effort) into the first T4.2 atomic plan; instantiate the re-eval carrier the CD.27 text promises; annotate 7d57a0d C7's dismissal as resting on a control since shown phantom."
+      acceptance: "The spec and carrier exist before the first persona lands, or CD.27's text stops presenting the fallback as a recorded, re-evaluated exit."
+      severity: high
+      severity_rationale: "The fallback is the load-bearing answer to NS-A and to a ~7-month-old service's maturity risk; its stated control is phantom and has already caused one wrong-but-trusted dismissal downstream -- the high-severity definition met literally."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-insufficient, item_ids: [T4.2, CD.27], dedup_search_terms: ["self-checkpointed", "fallback", "DynamoDB", "re-eval"], dedup_hit_count: 4, note: "Hits: CD.27:821 itself, INTENT:439, and 7d57a0d C7 (whose dismissal this finding annotates as unsound); the planned control exists as prose but its carrier does not"}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "One-page spec + carrier instantiation; belongs in the first persona atomic plan"}
+    - id: ESB-03
+      surface: persona_substrate
+      question: Q2a
+      dimension: VD8
+      title: "Persona routing is ratified (dec-122) without a recorded rationale addressed to Decision 116's agentic/non-agentic principle, and the reopen consequence (substrate-set collapse) is unrecorded"
+      evidence: "docs/DECISIONS.md:2043-2048,2295-2338; docs/ROADMAP-PLATFORM.yaml:6739-6758,7341-7347"
+      evidence_kind: static
+      current_behavior: "Decision 122 ratifies the executor steady state as LiteLLM tiers and confines 116's claude -p split to scheduled agents. T4.2's personas are agentic tool-using loops by 116's own criterion. A DISTRIBUTED rationale for the split exists (executor volume priced on DeepSeek at ~$0.05/rec; 116's reversal condition names executor Tier-2 and scheduled claude -p as distinct pool draws; dec-122 cites Decision 47), but no recorded statement addresses the 116 PRINCIPLE as applied to personas, and nothing records that reopening it would collapse the viable substrate set to the CLI-hosting class (Q2a cli_hosting)."
+      ideal_behavior: "One recorded paragraph (dec-122 amendment or new decision) stating why executor agentic loops route to LiteLLM while scheduled agentic agents route to claude -p, and naming the substrate consequence of any future reopen."
+      gap: "Re-litigation risk on a load-bearing premise of the substrate decision; a future session reading 116's principle could conclude personas were overlooked rather than decided."
+      compensating_controls_considered: "Decision 116's reversal condition (Max-pool contention) bounds the reopen branch economically and points AWAY from claude -p at executor volume -- a real partial control."
+      change_type: clarify
+      proposed_change: "Record the rationale paragraph and the reopen consequence; T4.2's transport section cites it."
+      acceptance: "A decision text addresses the principle explicitly; grep finds the reopen consequence recorded."
+      severity: medium
+      severity_rationale: "The decision exists (round-1 review corrected this audit's draft claim that it did not); the residual is rationale coherence and consequence recording, not an unmade decision"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [T4.2, T4.12], dedup_search_terms: ["claude -p", "provider routing", "Decision 116", "agentic"], dedup_hit_count: 3, note: "Hits: T4.12's scheduled-agent-scoped forward-intent ('NOT a routing Decision') and dec-116/122 texts; none address the persona principle"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Paper-only"}
+    - id: ESB-04
+      surface: persona_substrate
+      question: Q6
+      dimension: VD8
+      title: "The layer-2 comparative evaluation is incomplete: container-class alternatives were evaluated (INTENT Stage-4 table) but sfn-per-iteration-for-personas and hosted-CLI-for-personas never were"
+      evidence: "docs/INTENT-provider-agnostic-executor.md (Stage 4 substrate table + 'Runtimes evaluated and not selected'); docs/ROADMAP-PLATFORM.yaml:747-825; docs/DECISIONS.md:4137-4188"
+      evidence_kind: static
+      current_behavior: "A real comparative record EXISTS -- the Stage-4 table evaluates Lambda-container-as-harness, Fargate-single-executor, AWS Batch, Modal/Cloud Run/EKS, and Durable-Functions-without-Step-Functions, with reasons -- correcting this audit's round-1 draft claim that no comparison was recorded. What was never evaluated: the persona loop as SFN-per-iteration state transitions (Decision 75's own alternative class, applied one layer down), the hosted-CLI-runner class for personas, and (traced in review, unverifiable within this run's source cap) the CodeBuild-class and AgentCore-class options."
+      ideal_behavior: "NS-B: the ratifying decision cites a comparative record covering the pinned alternatives -- the standard Decision 39 meets for layer 1."
+      gap: "The unevaluated candidates include the one class (per-iteration SFN) that the repo's own frame-lock post-mortem says surfaced only from outside perspective."
+      compensating_controls_considered: "CD.27's pending state keeps ratification open (real control) but prescribes no comparative content; the Stage-4 table covers the container axis only."
+      change_type: enforce
+      proposed_change: "Ratify CD.27 layer 2 only alongside a comparative record covering the pinned set (this audit may serve) plus the Q5 spike result."
+      acceptance: "The ratifying decision cites the comparison and the spike outcome."
+      severity: medium
+      severity_rationale: "Process gap partially covered by live controls (pending status; Stage-4 table); no wrong commitment yet made"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-insufficient, item_ids: [CD.27, T4.2], dedup_search_terms: ["Runtimes evaluated", "alternative", "frame lock", "Decision 75"], dedup_hit_count: 3, note: "Stage-4 table found by round-1 review (correcting this audit's own draft); Decision 75 names the failure mode; 7d57a0d EXR findings do not cover evaluation sufficiency"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Bookkeeping on the ratification path"}
+    - id: ESB-05
+      surface: persona_substrate
+      question: Q5
+      dimension: VD4
+      title: "Mechanism-named contracts: T4.1's node typing, T4.2 criterion c1, and CD.27:822's replay-rate health signal name the incumbent's mechanism rather than substrate-neutral resume properties"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:6670-6674,6777,822,6781"
+      evidence_kind: static
+      current_behavior: "T4.1 types the persona nodes '[Durable Function, T4.2]'; T4.2 c1 reads 'checkpoint-replay verified: a forced timeout mid-persona-loop resumes from last completed tool call'; CD.27:822's health signal is 'per-persona checkpoint-replay rate < 5%'. Scope narrowed by review: T4.2's own stability criterion c5 IS substrate-neutral, so the defect is confined to c1, the node typing, and the 822 signal."
+      ideal_behavior: "Property-named contracts ('a killed persona resumes without re-issuing completed LLM calls and without losing workspace state; loss bounded') testable under every candidate, with the mechanism left to atomic plans -- restated BEFORE the Q5 spike so its pass/fail vocabulary does not inherit the incumbent's mechanism."
+      gap: "Mechanism-named criteria bias every future evaluation toward the incumbent (the Decision 75 frame-lock at the scoring layer) and quietly raise reversal cost; Q1's verdict had to be conditioned on this contract to stay honest."
+      compensating_controls_considered: "CD.27's pending status keeps the text amendable at zero migration cost."
+      change_type: rescope
+      proposed_change: "Reword T4.2 c1 and the 822 signal to substrate-neutral properties; keep the mechanism in CD.27's detail."
+      acceptance: "Exit criteria and health signals test properties; the spike's success vocabulary is substrate-neutral."
+      severity: medium
+      severity_rationale: "Avoidable evaluation bias and reversal-cost driver; no correctness loss today"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [T4.1, T4.2], dedup_search_terms: ["checkpoint-replay", "forced timeout", "health signal"], dedup_hit_count: 3, note: "Hits are the criteria themselves; no prior finding names their substrate-specificity"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Text rescope; sequence BEFORE the spike"}
+    - id: ESB-06
+      surface: persona_substrate
+      question: Q1
+      dimension: VD7
+      title: "No contracted signal or check detects silent replay divergence, and the determinism-discipline surface is per-persona by recorded intent, multiplying exposure"
+      evidence: "https://docs.aws.amazon.com/durable-execution/patterns/best-practices/determinism/; docs/INTENT-provider-agnostic-executor.md (OQ2: hand-rolled loop per persona; framework per-persona); docs/ROADMAP-PLATFORM.yaml:7196-7231,822"
+      evidence_kind: static
+      current_behavior: "AWS requires every non-deterministic call wrapped in a step, forbids branch decisions on unwrapped values, and silently loses outer-state writes inside step bodies -- failures that manifest as correct-first-run/wrong-replay. The repo's recorded intent commits to a hand-rolled loop PER persona (not one shared harness), so the discipline surface is 5-7x. T4.10a contract fields encode none of these rules; no validate.py check exists; and the checkpoint-replay-rate signal measures replay FREQUENCY, not replay CORRECTNESS -- silent divergence is invisible to every contracted signal."
+      ideal_behavior: "If the incumbent is ratified: a determinism-rule section in the persona contract template plus a static check in validate.py --pre, so violations fail at PR time; ideally one shared loop harness concentrating the discipline (revisiting INTENT OQ2)."
+      gap: "The failure class survives e2e smokes (which exercise one benign replay path) and surfaces as rare production incidents on the ci-rca path."
+      compensating_controls_considered: "T4.2's forced-timeout criterion exercises ONE replay path per persona -- real but narrow; it cannot cover branch-divergence classes."
+      change_type: add
+      proposed_change: "Add determinism rules to the T4.10a contract template and a static check to validate.py, conditional on the incumbent's ratification; revisit the per-persona-harness intent."
+      acceptance: "validate.py flags an unwrapped nondeterministic call in a persona module."
+      severity: medium
+      severity_rationale: "Real, subtle, incumbent-specific failure class; bounded by concurrency=1 and RCA-first containment (an incident becomes a rec, not a cascade)"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [T4.10a, T4.2], dedup_search_terms: ["determinis", "replay", "per-persona"], dedup_hit_count: 2, note: "INTENT OQ2 records the per-persona commitment; the rust audit touches determinism once, language-scoped (verdicts not inherited); no repo control covers divergence detection"}
+      effort: S
+      depends_on: [ESB-03]
+      sequencing: {safe_to_queue_now: false, blocked_behind: [ESB-03], note: "Build only if routing keeps personas on a replay-based substrate after the spike"}
+    - id: ESB-07
+      surface: orchestration_layer
+      question: Q7
+      dimension: VD6
+      title: "T4.1's executor .tf files_in_scope targets the retired terraform/ root -- no agent-reachable governed deploy path exists for the executor's own infrastructure as scoped"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:6683-6685,7118,7258; .github/workflows/terraform-apply-sandbox.yml:44-48; terraform/CLAUDE.md"
+      evidence_kind: observed
+      current_behavior: "T4.1 names terraform/executor_step_functions.tf, terraform/executor_lambdas_iam.tf, terraform/executor_observability.tf at the legacy root, which terraform/CLAUDE.md marks retained-but-not-applied; the sole governed apply channel triggers only on terraform/personal/**. Only the operator break-glass path could apply them. T4.9a (terraform/personal/executor_callbacks.tf) and T4.11 (terraform/personal/executor_state_machine.tf) already target the live root -- T4.1 is the outlier, and its exit criterion c1 ('deployable via terraform apply') is satisfiable only out-of-band as scoped."
+      ideal_behavior: "T4.1's three .tf files re-pointed under terraform/personal/ so the executor infrastructure rides the governed Decision-126 infra channel like its sibling items."
+      gap: "As written, the first T4.1 atomic plan would author infrastructure the CD pipeline cannot apply."
+      compensating_controls_considered: "The speculative-plan + apply-the-saved-plan pipeline covers terraform/personal/** fully -- the control exists; the file paths just miss it."
+      change_type: rescope
+      proposed_change: "Re-point the three files_in_scope entries to terraform/personal/ (matching T4.9a/T4.11) at T4.1 planning time."
+      acceptance: "All executor .tf paths in T4.x files_in_scope sit under terraform/personal/."
+      severity: medium
+      severity_rationale: "Caught cheaply at planning time, but until then a roadmap item contracts an undeployable deliverable -- a delivery-path (NS-D) defect"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [T4.1], dedup_search_terms: ["executor_step_functions.tf", "terraform/personal", "files_in_scope"], dedup_hit_count: 3, note: "Hits are the three stale paths themselves plus the correctly-placed T4.9a/T4.11 entries; surfaced by round-1 adversarial review"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Three-line roadmap edit"}
+    - id: ESB-08
+      surface: failure_semantics
+      question: Q7
+      dimension: VD2
+      title: "The stability-gate operationalisation is incoherent with routine replay: CD.27:822's <5% replay-rate signal has no defined denominator and may be structurally unfirable for heavy personas"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:765-768,822; docs/INTENT-provider-agnostic-executor.md:352"
+      evidence_kind: static
+      current_behavior: "CD.27 makes forced-timeout replay the ROUTINE long-run mechanism ('run arbitrarily long via checkpointed replay'): a 2-hour implement_agent run is ~8 invocations of which ~7 are replays. CD.27:822 gates the CD.17 reversal on 'per-persona checkpoint-replay rate < 5%' over 14 days with an UNDEFINED denominator -- on the natural invocations-denominator reading, any persona routinely exceeding ~15.8 minutes sits at >=50% and the gate never fires; on other readings the metric is vacuous. INTENT:352's >5-replays/hour alarm is not arithmetically breached at max timeout config (peak ~4/hour) but is in SEMANTIC tension: it treats replay as an anomaly to investigate while CD.27 makes it routine. A sibling defect in the same 822 definition: the cost-per-rec signal requires a rolling 7-day baseline inside a 14-day window that begins at persona landing -- self-delaying by construction. The gate is human-evaluated prose today (T-1.20 runtime evaluation unbuilt), so the incoherence manifests at evaluation time."
+      ideal_behavior: "A defined denominator that exempts scheduled (timeout-driven) replays from failure-replay accounting, a reconciled INTENT:352 annotation, and a baseline definition computable within the window."
+      gap: "The CD.17 reversal precondition -- the platform's headline unfreeze trigger -- rests on a metric that cannot be evaluated coherently as written."
+      compensating_controls_considered: "T4.2's substrate-neutral stability criterion c5 (zero unrecovered failures) carries part of the gate soundly; only the 822 signals are defective."
+      change_type: retune_gate
+      proposed_change: "Amend CD.27:822: define the replay-rate denominator (failure-replays over invocations, scheduled replays exempt), fix the baseline window, and annotate INTENT:352."
+      acceptance: "The gate is evaluable on a worked example of a 2-hour persona run without contradiction."
+      severity: medium
+      severity_rationale: "Fails safe (gate stuck closed, executor stays frozen) rather than wrong-but-trusted, and the fix is XS -- but it blocks the platform's own reversal path"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [CD.27, T4.2], dedup_search_terms: ["checkpoint-replay rate", "replays in 1 hour", "stability"], dedup_hit_count: 2, note: "Hits are the two defective signal texts themselves; surfaced by round-2 adversarial review, refined in round 3 (arithmetic vs semantic split)"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Gate-text amendment on a pending CD"}
+    - id: ESB-09
+      surface: billing_shape
+      question: Q2
+      dimension: VD3
+      title: "No per-substrate billing model exists, latency-on-billed-compute is unacknowledged, and the repo's existing cost record cannot serve as a cross-check (its own SFN line overstates its arithmetic 13-44x)"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:268-320,840; https://aws.amazon.com/lambda/pricing/"
+      evidence_kind: static
+      current_behavior: "cost_projection prices inference and transitions; nothing prices persona-loop compute, durable operations, state retention, the wait-vs-step distinction, tool wall-clock, replay log duplication (CloudWatch is the dominant live line and durable replay re-emits prior log lines -- possibly correctable by a replay-indicator logging guard, runtime surface unverified), or the repo-visibility coupling of hosted_cli_runner (a private flip meters minutes at $0.008/min -- order $50-150/month at persona wall-clock, plausibly worst-in-set). The record is also internally inconsistent: the SFN transition line states $1-10/month while its own assumptions compute $0.075-0.225; the current_scale headline still sums retired lines (EC2 runner, RDS)."
+      ideal_behavior: "This audit's billing_model folded beside cost_projection with the explicit non-discrimination conclusion (<= ~$10-15/month deltas at concurrency=1), the NAT/EFS contingency, the hosted visibility coupling, and named re-evaluation triggers (A2+ concurrency raise; 100x scale; repo-visibility change)."
+      gap: "Absent a model, billing intuitions ('durable waits save money') could steer the substrate choice despite being worth single dollars either way."
+      compensating_controls_considered: "cost-reconciliation.yml observes actual spend monthly -- real but backward-looking; it cannot inform a forward substrate choice."
+      change_type: persist
+      proposed_change: "Fold the billing model (or a citation to this audit) into cost_projection; fix the SFN line's arithmetic; drop or annotate the retired lines."
+      acceptance: "cost_projection names the substrate cost envelope, its triggers, and computes consistently."
+      severity: low
+      severity_rationale: "Magnitude single-dollars monthly; clarity and record-hygiene fix"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [CD.27], dedup_search_terms: ["billing", "GB-second", "durable operation", "cost_projection", "state transition"], dedup_hit_count: 9, note: "All hits are inference/transition lines; none model the persona-loop substrate terms; the 13-44x inconsistency verified independently by two review rounds"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Documentation fold-in"}
+    - id: ESB-10
+      surface: deterministic_glue
+      question: Q4
+      dimension: VD8
+      title: "The 'Regular Lambdas are deterministic-only' discipline point, read literally, outlaws Decision 39's `agent` (LLM-backed regular Lambda) state type -- an unreconciled scope"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:817; docs/DECISIONS.md:4874"
+      evidence_kind: static
+      current_behavior: "CD.27's discipline point is universal; Decision 39's ratified typing expressly includes LLM-backed regular Lambdas as `agent` states. Both are live; neither cites the other."
+      ideal_behavior: "One scoping sentence: the deterministic-only rule governs ITERATIVE persona loops in the executor; Decision 39's agent typing continues to govern single-shot LLM states."
+      gap: "A future scheduled-agent or executor plan could cite either text and be 'right'; the load-bearing property (Q4) deserves protection without collateral contradiction."
+      compensating_controls_considered: "None applicable; record reconciliation."
+      change_type: clarify
+      proposed_change: "Amend CD.27's discipline point with the scoping sentence at ratification."
+      acceptance: "Both texts co-cite; grep shows the scope qualifier."
+      severity: low
+      severity_rationale: "Latent record conflict; no behavior depends on it today"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [CD.27], dedup_search_terms: ["deterministic-only", "task.*agent.*typed"], dedup_hit_count: 7, note: "Hits restate one text or the other; none reconcile them"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "One-line amendment"}
+    - id: ESB-11
+      surface: existing_precedents
+      question: Q7
+      dimension: VD8
+      title: "Cross-reference rot around CD.27: stale T4.3 description, a retired runner-cron option, a runtime list missing C#, and Decision 75's stale 'already in production' premise"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:803-804,791; docs/DECISIONS.md:4144; terraform/CLAUDE.md; https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html"
+      evidence_kind: static
+      current_behavior: "CD.27's closing note describes T4.3 as the scheduled-agent loop with a 'self-hosted runner cron (Decision 68)' option -- T4.3 was rewritten into a producer repoint (2026-07-06), scheduled agents moved to T4.12, and CD.21 retired the self-hosted runner. CD.27's runtime list omits C#/.NET (current AWS docs list .NET 8/10). Decision 75 cites data_pipeline.tf as 'primitives already in production' while the root is retained-not-applied."
+      ideal_behavior: "Cross-references re-pointed at ratification; deployment status carried on precedent citations."
+      gap: "None of the rot undermines a premise this audit's verdicts rest on (each was re-derived), but a future reader trusting CD.27's prose inherits three false statements."
+      compensating_controls_considered: "The audit-prompt convention of re-deriving anchors caught all three -- a control that works only inside audits."
+      change_type: clarify
+      proposed_change: "Batch-fix the references in CD.27's detail and annotate Decision 75's premise at ratification."
+      acceptance: "CD.27 prose matches current T4.3/T4.12 reality, the full runtime list, and the precedent's non-applied status."
+      severity: low
+      severity_rationale: "Record hygiene; verdict-neutral because re-derived"
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [CD.27, T4.12], dedup_search_terms: ["scheduled-agent loop", "Decision 68", "C#", "dotnet"], dedup_hit_count: 2, note: "stale_anchors records the same facts; no prior finding files them"}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Batch text fix at ratification"}
+  rejected_candidates:
+    - {candidate_id: C4, surface: orchestration_layer, adjudication: fully-covered, why_dismissed: "The inter-persona state externalization an alternative would need is already designed and owned", compensating_control: "S3-pointer discipline point (ROADMAP:818) + T4.11 Step-Functions-state budget counters", control_property_match: "The controls exercise exactly the claimed property: artefacts round-trip S3 by URI (payload under 256KB) and budgets live in SFN state where Choice states enforce them; were the externalization missing, the 256KB transition limit would fail loudly on the first real plan artefact", decision_or_item_id: "T4.11"}
+    - {candidate_id: C6, surface: deterministic_glue, adjudication: fully-covered, why_dismissed: "Precedent transfer to glue nodes is real and already embedded in T4.1's design", compensating_control: "Five authored handler modules + ASL retry/catch idiom in terraform/data_pipeline.tf", control_property_match: "Same runtime class, same JSON I/O shape, same deterministic retry lists; if the pattern did not transfer, T4.1's smoke-with-stub-personas criterion would fail on the first execution", decision_or_item_id: "T4.1"}
+    - {candidate_id: C6, surface: orchestration_layer, adjudication: fully-covered, why_dismissed: "The authored state machine demonstrates every layer-1 construct T4.1 needs except waitForTaskToken, which T4.9a specifies separately", compensating_control: "terraform/data_pipeline.tf:457-686 (Task/Choice/Succeed/Fail, ResultSelector data passing, logging level=ALL)", control_property_match: "Direct construct-for-construct coverage; the missing construct (waitForTaskToken) is owned by T4.9a's c6 heartbeat/timeout criterion, which fails loudly on a missing callback", decision_or_item_id: "T4.9a"}
+    - {candidate_id: C7, surface: portability_and_lockin, adjudication: not-a-defect, why_dismissed: "Irreversibility was traced and priced: reversible-with-material-cost at all three exit points; the material component is evidence-reset, not code", compensating_control: "Concurrency cap = 1 (T4.1 exit criterion) + contract externalization (T4.10a, S3 pointers, T4.9a callback)", control_property_match: "Cap=1 bounds in-flight executions to one, making drain-before-swap a single-execution operation; contracts survive by construction (node_projection shows glue/orchestration unchanged). If irreversibility were real, the drain would strand executions and contracts would need rewrites -- neither obtains", decision_or_item_id: "T4.1"}
+  summary:
+    total_findings: 11
+    novel_count: 9
+    planned_insufficient_count: 2
+    planned_unbuilt_count: 0
+    top_improvements: [ESB-01, ESB-02, ESB-07]
+    highest_leverage_change: ESB-01
+    overall_substrate: insufficient-evidence
+    decision_readiness_persona_substrate: frontier
+    decision_readiness_deterministic_glue: frontier
+    decision_readiness_orchestration_layer: frontier
+    decision_readiness_billing_shape: frontier
+    decision_readiness_failure_semantics: strong
+    decision_readiness_portability_and_lockin: strong
+    decision_readiness_existing_precedents: frontier
