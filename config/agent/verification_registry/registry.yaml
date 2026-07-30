@@ -1562,11 +1562,22 @@ entries:
     plan_slug: terraform-iam-allowlist-inversion
     graduated_at: '2026-07-22'
     graduated_by: implement-agent
+    # REPAIRED by PLAN-iam-write-surface-completion (B1-iii): the previous command awk-sliced the
+    # file FORWARD from the boundary resource match, so once that plan hoisted the boundary policy
+    # JSON into a local ABOVE the resource the slice no longer contained the verbs it grepped for
+    # and the row would have gone quietly vacuous (it greps for MISSING, so an empty slice fails
+    # loud -- but any re-ordering of the two blocks silently changes what it reads). The assertion
+    # is now POSITION-INDEPENDENT: each verb is grepped against the whole file, and the three Deny
+    # Sids are asserted as Sid declarations rather than as bare substrings inside a slice.
     check_spec:
       command:
       - bash
       - -c
-      - awk '/aws_iam_policy" "github_ci_apply_boundary"/{b=1} b' terraform/bootstrap/github_ci_apply.tf > /tmp/bnd.$$ ; for a in 'iam:DeleteRole' 'iam:DetachRolePolicy' 'iam:DeleteRolePolicy' 'iam:UpdateRoleDescription' 'DenyIAMEscalation' 'DenyBoundaryRemoval' 'DenyBoundaryPolicyModification'; do grep -q "$a" /tmp/bnd.$$ || { echo "MISSING $a"; rm -f /tmp/bnd.$$; exit 1; }; done; rm -f /tmp/bnd.$$
+      - f=terraform/bootstrap/github_ci_apply.tf; rc=0; for a in 'iam:DeleteRole' 'iam:DetachRolePolicy'
+        'iam:DeleteRolePolicy' 'iam:UpdateRoleDescription'; do grep -qE "\"$a\"" "$f" || { echo "MISSING
+        $a"; rc=1; }; done; for s in DenyIAMEscalation DenyBoundaryRemoval DenyBoundaryPolicyModification;
+        do grep -qE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$f" || { echo "MISSING Sid $s"; rc=1; };
+        done; exit $rc
   - check_id: authority-budget-v2-create-and-prefix
     primitive_slot: command_exit_zero
     guard_target: terraform/bootstrap/authority_budget.json
@@ -1761,17 +1772,23 @@ entries:
         grep -q "iam:PassedToService" terraform/bootstrap/github_ci_apply.tf && grep -q "lambda.amazonaws.com" terraform/bootstrap/github_ci_apply.tf
   - check_id: write-coverage-asserts-passrole-identity-and-boundary
     primitive_slot: command_exit_zero
-    guard_target: scripts/checks/iam_tf/_write_coverage.py
-    guard_symbol: check_passrole_implies_coverage
+    guard_target: scripts/checks/iam_tf/_write_companions.py
+    guard_symbol: check_lifecycle_companions
     plan_slug: t248-passrole-liveproof
     graduated_at: '2026-07-24'
     graduated_by: implement-agent
+    # REPAIRED by PLAN-iam-write-surface-completion (H2): design (b) DELETED
+    # check_passrole_implies_coverage and moved the PassRole obligation into the phase-keyed
+    # LIFECYCLE_COMPANIONS table in _write_companions.py, so both of the old greps (and the
+    # guard_symbol) named a file/symbol that no longer carries the logic -- the row would have
+    # gone false and validated nothing. Retargeted to the new module + checker symbol, still
+    # asserting BOTH halves: the PassRole companion and the boundary-ceiling assertion.
     check_spec:
       command:
       - bash
       - -c
-      - |
-        grep -q "PassRole" scripts/checks/iam_tf/_write_coverage.py && grep -Eq "DataPlaneAllow|boundary" scripts/checks/iam_tf/_write_coverage.py
+      - f=scripts/checks/iam_tf/_write_companions.py; grep -q "def check_lifecycle_companions" "$f"
+        && grep -q "iam:PassRole" "$f" && grep -Eq "DataPlaneAllow|boundary" "$f"
   - check_id: updaterole-present-identity-and-boundary
     primitive_slot: grep_count
     guard_target: terraform/bootstrap/github_ci_apply.tf
@@ -2335,3 +2352,93 @@ entries:
     graduated_by: implementation-agent
     check_spec:
       node_id: tests/checks/ci_guards/test_validate_actions_evidence.py::TestActionsEvidenceCounterfactuals
+  # PLAN-iam-write-surface-completion: VP steps 1, 2, 3, 4, 5, 6 and 8 (graduate dispositions).
+  # Steps 7 and 9 duplicate standing validate.py gates, step 10 is tautological (already true
+  # pre-change) and step 11 IS the presubmit tier -- all four are waived in the plan, not graduated.
+  - check_id: instanceprofile-untagoidc-verbs-both-layers
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: DataPlaneAllow
+    plan_slug: iam-write-surface-completion
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        rc=0; for a in iam:ListInstanceProfilesForRole iam:RemoveRoleFromInstanceProfile iam:UntagOpenIDConnectProvider; do n=$(grep -cE "^[[:space:]]*\"$a\",?[[:space:]]*$" terraform/bootstrap/github_ci_apply.tf); echo "$a=$n"; [ "$n" -ge 2 ] || rc=1; done; exit $rc
+  - check_id: reads-policy-relocation-complete
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: github_ci_apply_reads
+    plan_slug: iam-write-surface-completion
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        f=terraform/bootstrap/github_ci_apply.tf; t=$(mktemp); awk '/aws_iam_policy" "github_ci_apply_reads"/{p=1} /github_ci_apply_reads_policy_json *= *jsonencode/{p=1} p' "$f" > "$t"; rc=0; for s in IAMRolesRead SecretsManagerMetadataRead SecretsManagerValueReadEnumerated DataLakeBucketManage LambdaRead SSMParameterRead EventBridgeRead SNSRead CloudWatchAlarmsRead SNSSubscriptionRead CloudWatchLogsRead SSMDescribeParameters; do all=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$f"); inr=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$t"); [ "$all" -eq 1 ] || { echo "NOT-EXACTLY-ONCE $s ($all)"; rc=1; }; [ "$inr" -eq 1 ] || { echo "NOT-IN-READS-POLICY $s"; rc=1; }; done; grep -q 'resource "aws_iam_role_policy_attachment" "github_ci_apply_reads"' "$f" || { echo "MISSING attachment"; rc=1; }; rm -f "$t"; exit $rc
+  - check_id: all-three-policy-docs-carry-size-precondition
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: iam-write-surface-completion
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        f=terraform/bootstrap/github_ci_apply.tf; p=$(grep -c 'precondition {' "$f"); l1=$(grep -c 10240 "$f"); l2=$(grep -c 6144 "$f"); echo "precondition_blocks=$p limit10240=$l1 limit6144=$l2"; [ "$p" -ge 3 ] && [ "$l1" -ge 1 ] && [ "$l2" -ge 2 ]
+  - check_id: iam-simulate-fixture-by-design-record
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/iam-simulate-fixture.yaml
+    guard_symbol: by_design
+    plan_slug: iam-write-surface-completion
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        f=docs/contracts/iam-simulate-fixture.yaml; rc=0; for k in iam:CreateOpenIDConnectProvider iam:DeleteOpenIDConnectProvider iam:RemoveClientIDFromOpenIDConnectProvider s3:DeleteBucket DenyIAMEscalation iam:CreatePolicyVersion agent-platform-github-ci-apply-reads; do grep -q "$k" "$f" || { echo "MISSING $k"; rc=1; }; done; grep -q 'by_design' "$f" || { echo "MISSING by_design field"; rc=1; }; grep -q 'iam:PermissionsBoundary' "$f" || { echo "MISSING context-key artifact note"; rc=1; }; exit $rc
+  - check_id: reads-policy-deny-and-depends-on
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: DenyBoundaryPolicyModification
+    plan_slug: iam-write-surface-completion
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        f=terraform/bootstrap/github_ci_apply.tf; rc=0; awk '/Sid *= *"DenyBoundaryPolicyModification"/{d=1} d&&/agent-platform-github-ci-apply-reads/{found=1} END{exit !found}' "$f" || { echo "MISSING S5 reads-policy ARN in DenyBoundaryPolicyModification"; rc=1; }; awk '/resource "aws_iam_role_policy" "github_ci_apply"/{d=1} d&&/depends_on/&&/aws_iam_role_policy_attachment.github_ci_apply_reads/{found=1} d&&/^resource /&&!/aws_iam_role_policy" "github_ci_apply"/{exit} END{exit !found}' "$f" || { echo "MISSING B3 depends_on edge"; rc=1; }; exit $rc
+  - check_id: iam-tf-parser-resolves-hoisted-and-inline-policy-shapes
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/iam_tf/_read_coverage.py
+    guard_symbol: _locate_policy_statement_array
+    plan_slug: iam-write-surface-completion
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        bin/venv-python -c "from pathlib import Path; import scripts.checks.iam_tf._read_coverage as rc; t=Path('terraform/bootstrap/github_ci_apply.tf').read_text(encoding='utf-8'); b=rc._parse_boundary_dataplane_statement(t); r=rc._parse_managed_policy_statements(t,'github_ci_apply_reads'); assert b is not None and b['sid']=='DataPlaneAllow', 'boundary DataPlaneAllow not located after the hoist'; assert len(r)==12, f'reads policy parsed {len(r)} statements, expected 12'; assert rc._parse_managed_policy_statements(t,'no_such_policy')==[], 'absent-resource case must return []'; print('OK boundary=%d-actions reads=%d-statements'%(len(b['actions']),len(r)))"
+  - check_id: iam-tf-delete-role-companion-regression
+    primitive_slot: test_selector
+    guard_target: scripts/checks/iam_tf/_write_companions.py
+    guard_symbol: LIFECYCLE_COMPANIONS
+    plan_slug: iam-write-surface-completion
+    graduated_at: '2026-07-30'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/iam_tf/test__write_companions.py

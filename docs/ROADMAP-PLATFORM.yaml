@@ -5383,6 +5383,47 @@ tier_items:
       Scoped to the DEP-01/DEP-02 live-proof only -- NOT a whole-Decision-144-audit-complete claim;
       T2.44/T2.45 remain not_started, so item status stays in_progress (that determination is the
       overseer's G3 call, out of this plan's scope).
+      2026-07-30 (PLAN-iam-write-surface-completion): THIRD INSTANCE of one defect class --
+      headline verb granted, structurally-required companion verb missing or narrower (rec-2831
+      iam:PassRole for lambda:CreateFunction; rec-2842 iam:TagRole enumerated while iam:CreateRole
+      was at role/agent-platform-*; rec-2882 iam:ListInstanceProfilesForRole, which killed the live
+      gated DESTROY). ROOT CAUSE: the write-side exhaustiveness guard was DEAD CODE --
+      _write_coverage.py branched on `rtype in APPLY_WRITTEN_TYPES and rtype not in WRITE_COVERAGE`,
+      unsatisfiable by construction, with WRITE_COVERAGE hand-listing 5 of the 30 resource types in
+      terraform/personal, while the read side was discovery-driven (which is why read gaps closed
+      and write gaps recurred). This plan fixes the whole class in ONE human-gated bootstrap apply:
+      it deletes the dead branch for a discovery-driven write sweep, adds the mandatory-declaration
+      LIFECYCLE_COMPANIONS table (every WRITE_COVERAGE type must answer create/update/delete; an
+      empty answer needs a justification) plus Tag/Untag symmetry and read>=write scope parity, and
+      lands the grant changes. RELOCATION (the enabler): the inline identity policy measured
+      10,156 B of the 10,240 B AWS hard limit (84 B headroom, 33 statements) and the remediation
+      costs ~2,384 B, so the 11 read-only Sids MOVE to a new customer-managed policy
+      agent-platform-github-ci-apply-reads attached to the same role -- reads move, authority stays
+      (every write Sid and both Denies remain inline; post-change inline 8,580 B, reads 3,998 B,
+      boundary 1,548 B). That split, its load-bearing reversal ORDER (restore inline reads FIRST,
+      then detach -- a bare detach strips the refresh-read surface and fails every later CD plan
+      with AccessDenied before the guard runs, locking the CD path out of its own recovery), its
+      post-move protection model and its reversal conditions are recorded as DECISION 156, authored
+      by this plan. NAMED EXCEPTION RETAINED: the IAM read quartet stays ENUMERATED rather than
+      widened to role/agent-platform-* -- widening would relax _read_coverage.ENUMERATED_IAM_TYPES'
+      literal_only assertion, the live enforcement of Decision 129 pt 2 + pt 4(iii) with Decision
+      144 pt 5; the exception is recorded as the sole entry of _write_symmetry's
+      READ_SCOPE_PARITY_EXEMPT, collocated with the rule it exempts, and a follow-on rec revisits
+      the widening on its own merits. CLASS-CLOSURE HONESTY: this is the necessary precondition for
+      class closure, not class closure itself -- no static check can enumerate a verb nobody knows
+      the provider calls; the class-closing item is empirical (read-only CloudTrail for
+      PlatformAdmin, or an Athena-backed CloudTrail table), filed as a High follow-on rec. TEARDOWN
+      DECOUPLED (out of this plan, owned by the sibling plan, slug reconcile-stale-plan-coverage,
+      which fixes rec-2847's reconcile.yml recovery semantics FIRST and only then tears down
+      through the repaired CD path): the DEP-02 probe role agent-platform-probe-liveproof-role
+      remains LIVE and the sandbox convergence record remains RED at 99eb274, which CONTINUES to
+      block terraform/personal CD applies until the sibling completes -- an accepted, stated cost
+      of the split, not an oversight. Dependency stated in both directions: this plan is a HARD
+      PREDECESSOR of the sibling's teardown (the teardown cannot run until this plan's human-gated
+      bootstrap apply has landed, because it needs iam:ListInstanceProfilesForRole and
+      iam:RemoveRoleFromInstanceProfile live). rec-2847 is REFERENCED, never bundled here. No
+      criterion or item status flip in this note: c1-c5 remain met, c6 remains open (out of scope),
+      item stays in_progress.
 
   - id: T2.49
     tier: T2

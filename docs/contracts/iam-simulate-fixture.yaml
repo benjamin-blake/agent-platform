@@ -1,0 +1,620 @@
+# Standing live-simulate contract for the CD apply role (design (d), PLAN-iam-write-surface-completion).
+#
+# WHAT THIS IS: the machine-readable record of what the github_ci_apply identity/boundary
+# intersection is EXPECTED to decide, verb by verb. Its runner is
+# `bin/venv-python -m scripts.ci.iam_simulate` (scripts/ci/, POST-APPLY only -- see docs/contracts/
+# deploy-paths.yaml#admin_out_of_band.procedure). It is deliberately NOT a validate.py check: a
+# static PR-time check structurally cannot see condition-key evaluation or the identity/boundary
+# intersection, and between merge and the human-gated bootstrap apply the code legitimately declares
+# verbs the live policy does not yet have -- wiring this into --pre would red the very PR that fixes
+# the problem.
+#
+# WHY IT EXISTS: three production AccessDenied incidents (rec-2831, rec-2842, rec-2882) shared one
+# shape -- the headline verb was granted and a structurally-required companion verb was not. Every
+# such verb, and every verb the gap sweep deliberately REFUSED to grant, is recorded here with its
+# expected decision, so a later sweep re-derives nothing and a later auditor cannot mistake a
+# by-design denial for an unnoticed gap. A `by_design: ...` field marks the deliberate refusals.
+#
+# NOT A RITUAL CONTRACT (Decision 118 governs RATIFIED contracts): this is a free-form registry, the
+# same shape as docs/contracts/deploy-paths.yaml and docs/contracts/file-router.yaml -- no
+# contract:/class:/contract_version:/status: block, so validate_contract_drift skips it. Amend it by
+# editing it in the same PR as the grant change it records.
+#
+# PUBLIC REPO (Decision 101): ${account_id} and ${region} are PLACEHOLDERS, resolved at run time by
+# the runner. A literal 12-digit account id must NEVER appear in this file -- the pre-commit
+# never-commit hook blocks it.
+#
+# TARGET ARNS ARE REPRESENTATIVE, NOT ASSERTIONS OF EXISTENCE. iam:SimulatePrincipalPolicy evaluates
+# policy against the ARN string supplied and happily simulates resources that do not exist, so
+# `agent-platform-simulate-probe`-style names are used wherever a concrete ARN is needed only to
+# exercise a prefix pattern. Never put a wildcard in a target ARN: the simulator matches the policy's
+# resource pattern against this literal string, so a "*" here proves nothing.
+#
+# PROVIDER-SCOPED: every call-set inference below is scoped to hashicorp/aws 5.100 (the version in
+# .terraform.lock.hcl). RE-RUN THIS FIXTURE ON ANY PROVIDER BUMP -- a provider that migrates a call
+# (e.g. logs:TagLogGroup -> logs:TagResource) changes which companion verbs are load-bearing.
+schema_version: 1
+
+principal:
+  role_name: agent-platform-github-ci-apply
+  arn_template: "arn:aws:iam::${account_id}:role/agent-platform-github-ci-apply"
+  note: >-
+    SimulatePrincipalPolicy on a role evaluates its identity policies (inline + the attached
+    customer-managed agent-platform-github-ci-apply-reads document) AND its permissions boundary, so
+    every decision below is the INTERSECTION verdict -- which is exactly the layer a static text
+    check cannot reach. A verb granted in the identity policy but absent from the boundary's
+    DataPlaneAllow ceiling shows up here as implicitDeny.
+
+placeholders:
+  account_id: "Resolved at run time from `aws sts get-caller-identity` under --profile."
+  region: "Resolved at run time from the session (or --region); the platform region is eu-west-2."
+
+expected_decision_values:
+  - allowed
+  - implicitDeny
+  - explicitDeny
+
+# ---------------------------------------------------------------------------
+# Simulate ARTIFACTS -- documented so a future auditor does not "fix" a false positive.
+# ---------------------------------------------------------------------------
+artifacts:
+  - id: deny-iam-escalation-permissions-boundary-context
+    statement: DenyIAMEscalation
+    context_key: "iam:PermissionsBoundary"
+    note: >-
+      DenyIAMEscalation is a Deny on iam:CreateRole / iam:PutRolePolicy / iam:AttachRolePolicy with
+      StringNotEquals on iam:PermissionsBoundary, and IAMRoleCreateBounded / IAMRoleWriteBounded are
+      the matching conditional Allows (the same condition key also gates
+      iam:PutRolePermissionsBoundary -- four verbs in total). A simulate that omits the
+      iam:PermissionsBoundary context entry therefore returns explicitDeny for ALL FOUR: with the key
+      absent from the request context, StringNotEquals evaluates TRUE and the Deny applies. THIS IS
+      AN ARTIFACT OF THE SIMULATION, NOT A GAP. Terraform always sends PermissionsBoundary on these
+      calls (every agent-platform-* role declares it in HCL, enforced by validate_boundary_attached).
+      The triples below therefore supply the context entry explicitly and expect `allowed`; the
+      matching no-context triples expect explicitDeny and prove the Deny still bites. Do not "fix"
+      either by relaxing the Deny.
+  - id: passrole-passed-to-service-context
+    statement: IAMPassRoleForLambda
+    context_key: "iam:PassedToService"
+    note: >-
+      iam:PassRole is worst-verb scoped (Decision 143) with StringEquals on
+      iam:PassedToService=lambda.amazonaws.com. Simulated WITHOUT that context entry it returns
+      implicitDeny -- again an artifact: lambda:CreateFunction always supplies it. The triples below
+      cover both directions (with the key -> allowed; passing to a non-lambda service -> implicitDeny),
+      which is what makes the containment claim testable rather than asserted.
+  - id: boundary-intersection-is-invisible-to-static-checks
+    note: >-
+      A grant present in the identity policy but missing from the boundary's DataPlaneAllow ceiling is
+      SILENTLY denied. Only this fixture observes that; scripts/checks/iam_tf/ can assert both layers
+      mention a verb (VP step 1) but not that AWS actually intersects them the way we believe.
+
+# ---------------------------------------------------------------------------
+# Triples: (verb, target_arn_template, expected_decision, required_context_keys, why).
+# ---------------------------------------------------------------------------
+triples:
+  # -- rec-2882 (P0-1): the third-instance destroy companions. THIS PAIR IS THE CLOSURE EVIDENCE. --
+  - id: p0-1-list-instance-profiles-for-role
+    verb: "iam:ListInstanceProfilesForRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      rec-2882. The provider's resourceAwsIamRoleDelete unconditionally calls
+      deleteRoleInstanceProfiles() before DeleteRole, which calls this verb first. Its absence killed
+      the live gated destroy (run 30264239445) and latched the sandbox convergence record red at
+      99eb274. Granted in IAMRoleDeleteBounded AND in the boundary DataPlaneAllow -- both layers, or
+      the intersection denies it.
+  - id: p0-1-remove-role-from-instance-profile
+    verb: "iam:RemoveRoleFromInstanceProfile"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      rec-2882 companion #2: the SECOND call in the same provider loop, granted alongside the List
+      verb deliberately rather than waiting for it to fail in production (the patch-one-verb pattern
+      this plan exists to end).
+  - id: iam-delete-role-bounded
+    verb: "iam:DeleteRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      The headline verb of the rec-2882 triad. Guard classification is unchanged -- destroys still
+      ROUTE to the gated Environment; this only means the approved destroy EXECUTES instead of
+      AccessDenying after the human approval was spent.
+
+  # -- P0-2: lambda function-URL config (a terraform/personal type with no write grant at all) --
+  - id: p0-2-create-function-url-config
+    verb: "lambda:CreateFunctionUrlConfig"
+    target_arn_template: "arn:aws:lambda:${region}:${account_id}:function:agent-platform-ducklake-writer"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_lambda_function_url create. The matching read was already covered by LambdaRead's lambda:Get* wildcard, which is why the write gap stayed invisible."
+  - id: p0-2-update-function-url-config
+    verb: "lambda:UpdateFunctionUrlConfig"
+    target_arn_template: "arn:aws:lambda:${region}:${account_id}:function:agent-platform-ducklake-writer"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_lambda_function_url update -- authorized on the FUNCTION ARN, not a separate resource."
+  - id: p0-2-delete-function-url-config
+    verb: "lambda:DeleteFunctionUrlConfig"
+    target_arn_template: "arn:aws:lambda:${region}:${account_id}:function:agent-platform-ducklake-writer"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_lambda_function_url destroy/replace."
+
+  # -- P0-3: the SNS write surface (topic + subscription ARN axes) --
+  - id: p0-3-sns-create-topic
+    verb: "sns:CreateTopic"
+    target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_sns_topic create; the read side (SNSRead) already existed with no write counterpart."
+  - id: p0-3-sns-set-topic-attributes
+    verb: "sns:SetTopicAttributes"
+    target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_sns_topic update path."
+  - id: p0-3-sns-tag-resource
+    verb: "sns:TagResource"
+    target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "default_tags forces a tag call on every taggable create -- the rec-2842 coupling, applied to SNS."
+  - id: p0-3-sns-delete-topic
+    verb: "sns:DeleteTopic"
+    target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "destroy symmetry for aws_sns_topic."
+  - id: p0-3-sns-subscribe
+    verb: "sns:Subscribe"
+    target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_sns_topic_subscription create -- authorized against the bare TOPIC arn."
+  - id: p0-3-sns-set-subscription-attributes
+    verb: "sns:SetSubscriptionAttributes"
+    target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts:simulate-probe-subscription"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      A subscription's ARN is <topic-arn>:<uuid>, so this verb is authorized against the
+      agent-platform-alerts:* entry -- BOTH Resource entries in SNSTopicWrite are load-bearing, and
+      this triple is what proves the second one is not decorative.
+  - id: p0-3-sns-unsubscribe
+    verb: "sns:Unsubscribe"
+    target_arn_template: "arn:aws:sns:${region}:${account_id}:agent-platform-alerts:simulate-probe-subscription"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_sns_topic_subscription destroy, same subscription-ARN axis."
+
+  # -- P0-4: the CloudWatch Logs tagging families (deliberately over-granted, see why) --
+  - id: p0-4-logs-untag-log-group
+    verb: "logs:UntagLogGroup"
+    target_arn_template: "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/agent-platform-ducklake-writer"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "logs:TagLogGroup was granted with no untag counterpart, so a default_tags drift reconcile AccessDenied."
+  - id: p0-4-logs-tag-resource
+    verb: "logs:TagResource"
+    target_arn_template: "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/agent-platform-ducklake-writer"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      DELIBERATE OVER-GRANT. CloudWatch Logs has two tagging families (legacy TagLogGroup/UntagLogGroup
+      and resource-generic TagResource/UntagResource) and which one provider 5.100 calls on create
+      could not be determined offline (cloudtrail:LookupEvents is AccessDenied to PlatformAdmin). Both
+      are granted at the same non-escalating log-group prefix. This uncertainty is the concrete case
+      for the CloudTrail-observability follow-on.
+  - id: p0-4-logs-untag-resource
+    verb: "logs:UntagResource"
+    target_arn_template: "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/agent-platform-ducklake-writer"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "Second half of the resource-generic tagging family; same over-grant rationale."
+
+  # -- P0-5: S3 bucket-config writes --
+  - id: p0-5-put-bucket-versioning
+    verb: "s3:PutBucketVersioning"
+    target_arn_template: "arn:aws:s3:::agent-platform-data-lake"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_s3_bucket_versioning apply; the read half (DataLakeBucketManage) existed with no write counterpart."
+  - id: p0-5-put-bucket-policy
+    verb: "s3:PutBucketPolicy"
+    target_arn_template: "arn:aws:s3:::agent-platform-data-lake"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "aws_s3_bucket_policy create/update."
+  - id: p2-delete-bucket-policy
+    verb: "s3:DeleteBucketPolicy"
+    target_arn_template: "arn:aws:s3:::agent-platform-data-lake"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "P2 destroy/replace symmetry: the provider deletes then re-puts on a policy change."
+  - id: p2-create-bucket
+    verb: "s3:CreateBucket"
+    target_arn_template: "arn:aws:s3:::agent-platform-ducklake-catalog-dr"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "Bucket re-create on a greenfield or replaced bucket, at the two literal bucket ARNs only."
+
+  # -- P0-6: Secrets Manager, the two-Sid split (S2). METADATA prefix vs VALUE-CAPABLE enumeration. --
+  - id: p0-6-create-secret-prefix
+    verb: "secretsmanager:CreateSecret"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:agent-platform-simulate-probe-fixture"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "SecretsManagerMetadataWrite at secret:agent-platform-*. Metadata-only: cannot read or overwrite a VALUE."
+  - id: p0-6-delete-secret-prefix
+    verb: "secretsmanager:DeleteSecret"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:agent-platform-simulate-probe-fixture"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "Retirement of an agent-platform-* secret; AWS's 7-30 day recovery window bounds the blast radius."
+  - id: p0-6-update-secret-enumerated
+    verb: "secretsmanager:UpdateSecret"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:agent-platform-github-pat-fixture"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      One of exactly five ENUMERATED terraform/personal secret ARNs (S2). UpdateSecret accepts a
+      SecretString, so it is value-capable with no metadata-only variant and no narrowing condition
+      key -- a worst verb under Decision 143 clause 1.
+  - id: p0-6-update-secret-non-enumerated-negative
+    verb: "secretsmanager:UpdateSecret"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:agent-platform-simulate-probe-fixture"
+    expected_decision: implicitDeny
+    required_context_keys: {}
+    why: >-
+      THE LOAD-BEARING NEGATIVE for S2. There is NO boundary intersection available to narrow
+      UpdateSecret -- DataPlaneAllow already carries secretsmanager:* -- so the identity policy is the
+      SOLE control and a secret:agent-platform-* prefix here would be fully effective over every
+      current AND future agent-platform-* secret with no review. If this triple ever returns
+      `allowed`, the enumeration was replaced by a prefix: treat it as a security regression, not a
+      fixture error.
+  - id: p0-6-put-secret-value-negative
+    verb: "secretsmanager:PutSecretValue"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:agent-platform-simulate-probe-fixture"
+    expected_decision: implicitDeny
+    by_design: >-
+      secretsmanager:PutSecretValue is granted NOWHERE new by this change. It exists only on the
+      pre-existing SecretsManagerDuckLakeNeonDSN Sid, at that single secret ARN, because the apply
+      role assembles the Neon DSN. A prefix-wide PutSecretValue would let one approved apply overwrite
+      the Anthropic/DeepSeek keys, the GitHub PAT and both Alpaca broker envelopes.
+    required_context_keys: {}
+    why: "Value-write containment: metadata verbs take the prefix, value verbs do not."
+  - id: p2-delete-secret-ducklake-dsn
+    verb: "secretsmanager:DeleteSecret"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:ducklake-neon-catalog-dsn-fixture"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "P2 destroy symmetry on the DSN secret's own Sid: CreateSecret was granted there with no delete counterpart."
+
+  # -- P0-7: SSM parameter provisioning (rescoped from feature-flags/* to agent-platform/*) --
+  - id: p0-7-put-parameter
+    verb: "ssm:PutParameter"
+    target_arn_template: "arn:aws:ssm:${region}:${account_id}:parameter/agent-platform/ducklake/writer-url"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      The old Sid was pinned to /agent-platform/feature-flags/*, while terraform/personal now declares
+      aws_ssm_parameter resources elsewhere under /agent-platform/ (the T2.19 endpoint-discovery
+      parameters) -- those writes AccessDenied. Read and write scope are now at parity.
+  - id: p0-7-delete-parameter
+    verb: "ssm:DeleteParameter"
+    target_arn_template: "arn:aws:ssm:${region}:${account_id}:parameter/agent-platform/ducklake/writer-url"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "Create/destroy asymmetry: PutParameter had no delete counterpart, so a retirement AccessDenied after approval."
+  - id: p0-7-delete-parameters-plural-negative
+    verb: "ssm:DeleteParameters"
+    target_arn_template: "arn:aws:ssm:${region}:${account_id}:parameter/agent-platform/ducklake/writer-url"
+    expected_decision: implicitDeny
+    by_design: >-
+      The PLURAL form is not granted: hashicorp/aws 5.100 uses the singular ssm:DeleteParameter for
+      aws_ssm_parameter. Granting the batch verb would add a capability terraform never exercises. If
+      a provider bump migrates to the plural form, this triple flips to `allowed` -- which is exactly
+      the signal the provider-bump re-run exists to catch.
+    required_context_keys: {}
+    why: "Recorded so a later sweep does not re-flag the singular/plural pair as an oversight."
+
+  # -- P1/P2 granted judgement calls --
+  - id: p1-2-update-function-code
+    verb: "lambda:UpdateFunctionCode"
+    target_arn_template: "arn:aws:lambda:${region}:${account_id}:function:agent-platform-ducklake-writer"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      aws_lambda_function's UPDATE path calls it whenever source_code_hash / s3_key / image_uri
+      changes. The four DuckLake functions ignore_changes on source_code_hash (rec-2646/2654), which is
+      the only reason this has not yet AccessDenied.
+  - id: p1-3-publish-layer-version-prefix
+    verb: "lambda:PublishLayerVersion"
+    target_arn_template: "arn:aws:lambda:${region}:${account_id}:layer:agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      P1-3: layer:agent-platform-* adopted as the layer-naming convention on BOTH the read and write
+      Sids (the three ducklake-* literals are retained). Deliberately NOT layer:* (Decision 143).
+  - id: p1-4-untag-oidc-provider
+    verb: "iam:UntagOpenIDConnectProvider"
+    target_arn_template: "arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "iam:TagOpenIDConnectProvider was granted with no untag counterpart in either layer, so a tag-drift reconcile AccessDenied."
+  - id: p2-glue-delete-database
+    verb: "glue:DeleteDatabase"
+    target_arn_template: "arn:aws:glue:${region}:${account_id}:database/agent_platform"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "P2 destroy symmetry at the existing enumerated ARN -- CreateDatabase/UpdateDatabase had no delete counterpart."
+  - id: p2-dynamodb-delete-table
+    verb: "dynamodb:DeleteTable"
+    target_arn_template: "arn:aws:dynamodb:${region}:${account_id}:table/agent-platform-counters"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "P2 destroy symmetry at the existing enumerated table ARN."
+  - id: p2-athena-delete-workgroup-scoped
+    verb: "athena:DeleteWorkGroup"
+    target_arn_template: "arn:aws:athena:${region}:${account_id}:workgroup/agent-platform-production"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      Granted in a NEW narrow Sid (AthenaWorkgroupDelete), deliberately NOT folded into the existing
+      AthenaWorkgroup Sid whose Resource is "*".
+  - id: p2-athena-delete-workgroup-primary-negative
+    verb: "athena:DeleteWorkGroup"
+    target_arn_template: "arn:aws:athena:${region}:${account_id}:workgroup/primary"
+    expected_decision: implicitDeny
+    by_design: >-
+      The narrow-Sid decision is only meaningful if the wide case is actually denied. Folding
+      DeleteWorkGroup into the Resource:"*" AthenaWorkgroup Sid would have granted deletion of ANY
+      workgroup including `primary`. If this ever returns `allowed`, that fold happened.
+    required_context_keys: {}
+    why: "Proves the AthenaWorkgroupDelete scoping decision by construction rather than by reading the HCL."
+
+  # -- BY-DESIGN DENIALS: the sweep named these and deliberately refused them. --
+  - id: by-design-s3-delete-bucket
+    verb: "s3:DeleteBucket"
+    target_arn_template: "arn:aws:s3:::agent-platform-data-lake"
+    expected_decision: implicitDeny
+    by_design: >-
+      DENIED BY DESIGN, admin-tier only. This bucket holds the terraform state, the saved tfplan
+      artifacts AND the convergence record, so a CD-executable bucket delete would let one approved
+      apply destroy the platform's own integrity anchor. Bucket destruction stays out-of-band.
+    required_context_keys: {}
+    why: "Recorded so a future sweep does not re-flag the s3:CreateBucket / s3:DeleteBucket asymmetry as a gap."
+  - id: by-design-create-oidc-provider
+    verb: "iam:CreateOpenIDConnectProvider"
+    target_arn_template: "arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
+    expected_decision: implicitDeny
+    by_design: >-
+      DENIED BY DESIGN. The OIDC provider is what the CI job assumed a role THROUGH; creating,
+      replacing or destroying it from inside that job breaks the pipeline mid-apply. OIDCProviderReconcile
+      grants only the non-lifecycle verbs (Get / UpdateThumbprint / AddClientID / Tag / Untag).
+    required_context_keys: {}
+    why: "Provider lifecycle stays admin-tier and out-of-band."
+  - id: by-design-delete-oidc-provider
+    verb: "iam:DeleteOpenIDConnectProvider"
+    target_arn_template: "arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
+    expected_decision: implicitDeny
+    by_design: "DENIED BY DESIGN -- same ordering hazard as the create verb: the pipeline would delete the identity provider authenticating itself."
+    required_context_keys: {}
+    why: "Second of the three OIDC-provider lifecycle verbs the sweep refused."
+  - id: by-design-remove-client-id-from-oidc-provider
+    verb: "iam:RemoveClientIDFromOpenIDConnectProvider"
+    target_arn_template: "arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
+    expected_decision: implicitDeny
+    by_design: >-
+      DENIED BY DESIGN. Removing the sts.amazonaws.com audience is functionally equivalent to deleting
+      the provider for this pipeline's purposes -- the additive AddClientIDToOpenIDConnectProvider is
+      granted, its destructive inverse is not.
+    required_context_keys: {}
+    why: "Third of the three OIDC-provider lifecycle verbs the sweep refused."
+  - id: by-design-lambda-list-layers
+    verb: "lambda:ListLayers"
+    target_arn_template: "arn:aws:lambda:${region}:${account_id}:layer:agent-platform-simulate-probe"
+    expected_decision: implicitDeny
+    by_design: >-
+      DENIED BY DESIGN. lambda:ListLayers / lambda:ListLayerVersions are account-level and
+      unscopable -- granting them would require Resource:"*" -- and the provider does not call them
+      for the resources this module declares.
+    required_context_keys: {}
+    why: "Recorded so the account-level read absence is not re-flagged as a LambdaRead gap."
+
+  # -- ESCALATION BREAKS: the Denies that must keep biting after the policy-architecture split. --
+  - id: s5-create-policy-version-on-reads-policy
+    verb: "iam:CreatePolicyVersion"
+    target_arn_template: "arn:aws:iam::${account_id}:policy/agent-platform-github-ci-apply-reads"
+    expected_decision: explicitDeny
+    by_design: >-
+      S5, THE LOAD-BEARING TRIPLE OF THE POLICY-ARCHITECTURE SPLIT. The 11 relocated read Sids now live
+      in the customer-managed agent-platform-github-ci-apply-reads document, so
+      DenyBoundaryPolicyModification's Resource list names that ARN alongside the boundary's. Without
+      it the relocation would downgrade those grants' protection IN KIND -- from an explicit Deny to
+      the mere ABSENCE of an iam:CreatePolicy* grant. explicitDeny (not implicitDeny) is the assertion:
+      it proves the Deny statement matched, not merely that no Allow did.
+    required_context_keys: {}
+    why: "Makes the acceptance criterion true by construction rather than by absence."
+  - id: s5-create-policy-version-on-boundary-policy
+    verb: "iam:CreatePolicyVersion"
+    target_arn_template: "arn:aws:iam::${account_id}:policy/agent-platform-github-ci-apply-boundary"
+    expected_decision: explicitDeny
+    by_design: "The pipeline cannot rewrite the authority budget that constrains it (T2.23 non-strippable boundary)."
+    required_context_keys: {}
+    why: "The pre-existing half of the S5 pair -- both ARNs asserted, so a partial edit to the Resource list fails loud."
+  - id: deny-set-default-policy-version-on-reads-policy
+    verb: "iam:SetDefaultPolicyVersion"
+    target_arn_template: "arn:aws:iam::${account_id}:policy/agent-platform-github-ci-apply-reads"
+    expected_decision: explicitDeny
+    by_design: "Rolling the reads document back to an older version is the same capability as rewriting it; the Deny covers all four version verbs."
+    required_context_keys: {}
+    why: "Guards the second escape hatch on the same document."
+  - id: deny-self-inline-policy-write
+    verb: "iam:PutRolePolicy"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-github-ci-apply"
+    expected_decision: explicitDeny
+    required_context_keys:
+      "iam:PermissionsBoundary": "arn:aws:iam::${account_id}:policy/agent-platform-github-ci-apply-boundary"
+    by_design: >-
+      T2.23 self-grant break. The role/agent-platform-* write prefix MATCHES the apply role's own ARN,
+      so DenySelfInlinePolicyWrite carves that ARN out explicitly. The context entry is supplied
+      deliberately: the Deny must bite even on a fully in-budget request, which is the only case that
+      would otherwise be allowed.
+    why: "The pipeline cannot write its own inline policy -- the whole reason terraform/bootstrap is a separate root."
+  - id: deny-self-detach-role-policy
+    verb: "iam:DetachRolePolicy"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-github-ci-apply"
+    expected_decision: explicitDeny
+    by_design: >-
+      This is what protects the NEW attachment. An inline policy cannot be detached, but a
+      customer-managed one can -- and detaching agent-platform-github-ci-apply-reads from this role
+      would strip its entire refresh-read surface, after which every subsequent CD plan fails
+      AccessDenied BEFORE the guard runs. DenySelfInlinePolicyWrite's DetachRolePolicy carve-out on
+      the role's own ARN is the control; this triple is its proof.
+    required_context_keys: {}
+    why: "Self-DoS break, load-bearing for the policy-architecture split's rollback hazard."
+  - id: deny-boundary-removal
+    verb: "iam:DeleteRolePermissionsBoundary"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: explicitDeny
+    by_design: "The pipeline cannot strip the authority budget from itself or from any role it manages (DenyBoundaryRemoval, Resource \"*\")."
+    required_context_keys: {}
+    why: "Non-strippable boundary -- unchanged by the relocation."
+  - id: deny-iam-escalation-unbounded-create-role
+    verb: "iam:CreateRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: explicitDeny
+    by_design: >-
+      DenyIAMEscalation with NO iam:PermissionsBoundary context entry -- an unbounded role create. The
+      StringNotEquals evaluates TRUE when the key is absent, so the Deny applies. See the
+      deny-iam-escalation-permissions-boundary-context artifact note before "fixing" this.
+    required_context_keys: {}
+    why: "The pipeline may only mint roles that carry the authority budget (T2.23 EC4)."
+  - id: bounded-create-role-with-boundary-context
+    verb: "iam:CreateRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys:
+      "iam:PermissionsBoundary": "arn:aws:iam::${account_id}:policy/agent-platform-github-ci-apply-boundary"
+    why: >-
+      The same verb WITH the boundary context is allowed -- this is the pair that distinguishes the
+      simulate artifact from a real gap. T2.48's allow-list inversion depends on this being allowed:
+      a gated role create must EXECUTE after approval, not AccessDeny.
+  - id: bounded-put-role-policy-with-boundary-context
+    verb: "iam:PutRolePolicy"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys:
+      "iam:PermissionsBoundary": "arn:aws:iam::${account_id}:policy/agent-platform-github-ci-apply-boundary"
+    why: "IAMRoleWriteBounded on a NON-self agent-platform-* role; the self case is explicitDeny above."
+  - id: bounded-put-role-permissions-boundary
+    verb: "iam:PutRolePermissionsBoundary"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys:
+      "iam:PermissionsBoundary": "arn:aws:iam::${account_id}:policy/agent-platform-github-ci-apply-boundary"
+    why: "The fourth iam:PermissionsBoundary-conditioned verb -- boundary ATTACH is allowed, boundary REMOVE is denied."
+  - id: passrole-to-lambda-allowed
+    verb: "iam:PassRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys:
+      "iam:PassedToService": "lambda.amazonaws.com"
+    why: "rec-2831 regression anchor: AWS requires iam:PassRole on a Lambda's execution role for lambda:CreateFunction."
+  - id: passrole-to-non-lambda-service-negative
+    verb: "iam:PassRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: implicitDeny
+    by_design: >-
+      The StringEquals on iam:PassedToService is the containment. This identity may pass an
+      agent-platform-* role ONLY to the lambda service -- never to ecs, glue, or any other principal.
+      If this returns `allowed`, the condition was dropped.
+    required_context_keys:
+      "iam:PassedToService": "ecs-tasks.amazonaws.com"
+    why: "Proves the worst-verb Condition, not just the Resource scope."
+  - id: trust-rewrite-outside-enumerated-roles-negative
+    verb: "iam:UpdateAssumeRolePolicy"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: implicitDeny
+    by_design: >-
+      IAMRoleReconcile keeps iam:UpdateAssumeRolePolicy at exactly two enumerated roles
+      (agent-platform-github-ci-branch, agent-platform-github-ci-pr) and is deliberately NOT widened to
+      role/agent-platform-*. A widened trust Resource would grant a fleet-wide trust rewrite, and
+      DEP-05 (a dedicated trust-boundary control) is still open -- this narrow grant is the only
+      control against it.
+    required_context_keys: {}
+    why: "P1 disposition: trust is not widened by this change; the negative is what keeps that true."
+  - id: trust-rewrite-on-enumerated-role
+    verb: "iam:UpdateAssumeRolePolicy"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-github-ci-branch"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "Regression anchor for the two enumerated trust ARNs -- the narrow grant must still work."
+
+  # -- RULED-OUT ALLOWED SET: pre-existing grants kept as regression anchors across the relocation. --
+  - id: anchor-tfstate-put-object
+    verb: "s3:PutObject"
+    target_arn_template: "arn:aws:s3:::agent-platform-data-lake/tfstate/personal/sandbox/terraform.tfstate"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "TerraformStateBackend -- stayed inline. If this breaks, the relocation moved something it should not have."
+  - id: anchor-convergence-record-put-object
+    verb: "s3:PutObject"
+    target_arn_template: "arn:aws:s3:::agent-platform-data-lake/convergence/personal/sandbox.json"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "ConvergenceRecordWrite -- the apply role is a sanctioned writer of the integrity anchor (CD.35 Wave 1)."
+  - id: anchor-relocated-read-get-role
+    verb: "iam:GetRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-github-ci-branch"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      RELOCATION ANCHOR: IAMRolesRead is one of the 11 Sids that MOVED into
+      agent-platform-github-ci-apply-reads. Its decision must be unchanged by the move -- a customer-
+      managed policy that is declared but not attached grants nothing, and this triple is the live
+      proof the attachment took effect.
+  - id: anchor-relocated-read-describe-secret
+    verb: "secretsmanager:DescribeSecret"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:agent-platform-terraform-personal-tfvars-fixture"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      Second relocation anchor, on the Sid with the most at stake: SecretsManagerReadOnly's six
+      enumerated ARNs moved VERBATIM (S1 -- no widening; Decision 129 pt 2 keeps Secrets Manager
+      enumerated because secrets return VALUES).
+  - id: anchor-secrets-read-non-enumerated-negative
+    verb: "secretsmanager:GetSecretValue"
+    target_arn_template: "arn:aws:secretsmanager:${region}:${account_id}:secret:agent-platform-simulate-probe-fixture"
+    expected_decision: implicitDeny
+    by_design: >-
+      S1: the relocation moved SecretsManagerReadOnly's six enumerated ARNs verbatim and widened
+      NOTHING. If a non-enumerated agent-platform-* secret ever reads as `allowed`, the enumeration was
+      traded for a prefix during a byte-pressure edit -- the exact trade this plan refused to make.
+    required_context_keys: {}
+    why: "Proves the read scope did not widen in transit."
+  - id: anchor-lambda-create-function
+    verb: "lambda:CreateFunction"
+    target_arn_template: "arn:aws:lambda:${region}:${account_id}:function:agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "rec-2831's headline verb; paired with the passrole-to-lambda-allowed triple above (headline + companion, together)."
+  - id: anchor-logs-create-log-group
+    verb: "logs:CreateLogGroup"
+    target_arn_template: "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: "DEP-01 grant; its tagging companions are the P0-4 triples above."
+  - id: anchor-tag-role
+    verb: "iam:TagRole"
+    target_arn_template: "arn:aws:iam::${account_id}:role/agent-platform-simulate-probe"
+    expected_decision: allowed
+    required_context_keys: {}
+    why: >-
+      rec-2842 regression anchor (instance 2 of the class): default_tags forces a TagRole call on
+      every role create, so iam:CreateRole at role/agent-platform-* structurally requires iam:TagRole
+      at the SAME prefix.

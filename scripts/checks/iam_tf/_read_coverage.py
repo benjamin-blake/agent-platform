@@ -26,6 +26,19 @@ from scripts.checks.iam_tf import validate_invoke_implies_resolve as _vir
 #         agent-platform-* (or other) prefix, OR a bare/interpolated Terraform resource reference
 #         in the Resource list of a statement granting one of those actions. A None name_attrs
 #         means the type is covered purely by a Resource:"*" grant (no per-instance name to check).
+#
+#         "read_actions" is ANY-OF: one marker action on a covering Resource satisfies the type.
+#         The OPTIONAL "read_actions_all_of" key overrides that with an EXACT, ALL-OF requirement
+#         -- every listed action must be granted (literally, or by a wildcard grant that covers
+#         it) on a Resource covering the instance. It exists for the types whose refresh-read set
+#         is genuinely a conjunction of two DIFFERENT capability classes, where an ANY-OF marker
+#         list would let the cheap half stand in for the expensive one. Concretely: after the
+#         Secrets Manager read split (value-free metadata prefixed, GetSecretValue enumerated), a
+#         wide `secretsmanager:Describe*` statement would ANY-OF-satisfy
+#         data:aws_secretsmanager_secret_version -- a green for the wrong reason that lets a data
+#         source on a non-enumerated secret AccessDeny live at plan, which is exactly the silent
+#         deferred failure this gate exists to kill. Types WITHOUT the key are matched exactly as
+#         before (_action_matches, unchanged).
 #   (ii)  ENUMERATED_IAM_TYPES -- iam: role reads. MUST be a literal enumerated ARN (Decision
 #         35/98) -- a wildcard/prefix match never counts, unlike CHECKED_TYPES.
 #   (iii) TRANSITIVE_TYPES  -- covered by a parent/sibling resource's own grant (e.g.
@@ -42,12 +55,22 @@ CHECKED_TYPES: dict[str, dict] = {
     "aws_lambda_function": {"read_actions": ("lambda:Get*", "lambda:List*"), "name_attrs": ("function_name",)},
     "aws_lambda_layer_version": {"read_actions": ("lambda:Get*", "lambda:List*"), "name_attrs": ("layer_name",)},
     "aws_cloudwatch_event_rule": {"read_actions": ("events:Describe*", "events:List*"), "name_attrs": ("name",)},
+    # The two Secrets Manager types carry EXACT, ALL-OF refresh-read sets rather than the shared
+    # Describe*/Get* marker pair they used before the read split. hashicorp/aws v5.100.0:
+    # aws_secretsmanager_secret's refresh calls DescribeSecret + GetResourcePolicy and NEVER
+    # GetSecretValue, while the value read is issued only by aws_secretsmanager_secret_version
+    # (resource + data source). Keeping them on one shared ANY-OF pair would mean a metadata-only
+    # `secretsmanager:Describe*` grant satisfies the data source's genuine GetSecretValue need.
     "aws_secretsmanager_secret": {
-        "read_actions": ("secretsmanager:Describe*", "secretsmanager:Get*"),
+        # ANY-OF markers, retained for the scope-parity rule (_write_symmetry) which compares read
+        # and write SCOPES, not capability classes; the coverage assertion uses the all_of set.
+        "read_actions": ("secretsmanager:Describe*", "secretsmanager:GetResourcePolicy"),
+        "read_actions_all_of": ("secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"),
         "name_attrs": ("name",),
     },
     "data:aws_secretsmanager_secret_version": {
-        "read_actions": ("secretsmanager:Describe*", "secretsmanager:Get*"),
+        "read_actions": ("secretsmanager:GetSecretValue",),
+        "read_actions_all_of": ("secretsmanager:GetSecretValue",),
         "name_attrs": ("secret_id",),
     },
     "aws_sns_topic": {"read_actions": ("sns:Get*", "sns:List*"), "name_attrs": ("name",)},
@@ -163,28 +186,46 @@ def _extract_capitalized_field(body: str, field: str) -> tuple[list[str], str]:
     return [], ""
 
 
-def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> list[dict]:
-    block_re = re.compile(rf'resource\s+"aws_iam_role_policy"\s+"{re.escape(role_policy_resource_name)}"\s*\{{')
+def _locate_policy_statement_array(text: str, resource_type: str, resource_name: str) -> str | None:
+    """Return the raw `Statement = [...]` body for a named IAM policy resource, or None.
+
+    ONE shared locator for every policy document in terraform/bootstrap. It resolves BOTH textual
+    shapes a policy attribute can take, so callers never depend on where in the file a document's
+    JSON physically lives:
+
+      inline   `policy = jsonencode({ ... Statement = [...] ... })`
+      hoisted  `policy = local.<name>` -> `locals { <name> = jsonencode({ ... Statement = [...] }) }`
+
+    The hoist is the rec-2793 lifecycle-precondition workaround (a precondition cannot reference
+    `self`, so the rendered document must exist as a local the precondition can re-render). It is NOT
+    identity-policy-specific: any document that grows a size precondition acquires the same shape.
+    Resolving the indirection here -- rather than forward-searching from a resource match -- is what
+    makes the locator position-independent, so hoisting a document no longer silently strips its
+    statements from every consumer.
+    """
+    block_re = re.compile(rf'resource\s+"{re.escape(resource_type)}"\s+"{re.escape(resource_name)}"\s*\{{')
     m = block_re.search(text)
     if not m:
-        return []
+        return None
     body = _vir._extract_block(text, m.end() - 1)
     stmt_m = re.search(r"Statement\s*=\s*\[", body)
     if stmt_m:
-        array_text = _extract_bracket_block(body, stmt_m.end() - 1)
-    else:
-        # Not inline -- try the rec-2793 hoisted-local indirection (see _POLICY_LOCAL_REF_RE).
-        local_m = _POLICY_LOCAL_REF_RE.search(body)
-        if not local_m:
-            return []
-        assign_m = re.search(rf"\b{re.escape(local_m.group(1))}\s*=\s*jsonencode\s*\(\s*\{{", text)
-        if not assign_m:
-            return []
-        local_body = _vir._extract_block(text, assign_m.end() - 1)
-        local_stmt_m = re.search(r"Statement\s*=\s*\[", local_body)
-        if not local_stmt_m:
-            return []
-        array_text = _extract_bracket_block(local_body, local_stmt_m.end() - 1)
+        return _extract_bracket_block(body, stmt_m.end() - 1)
+    local_m = _POLICY_LOCAL_REF_RE.search(body)
+    if not local_m:
+        return None
+    assign_m = re.search(rf"\b{re.escape(local_m.group(1))}\s*=\s*jsonencode\s*\(\s*\{{", text)
+    if not assign_m:
+        return None
+    local_body = _vir._extract_block(text, assign_m.end() - 1)
+    local_stmt_m = re.search(r"Statement\s*=\s*\[", local_body)
+    if not local_stmt_m:
+        return None
+    return _extract_bracket_block(local_body, local_stmt_m.end() - 1)
+
+
+def _parse_statement_array(array_text: str) -> list[dict]:
+    """Parse a `Statement = [...]` array body into the shared statement dicts."""
     statements = []
     for obj_body in _split_top_level_objects(array_text):
         sid_m = _SID_CAP_RE.search(obj_body)
@@ -206,6 +247,45 @@ def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> li
             }
         )
     return statements
+
+
+def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> list[dict]:
+    """Statements of the named inline `aws_iam_role_policy` (the identity policy). [] when absent."""
+    array_text = _locate_policy_statement_array(text, "aws_iam_role_policy", role_policy_resource_name)
+    if array_text is None:
+        return []
+    return _parse_statement_array(array_text)
+
+
+def _parse_managed_policy_statements(text: str, policy_resource_name: str) -> list[dict]:
+    """Statements of a named customer-managed `aws_iam_policy`. [] when the resource is absent.
+
+    Returning [] (never raising) on an absent resource is load-bearing: the synthetic fixtures under
+    tests/checks/iam_tf/validate_ci_refresh_read_coverage/ declare only an inline role policy, and
+    they must stay green unmodified. Callers that REQUIRE the policy assert on the parsed length.
+    """
+    array_text = _locate_policy_statement_array(text, "aws_iam_policy", policy_resource_name)
+    if array_text is None:
+        return []
+    return _parse_statement_array(array_text)
+
+
+def _parse_boundary_dataplane_statement(bootstrap_text: str) -> dict | None:
+    """Locate github_ci_apply_boundary's DataPlaneAllow statement. None on HCL shape drift.
+
+    Lives here (not in _write_coverage) because it is a policy-document parse, and it is expressed on
+    the SHARED locator above so it follows the hoisted-local indirection. The previous implementation
+    forward-searched for the next `Statement = [` after the boundary resource match and documented an
+    assumption -- "the boundary policy is inline, no rec-2793 hoisted-local indirection" -- that a
+    boundary size precondition makes false: once the boundary JSON moves into a local ABOVE the
+    resource, the forward search finds nothing (the resource is the last thing in the file) and every
+    boundary-ceiling check fails closed with "could not locate the DataPlaneAllow statement".
+    Re-exported from _write_coverage so existing importers keep working.
+    """
+    for stmt in _parse_managed_policy_statements(bootstrap_text, "github_ci_apply_boundary"):
+        if stmt.get("sid") == "DataPlaneAllow":
+            return stmt
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +427,43 @@ def _action_matches(read_actions: tuple[str, ...], stmt_actions: list[str]) -> b
     return False
 
 
+def _action_granted(required: str, stmt_actions: list[str]) -> bool:
+    """Does `stmt_actions` grant the EXACT `required` action?
+
+    Deliberately the MIRROR IMAGE of _action_matches, and kept separate from it so no existing
+    type's behaviour shifts. _action_matches generalises on the REQUIREMENT side (a
+    `service:Verb*` marker matches a literal grant); this generalises on the GRANT side (a
+    literal requirement is satisfied by a wildcard grant that covers it). That direction is what
+    an exact ALL-OF set needs: `secretsmanager:Get*` genuinely does grant
+    `secretsmanager:GetSecretValue`, while `secretsmanager:Describe*` genuinely does not -- which
+    is precisely the distinction the shared Describe*/Get* marker pair could not draw.
+    """
+    for granted in stmt_actions:
+        if granted == required:
+            return True
+        if granted.endswith("*") and required.startswith(granted[:-1]):
+            return True
+    return False
+
+
+def _statement_covers_resource(
+    rtype: str,
+    rname: str,
+    resolved_name: str | None,
+    stmt: dict,
+    literal_only: bool,
+) -> bool:
+    """Does one statement's Resource list reach this resource instance? (Action is not consulted.)"""
+    raw = stmt["resources_raw"]
+    if not literal_only and "*" in _vir._QUOTED_RE.findall(raw):
+        return True
+    # Bare or interpolated Terraform resource reference (oidc.tf style), e.g.
+    # `aws_sns_topic.alerts.arn` or `${aws_glue_catalog_database.ops.name}`.
+    if f"{rtype}.{rname}." in raw:
+        return True
+    return bool(resolved_name and _literal_or_prefix_match(resolved_name, raw, literal_only=literal_only))
+
+
 def _resource_covered(
     rtype: str,
     rname: str,
@@ -354,18 +471,27 @@ def _resource_covered(
     read_actions: tuple[str, ...],
     statements: list[dict],
     literal_only: bool = False,
+    all_of: bool = False,
 ) -> bool:
+    """ANY-OF by default (unchanged); ALL-OF when `all_of` -- every action needs its own cover.
+
+    In ALL-OF mode each required action must be granted on a covering Resource by SOME statement,
+    not necessarily the same one: two statements each covering the instance, one granting
+    DescribeSecret and the other GetResourcePolicy, is a correct grant surface.
+    """
+    if all_of:
+        return all(
+            any(
+                _action_granted(required, stmt["actions"])
+                and _statement_covers_resource(rtype, rname, resolved_name, stmt, literal_only)
+                for stmt in statements
+            )
+            for required in read_actions
+        )
     for stmt in statements:
         if not _action_matches(read_actions, stmt["actions"]):
             continue
-        raw = stmt["resources_raw"]
-        if not literal_only and "*" in _vir._QUOTED_RE.findall(raw):
-            return True
-        # Bare or interpolated Terraform resource reference (oidc.tf style), e.g.
-        # `aws_sns_topic.alerts.arn` or `${aws_glue_catalog_database.ops.name}`.
-        if f"{rtype}.{rname}." in raw:
-            return True
-        if resolved_name and _literal_or_prefix_match(resolved_name, raw, literal_only=literal_only):
+        if _statement_covers_resource(rtype, rname, resolved_name, stmt, literal_only):
             return True
     return False
 
@@ -421,14 +547,28 @@ def _check_resource(
             "treating as uncovered until the extraction is fixed"
         ], False
 
+    # An entry declaring read_actions_all_of is asserted as an EXACT conjunction; every other entry
+    # keeps the historical ANY-OF marker semantics, byte for byte.
+    all_of_actions = spec.get("read_actions_all_of")
+    required_actions = all_of_actions or spec["read_actions"]
+    quantifier = "ALL of" if all_of_actions else "one of"
+
     findings = []
     for role_key, statements in role_statements.items():
-        if not _resource_covered(rtype, rname, resolved_name, spec["read_actions"], statements, literal_only=literal_only):
+        if not _resource_covered(
+            rtype,
+            rname,
+            resolved_name,
+            required_actions,
+            statements,
+            literal_only=literal_only,
+            all_of=bool(all_of_actions),
+        ):
             findings.append(
                 f"{key} {rtype} {rname!r}"
                 + (f" ({resolved_name!r})" if resolved_name else "")
                 + f" in {fname} is not refresh-read-covered in the {role_key} role policy "
-                f"(expected one of {spec['read_actions']} on a matching Resource ARN/reference)"
+                f"(expected {quantifier} {required_actions} on a matching Resource ARN/reference)"
             )
     return findings, True
 
