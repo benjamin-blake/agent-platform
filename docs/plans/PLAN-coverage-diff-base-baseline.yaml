@@ -36,8 +36,20 @@ scope:
       In get_changed_source_files() (lines ~494-524) prepend _common.push_context_base() and
       use it when non-None, otherwise keep the existing merge-base-or-HEAD block verbatim (no
       third diff-base convention -- sole-home discipline, Decision 104/148). Fix rec-943 --
-      switch check_per_file_coverage's --cov argument from a module string to a file-path
-      source spec so importlib-loaded modules are measured. Consume the baseline compare from
+      switch check_per_file_coverage's --cov argument from the dotted module string to the
+      target file's PARENT DIRECTORY (e.g. scripts/roadmap for scripts/roadmap/plan_audit.py;
+      scripts for a scripts/ root file), so importlib-loaded modules are measured.
+      NOT a single-file path: coverage.py treats a --cov/source entry as an importable name
+      or a directory, never as one .py file. Verified at planning time --
+      "--cov=scripts/roadmap/plan_audit.py" emits module-not-imported + no-data-collected and
+      writes NO json, which would send every file down the line-443 info-skip path and make
+      the whole gate silently no-op (strictly worse than today); "--cov=scripts/roadmap"
+      works and reports plan_audit.py at 87.7%. No downstream logic change is needed -- the
+      existing matched loop (lines ~456-464) already narrows a multi-file report to the
+      target path. The directory spec makes the child pytest exit non-zero via the global
+      fail_under=37 when the measured subtree is below it, which is harmless here: the JSON
+      is written BEFORE that check and check_per_file_coverage ignores the child returncode
+      (both verified). Consume the baseline compare from
       scripts/checks/misc/coverage_baseline.py. File is 470/500 SLOC: net growth must stay
       under the limit; all new logic lives in the new module.
   - file: scripts/checks/misc/coverage_baseline.py
@@ -110,12 +122,22 @@ scope:
       Add fetch-depth: 2 to the main-validate job's checkout step so HEAD~1 exists for the
       push-context diff base (squash-merge convention, Decision 76 - every merge to main is
       a single commit, so depth 2 suffices). No new check is added to ci.yml.
+  - file: .github/workflows/main-canary.yml
+    action: Modify
+    purpose: >-
+      Same one-line fetch-depth: 2 on its checkout step. This workflow runs the SAME full
+      tier ("python -m scripts.validate", line ~50) on main every 3 hours on a schedule with
+      a bare actions/checkout@v7, so without it the canary stays blind and the plan's stated
+      intent ("restore the post-merge diff-aware validation layer") is only half delivered.
+      It degrades safely without the fix (branch is main and merge-base == HEAD, so push
+      context is detected, but HEAD~1 cannot resolve at depth 1 -> None -> today's
+      behaviour), which is why this is a completeness fix rather than a correctness one.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
       Append the carrying Decision (next free number - 158 at planning time, RE-CHECK the
       max "## Decision NNN:" header at implement time). Condensed draft in
-      execution_steps. Keep under ~2.5KB - DECISIONS.md is at 480KB of the 500KB ceiling.
+      execution_steps. Keep under ~2.5KB - DECISIONS.md is 489,908 bytes against the 500,000-byte Decision 145 ceiling, i.e. only ~10KB of headroom.
   - file: tests/test_checks_registry.py
     action: Modify
     purpose: >-
@@ -171,7 +193,10 @@ acceptance_criteria:
     still diffs origin/main directly (NOT merge-base, preserving its behaviour on diverged
     branches), get_status_aware_diff() and get_changed_source_files() still use
     merge-base-or-HEAD. Verified by asserting outputs match a pre-change reference on a
-    feature branch, including one diverged from main.
+    feature branch, including one diverged from main. Scope of the claim: Decision 135 pt 3's
+    "contract unchanged for existing callers" holds for all branch and PR callers;
+    get_changed_files() DOES newly change behaviour when running on main in push context,
+    which is the correction this plan exists to make, not an unintended side effect.
   - >-
     Structural-exclusion correctness: with the new exclude_lines,
     scripts/ops_writer.py measures 75.3% (was 69.6%) with zero source edits, and no
@@ -186,8 +211,11 @@ acceptance_criteria:
     inline "# baseline-lowered: dec-NNN <reason>" marker naming a real Decision header
     fails validate_coverage_baseline_edits; raises and removals pass unrestricted.
   - >-
-    rec-943 closed by mechanism: scripts/roadmap/plan_audit.py (importlib-loaded test
-    idiom) yields a numeric per-file coverage result, not an informational skip.
+    rec-943 closed by mechanism: with the parent-directory --cov spec,
+    scripts/roadmap/plan_audit.py (importlib-loaded test idiom) yields a numeric per-file
+    coverage result (87.7% when measured at planning time), not an informational skip -- and
+    check_per_file_coverage reports a measured number for EVERY file it examines, so a
+    silently-empty coverage report can no longer masquerade as a pass.
   - >-
     main-validate checks out with fetch-depth 2, and the Decision 124 ops_portal carve-out
     still holds (map_source_to_test returns None for scripts/ops_portal/ paths).
@@ -202,7 +230,7 @@ verification_plan:
       Run the shared-primitive tests - push-context detection (temp-repo fixture),
       PR-context invariance, HEAD~1-missing fallback.
     command: bin/venv-python -m pytest tests/test_checks_registry.py -q
-    expected: Exit 0; new resolve_diff_base tests all pass.
+    expected: Exit 0; new push_context_base tests all pass.
     fix_if: >-
       Push context misdetected (merge-base comparison wrong), PR-context outputs changed
       (Decision 135 violation), or fallback not loud - fix _common.py, not the tests.
@@ -212,9 +240,9 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
-      Run the coverage-checker and baseline-module tests - path-spec measurement of an
-      importlib-loaded fixture module (rec-943), baseline compare semantics, tamper-guard
-      marker enforcement.
+      Run the coverage-checker and baseline-module tests - parent-directory-spec measurement
+      of an importlib-loaded fixture module (rec-943), baseline compare semantics,
+      tamper-guard marker enforcement.
     command: bin/venv-python -m pytest tests/test_test_coverage_checker.py tests/checks/misc/test_coverage_baseline.py tests/checks/misc/test_validate_test_coverage.py -q
     expected: Exit 0; importlib fixture measured numerically; guard fails lowering-without-marker and passes raise/removal.
     fix_if: >-
@@ -231,13 +259,20 @@ verification_plan:
       would satisfy merge-base == HEAD. Guards the exact defect the first draft of this
       design contained.
     command: >-
-      bin/venv-python -c "import sys; sys.path.insert(0,'.'); import os;
+      bin/venv-python -c "import sys,os,subprocess; sys.path.insert(0,'.');
       os.environ.pop('GITHUB_EVENT_NAME', None);
-      from scripts.checks import _common;
-      b=_common.push_context_base();
-      assert b is None, f'false positive: expected None on a session branch, got {b}';
-      print('session-branch guard OK (None)')"
-    expected: Exit 0, prints the guard confirmation.
+      br=subprocess.run(['git','branch','--show-current'],capture_output=True,text=True).stdout.strip();
+      mb=subprocess.run(['git','merge-base','origin/main','HEAD'],capture_output=True,text=True).stdout.strip();
+      hd=subprocess.run(['git','rev-parse','HEAD'],capture_output=True,text=True).stdout.strip();
+      from scripts.checks import _common; b=_common.push_context_base();
+      assert b is None, f'false positive: expected None on branch {br!r}, got {b}';
+      print(f'session-branch guard EXERCISED on {br!r}: returned None' if mb==hd else
+      f'SKIP (precondition absent on {br!r}: branch has own commits, merge-base != HEAD) -- durable coverage is VP step 1')"
+    expected: >-
+      Exit 0. Prints "guard EXERCISED" when the branch has no commits of its own (the real
+      false-positive precondition, merge-base == HEAD); prints a loud SKIP naming the reason
+      otherwise. The assertion runs either way, so it can never pass silently; the
+      unconditional durable coverage lives in VP step 1's temp-repo fixture.
     fix_if: >-
       Returns a base - the branch-name conjunct is missing from the detection condition;
       add it rather than widening the tree-state guard.
@@ -285,13 +320,21 @@ verification_plan:
     graduation: not-applicable
   - step: 6
     phase: pre-deploy
-    action: Assert main-validate's checkout carries fetch-depth 2.
+    action: >-
+      Assert BOTH full-tier-on-main checkouts carry fetch-depth 2 - ci.yml's main-validate
+      and main-canary.yml's scheduled job.
     command: >-
       bin/venv-python -c "import yaml; w=yaml.safe_load(open('.github/workflows/ci.yml'));
-      s=w['jobs']['main-validate']['steps'][0]; assert 'checkout' in s['uses'], s;
-      assert s.get('with',{}).get('fetch-depth')==2, s; print('fetch-depth: 2 present')"
-    expected: Exit 0, prints confirmation.
-    fix_if: Checkout step moved position - locate the actions/checkout step by uses-match instead of index.
+      s=next(x for x in w['jobs']['main-validate']['steps'] if 'checkout' in x.get('uses',''));
+      assert s.get('with',{}).get('fetch-depth')==2, s; print('ci.yml main-validate fetch-depth OK')"
+      && bin/venv-python -c "import yaml;
+      w=yaml.safe_load(open('.github/workflows/main-canary.yml')); j=list(w['jobs'])[0];
+      s=next(x for x in w['jobs'][j]['steps'] if 'checkout' in x.get('uses',''));
+      assert s.get('with',{}).get('fetch-depth')==2, s; print('main-canary fetch-depth OK')"
+    expected: Exit 0, prints a confirmation line for each of the two workflows.
+    fix_if: >-
+      AssertionError naming the offending workflow - add fetch-depth: 2 there. The step is
+      located by uses-match, not index, so a reordered checkout step will not false-fail.
     hermetic: true
     graduation: graduate
     graduation_check_id: main-validate-fetch-depth
@@ -317,20 +360,34 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Unblock simulation - run the baseline-aware gate against the hermeticity blocker
-      change-set [scripts/ops_writer.py, scripts/sync/ops.py] with the seeded roster and
-      expect zero errors.
+      change-set [scripts/ops_writer.py, scripts/sync/ops.py] with the seeded roster.
+      ANTI-VACUITY: assert a numeric coverage result was produced for BOTH files before
+      asserting no errors - "no errors" alone passes trivially when coverage data is missing
+      entirely (the line-443 info-skip path), which is exactly how a dead gate would look.
     command: >-
       bin/venv-python -c "import importlib.util,sys,pathlib; sys.path.insert(0,'.');
       spec=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
       m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m);
       srcs=m.get_changed_source_files(files=['scripts/ops_writer.py','scripts/sync/ops.py']);
-      errs=m.check_per_file_coverage(srcs); assert errs==[], errs; print('gate passes with baseline')"
-    expected: Exit 0 - both files pass at their baselined values.
+      assert len(srcs)==2, srcs;
+      pcts=m.measure_per_file_coverage(srcs);
+      assert all(isinstance(pcts.get(str(s)), float) for s in srcs), f'missing coverage data (dead gate): {pcts}';
+      errs=m.check_per_file_coverage(srcs); assert errs==[], errs;
+      print('gate live and passing with baseline:', pcts)"
+    expected: >-
+      Exit 0 - a numeric percentage is reported for each of the two files AND no errors are
+      returned. Implementation note - expose the measured percentages from
+      check_per_file_coverage (e.g. a measure_per_file_coverage helper in
+      coverage_baseline.py that check_per_file_coverage also consumes) so this assertion is
+      possible; if that helper is not built, this step MUST instead assert on the checker's
+      printed per-file mapping output rather than being weakened to errs==[].
     fix_if: >-
-      Errors returned - baseline entries missing, seeded above measured values, or the
-      compare direction inverted.
+      Missing coverage data - the --cov spec is wrong (a single .py path yields no JSON; use
+      the parent directory). Errors returned - baseline entries missing, seeded above
+      measured values, or the compare direction inverted.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: coverage-gate-live-with-baseline
   - step: 9
     phase: pre-deploy
     action: Full fast-tier presubmit, including the new guard's own registration reachability.
@@ -338,10 +395,32 @@ verification_plan:
     expected: Exit 0; validate_coverage_baseline_edits appears in the pre-tier run output.
     fix_if: >-
       KeyError on the check name - facade re-export line missing in scripts/validate.py;
-      SLOC failure on test_coverage_checker.py - move logic into coverage_baseline.py.
+      SLOC failure on test_coverage_checker.py - move logic into coverage_baseline.py;
+      SLOC failure on tests/test_checks_registry.py - the marked budget raise is missing or
+      its dec-NNN marker names a header that does not exist yet.
     hermetic: false
     graduation: not-applicable
   - step: 10
+    phase: pre-deploy
+    action: >-
+      Full-tier presubmit - the ONLY tier validate_test_coverage and the new baseline guard
+      actually run in (both are full_sequence()-only), so without this step no VP step ever
+      exercises the plan's central claim end to end. Also satisfies
+      handoff_policy.full_validation_required_before_commit.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0. The "=== Test coverage check ===" section reports a non-zero number of source
+      files checked with 0 below their baseline, and validate_coverage_baseline_edits runs.
+      A report of "No source file changes to check." means the diff base is wrong -- treat
+      that as a FAILURE of this step, not a pass.
+    fix_if: >-
+      Zero source files checked - push_context_base()/fallback mis-scoped on a feature
+      branch. Coverage errors - a scope file this plan modifies measures below 100 and needs
+      its own seeded baseline entry (expected for _common.py / test_coverage_checker.py if
+      the new tests do not reach 100).
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
     phase: post-deploy
     action: >-
       After squash-merge, on updated local main, confirm the post-merge diff base is live -
@@ -355,7 +434,7 @@ verification_plan:
       files=m.get_changed_source_files(); assert files, 'post-merge diff base still empty'; print(sorted(str(p) for p in files))"
     expected: Non-empty list naming this plan's merged .py files.
     fix_if: Empty - push-context detection failed on real main; RCA before any further merges (Decision 55).
-  - step: 11
+  - step: 12
     phase: post-deploy
     action: >-
       Closure obligation - confirm rec-2903 and rec-943 auto-closed via the Resolves
@@ -413,8 +492,8 @@ constraints:
     No rescue agents or workaround loops (Decision 55); on unrecoverable V3-like failure
     in post-deploy steps, stop and RCA.
   - >-
-    The DECISIONS.md entry stays concise (~2.5KB) - the file is at 480KB of the 500KB
-    Decision 145 ceiling.
+    The DECISIONS.md entry stays concise (~2.5KB) - the file is 489,908 bytes against the
+    500,000-byte Decision 145 ceiling, leaving only ~10KB of headroom.
 context:
   - >-
     Root cause (precise per-function form): get_status_aware_diff()
@@ -459,14 +538,27 @@ context:
     Decision 142, Decision 73, Decision 55, Decision 72, Decision 129, Decision 131,
     Decision 79, Decision 86, Decision 132. Flags resolved in-plan: Decision 48 V2-row
     narrowed by forward reference in the carrying Decision; Decision 124 stale premise
-    corrected by forward reference with a carve-out VP proof (step 6); Decision 128-mirror
+    corrected by forward reference with a carve-out VP proof (step 7); Decision 128-mirror
     tamper guard on baseline lowering; Decision 102 respected via the separate
     coverage_baseline.py module; Decision 130 one-time-roster framing with a filed paydown
     rec and a growth reversal condition.
   - >-
     "gates: decision-scout=FLAGS_FOUND (after 1 BLOCK->pivot round) after 2 round(s);
-    plan-critique=PROCEED after 2 round(s)". Round 1 returned REVISE on two blocking items,
-    both fixed here: (1) tests/test_checks_registry.py had 3 SLOC headroom against
+    plan-critique=PROCEED after 3 round(s)". Round 2 confirmed round 1's two items resolved
+    and raised two more, both fixed here: (A) the rec-943 mechanism was factually wrong and
+    silent -- a single-.py --cov spec yields NO coverage json (verified: module-not-imported
+    + no-data-collected), which would have routed every file to the line-443 info-skip and
+    killed the gate outright; changed to a parent-directory spec (verified working, 87.7% on
+    plan_audit.py) and VP step 8 hardened to assert a numeric result per file so a dead gate
+    cannot pass vacuously. (B) the carrying-Decision draft still named the round-1
+    resolve_diff_base() and its defective detection rule, which would have durably enshrined
+    the very bug the revision removed (Decision 86: the Decision entry is the permanent
+    record); rewritten, along with two stale cross-references. Also folded in: main-canary.yml
+    added to scope (same full tier on main, same bare checkout), VP step 3 made
+    self-asserting rather than conditionally vacuous, a full-tier VP step added (the coverage
+    gate is full_sequence()-only, so no prior step exercised it), and three counts corrected.
+    Round 1 returned REVISE on two blocking items,
+    both fixed earlier: (1) tests/test_checks_registry.py had 3 SLOC headroom against
     substantial additions with no disposition -- now a declared, marked budget raise with
     config/sloc_budgets.yaml added to scope; (2) the diff-base primitive was underspecified --
     it unified three consumers onto one merge-base (a real behaviour change for
@@ -505,8 +597,10 @@ execution_steps:
     scripts/test_coverage_checker.py - in get_changed_source_files() try
     _common.push_context_base() first (import scripts.checks._common via the already-injected
     ROOT sys.path) and keep the existing merge-base-or-HEAD block as the fallback; switch
-    check_per_file_coverage to a file-path --cov source spec (rec-943); route the per-file
-    verdict through the baseline compare helper. Keep the file under 500 SLOC.
+    check_per_file_coverage's --cov argument to the target file's PARENT DIRECTORY, never a
+    single .py path (rec-943; see the scope row for the verified reason a file path yields no
+    coverage data at all); route the per-file verdict through the baseline compare helper.
+    Keep the file under 500 SLOC.
   - >-
     config/sloc_budgets.yaml - register tests/test_checks_registry.py at its post-change SLOC
     with an inline "# raise-approved: dec-NNN tests for _common.push_context_base() must live
@@ -514,7 +608,10 @@ execution_steps:
     _CHECKS_REGISTRY_MECHANISM_FILES, and decomposing would require editing map_source_to_test
     in the same PR that repairs the coverage checker" marker, citing the carrying Decision.
     Verify validate_sloc_budget_raises accepts it (the marker must name a real "## Decision
-    NNN:" header, so add the Decision entry first).
+    NNN:" header, so add the Decision entry first). SEQUENCING: the registered value is the
+    file's POST-change SLOC, which is not known until the tests are written -- so run this
+    step AFTER the test-authoring step, not before, and recount with the gate's own rule
+    (non-blank, non-comment lines) rather than reusing the 497 planning-time figure.
   - >-
     Create scripts/checks/misc/coverage_baseline.py (load + compare + the
     validate_coverage_baseline_edits guard as specified in scope) and
@@ -537,7 +634,7 @@ execution_steps:
     after the rec-943 fix are recorded at their measured value, never guessed.
   - >-
     Close the known-unknowns tail before sealing the roster: sweep
-    "grep -rl spec_from_file_location tests/" (~20 files today), map each back to its source
+    "grep -rl spec_from_file_location tests/" (34 files at planning time), map each back to its source
     via map_source_to_test, and measure those too -- the rec-943 fix makes this whole set
     newly measurable, so any sub-100 member would otherwise surface as a surprise red on a
     later merge rather than as a seeded, cited roster entry. Report the swept count and any
@@ -549,11 +646,20 @@ execution_steps:
     stays under 500 SLOC (Decision 128/130).
   - >-
     docs/DECISIONS.md - append the carrying Decision (re-check next free number; drafted
-    as 158): (1) class fix - push-context diff base centralised in
-    _common.resolve_diff_base(); when merge-base(origin/main, HEAD) == HEAD the base is
-    HEAD~1; main-validate checks out fetch-depth 2 (squash convention, Decision 76). A
-    MEASUREMENT CORRECTION, not a relaxation (Decision 82 framing) - the diff-aware
-    full-tier layer previously no-oped on main. (2) coverage baseline -
+    as 158): (1) class fix - push-context base selection centralised in
+    _common.push_context_base(), which returns a base ONLY in push context and None
+    otherwise, so each of the three consumers keeps its own existing base on the None path
+    (get_changed_files() still diffs origin/main directly; the other two keep
+    merge-base-or-HEAD). Push context is GITHUB_EVENT_NAME == "push" OR (current branch ==
+    "main" AND merge-base(origin/main, HEAD) == HEAD); the branch-name conjunct is required,
+    because merge-base == HEAD alone also matches every fresh harness session branch before
+    its first commit. In push context the base is GITHUB_EVENT_BEFORE when it names a
+    non-zero locally-present commit, else HEAD~1, and None with a loud warning if HEAD~1
+    does not resolve. main-validate checks out fetch-depth 2 (squash convention, Decision
+    76). A MEASUREMENT CORRECTION, not a relaxation (Decision 82 framing) - the diff-aware
+    full-tier layer previously no-oped on main. Decision 135 pt 3's "contract unchanged"
+    holds for all branch/PR callers; get_changed_files() does newly change behaviour ON main
+    in push context, which is the correction itself. (2) coverage baseline -
     config/coverage_baseline.yaml is a one-time grandfather roster (Decision 130 style);
     changed files with an entry fail iff measured < entry, unbaselined files keep the 100%
     standard - narrowing Decision 48's V2 row by forward reference (100% remains the
@@ -570,10 +676,18 @@ execution_steps:
     local full run can still redden main (existing two-tier design per Decision 73, now
     live rather than dormant); and a multi-commit direct push to main (admin/break-glass)
     under-selects with a HEAD~1 base, which assumes the Decision 76 squash convention.
-    (6) reversal conditions - net roster growth over any 90-day window triggers a
-    gate-design re-audit (Decision 62 alarm-not-gate relocation is the escalation, never
-    silent weakening); when the roster empties, the baseline clauses retire and Decision
-    48's V2 row reads unamended.
+    (6) records the single deliberate test-SLOC raise on
+    tests/test_checks_registry.py with its mechanism reason (the checker pins both
+    mechanism files' only mirror home to that one file) - explicitly a re-introduction of
+    test SLOC debt after the rec-2709 waves retired all 24 Decision 130 grandfathers, which
+    is why it carries a retirement condition below. (7) reversal / retirement conditions -
+    net roster growth over any 90-day window triggers a gate-design re-audit (Decision 62
+    alarm-not-gate relocation is the escalation, never silent weakening); when the roster
+    empties, the baseline clauses retire and Decision 48's V2 row reads unamended; the SLOC
+    raise retires by folding the _CHECKS_REGISTRY_MECHANISM_FILES mapping into a
+    concern-split test package; and if CD.30's diff-line-coverage ratchet (Platform
+    End-State section 6) lands it likely obsoletes the per-file-100%-plus-roster mechanism
+    outright, in which case this Decision is revisited rather than extended.
   - >-
     File the coverage-debt-paydown rec via the ops portal (get_rec_write_guidance() before
     file_rec()): scope = ratcheting the seeded roster to 100 (ops_writer.py drain/compact
