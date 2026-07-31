@@ -113,11 +113,16 @@ scope:
 - file: tests/test_rec_write_guidance.py
   action: Modify
   purpose: Assert the ci_rca schema_fields block documents unobserved_steps and its pair shape.
-- file: tests/ops_data_portal/test_ci_rca_runtime.py
-  action: Modify
+- file: tests/ops_data_portal/test_ci_rca_unobserved_steps.py
+  action: Create
   purpose: >-
-    Add TestUnobservedStepsStampAndEcho. See the SLOC constraint - this file is at 403 SLOC and may
-    need decomposing rather than growing.
+    TestUnobservedStepsStampAndEcho lands HERE, not in tests/ops_data_portal/test_ci_rca_runtime.py.
+    Verified against the post-sibling tree: that module carries `duckdb = pytest.importorskip("duckdb")`
+    at line 22 - exactly the trap that failed the sibling's CI job 91219816511. The fast tier has no
+    duckdb, the whole module skips, VF-06 reports `skipped (non-fatal)` instead of enforcing, and the
+    VP-replay gate reads the skip as a hard failure. A guard-free module fixes the graduation AND
+    sidesteps the SLOC pressure: test_ci_rca_runtime.py sits at 403 SLOC with ~97 headroom, and a
+    ten-case class with bundle fixtures would likely cross 500.
 - file: config/agent/verification_registry/registry.yaml
   action: Modify
   purpose: Graduate the eight counterfactuals named in the VP as standing regression guards.
@@ -310,7 +315,7 @@ verification_plan:
   action: >-
     Prove the authoritative set is stamped in code to its own key and that check-5 catches rec-2923's
     shape without punishing a correct echo.
-  command: bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_runtime.py::TestUnobservedStepsStampAndEcho
+  command: bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_unobserved_steps.py::TestUnobservedStepsStampAndEcho
   expected: >-
     `unobserved_steps_authoritative` lands from the verified bundle even when the agent supplied no
     echo, and the agent's `unobserved_steps` is still present and unmodified alongside it. The
@@ -321,7 +326,9 @@ verification_plan:
     If the echo is missing from the written context after the stamp, the two fields share a key - split
     them. If the exact-match control is stamped, the comparison is order- or type-sensitive; compare as
     sets of pairs. If the stamp is absent when the echo is absent, the Tier-B write was made
-    conditional on the agent's field, which inverts AC7.
+    conditional on the agent's field, which inverts AC7. Do NOT relocate this class into
+    tests/ops_data_portal/test_ci_rca_runtime.py - its duckdb importorskip at line 22 would make the
+    row admitted-by-skip rather than proven differential.
   hermetic: true
   graduation: graduate
   graduation_check_id: ci-rca-unobserved-steps-stamp-and-echo
@@ -445,11 +452,13 @@ constraints:
   the registry anchors at 1988 and 2054 survived the sibling's 106 added rows. The sibling also added
   38 lines to docs/contracts/ci-rca-lifecycle.yaml - extend that file, do not assume its prior shape.
 - >-
-  SLOC, decompose-by-default (Decision 128): scripts/ops_portal/ci_rca_runtime.py is 353 SLOC (~147
-  headroom) and tests/ops_data_portal/test_ci_rca_runtime.py is 403 (~97), neither registered, and
-  iter_gated_py_files() gates tests/. The new test class plus scope fixtures is the live risk. If
-  either would cross 500, decompose into a sibling module - do not raise and do not run
-  --update-sloc-budgets.
+  SLOC, decompose-by-default (Decision 128): re-measured on the post-sibling tree,
+  scripts/ops_portal/ci_rca_runtime.py is 353 SLOC (~147 headroom) and
+  tests/ops_data_portal/test_ci_rca_runtime.py is 403 (~97), neither registered, and
+  iter_gated_py_files() gates tests/. The test-file risk is already discharged by putting the new class
+  in its own module (see scope). The remaining live risk is ci_rca_runtime.py itself: if the stamp plus
+  check-5 would cross 500, decompose the cross-check family into a sibling module - do not raise and do
+  not run --update-sloc-budgets.
 - No rescue agents or workaround loops (Decision 55).
 context:
 - >-
@@ -512,7 +521,11 @@ context:
   than a benign skip - CI job 91219816511 failed on exactly this. Before placing any new graduated test
   class in an existing module, grep that module for `importorskip`; if present, put the class in a
   guard-free file. This plan's own at-risk placements are tests/ops_data_portal/test_ci_rca_runtime.py
-  and tests/ci_rca/evidence/test_main_emit.py - check both.
+  and tests/ci_rca/evidence/test_main_emit.py. Both were checked against the post-sibling tree:
+  test_main_emit.py is guard-free (safe); test_ci_rca_runtime.py carries the duckdb guard at line 22
+  and has therefore been replaced in scope by a new guard-free module. Every other test file in scope
+  (test_ci_rca_log_evidence.py, test_ci_rca_evidence_input.py, test_ci_rca_fetch_logs.py,
+  test_rec_write_guidance.py, test_validate_actions_evidence.py) is clean.
   TRIGGER: build it as check-6 if warn-mode telemetry shows mis-narration recurring after this lands.
   It is also the eventual consumer of unobserved_steps_authoritative (AC12).
 - >-
