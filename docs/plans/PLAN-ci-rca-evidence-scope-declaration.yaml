@@ -82,9 +82,9 @@ scope:
 - file: tests/test_ci_rca_log_evidence.py
   action: Modify
   purpose: >-
-    Add TestScopeDeclarationCounterfactuals and TestFingerprintInputPinned. Its `_envelope()` helper
-    (used by ~14 tests) hand-builds a v1 envelope through publish_envelope and breaks under AC6 - give
-    it a scope block, same as test_main_emit.py's fixture.
+    Add TestScopeDeclarationCounterfactuals and TestFingerprintInputPinned. Its `_envelope()` helper,
+    called throughout the module, hand-builds a v1 envelope through publish_envelope and breaks under
+    AC6 - give it a scope block, same as test_main_emit.py's fixture.
 - file: tests/test_ci_rca_evidence_input.py
   action: Modify
   purpose: >-
@@ -356,7 +356,7 @@ verification_plan:
     Exit 0, no output. -I and --exclude-dir are required: a stale
     scripts/ci_rca/__pycache__/log_evidence.cpython-312.pyc matches on the current tree and would
     otherwise fail the step after a correct bump. tests/ and docs/plans/ are excluded deliberately -
-    tests/verify_ci_workflow/test_ci_rca_and_canary.py:420 legitimately keeps a v1 negative fixture.
+    tests/verify_ci_workflow/test_ci_rca_and_canary.py:507 legitimately keeps a v1 negative fixture.
   fix_if: >-
     A surviving v1 in scripts/ or docs/contracts/ means a partial bump - worse than none, since the
     guard would pin a schema the producer no longer emits. rc=2 means a root path was renamed.
@@ -446,7 +446,10 @@ constraints:
   SEQUENCING: BOTH prerequisites have now MERGED, so the previously-anticipated conflicts are
   resolved rather than pending. GAL-03 landed as #821 (d79cb58) and the sibling
   PLAN-ci-rca-abstention-and-citation landed as #823 (d39d467). This plan is cut from main at or after
-  2e60bdd. All line references below were re-verified against the post-sibling tree and still resolve:
+  2e60bdd. Line references below were re-verified against the post-prerequisite tree. One had drifted
+  and is corrected here: the v1 negative fixture in tests/verify_ci_workflow/test_ci_rca_and_canary.py
+  moved from :420 to :507 when GAL-03 itself edited that file - a reminder that the citations most
+  likely to move are the ones inside the prerequisites' own scope, not this plan's. The rest resolve:
   ci_rca_schema.py:38 now reads `(py|yaml|yml|tf|md|sh)` from the sibling's widening without shifting
   line numbers, escape_class is still at 127 and the warn_mode_reject precedent still at 105-110, and
   the registry anchors at 1988 and 2054 survived the sibling's 106 added rows. The sibling also added
@@ -572,7 +575,7 @@ context:
 - >-
   Coverage regression this plan accepts (re-addressed to this plan, since GAL-03 lands FIRST under the
   sequencing constraint and so cannot act on it): after the v2 bump,
-  tests/verify_ci_workflow/test_ci_rca_and_canary.py:420's negative fixture still passes (it asserts
+  tests/verify_ci_workflow/test_ci_rca_and_canary.py:507's negative fixture still passes (it asserts
   main(...) == 1 on a malformed envelope) but its semantics shift from "malformed body-less envelope"
   to "wrong schema version" - still valid, marginally weaker.
 - >-
@@ -634,7 +637,7 @@ execution_steps:
   test_selector with a class-level node_id, matching the ci-rca-bounded-retrieval-envelope shape at
   line 2054, with guard_target/guard_symbol set to the module each guards - note
   ci-rca-scope-bundle-propagation and ci-rca-scope-reaches-emitted-bundle are SEPARATE rows because a
-  test_selector check_spec holds exactly one node_id (verification_checks.py:219,226). The seventh,
+  test_selector check_spec holds exactly one node_id (verification_checks.py:219,226). The eighth,
   ci-rca-log-evidence-schema-v2-total, is primitive_slot command_exit_zero with check_spec.command a
   [bash, -c, ...] list carrying VP step 8's literal command INCLUDING -I and --exclude-dir, matching
   provider-mirror-stale-claim-sweep at line 1988. Each row must assert the SAME thing as its VP step.
