@@ -147,31 +147,43 @@ raise, is the sanctioned response.
     (buckets, severity taxonomy, quality gates, `Decisions triaged: N of M` echo, Verdict line) is
     UNCHANGED and stays the stable interface across that future swap.
 
-14. **Recall measurement and the `category_tags` fix (VP step 9).** Live decision-scout dispatches --
-    whole-file baseline vs bounded protocol, same probe briefs -- measured a REAL recall regression in
-    the first cut of the bounded index-pass triage: a decision that governs by ARTIFACT TYPE (e.g. any
-    new Lambda touches the Lambda-packaging/deploy-channel decisions regardless of what it does) rather
-    than shared vocabulary was being silently discarded as IRRELEVANT before ever reaching a targeted
-    read, because a per-entry judgment call over ~113 live entries in one context is unreliable --
-    empirically demonstrated across three rounds of SKILL.md prose-only tightening, each of which
+14. **Recall measurement and the `category_tags` fix (VP step 9), FINAL measured state.** Live
+    decision-scout dispatches -- whole-file baseline vs bounded protocol, same two probe briefs
+    (a Neon-Postgres pg_dump-backup-Lambda proposal; a DECISIONS.md-topic-registry-split proposal)
+    -- measured a REAL recall regression in the first cut of the bounded index-pass triage: a
+    decision that governs by ARTIFACT TYPE (e.g. any new Lambda touches the Lambda-packaging/
+    deploy-channel decisions regardless of what it does) rather than shared vocabulary was being
+    silently discarded as IRRELEVANT before ever reaching a targeted read -- round 1 lost 5 of 6
+    CITE entries on the pg_dump probe alone. Two rounds of SKILL.md prose-only tightening each
     recovered some entries and left others (e.g. Decision 126's title says "deployment model", not
-    "deploy", so a prose rule enumerating only "Lambda/Terraform/IAM/Secrets Manager" nouns missed it
-    even though the scout followed the rule as written). A Fable advice-consult diagnosed the residual
-    as a prompt-level instruction-following ceiling, not a further-fixable prose problem, and
-    recommended converting the shortlist from an LLM judgment call into a mechanical lookup:
-    `scripts/decisions_index.py` now derives a deterministic `category_tags` list per entry (regex
-    classes over title + `triage_excerpt` only, never the full body: `lambda`, `terraform`, `iam`,
-    `secrets`, `deploy`, `egress`, `decisions-corpus`, `prose-docs`; each class verified to cover <!-- pragma: allowlist secret -->
-    <=~17% of live entries so the shortlist stays materially smaller than the corpus), and
-    `.claude/skills/decision-scout/SKILL.md` Phase 2 step 3 shortlists by tag-set intersection FIRST,
-    before any judgment-based triage. This closed the fully-missed-entry failure mode measured in
-    rounds 1-3. A SEPARATE, smaller residual remains and is NOT closed by `category_tags`: two
-    decisions that WERE shortlisted and targeted-read were bucketed RELATED instead of CITE relative
-    to the baseline -- post-read classification variance the Fable consult attributes to ordinary
-    inter-run LLM judgment noise (the same class of variance two whole-file baseline runs would likely
-    also show), not a bounded-retrieval-specific defect. `category_tags` is generator-internal and
-    revisable without Decision ceremony -- a retrieval aid, not a governance taxonomy; the tag
-    vocabulary may grow as new artifact classes accrue decisions, without amending this entry.
+    "deploy", so a prose rule enumerating only "Lambda/Terraform/IAM/Secrets Manager" nouns missed
+    it even though the scout followed the rule as written) -- a per-entry LLM judgment call over
+    ~113 live entries in one context is inherently unreliable. A Fable advice-consult diagnosed the
+    residual as a prompt-level instruction-following ceiling, not a further-fixable prose problem,
+    and recommended converting the shortlist from an LLM judgment call into a mechanical lookup:
+    `scripts/decisions_index.py` derives a deterministic `category_tags` list per entry (regex
+    classes over title + `triage_excerpt` only, never the full body -- eight classes including
+    lambda/terraform/iam/deploy/egress and credential-handling, each verified under ~17% of live
+    entries so the shortlist stays materially smaller than the corpus), and
+    `.claude/skills/decision-scout/SKILL.md` Phase 2 step 3 shortlists by tag-set intersection
+    FIRST, before any judgment-based triage. Round 4 (post-fix) measured: pg_dump probe, 5 of 6
+    baseline CITE entries now match EXACTLY (including Decision 126, the round 1-3 holdout), one
+    (Decision 157) found but bucketed RELATED instead of CITE; topic_registries probe, 2 of 4 match
+    exactly, one (Decision 149) found but bucketed CONTRADICT instead of CITE, one (Decision 105 --
+    carries no category_tags match, a pure judgment-lane entry) genuinely absent, present in round
+    3's dispatch on the identical probe but not round 4's. `category_tags` closed every FULLY-MISSED
+    artifact-type entry measured across all four rounds. The residual that remains -- 3 of 10 total
+    baseline CITE entries across both probes, ALL either found-but-reclassified (157, 149) or a
+    single non-tagged entry with round-to-round presence variance (105) -- is judged, per the Fable
+    consult, to be ordinary inter-run LLM judgment noise on entries `category_tags` cannot reach by
+    construction (no artifact-type signal to key on), the same class of variance two whole-file
+    baseline runs would likely also show against each other. This is the disclosed, HONEST COST of
+    bounded retrieval per this plan's own self-attestation framing (AC5): not zero, materially
+    better than any of rounds 1-3, and not further closable by index enrichment without a
+    structurally different mechanism (e.g. a full warehouse/portal read -- T1.5's eventual scope,
+    point 13). `category_tags` is generator-internal and revisable without Decision ceremony -- a
+    retrieval aid, not a governance taxonomy; the tag vocabulary may grow as new artifact classes
+    accrue decisions, without amending this entry.
 
 **Reversal conditions:** Revisit if the header ceiling (120) or the combined ceiling (700,000) is
 breached before the per-entry authoring size norm (point 11's named owner) lands -- a breach at that
