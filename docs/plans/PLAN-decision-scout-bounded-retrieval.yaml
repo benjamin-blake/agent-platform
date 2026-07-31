@@ -26,12 +26,19 @@ scope:
       decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md]). The shared parser is NOT
       modified -- decision_header_numbers already accepts an explicit paths list, so provenance is
       derivable in the generator without changing parse_decisions_md's row shape (which feeds the
-      ops_decisions ETL allowlist). ALSO add `triage_excerpt` (<=320 chars of the entry's Intent
-      marker, falling back to Problem then Context) plus `triage_excerpt_source` naming which marker
-      it came from. This is the Decision 152 gate (ii) anchor: a SPIRIT flag must quote the violated
-      entry VERBATIM, and without an excerpt a spirit violation in a NON-shortlisted entry is
-      structurally unquotable. Measured: 115 of 139 entries become quotable at triage time and the
-      projection grows to ~58,593 B (11.7% of the live file, still an 88% cut).
+      ops_decisions ETL allowlist). ALSO add `triage_excerpt` (<=320 chars, fallback order
+      Intent -> Problem -> Context/Rationale -> Decision), `triage_excerpt_source` naming which
+      marker it came from, and `triage_excerpt_truncated` (bool) so a truncated fragment can never
+      be presented as a complete quote. This is the Decision 152 gate (ii) anchor: a SPIRIT flag
+      must quote the violated entry VERBATIM, and without an excerpt a spirit violation in a
+      NON-shortlisted entry is structurally unquotable. MEASURED under this exact spec
+      (json.dumps indent=2, sort_keys=True, as _EXPORT_PATH is written): projection = 97,782 bytes,
+      19.6% of the live file, an 80% cut; 135 of 139 entries quotable, the 4 residual being 63/64/65/67
+      -- the terse pre-77 band already carried in the fidelity baseline. The Decision-clause fallback
+      is what takes coverage from 115 to 135; `**Decision:**` is a REQUIRED marker per
+      docs/contracts/decision-entry.yaml, so it is the most reliable anchor available. This widens
+      Decision 152 gate (ii) to admit a Decision-clause quote, which the SKILL.md rewrite must state
+      and the governing Decision must record.
   - file: docs/decisions-index.json
     action: Modify
     purpose: Regenerated committed projection carrying the new `live` field.
@@ -90,8 +97,12 @@ scope:
   - file: tests/test_decisions_index.py
     action: Modify
     purpose: >-
-      Assert the `live` field is present, correct against file provenance (derived from
-      decision_header_numbers(), never hardcoded counts), and deterministic across two builds.
+      Assert `live` correctness against file provenance (derived from decision_header_numbers(),
+      never hardcoded counts) and determinism across two builds. ALSO cover the three new excerpt
+      fields: each of the four fallback branches (Intent / Problem / Context / Decision), the
+      empty-excerpt branch, the 320-char cap, and the truncation flag. NOTE: the existing
+      `set(entry.keys()) == expected_keys` assertion at lines 35-39 WILL fail the moment the three
+      new keys land and must be extended in the same commit.
   - file: tests/checks/decisions/test_validate_decisions_size.py
     action: Modify
     purpose: >-
@@ -119,8 +130,11 @@ acceptance_criteria:
   - >-
     docs/decisions-index.json carries a boolean `live` field on every entry; the count of live:true
     rows equals the live-file `## Decision` header count, and live:false equals the archive header
-    count. Every entry that has an Intent, Problem or Context marker also carries a non-empty
-    `triage_excerpt` with `triage_excerpt_source` naming its origin (115 of 139 at authoring time).
+    count. Every entry with an Intent, Problem, Context or Decision marker carries a non-empty
+    `triage_excerpt` with `triage_excerpt_source` naming its origin and `triage_excerpt_truncated`
+    set correctly (135 of 139 at authoring time; residual 63/64/65/67). The committed projection is
+    at most 110,000 bytes -- pinned so the figure recorded in the governing Decision (97,782 B,
+    19.6% of the live file) cannot silently drift.
   - >-
     scripts.decisions_index regenerates byte-identically on consecutive runs and
     validate_decisions_index_freshness passes.
@@ -147,8 +161,9 @@ acceptance_criteria:
     retro-fitted to a lossy bounded run without deliberate falsification.
   - >-
     A new `## Decision NNN:` entry exists recording the ceiling retirement, the Decision 145/152
-    reversal-trigger adjudication, the Decision 145 and Decision 134 clause 2 amendments, the
-    Decision 151 backstop consequence, the DATED runway of the surviving ceilings with a named
+    reversal-trigger adjudication, the Decision 145 / 134 clause 2 / 146 amendments, the widening of
+    Decision 152 gate (ii) to admit a Decision-clause quote, the Decision 151 backstop consequence,
+    the newly-unguarded docs/decisions-index.json surface, the DATED runway of the surviving ceilings with a named
     owner, and that this arrangement is interim and NOT the T1.5 portal cutover; ops_data_portal
     --backfill-decisions-md completes green with the new entry in ops_decisions.
   - >-
@@ -179,12 +194,18 @@ verification_plan:
       d=json.load(open('docs/decisions-index.json'))['decisions'];
       L={x['number'] for x in d if x['live']}; A={x['number'] for x in d if not x['live']};
       exc=[x for x in d if (x.get('triage_excerpt') or '').strip()];
-      print('live',len(L),len(live),'archive',len(A),len(arc),'excerpts',len(exc));
+      size=len(pathlib.Path('docs/decisions-index.json').read_bytes());
+      print('live',len(L),len(live),'archive',len(A),len(arc),'excerpts',len(exc),'bytes',size);
       assert L==live and A==arc, 'provenance mismatch';
-      assert all(x.get('triage_excerpt_source') for x in exc), 'excerpt without source'"
+      assert all(x.get('triage_excerpt_source') for x in exc), 'excerpt without source';
+      assert all('triage_excerpt_truncated' in x for x in d), 'missing truncation flag';
+      assert len(exc) >= len(d)-4, f'excerpt coverage regressed: {len(exc)}/{len(d)}';
+      assert size <= 110000, f'projection over pin: {size}'"
     expected: >-
       Prints matching counts and exits 0; the live and archive number SETS equal what
-      decision_header_numbers() reports per file, and every non-empty excerpt names its source.
+      decision_header_numbers() reports per file, every non-empty excerpt names its source and
+      carries a truncation flag, at most 4 entries lack an excerpt, and the committed projection is
+      within the 110,000-byte pin.
     fix_if: >-
       Counts diverge -- the generator is deriving provenance from something other than
       decision_header_numbers(paths=[live]). Note build_index()'s dict comprehension at
@@ -273,7 +294,12 @@ verification_plan:
       file -- this step is graduated, so a mention-matching pattern would permanently forbid writing
       "do not load the full DECISIONS.md". The line-number clause is scoped to LIVE surfaces only;
       docs/audit-prompts/ and docs/plans/ carry three further citations and are frozen historical
-      artifacts that must not be edited.
+      artifacts that must not be edited. RESIDUAL (accepted): the pattern still cannot parse a
+      negation, so once graduated it also forbids phrasings like "Do not read the entire
+      docs/DECISIONS.md" or "Never read the full DECISIONS.md", and the bare `DECISIONS.md read`
+      alternation forbids noun-phrases such as "the bounded DECISIONS.md read protocol". Failures are
+      loud and rephrasable -- prefer "do not load the full corpus" / "the bounded retrieval
+      protocol".
     hermetic: true
     graduation: graduate
     graduation_check_id: "no-whole-decisions-read-instructions"
@@ -465,9 +491,11 @@ constraints:
     M" echo, same Verdict line. Callers must not need updating. The SPIRIT LANE'S EVIDENCE BASE
     does change, and this is not asserted away: Decision 152 gate (ii) requires a verbatim quote of
     the violated entry, which under bounded retrieval is only available for shortlisted entries
-    unless the index carries an excerpt -- hence triage_excerpt. Measured residual: 24 of 139
-    entries carry no Intent, Problem or Context marker and are therefore unquotable at triage time;
-    for those, a SPIRIT flag can still fire only if the entry is shortlisted. VP step 9 measures
+    unless the index carries an excerpt -- hence triage_excerpt. Gate (ii) is WIDENED to admit a
+    Decision-clause quote, which is what takes coverage from 115 to 135 of 139. Measured residual:
+    4 entries (63, 64, 65, 67 -- all live, the terse pre-77 band already in the fidelity baseline)
+    carry no quotable marker at all; for those a SPIRIT flag can fire only if the entry is
+    shortlisted. VP step 9 measures
     SPIRIT loss, and the governing Decision records this residual as the honest cost.
   - >-
     Triage and fetch must both remain credential-free and hermetic. The committed index and the
@@ -605,7 +633,7 @@ context:
     SPIRIT: Decision 146 [NOTE] relief-valve bypass -- answered by the 15.7 KB measurement;
     Decision 114 [NOTE] coherent-load analogy -- answered in context. RELATED: Decision 147,
     Decision 159, Decision 155, Decision 131, Decision 86, Decision 110, Decision 127."
-  - "gates: decision-scout=FLAGS_FOUND (all flags resolved in-plan); plan-critique=REVISE after 2 round(s), revised"
+  - "gates: decision-scout=FLAGS_FOUND (all flags resolved in-plan); plan-critique=REVISE after 3 round(s) -- convergence cap reached, blocking items applied, escalated to human"
 
 pre_implementation_checklist:
   - Branch confirmed not on main
@@ -659,8 +687,13 @@ execution_steps:
     scripts/checks/decisions/validate_decisions_size.py -- delete _DECISIONS_LIVE_MAX_BYTES, its
     parameter at line 36, and its FAIL branch at lines 48-53. Rewrite the module docstring, which
     grounds the ceiling in the whole-file read this plan removes, to state that the combined ceiling
-    is now the live-file backstop. Leave _DECISIONS_LIVE_MAX_H2 and _DECISIONS_COMBINED_MAX_BYTES
-    untouched. Mirror into docs/contracts/decision-entry.yaml's size_governance block.
+    is now the live-file backstop. ALSO rewrite `_RELIEF_VALVES` (lines 24-28): it is emitted in the
+    COMBINED-breach message and still advises "archive superseded entries", which this plan proves
+    inert against that ceiling (archival only moves bytes between the two counted files). Replace it
+    with valves that actually relieve the combined ceiling -- compaction to stubs per Decision 149,
+    and the per-entry authoring size norm. Leave _DECISIONS_LIVE_MAX_H2 and
+    _DECISIONS_COMBINED_MAX_BYTES untouched. Mirror into docs/contracts/decision-entry.yaml's
+    size_governance block.
   - >-
     tests/checks/decisions/test_validate_decisions_size.py -- drop the retired assertions (the
     module-level import at line 9 and the comment at line 64 change together), pin 120 / 700000, and
@@ -675,14 +708,19 @@ execution_steps:
     literal-vs-purpose adjudication, including that T0.8's verb surface is deliberately deferred to
     T1.5 on Decision 88 grounds; that it amends Decision 145 and Decision 134 clause 2 per the
     forward-direction convention; that it performs Decision 152's mandated revisit; that the header
-    and combined ceilings are retained because Decision 150's bar is complementary; the Decision 151
-    backstop consequence; the Decision 114 coherent-load adjudication; and the DATED runway (~8 days
+    and combined ceilings are retained because Decision 150's bar is complementary; an explicit
+    DECISION 146 AMENDMENT recording that archival is demoted from a live-file relief valve to inert
+    against the surviving combined ceiling; that Decision 152 gate (ii) is widened to admit a
+    Decision-clause quote; that docs/decisions-index.json becomes a NEW read-in-full-every-/plan
+    surface carrying no byte guard of its own (bounded only by the 120-header ceiling and the AC1
+    pin); the Decision 151 backstop consequence; the Decision 114 coherent-load adjudication; and the DATED runway (~8 days
     combined, ~4 days headers at 294 KB / 56 entries per month) with the per-entry size norm named
     as owner. Include reversal conditions tied to that runway.
   - >-
     AFTER the SKILL.md rewrite -- dispatch the scout on the BOUNDED protocol against the SAME probe
-    briefs, with identical probe names, and record logs/debug/scout-bounded.json in the same shape.
-    VP step 9 reads both files and fails loudly if either is missing.
+    briefs, with identical probe names, and record logs/debug/scout-bounded.json in the SAME
+    {probe_name: {"cite": [...], "spirit": [...]}} shape. VP step 9 reads both files and fails
+    loudly if either is missing or mis-shaped.
   - >-
     File TWO follow-on recommendations via scripts.ops_data_portal file_rec (call
     get_rec_write_guidance() first): (a) the deferred per-entry authoring size norm; (b) a successor
