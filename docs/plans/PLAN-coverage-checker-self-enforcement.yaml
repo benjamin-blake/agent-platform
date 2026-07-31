@@ -32,7 +32,11 @@ scope:
       _ALL_MIRROR_TARGET_HOMES must NOT be mutated (Decision 131 cl.1 declares it fixed and
       never-mutated, and this file was never a Decision 130 grandfathered entry).
       (3) Add "scripts/test_coverage_checker.py" to _CONCERN_SPLIT_TEST_PACKAGES.
-      File is 442/500 SLOC -- the additions are ~8 lines; it must stay under 500.
+      Also update map_source_to_test's docstring and the _CONCERN_SPLIT_TEST_PACKAGES comment
+      to state the new semantics (membership is independently sufficient; it no longer depends
+      on the home having retired) -- this is the collocated half of the field-semantics note
+      required by docs/contracts/decision-entry.yaml, the other half being tests/CLAUDE.md.
+      File is 442/500 SLOC -- the additions are ~8 lines plus comments; it must stay under 500.
   - file: tests/test_coverage_checker/__init__.py
     action: Create
     purpose: >-
@@ -80,6 +84,31 @@ scope:
       check_test_file_exists (2), check_per_file_coverage (2), _grandfathered_source_to_test
       (1) -- error/fallback branches. Also covers the new concern-split decoupling branch
       added to map_source_to_test.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Repoint the ONE graduated check the `git mv` would orphan: line ~24,
+      check_id `mapped-coverage-diagnostic-contract`, whose
+      check_spec.node_id is
+      `tests/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module`.
+      After the move that node_id is unresolvable. Verified this is the only stale reference
+      to any of the four moved files anywhere outside docs/plans/**. Editing an existing row
+      is NOT an "added entry", so validate_verification_registry's
+      _run_added_entry_differentials does not fire and no re-admission is owed. Note the
+      registry's node_ids are not resolved by any standing check or workflow, so nothing
+      would have caught this break -- hence the sweep VP step below.
+  - file: tests/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Land the concern-split semantics note on its OWNING ambient surface. Per
+      docs/contracts/decision-entry.yaml's significance.routing.field_semantics row -- "The
+      meaning or constraints of a data field or config key -> a governance/semantics note in
+      the OWNING contract, collocated with the field it describes. Never a numbered Decision."
+      -- a plan Context is not the record of record. This file's mirror-convention section
+      currently presents concern-split resolution strictly as a post-retirement sub-case ("A
+      wave retires a home ... then creates the mirror test file(s)/package"); after this change
+      a source can resolve to a package directory having never been on the 24-home roster.
+      Leaving it stale creates the second-surface drift AGENTS.md's Agent-First section forbids.
   - file: config/coverage_baseline.yaml
     action: Modify
     purpose: >-
@@ -110,8 +139,8 @@ acceptance_criteria:
   - >-
     Recovered coverage is real: the gate's own measurement path reports
     scripts/test_coverage_checker.py at 100.0% (was 37.80% measured against the single mapped
-    file; 74.16% with all four existing modules counted -- so 77 statements were already
-    covered and merely uncounted, and 54 needed new tests).
+    file; 74.16% with all four existing modules counted -- so 76 statements were already
+    covered and merely uncounted, and 54 needed new tests; 209 statements total).
   - >-
     Roster: config/coverage_baseline.yaml no longer contains a scripts/test_coverage_checker.py
     entry (or, on the fallback branch, contains a RAISED entry plus a recorded residual
@@ -125,6 +154,16 @@ acceptance_criteria:
     The moved modules still resolve `from tests.fixtures.coverage_checker_module import ...`
     from their new package location, and validate_no_cross_test_imports still passes
     (Decision 131 cl.2).
+  - >-
+    Stale-reference sweep (surface-retiring closure obligation): no file outside docs/plans/**
+    still references any of the four moved paths, and in particular the graduated registry row
+    `mapped-coverage-diagnostic-contract` in config/agent/verification_registry/registry.yaml
+    resolves to its new node_id under tests/test_coverage_checker/.
+  - >-
+    Concern-split semantics are documented on their owning surfaces, not only in this plan:
+    tests/CLAUDE.md's mirror-convention section states that _CONCERN_SPLIT_TEST_PACKAGES
+    membership alone resolves a source to a test package directory (no longer conditional on
+    the grandfathered home having retired), matching map_source_to_test's docstring.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -232,9 +271,14 @@ verification_plan:
     fix_if: >-
       None measurement - the package target is empty or unmapped (see step 1). Below 100 -
       identify residual lines with `pytest tests/test_coverage_checker --cov=scripts
-      --cov-report=term-missing` and extend test_edge_paths.py; if the residual is genuinely
-      untestable, take the documented fallback branch (raise the entry + record against
-      rec-2914) rather than weakening this step.
+      --cov-report=term-missing` and extend test_edge_paths.py. Do NOT take the fallback
+      branch prematurely: 6 of the 54 statements are defensively dead on real inputs --
+      map_source_to_test 323-324 and check_per_file_coverage 411-412 are reachable only if a
+      resolve()/relative_to(ROOT) that already succeeded upstream in the same call now fails,
+      so they need `_grandfathered_source_to_test` / the measure helper patched rather than a
+      crafted input. They ARE coverable; 100% is achievable. Only if a statement resists after
+      helper-mocking should the fallback branch (raise the entry + record against rec-2914) be
+      taken, and never by weakening this step.
     hermetic: false
     graduation: graduate
     graduation_check_id: coverage-checker-at-100
@@ -278,6 +322,33 @@ verification_plan:
       remains the durable enforcement surface.
   - step: 8
     phase: pre-deploy
+    action: >-
+      Stale-reference sweep (closure obligation, surface-retiring trigger) - no reference to
+      any of the four moved paths survives outside docs/plans/**, the four old files are gone,
+      and the graduated registry row now points inside the package. This is the step that
+      catches the orphaned verification-registry node_id; nothing else in CI resolves those
+      node_ids, so a break here would otherwise ship green.
+    command: >-
+      test ! -f tests/test_test_coverage_checker.py && test ! -f tests/test_coverage_checker_checks.py
+      && test ! -f tests/test_coverage_checker_grandfather.py && test ! -f tests/test_coverage_checker_map.py
+      && ! grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md
+      -e 'tests/test_test_coverage_checker\.py' -e 'tests/test_coverage_checker_checks\.py'
+      -e 'tests/test_coverage_checker_grandfather\.py' -e 'tests/test_coverage_checker_map\.py'
+      scripts/ config/ tests/ docs/contracts/ .github/
+      && grep -q 'tests/test_coverage_checker/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module'
+      config/agent/verification_registry/registry.yaml
+      && echo 'no stale references; registry row repointed'
+    expected: Exit 0, prints the confirmation.
+    fix_if: >-
+      grep finds a hit - repoint it. The one KNOWN hit is
+      config/agent/verification_registry/registry.yaml line ~24
+      (check_id mapped-coverage-diagnostic-contract). Final grep fails - the registry node_id
+      was not repointed to the package path.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: coverage-checker-move-no-stale-refs
+  - step: 9
+    phase: pre-deploy
     action: Fast-tier presubmit (placement, cross-test-import guard, mirror-rule checks).
     command: bin/venv-python -m scripts.validate --pre
     expected: >-
@@ -289,7 +360,7 @@ verification_plan:
       or __init__.py is wrong.
     hermetic: false
     graduation: not-applicable
-  - step: 9
+  - step: 10
     phase: pre-deploy
     action: >-
       Full-tier presubmit - the only tier validate_test_coverage runs in, and the first run in
@@ -304,7 +375,7 @@ verification_plan:
       step 5 did not actually reach 100 in the committed tree.
     hermetic: false
     graduation: not-applicable
-  - step: 10
+  - step: 11
     phase: post-deploy
     action: Closure obligation - confirm rec-2916 auto-closed via the Resolves trailer.
     command: >-
@@ -343,6 +414,13 @@ constraints:
     No Lambda-packaged file is in scope - compute_affected_artifacts over the scope returns {}
     (verified at planning time), which is what keeps this V2 under Decision 79.
   - >-
+    HARD: tests/test_coverage_checker/test_main_cli.py MUST mock check_per_file_coverage (or
+    subprocess.Popen) on EVERY path that drives main() with --check-coverage. After this plan
+    the checker self-maps to tests/test_coverage_checker/ -- the very directory those tests
+    live in -- so an unmocked coverage run spawns pytest over the directory containing itself,
+    with no depth guard anywhere on that call path (see the recursion-hazard Context entry).
+    An unmocked --check-coverage test is an unbounded fork, not a slow test.
+  - >-
     No rescue agents or workaround loops (Decision 55). If the residual coverage proves
     genuinely untestable, take the documented fallback branch (raise + record against
     rec-2914); do not weaken VP step 5.
@@ -360,10 +438,10 @@ context:
   - >-
     Measured baseline (planning time, via the gate's own measurement path): the mapped home
     alone (tests/test_test_coverage_checker.py) yields 37.80%; all four existing modules yield
-    74.16%; the file is 209-211 statements. So of the 131-statement apparent gap, 77 statements
-    were already covered and merely uncounted, and 54 are genuinely untested -- 40 of them in
-    main(), 14 scattered across six functions. This plan's test-writing burden is the 54, not
-    the 131.
+    74.16%; the file is 209 statements. So of the 130-statement apparent gap, 76 statements
+    were already covered and merely uncounted, and 54 are genuinely untested -- exactly 40 of
+    them at or after line 511 (main()), 14 scattered across six functions. This plan's
+    test-writing burden is the 54, not the 130.
   - >-
     The roster entry is a live trap this plan defuses: scripts/test_coverage_checker.py is
     seeded at 38.3 but measures 37.8, and the file is unchanged since seeding (verified via
@@ -382,9 +460,20 @@ context:
     empty) is answered by requiring the fallback branch to record its residual against
     rec-2914. Decision 135 channel (c) consumes map_source_to_test read-only for --pre
     affected-set selection; 1 file -> 4+ files is strictly additive, preserving its
-    selection-can-only-grow invariant. Decision 130 cl.4's PYTEST_CURRENT_TEST early-exit plus
-    _COVERAGE_SUBPROCESS already close the self-measurement recursion hazard, so subjecting
-    this file to its own gate needs no new ruling.
+    selection-can-only-grow invariant.
+  - >-
+    RECURSION HAZARD -- created by this plan, not pre-existing. An earlier draft of this plan
+    claimed Decision 130 cl.4's PYTEST_CURRENT_TEST early-exit plus _COVERAGE_SUBPROCESS
+    already closed it; that was verified WRONG. PYTEST_CURRENT_TEST guards
+    scripts/validate.py::main() (line ~356), and _COVERAGE_SUBPROCESS is READ in exactly one
+    place repo-wide -- scripts/checks/misc/validate_test_coverage.py:40 (coverage_baseline.py:104
+    only SETS it for the child). Neither sits on the path test_coverage_checker.main() ->
+    check_per_file_coverage -> measure_and_check -> Popen([pytest, <mapped target>,
+    --cov=scripts]), and that main() carries no depth or pytest-context guard of any kind.
+    This plan is the first change that BOTH self-maps the checker to a directory AND puts
+    main()-driving tests inside that same directory, so an unmocked --check-coverage path
+    would re-enter tests/test_coverage_checker/ without bound (~8s per level). The mocking
+    constraint above is the mitigation; do not relax it.
   - "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=PROCEED after N round(s)"
   - >-
     ci-rca deferral rationale (Related-Work check): rec-2923 (Critical, "Sandbox subagent plan
@@ -422,6 +511,19 @@ execution_steps:
   - >-
     Create tests/test_coverage_checker/__init__.py, then `git mv` all four existing modules
     into the package with no content edits.
+  - >-
+    Immediately after the move, repoint config/agent/verification_registry/registry.yaml's
+    `mapped-coverage-diagnostic-contract` row (line ~24) to
+    tests/test_coverage_checker/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module,
+    then run VP step 8's sweep to confirm no other stale reference survives. Do this in the
+    same commit as the move so the repo is never in a state where a graduated check points at
+    a deleted path.
+  - >-
+    Update tests/CLAUDE.md's mirror-convention section so concern-split resolution is stated
+    as independently sufficient (membership in _CONCERN_SPLIT_TEST_PACKAGES resolves a source
+    to its test package directory, whether or not its grandfathered home has retired), keeping
+    it consistent with map_source_to_test's revised docstring. This is the field-semantics
+    routing required by docs/contracts/decision-entry.yaml -- NOT a numbered Decision.
   - >-
     Run VP steps 1-4 to confirm the mapping, the rec-2916 fix, and that the moved suite still
     passes from its new location before writing any new test.
