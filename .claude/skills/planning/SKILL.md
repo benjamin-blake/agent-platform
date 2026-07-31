@@ -502,7 +502,7 @@ verification_plan:                 # min 1 step; step ids must be unique
     expected: specific expected result
     fix_if: what failure looks like
 constraints:
-  - limits from docs/PROJECT_CONTEXT.md and DECISIONS.md
+  - limits from PROJECT_CONTEXT.md, DECISIONS.md
   - No rescue agents or workaround loops (Decision 55)
 context:
   - Relevant decisions, phase dependencies, known gotchas
@@ -511,7 +511,7 @@ context:
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - DECISIONS.md read
+  - only the plan-cited decision sections
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
 execution_steps:                   # REQUIRED non-empty for IMPLEMENTATION plans

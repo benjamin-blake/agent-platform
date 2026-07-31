@@ -227,12 +227,16 @@ compaction:
 size_governance:
   # Decision 134 / Decision-114 parity ceilings (enforced by
   # scripts/checks/decisions/validate_decisions_size.py, both --pre and full tiers). Documented
-  # here for authors: approaching these ceilings is a signal to archive superseded entries
-  # (DPI-04's dispositions) or compact superseded bodies to pointer stubs (see compaction: above),
-  # not to raise the ceiling. live_max_bytes reflects the Decision 145 stopgap raise (400000 ->
-  # 500000, amending Decision 134 clause 2); the validator constant is the SoT if this value ever
-  # drifts from it again.
-  live_max_bytes: 500000
+  # here for authors. live_max_bytes (the Decision 145 stopgap raise, 400000 -> 500000) was
+  # RETIRED by PLAN-decision-scout-bounded-retrieval: it existed solely to size the
+  # decision-scout gate's whole-live-file read, and that read no longer happens (bounded index
+  # triage plus targeted per-entry reads instead, see .claude/skills/decision-scout/SKILL.md).
+  # The bounded-retrieval model plus the combined ceiling below are now the live-file backstop --
+  # live_max_bytes is implicitly <= combined_max_bytes minus archive bytes. Approaching either
+  # surviving ceiling is a signal to compact superseded bodies to pointer stubs (see compaction:
+  # above) or tighten per-entry authoring size, never to raise the ceiling -- archiving a live
+  # entry does NOT relieve combined_max_bytes (it only moves bytes between the two counted
+  # files). The validator constants are the SoT if these values ever drift from it again.
   live_max_h2_headers: 120
   combined_max_bytes: 700000
 
