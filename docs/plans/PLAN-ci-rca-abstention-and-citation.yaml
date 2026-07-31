@@ -33,8 +33,11 @@ scope:
     asserts on, and two printed strings that are now FALSE - line 109 ("Evidence bundle abstained on
     these recs"), untrue of a self-rated-low rec and the same defect this plan fixes in probe_health,
     and line 110 ("Advisory only: open ci_rca recs already hard-block /plan via Decision 73 L5"), the
-    exact falsehood AC6 rebuts. Preserve the substrings "CI-RCA Abstention Review" and "Decision 73
-    L5" - test_ci_rca_signals.py:423 asserts the latter.
+    exact falsehood AC6 rebuts. Line 110 must keep the substring "Decision 73 L5" while dropping the
+    false universal claim - it is the only production emitter of that substring and
+    test_ci_rca_signals.py:423 asserts it. The shape that satisfies both: state that open ci_rca recs
+    are triaged under Decision 73 L5 into a hard block or a likely-resolved prompt, rather than that
+    they all hard-block. Also preserve "CI-RCA Abstention Review" in the title at 104.
 - file: scripts/ci_rca/probe_health.py
   action: Modify
   purpose: >-
@@ -47,11 +50,12 @@ scope:
 - file: scripts/preflight/ci_rca_gauges.py
   action: Modify
   purpose: >-
-    _compute_ci_rca_abstention keys the dict `undetermined_count` (line 25) and
-    print_ci_rca_abstention_gauge prints "N/M undetermined (X%)" (line 66). Both become false once the
-    counted set is {low, undetermined}. Rename the key and the label to something set-accurate so the
-    widening does not relocate the one-word-two-sets defect from predicate-vs-predicate to
-    predicate-vs-label.
+    THREE key sites, and one of them fails SILENTLY. _compute_ci_rca_abstention keys the dict
+    `undetermined_count` (line 25); print_ci_rca_abstention_gauge prints "N/M undetermined (X%)" (line
+    66); and _escalate_ci_rca_probe_health READS `gauge["undetermined_count"]` at line 50 inside a bare
+    `except Exception` (line 55) that prints a [WARN] and returns None. Miss line 50 and the rename
+    raises KeyError, the handler swallows it, and probe-health escalation is quietly disabled - the
+    worst form of the very defect constraint 3 exists to prevent. Rename all three.
 - file: scripts/ops_portal/ci_rca_lifecycle.py
   action: Modify
   purpose: >-
@@ -70,12 +74,16 @@ scope:
     visibility rather than a gating change, the benign back_validate_ci_rca reclassification the
     citation fix causes, and a `procedure:` note for the one-shot rec-context correction alongside the
     existing closure_dependency.manual_route.
-- file: tests/ops_data_portal/test_ci_rca_schema.py
-  action: Modify
+- file: tests/ops_data_portal/test_ci_rca_citation_pattern.py
+  action: Create
   purpose: >-
-    Add TestCitationPatternExtensions - a differential fixture asserting the PRE-fix pattern rejects
-    `.github/workflows/ci.yml:12` and the post-fix pattern accepts it, plus a guard that every
-    previously-accepted extension still matches.
+    Add TestCitationPatternExtensions HERE rather than in test_ci_rca_schema.py, which carries a
+    module-level `pytest.importorskip` on duckdb (line 24). pr-validate installs only
+    requirements-fast + requirements-dev, so duckdb is absent and VF-06's differential reports
+    `skipped (non-fatal)` instead of enforcing - the row would be admitted without ever being proven
+    differential. These assertions are pure regex and need no heavy import, so a guard-free module buys
+    real fast-tier coverage. Asserts the PRE-fix pattern rejects `.github/workflows/ci.yml:12`, the
+    post-fix accepts it, and every previously-accepted extension still matches.
 - file: tests/session/preflight/test_ci_rca_signals.py
   action: Modify
   purpose: >-
@@ -86,7 +94,11 @@ scope:
   action: Modify
   purpose: >-
     Add TestAbstentionGaugeWidened - a low-confidence row counts toward the rate, and the auto-filed
-    rec's context and title describe the widened set rather than claiming probe abstention.
+    rec's context and title describe the widened set rather than claiming probe abstention. ALSO a
+    migration: if constraint 3's escalate() parameter rename at probe_health.py:183/196 is taken, this
+    file passes it as a KEYWORD at 11 sites (145, 162, 176, 189, 202, 215, 220, 232, 249, 261, 274) and
+    every one must move. Keeping the parameter name is an acceptable alternative - but decide once and
+    apply the decision to both files.
 - file: tests/session/preflight/test_ci_rca_gauges.py
   action: Modify
   purpose: >-
@@ -106,7 +118,7 @@ scope:
     refuses when the merged context fails validation, and preserves sibling keys.
 - file: config/agent/verification_registry/registry.yaml
   action: Modify
-  purpose: Graduate the six counterfactuals named in the VP as standing regression guards.
+  purpose: Graduate the five counterfactuals named in the VP as standing regression guards.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -164,16 +176,18 @@ acceptance_criteria:
   action.yml:86-89). On the row: `title`, currently "Sandbox subagent plan review starved twice; apply
   blocked" - both halves false, since the retry never ran and the record DID latch red. The title is
   the ONLY string print_ci_rca_recs emits on the SOFT surface, so leaving it would correct five fields
-  a human never sees there while the false one stays on screen next to a close command. Correcting any
-  subset would leave a Critical rec contradicting itself.
+  a human never sees there while the false one stays on screen next to a close command. The top-level
+  `context` column is corrected in the same write (AC9). Correcting any subset would leave a Critical
+  rec contradicting itself.
 - >-
-  AC9 - The top-level `context` COLUMN is deliberately left uncorrected, with an honest reason rather
-  than a predicted one: it is in _UPDATE_CONTENT_VALIDATED_FIELDS (ops_data_portal.py:422), so a
-  rewrite must satisfy the Decision 66 write-time content validators loaded from ops.yaml. Whether a
-  well-formed replacement would pass is not established here, and this plan does not claim it would
-  fail - it defers the column as a separate concern. `title` is in the same frozenset but IS corrected
-  (AC8), because it is the string the SOFT surface actually prints. The contract records that the
-  column still carries the superseded summary and points at the corrected fields.
+  AC9 - The top-level `context` COLUMN is corrected too, not deferred. An earlier revision deferred it
+  on the theory that Decision 66's write-time gate might block a rewrite; that reason does not survive
+  contact with the code - `context`'s only validators are `_check_not_null` and a >= 80-stripped-char
+  length lambda, both trivially satisfied. It carries the LONGEST statement of the false narrative
+  ("both the initial claude -p reviewer invocation and the same-budget MAX_TURNS=5 retry returned
+  STARVED ... apply blocked WITHOUT latching the convergence record red") and is the field the portal,
+  the executor and future /plan readers consume. Deferring it would leave exactly the self-contradicting
+  subset AC8 exists to prevent.
 - >-
   AC10 - The correction preserves the rest of the blob. update_rec does `merged = {**existing,
   **updates}` - a record-level shallow merge - so a partial context_v2_json would replace the whole
@@ -266,8 +280,9 @@ verification_plan:
   phase: pre-deploy
   action: >-
     Correct every false-narrative field in rec-2923's context_v2_json while the rec remains open. Runs
-    AFTER step 1 - the corrected blob cannot pass validation until the yml fix lands, because
-    detection_gap.gap_explanation cites action.yml:36.
+    AFTER step 1 - the corrected blob cannot pass validation until the yml fix lands, because the
+    REPLACEMENT detection_gap.gap_explanation cites action.yml:38, a `.yml` citation deliberately
+    retained so the ordering dependency survives the rewrite.
   command: |
     bin/venv-python - <<'PY'
     import json
@@ -317,6 +332,16 @@ verification_plan:
         ),
     }, row_updates={
         "title": "Sandbox subagent review starved; inherited errexit voided the retry and latched a false red",
+        "context": (
+            "Run 30615075007's apply-sandbox job failed at the subagent plan-review step. "
+            "review_verdict.py classified the transcript STARVED and exited 1 by contract; GitHub runs "
+            "composite bash bodies under an inherited -e that the body's own `set -uo pipefail` does "
+            "not clear, so the shell aborted at the classifier call. The same-budget retry never ran, "
+            "outputs.outcome was never written, and the always-run writer missed its starved carve-out "
+            "on the empty value and latched status=red at 3ae1863 for a run whose terraform apply was "
+            "skipped. PR #812 fixed the errexit defect in review.sh. This context supersedes the "
+            "original filing, which asserted the retry ran and that no red record was latched."
+        ),
     })
     row = _fetch_rec_from_reader("rec-2923")
     ctx = json.loads(row["context_v2_json"])
@@ -328,6 +353,9 @@ verification_plan:
     assert "STARVED, so the composite" not in ctx["proximate_cause"]
     assert "intended fail-closed exit" not in ctx["detection_gap"]["gap_explanation"]
     assert "starved twice" not in row["title"], "the SOFT surface still prints the false title"
+    assert "inherited errexit" in row["title"], "the corrected title did not land"
+    assert ctx["detection_gap"]["earliest_viable_gate"] == "presubmit", "detection_gap did not land"
+    assert "supersedes the original filing" in row["context"], "the context column did not land"
     print("OK", ctx["fingerprint"][:12])
     PY
   expected: >-
@@ -335,8 +363,8 @@ verification_plan:
     evidence_bundle_ref survive; no context_v2_json field still asserts the retry ran or that no red
     record was latched.
   fix_if: >-
-    If validation fails inside the helper, step 1 has not landed - gap_explanation still cites
-    action.yml:36. If a survival assertion fails, the helper replaced rather than merged; investigate
+    If validation fails inside the helper, step 1 has not landed - the replacement gap_explanation
+    cites action.yml:38 and `.yml` is not yet accepted. If a survival assertion fails, the helper replaced rather than merged; investigate
     rather than retrying. On portal auth failure confirm with `aws sts get-caller-identity --profile
     agent_platform` - there is no offline outbox (Decision 84 I-4).
   hermetic: false
@@ -375,9 +403,11 @@ constraints:
   passes identically on both, so a "grep finds no counterexample" row is inadmissible by construction.
 - >-
   Widen predicate AND prose together. Seven sites in ci_rca_signals.py (61, 45, 96, 104, 109, 110,
-  118), probe_health.py's predicate (109) plus _build_context (147-159), _build_rec_fields (162-179),
-  the docstring at 90 and the undetermined_count parameter name at 183/196, and two in ci_rca_gauges.py
-  (25, 66). Moving a predicate without its labels relocates the defect instead of fixing it.
+  118); probe_health.py's predicate (109) plus _build_context (147-159), _build_rec_fields (162-179),
+  the docstring at 90 and the escalate() parameter name at 183/196; THREE in ci_rca_gauges.py (25, 66
+  and the read at 50). Line 50 is the dangerous one - it sits inside a bare `except Exception` that
+  turns a KeyError into a [WARN] and a silent None. Moving a predicate without its labels relocates the
+  defect instead of fixing it.
 - >-
   Do NOT change the /plan gate. print_ci_rca_recs' SOFT/HARD split is untouched; this plan changes an
   advisory surface only.
