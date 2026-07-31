@@ -1,21 +1,21 @@
 ---
 name: decision-scout
-description: "Use when: scope a proposed plan against active decisions, surface decision-contradiction flags before plan commitment, find related decisions a plan should cite. Mandatory pre-confirmation gate in /plan, runs in a fresh-context subagent so the full DECISIONS.md cost (large -- near its Decision 134 size ceiling) does not bloat the planning agent."
+description: "Use when: scope a proposed plan against active decisions, surface decision-contradiction flags before plan commitment, find related decisions a plan should cite. Mandatory pre-confirmation gate in /plan; runs in a fresh-context subagent so the bounded triage load stays off the planning agent."
 ---
 
 ## Intent
 
-Given a proposed plan approach, surface every active decision that is relevant -- as context to cite, as a literal contradiction to resolve, as a related-work pointer, or as a spirit-alignment concern to weigh (the SPIRIT overlay, Phase 2). The full `docs/DECISIONS.md` (large -- near its Decision 134 size ceiling) only enters this subagent's context, never the parent planning agent's; only the structured summary returns.
+Given a proposed plan approach, surface every active decision that is relevant -- as context to cite, as a literal contradiction to resolve, as a related-work pointer, or as a spirit-alignment concern (the SPIRIT overlay, Phase 2). Triage is BOUNDED (Phase 1 step 1): the committed `docs/decisions-index.json` projection plus targeted reads of only shortlisted entries -- the corpus never loads wholesale into this subagent's context, let alone the parent's; only the structured summary returns.
 
 This is a BLOCKING gate before `/plan` Step 6 "Present Findings and Confirm". A superficial scan that misses a contradiction is worse than not running -- the parent agent and human both trust this output to be exhaustive.
 
-### Why a subagent and not inline grep
+### Why a subagent, and why bounded
 
-The naive alternative is to grep `docs/DECISIONS.md` from the planning agent for keywords from the proposed approach. That misses decisions that contradict implicitly (different vocabulary, similar concept) and forces the planning agent to load enough of DECISIONS.md to make a judgement -- the exact large-file cost (near its Decision 134 size ceiling) this gate exists to avoid.
+A naive inline grep from the planning agent misses implicit contradictions (different vocabulary, same concept) and would force it to load the corpus to judge -- the exact cost this gate avoids. Bounded retrieval keeps that judgement in the subagent without the whole-corpus cost: triage every live title + `triage_excerpt` from the index, then read ONLY shortlisted entries as targeted source-file sections.
 
-### Lambda migration contract
+### Lambda / portal migration contract (T1.5 c1 owns this; rec-2774)
 
-When `docs/DECISIONS.md` is replaced by a Lambda-backed tool query (in-flight per project roadmap), the only change is Phase 1 step 1: swap `Read docs/DECISIONS.md` for a tool call. The output contract is unchanged. Callers do not need to update their invocation. This skill is the migration's stable interface.
+The index-plus-targeted-reads mechanism is the INTERIM arrangement, not the T1.5 portal cutover (Decision 134 clause 5). T1.5 c1 owns swapping Phase 1 step 1's two reads for a queried tool call; the output contract, buckets, severity taxonomy, and quality gates below are the stable interface across that swap.
 
 ---
 
@@ -23,7 +23,7 @@ When `docs/DECISIONS.md` is replaced by a Lambda-backed tool query (in-flight pe
 
 ### Phase 1: Load Inputs (MANDATORY)
 
-1. Read the **entire** `docs/DECISIONS.md` -- do not Read with offset/limit. A decision near the bottom of the file is just as likely to contradict the proposed approach as one near the top. (Post-Lambda-migration: call the decisions tool with no filter; pagination is acceptable only if the tool guarantees ordering by recency-of-relevance.) Before triage, run `rg -c "^## Decision " docs/DECISIONS.md` and record the count M -- this is the LIVE-FILE header count, NOT the max decision number (which reflects archive entries and numbering gaps) and NOT inclusive of `docs/DECISIONS_ARCHIVE.md`, per Decision 105.
+1. **Triage source.** Read `docs/decisions-index.json` -- committed, generated solely from `docs/DECISIONS.md` and `docs/DECISIONS_ARCHIVE.md` by `scripts.decisions_index`; used instead of the gitignored `ops_decisions` cache because CI PR roles lack reader access there and this gate stays credential-free and hermetic (Decision 105's R1-R3 guard relies on the same file-header hermeticity). Derive **M** = count of `live: true` entries -- the live-file header count, excluding the archive and distinct from the max decision number (numbering gaps). Each live entry's `title` and `triage_excerpt` (<=320 chars, Intent/Problem/Context/Decision fallback order; `triage_excerpt_source` names which; a small terse-historical band carries none) is the Phase 2 signal -- never a whole-file load here.
 
 2. Read the caller's input brief, which is mandated to include:
    - **Intent** (1-2 sentences from `/plan` Step 3 clarification)
@@ -36,53 +36,45 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
 
 ### Phase 2: Triage Each Decision
 
-3. For each decision in `docs/DECISIONS.md`, classify against the proposed approach into one of four buckets:
-   - **CITE** -- the decision directly governs the approach and the plan MUST reference it (e.g., a decision constraining how to write to Athena, when the plan writes to Athena).
-   - **CONTRADICT** -- the proposed approach violates an active decision (e.g., decision says "no `python -c` in acceptance commands"; proposed approach includes a `python -c` one-liner).
-   - **RELATED** -- the decision is in the neighbourhood but does not directly govern (e.g., a decision about session telemetry when the plan touches a different telemetry path). Useful context to mention but not mandatory to cite.
-   - **IRRELEVANT** -- discard.
+3. **Index pass.** For each live entry, classify PROVISIONALLY against the proposed approach using only its title + `triage_excerpt` into one of four buckets:
+   - **CITE** -- the decision directly governs the approach and the plan MUST reference it.
+   - **CONTRADICT** -- the proposed approach violates an active decision.
+   - **RELATED** -- in the neighbourhood but does not directly govern; worth mentioning, not mandatory.
+   - **IRRELEVANT** -- discard now; every other bucket, plus any SPIRIT candidate (step 8), is SHORTLISTED.
+   BIAS TOWARD INCLUSION here: many decisions govern by PROCESS CATEGORY (Lambda packaging/deploy,
+   Terraform apply routing, IAM/Secrets scoping, egress budgets), not topic keyword -- e.g. ANY new
+   Lambda touches the Lambda-packaging/deploy-channel decisions regardless of what it does. If the
+   approach's scope files or action touch a category a title names, shortlist it even with zero
+   lexical overlap; mark IRRELEVANT only when clearly off-topic. A spurious read is cheap; a missed
+   governing decision is not.
 
-4. For each CONTRADICT, attach a severity:
-   - **BLOCK** -- the proposed approach cannot proceed without violating the decision. Plan must pivot.
-   - **WARN** -- the proposed approach partially conflicts; a small refactor or explicit deferral note in the plan can resolve.
-   - **NOTE** -- the proposed approach edges close to the decision's domain but does not violate it; surface for the planning agent's judgement.
+4. **Targeted read.** For every shortlisted entry, locate its heading (`rg -n "^## Decision N:" docs/DECISIONS.md`) and Read with offset/limit spanning just that heading through the next -- one section, never the source file wholesale. Confirm or refine the provisional classification against the full text; a shortlisted entry's SPIRIT quote (step 8) may be any verbatim sentence from that section, not only the excerpt.
 
-5. **Managed-service-native check (Decision 100 / Decision 75):** During triage, flag CONTRADICT WARN when a
-   plan proposes to vendor client tooling or custom scripts to replicate a capability the managed service
-   already exposes natively (examples: pg_dump/pg_restore instead of Neon branching; manual S3 copy instead
-   of S3 replication; custom schema-copy instead of RDS snapshot). This check fires even when the mechanism
-   was previously recorded as a "human decision" -- a decision record does not exempt a mechanism from the
-   native-primitive principle. Cross-reference Decision 100 (which extends Decision 75 to ALL managed services,
-   not only AWS-native primitives).
+5. For each CONTRADICT, attach a severity:
+   - **BLOCK** -- the approach cannot proceed without violating the decision. Plan must pivot.
+   - **WARN** -- partial conflict; a small refactor or explicit deferral note can resolve.
+   - **NOTE** -- edges close to the decision's domain but does not violate it; surface for judgement.
 
-6. **Status filter.** Only flag CONTRADICT or CITE for decisions whose status is active (not reversed, not superseded, not deferred). If a decision is reversed/superseded, demote to RELATED with a one-line note: "Decision N (REVERSED by Decision M) — flagged for awareness only."
+6. **Managed-service-native check (Decision 100 / Decision 75):** flag CONTRADICT WARN when a plan
+   vendors client tooling or custom scripts to replicate a capability the managed service already
+   exposes natively (pg_dump/pg_restore instead of Neon branching; manual S3 copy instead of S3
+   replication; custom schema-copy instead of RDS snapshot). Fires even if previously recorded as a
+   "human decision" -- that does not exempt it. Decision 100 extends Decision 75 to ALL managed services.
 
-7. **Spirit-alignment overlay (SPIRIT bucket).** SEPARATELY from the literal CONTRADICT triage (steps
-   3-4), flag a proposed approach that violates the *spirit* of an active decision without
-   contradicting any single clause of it. This axis answers the intent-alignment half of the plan's
-   question ("is my plan aligned with the spirit of the corpus?"); it is gated hard against noise --
-   the skill's own defensive-over-citation anti-pattern applies with FULL force to this fuzzier axis.
+7. **Status filter.** Only flag CONTRADICT or CITE for decisions whose status is active (not reversed/superseded/deferred). If reversed/superseded, demote to RELATED with a one-line note: "Decision N (REVERSED by Decision M) — flagged for awareness only."
+
+8. **Spirit-alignment overlay (SPIRIT bucket).** SEPARATELY from the literal CONTRADICT triage (steps
+   3-5), flag an approach that violates the *spirit* of an active decision without contradicting any
+   single clause. Gated hard against noise -- defensive-over-citation applies with FULL force here.
    Emit a SPIRIT flag ONLY when ALL FOUR hold:
-   - (i) **No literal CONTRADICT on the same decision.** If the decision is already flagged CONTRADICT
-     (any severity), never also flag it SPIRIT -- literal contradiction supersedes, and a decision
-     appears in at most one of the two lanes. Routing note: a clause that merely describes the ruling's
-     OWN scope (e.g. "no retro-enforcement", "optional forever") is not a standing forward prohibition --
-     route it to SPIRIT, not CONTRADICT.
-   - (ii) **Verbatim-quotable violation.** You can quote, VERBATIM, the exact text the approach works
-     against: either the decision's `**Intent:**` marker (entries carrying one, Decision 151) or a
-     single specific sentence from its Problem/Rationale (historical entries without an Intent marker).
-     If you cannot ground the flag in a verbatim quote, DO NOT flag -- unquotable means no flag. A
-     paraphrase is not a quote.
-   - (iii) **WARN or NOTE severity only.** A SPIRIT flag NEVER carries BLOCK -- BLOCK stays reserved
-     for literal contradiction (step 4). WARN = the approach clearly works against the quoted intent;
-     NOTE = a softer tension surfaced for the planning agent's judgement.
-   - (iv) **Capped at 3.** Emit at most 3 SPIRIT flags. If more than 3 candidates qualify, keep the 3
-     highest-severity (WARN over NOTE) and drop the rest; the whole report still fits the ~1,200-word
-     budget (step 9).
+   - (i) **No literal CONTRADICT on the same decision.** A decision appears in at most one of the two lanes; a clause that only describes the ruling's OWN scope (e.g. "no retro-enforcement") is not a standing forward prohibition -- route it to SPIRIT.
+   - (ii) **Verbatim-quotable violation.** Quote, VERBATIM, the text the approach works against: `**Intent:**`, a specific Problem/Rationale sentence, OR -- widened for bounded retrieval -- the `**Decision:**` clause (a REQUIRED marker per `docs/contracts/decision-entry.yaml`, the most reliable fallback). Ungrounded means no flag. A few terse historical live entries carry no quotable marker at all; unshortlisted, their `triage_excerpt` is empty and no SPIRIT flag can fire from the index alone -- an accepted residual, not a bug.
+   - (iii) **WARN or NOTE severity only.** Never BLOCK -- that stays reserved for literal contradiction (step 5).
+   - (iv) **Capped at 3.** Keep the 3 highest-severity (WARN over NOTE) if more qualify; the whole report still fits the ~1,200-word budget (step 10).
 
 ### Phase 3: Structured Output
 
-8. Return exactly this output. Each section is mandatory even when empty (so the planning agent's parsing logic does not have to branch).
+9. Return exactly this output. Each section is mandatory even when empty (so the planning agent's parsing logic does not have to branch).
 
 ```
 ## Decision Scout Report
@@ -106,8 +98,7 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
 
 ### Spirit-Alignment Flags (SPIRIT)
 - **Decision N** [WARN | NOTE]: [title]
-  - Violated intent (verbatim): "[exact quote of the entry's **Intent:** marker, or a specific
-    Problem/Rationale sentence]"
+  - Violated intent (verbatim): "[exact quote of the entry's **Intent:**/**Problem:**/**Decision:** marker, or a specific Rationale sentence]"
   - Divergence: [the specific element of the proposed approach that works against the quoted intent]
   - Suggested resolution: [align to X | add explicit deferral note citing Decision N | clarify with human]
 
@@ -124,21 +115,20 @@ BLOCK = at least one CONTRADICT at BLOCK severity; planning agent must pivot bef
 Decisions triaged: N of M
 ```
 
-9. Cap total response at ~1,200 words. The planning agent reads this verbatim and surfaces it to the human; bloat dilutes the signal.
+10. Cap total response at ~1,200 words. The planning agent reads this verbatim and surfaces it to the human; bloat dilutes the signal.
 
 ---
 
 ## Quality Gate (self-check before output)
 
 Verify before returning:
-- [ ] You read the full DECISIONS.md (not a truncated section)
-- [ ] Every CITE and CONTRADICT entry names a decision number that actually exists in the file
+- [ ] You triaged every live entry via the index (biased toward inclusion, step 3) and read ONLY shortlisted entries as targeted sections -- never a whole-file load
+- [ ] Every CITE and CONTRADICT entry names a decision number that exists in the index
 - [ ] Every CONTRADICT entry has both a clause-level citation AND a severity
 - [ ] The Verdict line is one of the three exact strings (no variations)
-- [ ] The "Decisions triaged: N of M" line is present and N equals M (the rg -c count from Phase 1)
+- [ ] "Decisions triaged: N of M" is present and N equals M (the live:true count from Phase 1 step 1)
 - [ ] Total length under 1,200 words
-- [ ] Every SPIRIT flag carries a verbatim quote of the violated **Intent:** marker or a specific
-  Problem/Rationale sentence (no paraphrase)
+- [ ] Every SPIRIT flag carries a verbatim quote per gate (ii) (Intent, Problem/Rationale, or Decision-clause -- no paraphrase)
 - [ ] SPIRIT flags number <= 3, and no decision appears in both SPIRIT and CONTRADICT
 
 If any checkbox is false, fix before returning. The caller (planning agent) cannot self-verify these; a malformed output forces re-dispatch and wastes the latency budget.
@@ -147,11 +137,9 @@ If any checkbox is false, fix before returning. The caller (planning agent) cann
 
 ## Anti-patterns
 
-- **Keyword-only matching.** "The proposed approach mentions 'Lambda', so let me list every Lambda decision." -> noise. Match on whether the decision's *clause* governs the proposed approach's *action*, not on topic adjacency.
-- **Defensive over-citation.** Adding every tangentially-related decision to CITE bloats the planning agent's downstream summary and trains the human to skim past flags. Be ruthless: CITE only when omission would meaningfully harm the plan.
-- **Hedged contradictions.** "This *might* contradict Decision N." -> either it does or it doesn't. If you cannot determine, mark NOTE severity and explain what's uncertain. Hedge in the explanation, not in the classification.
-- **Editing files.** This skill is read-only. Do not modify `docs/DECISIONS.md` or any other file under any circumstance, even to "fix obvious typos in a decision title". File a recommendation if you find something genuinely wrong.
+- **Keyword-only CITE.** "The approach mentions 'Lambda', cite every Lambda decision." -> noise. Shortlist broadly (step 3), but CITE only when the decision's *clause* governs the approach's *action*.
+- **Defensive over-citation.** Bloats the downstream summary and trains the human to skim past flags. Be ruthless: CITE only when omission would meaningfully harm the plan.
+- **Hedged contradictions.** "This *might* contradict Decision N." -> either it does or it doesn't. If undetermined, mark NOTE and explain what's uncertain. Hedge in the explanation, not the classification.
+- **Editing files.** Read-only. Never modify `docs/DECISIONS.md` or any other file, even to "fix a typo". File a recommendation if something is genuinely wrong.
 - **Citing reversed decisions as governing.** A REVERSED decision is historical context only. Demote to RELATED with the reversal note; never CITE or CONTRADICT against it.
-- **SPIRIT over-citation.** The SPIRIT axis is the highest-noise lane -- an unquotable "this feels
-  misaligned" is not a flag. If you cannot paste a verbatim Intent/Problem/Rationale quote the approach
-  works against, it is not a SPIRIT flag; drop it. Three well-grounded flags beat ten hedged ones.
+- **SPIRIT over-citation.** The highest-noise lane -- an unquotable "this feels misaligned" is not a flag. Three well-grounded flags beat ten hedged ones.

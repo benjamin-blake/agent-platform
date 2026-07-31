@@ -1,10 +1,12 @@
 """Generated decisions index (audit finding DCG-08, PLAN-dcg-decisions-index, FINAL wave of
-the dcg-* audit-consolidation series).
+the dcg-* audit-consolidation series; PLAN-decision-scout-bounded-retrieval adds `live` and the
+triage_excerpt fields).
 
 A lightweight, machine-parseable projection over BOTH docs/DECISIONS.md and
-docs/DECISIONS_ARCHIVE.md -- number, title, status, decided_date, and typed
-supersedes/superseded_by/amends edges -- derived SOLELY via the shared parser
-scripts.decisions_md (DAF-03 single-parser rule): no second header/title regex lives here.
+docs/DECISIONS_ARCHIVE.md -- number, title, status, decided_date, typed
+supersedes/superseded_by/amends edges, a `live` provenance flag, and a bounded triage excerpt --
+derived SOLELY via the shared parser scripts.decisions_md (DAF-03 single-parser rule): no second
+header/title regex lives here.
 
 build_index() projects ONLY stable fields from each parse_decisions_md() row -- it EXCLUDES the
 parser's volatile created_timestamp/last_updated_timestamp/content_hash/raw_block fields, so two
@@ -19,6 +21,18 @@ Edge derivation:
   - supersedes: the corpus-wide UNION of (a) the inverse of every OTHER row's superseded_by
     pointing at this number, and (b) this row's own "title_supersedes" key
     (scripts.decisions_md._extract_title_borne_supersedes, title-borne "Supersedes Decision N").
+
+`live` derivation (PLAN-decision-scout-bounded-retrieval): whether the decision number is headed
+in docs/DECISIONS.md, via scripts.decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md])
+-- never a second parse of by_number's cross-file dict, which is last-occurrence-wins across the
+two files (overlap is zero today, so this is latent, not live behaviour).
+
+`triage_excerpt` derivation: a <=320-char excerpt for the decision-scout bounded-retrieval SPIRIT
+lane (Decision 152 gate (ii) widened to admit a Decision-clause quote), fallback order Intent ->
+Problem -> Context (the parser's Rationale/Key details/Context extraction) -> Decision (the
+decision-body marker). `triage_excerpt_source` names which of the four supplied the excerpt (or
+"" when none of the four markers are present at all). `triage_excerpt_truncated` is True iff the
+source text exceeded 320 chars and was cut.
 
 check_index_freshness(failed) fails on DRIFT (committed != regenerated) OR ABSENCE -- unlike
 scripts.dependency_graph.check_export_freshness (Decision 80 lean posture: no-op when the export
@@ -37,10 +51,39 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.decisions_md import parse_decisions_md
+from scripts.decisions_md import decision_header_numbers, parse_decisions_md
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _EXPORT_PATH = _REPO_ROOT / "docs" / "decisions-index.json"
+_LIVE_PATH = _REPO_ROOT / "docs" / "DECISIONS.md"
+
+_TRIAGE_EXCERPT_MAX_CHARS = 320
+
+# Fallback order for triage_excerpt: (row key, source label). "Context" covers the parser's
+# Rationale/Key details/Context extraction (whichever marker matched); "Decision" is the
+# decision-body marker, the most reliable fallback since it is a REQUIRED marker per
+# docs/contracts/decision-entry.yaml.
+_TRIAGE_EXCERPT_FALLBACKS: tuple[tuple[str, str], ...] = (
+    ("intent", "Intent"),
+    ("problem", "Problem"),
+    ("context", "Context"),
+    ("decision_text", "Decision"),
+)
+
+
+def _build_triage_excerpt(row: dict[str, Any]) -> tuple[str, str, bool]:
+    """Derive (triage_excerpt, triage_excerpt_source, triage_excerpt_truncated) for one row.
+
+    Fallback order Intent -> Problem -> Context -> Decision; the first non-empty field wins.
+    Returns ("", "", False) when none of the four fields are populated (the residual band).
+    """
+    for row_key, source_label in _TRIAGE_EXCERPT_FALLBACKS:
+        text = (row.get(row_key) or "").strip()
+        if text:
+            truncated = len(text) > _TRIAGE_EXCERPT_MAX_CHARS
+            excerpt = text[:_TRIAGE_EXCERPT_MAX_CHARS] if truncated else text
+            return excerpt, source_label, truncated
+    return "", "", False
 
 
 def _superseded_by_int(raw: str) -> int | None:
@@ -61,6 +104,7 @@ def build_index() -> dict[str, Any]:
     rows = parse_decisions_md()
     by_number = {row["decision_id"]: row for row in rows}
     superseded_by_map = {n: _superseded_by_int(row.get("superseded_by", "")) for n, row in by_number.items()}
+    live_numbers = decision_header_numbers(paths=[_LIVE_PATH])
 
     supersedes_map: dict[int, set[int]] = {n: set() for n in by_number}
     for n, row in by_number.items():
@@ -73,18 +117,24 @@ def build_index() -> dict[str, Any]:
                 # row n's own title says "Supersedes Decision target" -> n supersedes target.
                 supersedes_map[n].add(target)
 
-    decisions = [
-        {
-            "number": n,
-            "title": by_number[n]["title"],
-            "status": by_number[n]["status"],
-            "decided_date": by_number[n].get("decided_date", ""),
-            "supersedes": sorted(supersedes_map[n]),
-            "superseded_by": superseded_by_map[n],
-            "amends": sorted(t for t in by_number[n].get("amends", []) if t in by_number),
-        }
-        for n in sorted(by_number)
-    ]
+    decisions = []
+    for n in sorted(by_number):
+        excerpt, excerpt_source, excerpt_truncated = _build_triage_excerpt(by_number[n])
+        decisions.append(
+            {
+                "number": n,
+                "title": by_number[n]["title"],
+                "status": by_number[n]["status"],
+                "decided_date": by_number[n].get("decided_date", ""),
+                "supersedes": sorted(supersedes_map[n]),
+                "superseded_by": superseded_by_map[n],
+                "amends": sorted(t for t in by_number[n].get("amends", []) if t in by_number),
+                "live": n in live_numbers,
+                "triage_excerpt": excerpt,
+                "triage_excerpt_source": excerpt_source,
+                "triage_excerpt_truncated": excerpt_truncated,
+            }
+        )
 
     return {
         "decisions": decisions,

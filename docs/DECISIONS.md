@@ -2,6 +2,181 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 160: Retire the DECISIONS.md live-byte ceiling for bounded decision-scout retrieval; amends Decision 145, Decision 134 clause 2, and Decision 146; widens Decision 152 gate (ii) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-31
+**Warehouse ID:** dec-160 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+At authoring time docs/DECISIONS.md sat at 499,960 / 500,000 bytes (Decision 145's stopgap live-byte
+ceiling) and 112 / 120 live headers -- this entry's own landing would fail `validate_decisions_size` in
+the `--pre` tier unless the retirement below lands in the SAME PR, mirroring Decision 159's acute-state
+framing. Decision 134's live-byte ceiling existed to size ONE thing: the decision-scout gate's mandatory
+whole-live-file read (Decision 145: "~500 KB is ~125k tokens, under 200k" of context budget). Decision
+145's own reversal conditions and Decision 152's own reversal conditions both name removing that
+whole-file-read as the trigger that unwinds the stopgaps built on top of it -- but neither could fire
+literally, because nothing had yet built the bounded read they anticipate. PLAN-decision-scout-bounded-retrieval
+builds it: `scripts/decisions_index.py` now derives a `live` boolean per entry (from
+`decision_header_numbers(paths=[docs/DECISIONS.md])`) plus a bounded `triage_excerpt` (<=320 chars,
+Intent -> Problem -> Context -> Decision fallback order, sourced solely via the shared parser) in the
+committed `docs/decisions-index.json`; `.claude/skills/decision-scout/SKILL.md` Phase 1 step 1 now
+triages every live entry via that index and reads ONLY shortlisted entries as targeted sections of the
+source file -- never the corpus wholesale. Lowering the byte ceiling further is arithmetically
+impossible (the file already exceeds any value below its current size); per Decision 145's own warning,
+a second stopgap raise "is itself a signal that the structural fix is overdue." Retirement, not another
+raise, is the sanctioned response.
+
+**Decision:**
+1. **Retire `_DECISIONS_LIVE_MAX_BYTES`** (Decision 145's 500,000-byte stopgap value) entirely from
+   `scripts/checks/decisions/validate_decisions_size.py` -- the constant, its `_decisions_size_issues`
+   parameter, and its FAIL branch are all removed, not merely raised or lowered. The bounded-retrieval
+   mechanism above is what makes retirement safe: no consumer reads the live file wholesale anymore.
+
+2. **Reversal-trigger adjudication (Decision 145 / Decision 152).** Decision 145 condition (b) reads
+   "the decision-scout moves to a warehouse/portal read (Decision 134's protected consumer is gone)";
+   Decision 152's reads "the removal of the whole-file-read inefficiency is ITSELF the reversal trigger."
+   This plan satisfies the PURPOSE of both -- the protected whole-file-read consumer is gone; the
+   whole-file-read inefficiency is removed -- but NOT the LITERAL action of either: it declines a
+   warehouse/portal/verb read on Decision 88 zero-egress grounds (invariant (ii), "never an ad-hoc
+   re-fetch of data in hand"), reading the source files by targeted section instead. T0.8's MCP server
+   (`scripts/agent_sdk/mcp_server.py`, registered in `.mcp.json` as `ducklake-reads`, `docs/ROADMAP-PLATFORM.yaml`
+   status now `complete`) is deliberately NOT used by decision-scout here -- it is certified delivered
+   while its use in this gate is declined and deferred to T1.5 c1, which is exactly what makes the
+   literal trigger reachable for the first time. Both conditions are ADJUDICATED SATISFIED under this
+   purpose-vs-literal reading, the same treatment point 6 below gives the Decision 114 analogy.
+
+3. **Amends Decision 145** (retires the byte-ceiling value its stopgap raise set; its own
+   reversal-condition text is satisfied per point 2 above) **and amends Decision 134 clause 2** (the
+   live-byte ceiling clause; superseded by the bounded-retrieval read model plus the combined-ceiling
+   backstop, point 4). Per the forward-direction amendment convention (Decision 126/143, reused by
+   Decision 145 point 2), neither amended Decision's body text is edited -- the amendment is stated only
+   here.
+
+4. **The two surviving ceilings are retained, unchanged:** `_DECISIONS_LIVE_MAX_H2` (120 live headers)
+   and `_DECISIONS_COMBINED_MAX_BYTES` (700,000 combined bytes) remain enforced, in both the `--pre` and
+   full `validate.py` tiers. Decision 150's significance bar (gating what MAY become a new entry) is
+   COMPLEMENTARY to these size guards (gating how large the corpus MAY grow), not a substitute for
+   either. The combined ceiling now implicitly bounds the live file on its own
+   (live <= 700,000 - archive_bytes, ~588,930 bytes at this entry's authoring time) -- this IS the
+   intended backstop, not an accidental side effect of retiring point 1.
+
+5. **Decision 146 amendment.** Decision 146 named archival (moving a fully-superseded live entry to
+   `docs/DECISIONS_ARCHIVE.md`) as a live-file size-pressure relief valve, alongside compaction. Measured
+   under the surviving combined ceiling, archival is INERT: it only moves bytes between the two counted
+   files (`docs/DECISIONS.md` + `docs/DECISIONS_ARCHIVE.md`), so it cannot relieve
+   `_DECISIONS_COMBINED_MAX_BYTES`. `_RELIEF_VALVES` in `validate_decisions_size.py` is rewritten
+   accordingly, naming only valves that actually reduce combined bytes: compaction of superseded bodies
+   to pointer stubs (Decision 149) and the per-entry authoring size norm (point 10 below). Decision 146's
+   archival policy is otherwise UNCHANGED -- archival remains sanctioned for corpus-hygiene and
+   citation-hygiene reasons; it simply no longer functions as a combined-ceiling relief valve, and this
+   Decision's own measurement (9,048 bytes of live `**Status:** Superseded` entries; ~15.7 KB of
+   realistic reclaim across 12 archive-shaped candidates, ten of which carry armed reversal conditions
+   or live "necessary, not sufficient" scoping) is why declining an outflow wave here is an
+   operator-disposed judgement, not a bypass of Decision 146.
+
+6. **Decision 114 analogy, addressed.** Decision 114 rejected splitting `ROADMAP-PLATFORM.yaml` into
+   per-tier files because doing so "trades one coherent load for N files an agent must reassemble,"
+   choosing a raised ceiling + deterministic guard instead. This plan does NOT split `docs/DECISIONS.md`
+   -- the source file stays single and coherent, exactly as Decision 114 required. Only the READ is
+   bounded: decision-scout triages a generated index (itself derived from the one source file by the
+   shared parser, `scripts.decisions_md`, never hand-maintained) and reads targeted sections of that same
+   single source file for shortlisted entries. The anti-pattern Decision 114 and Decision 110 guard
+   against -- N files an agent must reassemble -- does not apply: there is still exactly one source file
+   and one generated index, not N fragments.
+
+7. **Decision 152 gate (ii) widened; Decision 152's mandated revisit performed.** The SPIRIT lane's
+   verbatim-quotability requirement (Decision 152 gate (ii)) now admits a quote of the entry's
+   Decision-marker clause -- a REQUIRED marker per `docs/contracts/decision-entry.yaml` -- in addition to
+   the existing Intent-marker and a specific Problem/Rationale sentence. This widening is what
+   takes `triage_excerpt` coverage from 115 to 135 of 139 entries (measured at authoring time). It also
+   performs the revisit Decision 152's own reversal conditions mandated once the whole-file-read
+   inefficiency is removed: "make the SPIRIT axis leaner and query-driven rather than prose-budget-funded."
+   The freed whole-file-read prose in `.claude/skills/decision-scout/SKILL.md` funds the new bounded
+   protocol text in place; the skill's `config/prose_budgets.yaml` S4 entry is ratcheted DOWN (11379 ->
+   11315 bytes, measured) and its `# raise-approved: dec-152` marker is REMOVED (a decrease needs no
+   marker) -- the raise Decision 152 point 3 authorized is retired along with the text it funded.
+
+8. **Residual, stated not hidden.** A small terse-historical band -- live Decisions 63, 64, 65, and 67
+   (the pre-Decision-77 band already carried in the DAF-01 fidelity baseline) -- carries no quotable
+   marker (Intent/Problem/Context/Decision) at all, even after the point 7 widening. If such an entry is
+   NOT shortlisted during a `/plan` triage pass, its `triage_excerpt` is empty and decision-scout cannot
+   emit a SPIRIT flag against it from the index alone. This is an accepted residual of bounded retrieval,
+   not a defect to work around; a shortlisted read of the entry's full section text remains fully
+   quotable regardless.
+
+9. **New surface, its own guard named.** `docs/decisions-index.json` becomes a NEW read-in-full-every-
+   `/plan` surface (decision-scout's Phase 1 step 1). It carries NO byte guard of its own -- it is bounded
+   only INDIRECTLY, by the 120-header live ceiling (point 4, since the index's live-row count tracks the
+   live header count 1:1) and by this plan's own acceptance-criterion pin (the committed projection must
+   stay <= 110,000 bytes; measured 98,555 bytes, 19.6% of the live file, at authoring time). A future
+   owner should reassess whether this indirect bound remains adequate as the corpus grows past the
+   header ceiling's current runway (point 11).
+
+10. **Decision 151 backstop consequence.** Decision 151 clause 3(v) left its Intent-marker accretion cap
+    convention-only, "backstopped by the existing 500,000-byte live-file ceiling and ordinary PR review."
+    That specific numeric backstop is retired by point 1. The surviving combined ceiling (point 4) plus
+    ordinary PR review now serve as the backstop instead; no separate Intent-specific ceiling is
+    introduced here. If Intent-marker accretion becomes material on its own, it remains visible the same
+    way any other accretion is -- via the combined ceiling and the dated runway below.
+
+11. **The dated runway -- days, not months, and a named owner.** At this plan's own measured inflow rate
+    (294 KB and 56 entries/month) and MEASURED including THIS entry as committed: live headers are 113 /
+    120 (headroom 7 headers, ~4 days of runway at ~1.87 headers/day); live+archive combined bytes are
+    625,905 / 700,000 (headroom 74,095 bytes, ~8 days of runway at ~9,800 bytes/day -- this entry landed
+    larger than the plan's own ~12 KB pre-authoring estimate, which is why the combined figure is ~8 days
+    rather than the plan's earlier ~8-9 day forecast; the header figure is unaffected since one entry is
+    always +1 header regardless of its byte size). The HEADER ceiling is the FIRST binding constraint, the
+    COMBINED ceiling second. "Nothing goes unguarded" is true; "nothing is urgent" is NOT. OWNER: the
+    deferred per-entry authoring size norm (rec filed by this plan, point 12) is the only lever that bends
+    the accrual RATE; until it lands, the runway above is the honest, disclosed cost of deferring it, not
+    an oversight -- and THIS entry's own above-estimate size is itself a live illustration of why the norm
+    is needed.
+
+12. **Follow-on recommendations filed, by substitution not deletion.** rec-2783 ("watch docs/DECISIONS.md
+    headroom against the Decision 145 500,000-byte ceiling") named a ceiling this Decision retires, so it
+    is superseded rather than left stale: a new successor-watch recommendation (naming the surviving
+    120-header and 700,000-combined-byte ceilings this Decision retains) is filed by this plan and named
+    as rec-2783's resolution when it is closed. A second new recommendation for the deferred per-entry
+    authoring size norm (point 11's named owner) is also filed by this plan.
+
+13. **This arrangement is INTERIM, not the T1.5 portal cutover.** Decision 134 clause 5 designates the
+    end state as a portal/warehouse read; T1.5 c1 still owns replacing decision-scout's Phase 1 step 1 (the
+    index-plus-targeted-reads mechanism this Decision installs) with a queried tool call, per the T1.5
+    relationship this plan's own context recorded and per point 2 above. The scout's output contract
+    (buckets, severity taxonomy, quality gates, `Decisions triaged: N of M` echo, Verdict line) is
+    UNCHANGED and stays the stable interface across that future swap.
+
+**Reversal conditions:** Revisit if the header ceiling (120) or the combined ceiling (700,000) is
+breached before the per-entry authoring size norm (point 11's named owner) lands -- a breach at that
+point would mean the runway was mis-measured or the norm arrived too late, and the response is to
+re-derive the runway and escalate the norm's priority, never a silent re-raise. Revisit when T1.5 c1's
+portal/verb read supersedes the source-file-read mechanism installed here (expected -- this is the
+literal action point 2 adjudicated as satisfied only in purpose, not yet in fact). Revisit if a future
+`/plan` session's live decision-scout dispatch surfaces a CITE or SPIRIT regression against the
+pre-bounded-retrieval baseline (VP step 9 of this plan's own verification) that cannot be closed by
+enriching the `triage_excerpt` projection -- in that case, per this plan's own rollback note, the
+SKILL.md bounded-read change may be reverted alone while keeping the index's `live` field, which is
+independently useful.
+
+**Related:** Decision 145 (amended -- point 3), Decision 134 (clause 2 amended -- point 3; clause 5's
+portal end-state -- point 13), Decision 146 (amended -- point 5), Decision 152 (mandated revisit
+performed and gate (ii) widened -- point 7), Decision 151 (backstop consequence -- point 10), Decision
+150 (significance bar, complementary to these size guards -- point 4), Decision 114 (splitting-vs-bounding
+analogy addressed -- point 6), Decision 110 (agent-first one-file-load principle, not violated -- point
+6), Decision 88 (zero-egress grounds for declining the verb/warehouse read -- point 2), Decision 105
+(committed-index hermeticity re-grounded in `.claude/skills/decision-scout/SKILL.md` -- the index is used
+instead of the gitignored `ops_decisions` cache because CI PR roles lack reader access there), Decision
+84 (`docs/DECISIONS.md` remains the sole ETL source for `ops_decisions`; this Decision changes how the
+corpus is READ, never where it is written), Decision 149 (compaction-to-stub relief valve named in point
+5), Decision 128 (decompose-by-default / ratchet-down convention mirrored by the prose-budget decrease in
+point 7), Decision 55 (fail-loud, no rescue agents; the residual in point 8 is stated, not silently
+absorbed). Provenance: decision-scout's own plan-time triage (112 of 112 live decisions) flagged
+CONTRADICT WARN on Decision 145 (retire-vs-raise, resolved by point 1/2), Decision 152 (mandated revisit,
+resolved by point 7), and Decision 88 (egress re-fetch, resolved by point 2); plan-critique converged
+after 3 rounds with all blocking items applied. Roadmap/queue refs (not DECISIONS.md entries): T0.8
+(closed out alongside this entry, Tier Item Freshness Gate), T1.5 c1, rec-2783, rec-2774, rec-2479.
+
 ## Decision 158: Reconcile's recovery path may substitute a freshly-planned artifact for the saved plan.bin, and its complete terminal route set narrows the tf-gated-apply Environment's reach (Decided)
 
 **Status:** Decided

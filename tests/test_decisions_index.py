@@ -1,18 +1,20 @@
 """Tests for scripts/decisions_index.py (DCG-08, PLAN-dcg-decisions-index -- Decision 104/131
-mirror of the generator).
+mirror of the generator; PLAN-decision-scout-bounded-retrieval adds the `live` and
+triage_excerpt_* coverage below).
 
 Covers: build_index() determinism (byte-stable, no volatile-field leak), both-files coverage
 (Decision 146), typed-edge spot-checks spanning both derivation paths (title extraction,
 superseded_by inverse map, title-borne supersedes) and both files (live + archive), the
-superseded_by string->int coercion, and the stable-field-only projection shape.
+superseded_by string->int coercion, the stable-field-only projection shape, the `live` provenance
+flag, and the triage_excerpt/triage_excerpt_source/triage_excerpt_truncated fallback logic.
 """
 
 from __future__ import annotations
 
 import json
 
-from scripts.decisions_index import build_index
-from scripts.decisions_md import decision_header_numbers
+from scripts.decisions_index import _LIVE_PATH, _build_triage_excerpt, build_index
+from scripts.decisions_md import decision_header_numbers, parse_decisions_md
 
 
 class TestDeterminism:
@@ -34,7 +36,19 @@ class TestDeterminism:
 
     def test_entry_shape_is_the_stable_projection_only(self) -> None:
         idx = build_index()
-        expected_keys = {"number", "title", "status", "decided_date", "supersedes", "superseded_by", "amends"}
+        expected_keys = {
+            "number",
+            "title",
+            "status",
+            "decided_date",
+            "supersedes",
+            "superseded_by",
+            "amends",
+            "live",
+            "triage_excerpt",
+            "triage_excerpt_source",
+            "triage_excerpt_truncated",
+        }
         for entry in idx["decisions"]:
             assert set(entry.keys()) == expected_keys
 
@@ -125,3 +139,168 @@ class TestSupersededByCoercion:
         idx = build_index()
         d = {x["number"]: x for x in idx["decisions"]}
         assert d[150]["superseded_by"] is None
+
+
+class TestLiveField:
+    """VP step 1 / AC1: `live` derived from decision_header_numbers(paths=[docs/DECISIONS.md]),
+    never a hardcoded count (Decision 55 test-count-coupling)."""
+
+    def test_live_matches_file_provenance(self) -> None:
+        idx = build_index()
+        live_numbers = decision_header_numbers(paths=[_LIVE_PATH])
+        indexed_live = {x["number"] for x in idx["decisions"] if x["live"]}
+        indexed_archive = {x["number"] for x in idx["decisions"] if not x["live"]}
+        assert indexed_live == live_numbers
+        assert indexed_archive == {x["number"] for x in idx["decisions"]} - live_numbers
+
+    def test_live_is_bool_not_truthy_value(self) -> None:
+        idx = build_index()
+        for entry in idx["decisions"]:
+            assert isinstance(entry["live"], bool)
+
+    def test_archive_only_entry_is_not_live(self) -> None:
+        """dec-36 exists only in DECISIONS_ARCHIVE.md (see TestBothFilesCoverage)."""
+        idx = build_index()
+        d = {x["number"]: x for x in idx["decisions"]}
+        assert d[36]["live"] is False
+
+
+class TestTriageExcerptUnit:
+    """VP step 1 / AC1: _build_triage_excerpt's fallback order (Intent -> Problem -> Context ->
+    Decision), the empty-excerpt branch, the 320-char cap, and the truncation flag -- tested as
+    a pure unit against synthetic rows so coverage does not depend on which real decision numbers
+    happen to occupy each branch today."""
+
+    def test_intent_wins_when_present(self) -> None:
+        row = {"intent": "the intent text", "problem": "the problem text", "context": "ctx", "decision_text": "dec"}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert excerpt == "the intent text"
+        assert source == "Intent"
+        assert truncated is False
+
+    def test_problem_wins_when_no_intent(self) -> None:
+        row = {"intent": "", "problem": "the problem text", "context": "ctx", "decision_text": "dec"}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert excerpt == "the problem text"
+        assert source == "Problem"
+        assert truncated is False
+
+    def test_context_wins_when_no_intent_or_problem(self) -> None:
+        row = {"intent": "", "problem": "", "context": "the context text", "decision_text": "dec"}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert excerpt == "the context text"
+        assert source == "Context"
+        assert truncated is False
+
+    def test_decision_wins_when_only_decision_text_present(self) -> None:
+        row = {"intent": "", "problem": "", "context": "", "decision_text": "the decision text"}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert excerpt == "the decision text"
+        assert source == "Decision"
+        assert truncated is False
+
+    def test_whitespace_only_fields_are_treated_as_empty(self) -> None:
+        row = {"intent": "   \n  ", "problem": "", "context": "", "decision_text": "the decision text"}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert source == "Decision"
+
+    def test_empty_when_no_markers_present_at_all(self) -> None:
+        row = {"intent": "", "problem": "", "context": "", "decision_text": ""}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert excerpt == ""
+        assert source == ""
+        assert truncated is False
+
+    def test_missing_keys_treated_as_empty(self) -> None:
+        excerpt, source, truncated = _build_triage_excerpt({})
+        assert excerpt == ""
+        assert source == ""
+        assert truncated is False
+
+    def test_320_char_cap_not_truncated_at_exactly_320(self) -> None:
+        row = {"intent": "x" * 320, "problem": "", "context": "", "decision_text": ""}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert len(excerpt) == 320
+        assert truncated is False
+
+    def test_320_char_cap_truncates_over_320(self) -> None:
+        row = {"intent": "x" * 400, "problem": "", "context": "", "decision_text": ""}
+        excerpt, source, truncated = _build_triage_excerpt(row)
+        assert len(excerpt) == 320
+        assert excerpt == "x" * 320
+        assert truncated is True
+
+
+class TestTriageExcerptIntegration:
+    """The generator's triage_excerpt fields, checked against the real corpus via independent
+    re-derivation (never a hardcoded entry count -- Decision 55 test-count-coupling)."""
+
+    def test_every_entry_carries_the_three_fields(self) -> None:
+        idx = build_index()
+        for entry in idx["decisions"]:
+            assert "triage_excerpt" in entry
+            assert "triage_excerpt_source" in entry
+            assert "triage_excerpt_truncated" in entry
+            assert isinstance(entry["triage_excerpt"], str)
+            assert isinstance(entry["triage_excerpt_source"], str)
+            assert isinstance(entry["triage_excerpt_truncated"], bool)
+
+    def test_no_excerpt_exceeds_320_chars(self) -> None:
+        idx = build_index()
+        for entry in idx["decisions"]:
+            assert len(entry["triage_excerpt"]) <= 320
+
+    def test_non_empty_excerpt_always_names_a_source(self) -> None:
+        idx = build_index()
+        for entry in idx["decisions"]:
+            if entry["triage_excerpt"]:
+                assert entry["triage_excerpt_source"] in {"Intent", "Problem", "Context", "Decision"}
+            else:
+                assert entry["triage_excerpt_source"] == ""
+
+    def test_empty_excerpt_set_matches_independent_rederivation(self) -> None:
+        """Re-derive the residual (no-marker) set straight from parse_decisions_md rows,
+        independent of build_index()'s own excerpt logic, and cross-check equality -- not a
+        hardcoded count."""
+        idx = build_index()
+        indexed_empty = {x["number"] for x in idx["decisions"] if not x["triage_excerpt"]}
+        rows = parse_decisions_md()
+        rederived_empty = {
+            row["decision_id"]
+            for row in rows
+            if not (row.get("intent") or "").strip()
+            and not (row.get("problem") or "").strip()
+            and not (row.get("context") or "").strip()
+            and not (row.get("decision_text") or "").strip()
+        }
+        assert indexed_empty == rederived_empty
+
+    def test_excerpt_coverage_is_high(self) -> None:
+        """At most 4 entries lack any quotable marker (measured 135/139 at authoring time) --
+        expressed as a coverage floor, not an exact count, so new decisions don't break this."""
+        idx = build_index()
+        total = len(idx["decisions"])
+        with_excerpt = sum(1 for x in idx["decisions"] if x["triage_excerpt"])
+        assert with_excerpt >= total - 4
+
+    def test_truncated_flag_matches_source_text_length(self) -> None:
+        """Cross-check truncated against an independent re-derivation of the winning fallback
+        field's raw length, never trusting the generator's own flag in isolation."""
+        idx = build_index()
+        rows_by_id = {row["decision_id"]: row for row in parse_decisions_md()}
+        for entry in idx["decisions"]:
+            if not entry["triage_excerpt_source"]:
+                continue
+            field_by_source = {
+                "Intent": "intent",
+                "Problem": "problem",
+                "Context": "context",
+                "Decision": "decision_text",
+            }
+            row_key = field_by_source[entry["triage_excerpt_source"]]
+            raw = (rows_by_id[entry["number"]].get(row_key) or "").strip()
+            assert entry["triage_excerpt_truncated"] == (len(raw) > 320)
+            if entry["triage_excerpt_truncated"]:
+                assert entry["triage_excerpt"] == raw[:320]
+            else:
+                assert entry["triage_excerpt"] == raw
