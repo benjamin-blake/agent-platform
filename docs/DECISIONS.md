@@ -94,7 +94,7 @@ raise, is the sanctioned response.
    inefficiency is removed: "make the SPIRIT axis leaner and query-driven rather than prose-budget-funded."
    The freed whole-file-read prose in `.claude/skills/decision-scout/SKILL.md` funds the new bounded
    protocol text in place; the skill's `config/prose_budgets.yaml` S4 entry is ratcheted DOWN (11379 ->
-   11315 bytes, measured) and its `# raise-approved: dec-152` marker is REMOVED (a decrease needs no
+   11325 bytes, measured) and its `# raise-approved: dec-152` marker is REMOVED (a decrease needs no
    marker) -- the raise Decision 152 point 3 authorized is retired along with the text it funded.
 
 8. **Residual, stated not hidden.** A small terse-historical band -- live Decisions 63, 64, 65, and 67
@@ -109,7 +109,9 @@ raise, is the sanctioned response.
    `/plan` surface (decision-scout's Phase 1 step 1). It carries NO byte guard of its own -- it is bounded
    only INDIRECTLY, by the 120-header live ceiling (point 4, since the index's live-row count tracks the
    live header count 1:1) and by this plan's own acceptance-criterion pin (the committed projection must
-   stay <= 110,000 bytes; measured 98,555 bytes, 19.6% of the live file, at authoring time). A future
+   stay <= 110,000 bytes; measured 105,609 bytes, ~20.4% of the live file, at this entry's FINAL
+   measured state -- the point 7/14 `category_tags` addition grew the projection after an earlier
+   draft of this point recorded a smaller pre-category_tags figure; this is the corrected number). A future
    owner should reassess whether this indirect bound remains adequate as the corpus grows past the
    header ceiling's current runway (point 11).
 
