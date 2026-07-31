@@ -1,0 +1,406 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: ci-rca-evidence-scope-declaration
+intent: >-
+  Make the CI-RCA retrieval envelope declare its own evidence SCOPE, not just its volume, so the RCA
+  agent can never again narrate intended control flow for a step whose log it was never shown. Closes
+  the axis GAL-01 left open and backs the rule with a deterministic write-time check rather than
+  prompt text alone.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-evidence-scope-declaration.yaml
+phase: >-
+  Ad hoc CI-RCA quality remediation behind rec-2923; completes the GAL-01 evidence envelope from
+  audits/github-actions-log-management-c144530f02d1 on the scope axis that audit did not examine.
+scope:
+- file: scripts/ci_rca/fetch_logs.py
+  action: Modify
+  purpose: >-
+    _failed_jobs() already parses the complete steps array from the `gh run view --json jobs` call it
+    already makes, then discards every step whose conclusion is not failure/timed_out/cancelled.
+    Retain the failed job's full per-step outcome table (step_index, name, conclusion) and emit a new
+    top-level `scope` block into the envelope declaring which steps executed and which of their logs
+    were retrieved. The `gh run view --log-failed` invocation, the fallback selection, and the `body`
+    blob are all unchanged.
+- file: scripts/ci_rca/log_evidence.py
+  action: Modify
+  purpose: >-
+    Bump SCHEMA to ci-rca-log-evidence/v2 and add a _validate_scope() branch wired into
+    validate_envelope(). validate_envelope is a positive-key validator that silently tolerates unknown
+    keys, so an absent or malformed scope declaration would degrade invisibly and make the whole
+    control unenforceable (Decision 55 fail-loud).
+- file: scripts/ci_rca/evidence_input.py
+  action: Modify
+  purpose: >-
+    load_retrieval_input() copies a fixed key tuple into the bundle's retrieval_evidence. Add "scope"
+    so the declaration actually reaches the evidence bundle the agent reads; without this the field is
+    computed and then dropped at the bundle boundary.
+- file: scripts/ops_portal/ci_rca_runtime.py
+  action: Modify
+  purpose: >-
+    Add cross-check check-5 to the existing _cross_check_bundle family: reject (warn-mode stamp) a
+    source=ci_rca rec whose why_chain or gap_explanation makes an assertion about a step the verified
+    bundle's retrieval_evidence.scope marks unretrieved. This is the deterministic backstop for the
+    prompt-level rule below - the failure being fixed originated in the LLM layer, so a prompt-only
+    control would re-rely on the layer that failed (Decision 59).
+- file: scripts/checks/ci_guards/validate_actions_evidence.py
+  action: Modify
+  purpose: _validate_s1 hard-pins the linkage schema string; accept ci-rca-log-evidence/v2.
+- file: docs/contracts/github-actions-evidence.yaml
+  action: Modify
+  purpose: >-
+    Update both schema strings (diagnostic_classes.ci_rca_log_evidence.schema and
+    s1_linkage.schema) from v1 to v2 in the same commit as the producer bump.
+- file: docs/contracts/ci-rca-lifecycle.yaml
+  action: Modify
+  purpose: >-
+    Record the scope field's semantics in the owning contract - what "executed but unretrieved" means
+    and the UNOBSERVED obligation it creates. Decision 86 routes field semantics to contracts; no new
+    prose doc.
+- file: .claude/agents/scheduled/ci-rca.md
+  action: Modify
+  purpose: >-
+    Step 2's bundle field list omits retrieval_evidence entirely, so the agent is never told the
+    envelope exists - even GAL-01's volume `limits` block is undocumented to its only consumer. List
+    retrieval_evidence.limits and retrieval_evidence.scope, and add the UNOBSERVED rule: a step present
+    in the scope declaration but marked unretrieved was NOT observed; assert nothing about it and
+    record undetermined instead.
+- file: tests/test_ci_rca_fetch_logs.py
+  action: Modify
+  purpose: Cover full-step-table retention, scope emission, and the fallback/unqueried-job interaction.
+- file: tests/test_ci_rca_log_evidence.py
+  action: Modify
+  purpose: >-
+    Cover _validate_scope rejection paths and the pinned-body invariant: the scope block must never
+    appear in `body`, because body is what error_signature_from_log_tail hashes.
+- file: tests/test_ci_rca_evidence_input.py
+  action: Modify
+  purpose: Cover scope propagation into retrieval_evidence and rejection of a v1 envelope.
+- file: tests/checks/ci_guards/test_validate_actions_evidence.py
+  action: Modify
+  purpose: Cover the v2 linkage assertion and rejection of a stale v1 contract.
+- file: tests/ops_data_portal/test_ci_rca_runtime.py
+  action: Modify
+  purpose: >-
+    Cover check-5 both ways - an assertion about an unretrieved step is stamped, an assertion about a
+    retrieved step is not - plus graceful degradation when the bundle carries no scope.
+- file: config/agent/verification_registry/registry.yaml
+  action: Modify
+  purpose: Graduate the canonical fingerprint-input-pinned counterfactual as a standing regression guard.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+- >-
+  The retrieval envelope carries a top-level `scope` block naming, for each failed job, every step the
+  run executed with its index, name and conclusion, and a per-step boolean recording whether that
+  step's log is present in `body`. For run 30615075007's shape this means step 16 (Terraform apply,
+  skipped) and step 17 (Write convergence record, success) both appear, both marked unretrieved.
+- >-
+  `log_evidence.validate_envelope` REJECTS an envelope whose scope block is absent, whose step set
+  disagrees with `failed_jobs[].failed_steps`, or whose retrieved-flags claim a log the body does not
+  contain. An envelope that merely omits the key does not pass.
+- >-
+  The bytes of `body` are unchanged by this plan for any given run - the scope declaration is a
+  structured sibling field and never enters the log text. A test asserts that
+  `error_signature_from_log_tail` returns the identical signature for a pre-change and post-change
+  envelope built from the same source log, so Decision 142's non-pytest fingerprint keyspace does not
+  fork and no open chain is orphaned.
+- >-
+  `ci-rca.yml`'s "Fetch failed run logs" step `run` scalar and `env` mapping are byte-for-byte
+  unchanged, and `gh run view --log-failed` remains the retrieval mechanism, so Decision 72's named
+  clause needs no amendment and PLAN-ci-rca-authority-anchor's guard and snapshot test remain valid.
+- >-
+  `retrieval_evidence.scope` is present in the evidence bundle produced by
+  `scripts.ci_rca.evidence --retrieval-envelope ...`, not merely in the envelope on disk.
+- >-
+  A `source=ci_rca` rec whose why_chain or gap_explanation asserts about a step the verified bundle
+  marks unretrieved is stamped with a warn_mode_reject tag in warn mode and raises in strict mode,
+  using the existing `[CI_RCA_CROSS_CHECK check-N]` shape. A rec asserting only about retrieved steps
+  is untouched.
+- >-
+  The schema string reads ci-rca-log-evidence/v2 in all three places that pin it
+  (`log_evidence.SCHEMA`, `validate_actions_evidence._validate_s1`,
+  `docs/contracts/github-actions-evidence.yaml`), with no v1 string left in a live code or contract
+  path.
+- >-
+  Replaying rec-2923's actual shape - a bundle whose scope marks step 17 unretrieved, plus its filed
+  why_chain claiming the convergence record was not latched red - trips check-5. This is the
+  regression proof that the plan closes the observed defect, not an adjacent one.
+- >-
+  Every changed Python source line is covered under the changed-file 100 percent coverage gate, and
+  literal `bin/venv-python -m scripts.validate --pre` and `bin/venv-python -m scripts.validate` both
+  exit zero before PR readiness.
+verification_plan:
+- step: 1
+  phase: pre-deploy
+  action: >-
+    Prove the fingerprint input is pinned - build an envelope from a fixed source log before and after
+    the scope field exists and assert the derived non-pytest error signature is byte-identical.
+  command: bin/venv-python -m pytest tests/test_ci_rca_log_evidence.py -k "fingerprint_input_pinned or scope_absent_from_body" -q
+  expected: >-
+    Both tests pass. The signature computed from the post-change envelope's body equals the pre-change
+    signature, and no scope key or step name appears anywhere in `body`.
+  fix_if: >-
+    If the signature differs, scope text has leaked into the log body - move it back out to the
+    structured sibling field. Do NOT re-salt the fingerprint to accommodate the leak; that forks the
+    keyspace Decision 142 deliberately kept disjoint.
+  hermetic: true
+  graduation: graduate
+  graduation_check_id: ci-rca-scope-fingerprint-input-pinned
+- step: 2
+  phase: pre-deploy
+  action: >-
+    Prove the envelope validator actually enforces the scope block rather than tolerating its absence.
+  command: bin/venv-python -m pytest tests/test_ci_rca_log_evidence.py -k "scope" -q
+  expected: >-
+    Envelopes missing `scope`, carrying a step set that disagrees with `failed_steps`, or claiming a
+    retrieved log absent from `body`, all raise ValueError. A well-formed envelope validates.
+  fix_if: >-
+    A tolerated-unknown-key pass means _validate_scope is not wired into validate_envelope. Wire it in;
+    do not rely on the producer always emitting the field.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: >-
+    Step 1 graduates the load-bearing invariant for this plan; this module's validator suite is
+    standing coverage already reached by the registry's existing log-evidence rows.
+- step: 3
+  phase: pre-deploy
+  action: >-
+    Prove the declaration survives the whole producer-to-bundle path, using a fixture with the exact
+    step shape of run 30615075007 (step 15 failure, 16 skipped, 17 success).
+  command: bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py tests/test_ci_rca_evidence_input.py -q
+  expected: >-
+    _failed_jobs retains all three steps; the envelope's scope marks 16 and 17 unretrieved; and
+    load_retrieval_input carries `scope` through into retrieval_evidence rather than dropping it at the
+    fixed key tuple.
+  fix_if: >-
+    If scope is present on disk but missing from retrieval_evidence, the key tuple in
+    evidence_input.load_retrieval_input was not extended.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: >-
+    Path-continuity across three modules is not one canonical primitive slot; step 4 graduates the
+    behavioural consequence that matters.
+- step: 4
+  phase: pre-deploy
+  action: >-
+    Replay rec-2923's own defect - a why_chain asserting the convergence record was not latched red,
+    against a bundle whose scope marks step 17 unretrieved - and confirm check-5 catches it.
+  command: bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_runtime.py -k "check_5 or unobserved_step" -q
+  expected: >-
+    The rec-2923 replay is stamped with the check-5 warn_mode_reject tag in warn mode and raises in
+    strict mode. A control rec asserting only about the retrieved failed step is not stamped, and a
+    bundle with no scope block degrades gracefully without stamping.
+  fix_if: >-
+    If the control rec is stamped, the step-name matcher is over-broad - tighten it to explicit step
+    references. Never weaken the positive case to make the control pass.
+  hermetic: true
+  graduation: graduate
+  graduation_check_id: ci-rca-unobserved-step-assertion-rejected
+- step: 5
+  phase: pre-deploy
+  action: >-
+    Confirm the schema bump is total and the S1 linkage guard moved with it.
+  command: >-
+    bin/venv-python -m pytest tests/checks/ci_guards/test_validate_actions_evidence.py -q &&
+    ! grep -rn "ci-rca-log-evidence/v1" scripts/ docs/contracts/ .github/
+  expected: >-
+    The guard suite passes against the v2 contract, and no live code or contract path still names v1.
+    Historical plan documents under docs/plans/ are deliberately excluded from the grep.
+  fix_if: >-
+    A surviving v1 string in scripts/ or docs/contracts/ means the bump is partial - a partial bump is
+    worse than none, because the guard then pins a schema the producer no longer emits.
+  hermetic: true
+  graduation: graduate
+  graduation_check_id: ci-rca-log-evidence-schema-v2-total
+- step: 6
+  phase: pre-deploy
+  action: >-
+    Confirm the GAL-03 surface is untouched - the "Fetch failed run logs" step's run scalar and env
+    mapping must be byte-identical, since PLAN-ci-rca-authority-anchor snapshots them.
+  command: >-
+    git diff origin/main -- .github/workflows/ci-rca.yml | tee /dev/stderr | wc -l | grep -qx 0 &&
+    bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_and_canary.py -q
+  expected: >-
+    Zero diff lines against origin/main for ci-rca.yml, and the existing CI-RCA workflow structural
+    suite passes unchanged.
+  fix_if: >-
+    Any diff to ci-rca.yml means this plan has strayed onto GAL-03's surface. Revert it and move the
+    change behind the module boundary instead.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: >-
+    The assertion is a diff against origin/main, which depends on this session's branch state rather
+    than on a stable repository property, so it is not expressible as a standing registry check.
+- step: 7
+  phase: pre-deploy
+  action: >-
+    Run focused lint and the fast presubmit before commit, then rerun this literal command after the
+    feat commit exists so VP replay and differential graduation observe committed state.
+  command: >-
+    bin/venv-python -m ruff check scripts/ci_rca/ scripts/ops_portal/ci_rca_runtime.py
+    scripts/checks/ci_guards/validate_actions_evidence.py && bin/venv-python -m scripts.validate --pre
+  expected: Ruff and the complete fast validator exit zero on both the working tree and the committed tree.
+  fix_if: Stop and repair the implementation, tests, registry row, or plan; never report constituent passes as gate success.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: Aggregate lint plus presubmit is an orchestration gate, not one registry node.
+- step: 8
+  phase: pre-deploy
+  action: >-
+    Run literal full validation before commit and again after the feat commit; retain both zero exit
+    statuses as blocking release evidence.
+  command: bin/venv-python -m scripts.validate
+  expected: >-
+    Exit zero, including 100 percent changed-source coverage, full pytest, workflow guards, plan
+    replay, verification registry, and pre-commit checks.
+  fix_if: >-
+    Stop before push or PR and add behavior-relevant tests or correct the failure; do not waive
+    coverage, lower thresholds, or characterise a nonzero validator as unrelated.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: The full repository validator is not one stable registry node.
+constraints:
+- >-
+  Do NOT change the retrieval mechanism. `gh run view --log-failed` stays, ci-rca.yml is not edited at
+  all, and the fallback's per-job selection is untouched. Widening retrieval would amend Decision 72's
+  named clause and collide with PLAN-ci-rca-authority-anchor.
+- >-
+  Do NOT let scope text enter `body`. `body` is the substrate
+  `evidence.error_signature_from_log_tail` hashes into the non-pytest fingerprint; any leak forks
+  Decision 142's v2 keyspace and orphans every open chain.
+- >-
+  SEQUENCING: PLAN-ci-rca-authority-anchor (GAL-03, approved, agent waiting) also edits
+  `config/agent/verification_registry/registry.yaml`. Land GAL-03 first and rebase this work behind it;
+  both plans add rows to the same file.
+- >-
+  scripts/ops_portal/ci_rca_runtime.py is 437 SLOC against the 500 default. If check-5 would cross the
+  budget, DECOMPOSE the cross-check family into its own submodule (Decision 128 decompose-by-default) -
+  do not raise the budget and do not run --update-sloc-budgets as the fix.
+- >-
+  All recommendation writes transit the ops portal (Decision 84). Nothing in this plan edits
+  logs/.recommendations-log.jsonl.
+- No rescue agents or workaround loops (Decision 55).
+context:
+- >-
+  "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (round 2 of 2; round 1
+  FLAGS_FOUND against a superseded approach that widened retrieval). CITE: Decision 72, Decision 142,
+  Decision 55, Decision 101, Decision 126, Decision 154, Decision 158, Decision 84, Decision 132,
+  Decision 48, Decision 135, Decision 86, Decision 67. Scout adjudications carried into this plan:
+  (a) no Decision 72 amend-forward obligation fires, and the Decision 142 keyspace split is avoided
+  provided the pinned-body invariant is asserted by a test; (b) the round-1 Decision 154 flag is fully
+  resolved - REVISE-latches-red / STARVED-does-not is Decision 154's own ratified distinction, not a
+  narrowing of it; (d) no decision mandates a split, and if split the seam is items 1-2 versus 3-6,
+  which is the seam used."
+- >-
+  "gates: decision-scout=FLAGS_FOUND after 2 round(s); plan-critique=<verdict> after <N> round(s)"
+- >-
+  Origin: rec-2923 (Critical, open, source=ci_rca) filed a factually wrong why_chain for run
+  30615075007. It asserted that the same-budget STARVED retry ran and also starved, and that apply was
+  blocked WITHOUT latching the convergence record red. The job logs show neither: PR #812 (rec-2924)
+  established that inherited errexit aborted the composite step at the first classifier call, so the
+  retry never ran, `outcome` was never written, and step 17 wrote status=red for a run in which
+  terraform apply was skipped.
+- >-
+  Root cause of the mis-narration: `gh run view --log-failed` returns only failed steps, so step 17 -
+  the always-run step where the failure's observable consequence landed - was structurally invisible to
+  the agent. Step 15's own log ends abruptly with no "Reviewer verdict:" line, and the agent filled the
+  gap by narrating action.yml's intended control flow as observed fact.
+- >-
+  Relationship to the GAL-01 audit (audits/github-actions-log-management-c144530f02d1): GAL-01 replaced
+  an unbounded whole-run `gh run view --log` fallback with a bounded failed-jobs-only selection plus a
+  truncation envelope. It did NOT introduce the blind spot - `--log-failed` was always the primary path
+  and returned non-empty here, so the fallback would not have fired even pre-GAL-01. What GAL-01 did do
+  is build the envelope, and the envelope declares only VOLUME (`limits.complete`, `truncation_reason`,
+  `omitted_bytes`). The audit asked "Can truncation bias diagnosis?" and never asked whether SCOPE can.
+  Its acceptance wording - "retain failed job/step identity" - treats the failed-step universe as given.
+  This plan completes that envelope on the axis the audit did not examine.
+- >-
+  The asymmetry is what makes it dangerous: volume truncation is declared, so the agent can see it and
+  hedge; scope exclusion is silent, so the agent cannot know what it was not given.
+- >-
+  Second gap found during scoping: `retrieval_evidence` is already attached to every bundle
+  (scripts/ci_rca/evidence.py:551), but `.claude/agents/scheduled/ci-rca.md` Step 2 never lists it among
+  the bundle's RCA-relevant fields. Even GAL-01's existing volume signal is undocumented to its only
+  consumer.
+- >-
+  Decision 59 SPIRIT flag, accepted rather than deferred: the defect originated in the LLM layer, so a
+  prompt-only rule would re-rely on the layer that failed. Hence check-5 in ci_rca_runtime.py as a
+  deterministic write-time backstop, sitting in the existing numbered cross-check family.
+- >-
+  Deliberately OUT of scope, and carried by the follow-on plan: the STARVED transcript archival to the
+  private ci-rca-evidence prefix, the Decision 155 STARVED-rate marker, rec-2664 (reconcile.yml leaves
+  no durable rec on STARVED), and the composite-action errexit guard generalising PR #812. The scout
+  raised two flags that land on that plan, not this one - Decision 144 (a new s3:PutObject from an
+  identity that may not hold the grant) and Decision 61 (the new rec needs a registered `source`).
+- >-
+  rec-2923 itself is NOT closed by this plan. Its why_chain correction and closure belong with the
+  STARVED-surface plan that fixes the reviewer path it cites; Decision 142 requires the correction to
+  land while the rec is still open, and closure to run through a `Resolves:` trailer so
+  stamp_fixed_by_sha fires.
+- >-
+  T2.39's exit criteria c2 (same-budget retry) and c3 (STARVED never latches red) are marked `met` in
+  the roadmap but were structurally dead code from the day they landed until PR #812 - they were
+  verified by unit-testing review_verdict.py's exit contract, never by driving the composite step under
+  the `bash --noprofile --norc -e -o pipefail` invocation GitHub actually uses. No criterion flip is
+  owed now that #812 has restored them; the lesson is recorded here and generalised by the follow-on
+  plan's errexit guard.
+pre_implementation_checklist:
+- Branch confirmed not on main
+- docs/PROJECT_CONTEXT.md read
+- DECISIONS.md read
+- PLAN-ci-rca-authority-anchor has merged, and this branch is rebased on top of it
+- All files in scope located and readable
+- Acceptance criteria understood and verifiable
+execution_steps:
+- >-
+  scripts/ci_rca/fetch_logs.py - widen `_failed_jobs()` to retain every step of each failed job
+  (step_index, name, conclusion) alongside the existing `failed_steps` list, then emit a top-level
+  `scope` block in the envelope built in `fetch_run_log()` recording, per job, the executed step table
+  and a per-step retrieved flag. Leave the `gh run view --log-failed` primary call, `_fallback_logs`,
+  and the `body` blob untouched.
+- >-
+  scripts/ci_rca/log_evidence.py - bump SCHEMA to "ci-rca-log-evidence/v2"; add `_validate_scope()`
+  asserting the scope block exists, its step set is a superset of `failed_jobs[].failed_steps` and
+  agrees with it on conclusions, indexes are sorted and unique, and no step is flagged retrieved whose
+  content is absent from `body`; call it from `validate_envelope()`.
+- >-
+  scripts/ci_rca/evidence_input.py - add "scope" to the key tuple `load_retrieval_input()` projects
+  into retrieval_evidence.
+- >-
+  scripts/ops_portal/ci_rca_runtime.py - add cross-check check-5 to `_cross_check_bundle`, following
+  the existing `[CI_RCA_CROSS_CHECK check-N]` message and `_CROSS_CHECK_TAG_RE` tagging shape: when the
+  verified bundle carries retrieval_evidence.scope, flag a why_chain or gap_explanation that references
+  a step marked unretrieved. Degrade silently when no scope is present (older bundles). If this crosses
+  the 500-SLOC budget, decompose the cross-check family into a submodule instead of raising.
+- >-
+  scripts/checks/ci_guards/validate_actions_evidence.py and docs/contracts/github-actions-evidence.yaml
+  - move the pinned schema string to v2 in the same commit as the producer bump; all three pins must
+  move together.
+- >-
+  docs/contracts/ci-rca-lifecycle.yaml - record the scope field's semantics and the UNOBSERVED
+  obligation it creates, in the owning contract (Decision 86, no new prose doc).
+- >-
+  .claude/agents/scheduled/ci-rca.md - add retrieval_evidence.limits and retrieval_evidence.scope to
+  Step 2's bundle field list, and state the UNOBSERVED rule: a step present in the scope declaration but
+  marked unretrieved was not observed; assert nothing about it, and prefer an explicit undetermined over
+  an inferred control-flow narration.
+- >-
+  Add the tests named in the Scope table, including the rec-2923 replay fixture (step 15 failure, 16
+  skipped, 17 success) used by VP steps 3 and 4, and the pinned-body invariant test used by VP step 1.
+- >-
+  config/agent/verification_registry/registry.yaml - add the three `graduate` rows named in the VP
+  (ci-rca-scope-fingerprint-input-pinned, ci-rca-unobserved-step-assertion-rejected,
+  ci-rca-log-evidence-schema-v2-total), following the existing ci-rca row shape.
+- >-
+  Execute Verification Plan - run each step; loop until pass; on unrecoverable V3 failure stop and RCA
+  (Decision 55).
+- 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Revert as one commit. The schema bump, the guard pin, and the contract string must move together in
+  either direction - a partial revert leaves the S1 guard pinning a schema the producer no longer emits,
+  which is worse than either end state. Because `body` is unchanged by construction, no fingerprint
+  backfill or chain repair is needed on revert.
