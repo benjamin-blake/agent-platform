@@ -390,3 +390,15 @@ class TestCategoryTagsIntegration:
         counts = Counter(tag for entry in live for tag in entry["category_tags"])
         for tag, count in counts.items():
             assert count / len(live) <= 0.40, f"tag {tag!r} covers {count}/{len(live)} live entries -- too broad"
+
+
+class TestCommittedIndexSizePin:
+    """AC1 / VP step 1 graduation candidate 'decisions-index-live-count-matches-file': the
+    committed docs/decisions-index.json stays within its 110,000-byte pin, so the figure recorded
+    in the governing Decision cannot silently drift upward without review."""
+
+    def test_committed_index_under_110000_byte_pin(self) -> None:
+        from scripts.decisions_index import _EXPORT_PATH
+
+        size = len(_EXPORT_PATH.read_bytes())
+        assert size <= 110_000, f"committed index is {size} bytes, over the 110,000-byte pin"

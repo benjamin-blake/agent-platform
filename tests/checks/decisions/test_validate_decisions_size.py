@@ -179,3 +179,14 @@ class TestValidateDecisionsSizeRegisteredCheck:
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_decisions_size(failed)
         assert "DECISIONS size governance" in failed
+
+
+class TestLiveByteCeilingRetired:
+    """VP step 6 / graduation candidate 'decisions-live-ceiling-retired-others-intact':
+    _DECISIONS_LIVE_MAX_BYTES (Decision 145's stopgap) no longer exists as a module attribute --
+    a standing regression guard against reintroducing the retired ceiling."""
+
+    def test_live_max_bytes_constant_does_not_exist(self) -> None:
+        import scripts.checks.decisions.validate_decisions_size as m
+
+        assert not hasattr(m, "_DECISIONS_LIVE_MAX_BYTES")
