@@ -84,12 +84,18 @@ scope:
     differential. These assertions are pure regex and need no heavy import, so a guard-free module buys
     real fast-tier coverage. Asserts the PRE-fix pattern rejects `.github/workflows/ci.yml:12`, the
     post-fix accepts it, and every previously-accepted extension still matches.
-- file: tests/session/preflight/test_ci_rca_signals.py
-  action: Modify
+- file: tests/session/preflight/test_ci_rca_signals_abstention_matrix.py
+  action: Create
   purpose: >-
-    Add TestAbstentionSurfaceConfidenceMatrix - low surfaces, undetermined still surfaces, high and
-    medium do not, absent rca_confidence does not; the retitled section keeps both asserted substrings;
-    the overflow label at line 118 matches the widened wording.
+    REALIZED DIFFERENTLY from the original "Modify tests/session/preflight/test_ci_rca_signals.py"
+    plan: that file carries a module-level `boto3 = pytest.importorskip("boto3")` guard (for other,
+    unrelated tests) that skips the WHOLE MODULE on the fast pr-validate tier (no boto3 there) -- the
+    interactive VP-replay gate (T3.15 c2) reads that as a hard failure (exit 4, no collectors) rather
+    than a benign skip, exactly the reason the citation-pattern class landed in its own guard-free
+    file. TestAbstentionSurfaceConfidenceMatrix - low surfaces, undetermined still surfaces, high and
+    medium do not, absent rca_confidence does not; the retitled section keeps both asserted
+    substrings; the overflow label matches the widened wording - lands here instead;
+    tests/session/preflight/test_ci_rca_signals.py carries only a pointer comment.
 - file: tests/test_ci_rca_probe_health.py
   action: Modify
   purpose: >-
@@ -102,9 +108,17 @@ scope:
 - file: tests/session/preflight/test_ci_rca_gauges.py
   action: Modify
   purpose: >-
-    Add TestAbstentionLabelAccuracy, AND migrate the 8 existing assertions that hardcode
-    `undetermined_count` (lines 32, 41, 49, 65, 80, 86-89, 148) - this is a rename migration across the
-    file, not one class appended.
+    Migrate the 8 existing assertions that hardcode `undetermined_count` (lines 32, 41, 49, 65, 80,
+    86-89, 148) - this is a rename migration across the file. TestAbstentionLabelAccuracy is added
+    in a NEW sibling file instead (see tests/session/preflight/test_ci_rca_gauges_abstention_label.py
+    below) - this file's module-level `boto3 = pytest.importorskip("boto3")` guard would skip it on
+    the fast pr-validate tier.
+- file: tests/session/preflight/test_ci_rca_gauges_abstention_label.py
+  action: Create
+  purpose: >-
+    REALIZED DIFFERENTLY from the original "add TestAbstentionLabelAccuracy to
+    tests/session/preflight/test_ci_rca_gauges.py" plan, for the same importorskip-guard reason as
+    the sibling test_ci_rca_signals_abstention_matrix.py split above.
 - file: tests/test_session_preflight_decomposition.py
   action: Modify
   purpose: >-
@@ -233,7 +247,7 @@ verification_plan:
 - step: 2
   phase: pre-deploy
   action: Prove the abstention surface admits low and still excludes high, medium and absent.
-  command: bin/venv-python -m pytest tests/session/preflight/test_ci_rca_signals.py::TestAbstentionSurfaceConfidenceMatrix
+  command: bin/venv-python -m pytest tests/session/preflight/test_ci_rca_signals_abstention_matrix.py::TestAbstentionSurfaceConfidenceMatrix
   expected: >-
     A `low` fixture surfaces; `undetermined` still does; `high`, `medium` and a rec with no
     rca_confidence do not. The retitled section retains "CI-RCA Abstention Review" and "Decision 73
@@ -262,7 +276,7 @@ verification_plan:
 - step: 4
   phase: pre-deploy
   action: Prove no emitted string still labels the widened set "undetermined".
-  command: bin/venv-python -m pytest tests/session/preflight/test_ci_rca_gauges.py::TestAbstentionLabelAccuracy
+  command: bin/venv-python -m pytest tests/session/preflight/test_ci_rca_gauges_abstention_label.py::TestAbstentionLabelAccuracy
   expected: The gauge dict key and the printed label both name the widened set.
   fix_if: A surviving "undetermined" label means the predicate moved but the prose did not - the same one-word-two-sets defect, relocated.
   hermetic: true

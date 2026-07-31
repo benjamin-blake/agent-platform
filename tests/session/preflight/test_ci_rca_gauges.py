@@ -17,6 +17,11 @@ boto3 = pytest.importorskip("boto3")
 
 from tests.fixtures.session_preflight_module import preflight as _preflight  # noqa: E402
 
+# TestAbstentionLabelAccuracy lives in test_ci_rca_gauges_abstention_label.py -- this file's
+# module-level `boto3 = pytest.importorskip("boto3")` guard (line 16 above) would skip it on the
+# fast pr-validate tier (no boto3 there), which the interactive VP-replay gate reads as a hard
+# failure rather than a benign skip.
+
 
 class TestAbstentionGauge:
     """T1.13 c12(i): _compute_ci_rca_abstention / _escalate_ci_rca_probe_health / preflight report JSON."""
@@ -94,24 +99,6 @@ class TestAbstentionGauge:
         _preflight.print_ci_rca_abstention_gauge(None)
         out = capsys.readouterr().out
         assert out == ""
-
-
-class TestAbstentionLabelAccuracy:
-    """PLAN-ci-rca-abstention-and-citation AC5: the gauge dict key and the printed label both
-    name the widened {low, undetermined} set -- no surviving 'undetermined'-only label."""
-
-    def test_compute_gauge_key_is_low_or_undetermined_count(self) -> None:
-        with patch("scripts.ci_rca.probe_health.compute_abstention_rate", return_value=(3, 6, 0.5)):
-            gauge = _preflight._compute_ci_rca_abstention([{"id": "rec-1"}], window_days=14)
-        assert "low_or_undetermined_count" in gauge
-        assert "undetermined_count" not in gauge
-
-    def test_printed_label_names_widened_set(self, capsys: pytest.CaptureFixture) -> None:
-        gauge = {"low_or_undetermined_count": 4, "total_count": 16, "rate": 0.25, "window_days": 14}
-        _preflight.print_ci_rca_abstention_gauge(gauge)
-        out = capsys.readouterr().out
-        assert "low-confidence/undetermined" in out
-        assert "4/16" in out
 
     def test_main_report_contains_abstention_gauge_fields(self, tmp_path: Path) -> None:
         """The gauge fields appear in the preflight report JSON, computed from the warm cache."""
