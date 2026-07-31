@@ -41,12 +41,12 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
    - **CONTRADICT** -- the proposed approach violates an active decision.
    - **RELATED** -- in the neighbourhood but does not directly govern; worth mentioning, not mandatory.
    - **IRRELEVANT** -- discard now; every other bucket, plus any SPIRIT candidate (step 8), is SHORTLISTED.
-   BIAS TOWARD INCLUSION here: many decisions govern by PROCESS CATEGORY (Lambda packaging/deploy,
-   Terraform apply routing, IAM/Secrets scoping, egress budgets), not topic keyword -- e.g. ANY new
-   Lambda touches the Lambda-packaging/deploy-channel decisions regardless of what it does. If the
-   approach's scope files or action touch a category a title names, shortlist it even with zero
-   lexical overlap; mark IRRELEVANT only when clearly off-topic. A spurious read is cheap; a missed
-   governing decision is not.
+   MANDATORY CATEGORY SHORTLIST: many decisions govern by ARTIFACT TYPE, not topic keyword -- e.g.
+   ANY new Lambda touches the Lambda-packaging/deploy-channel decisions regardless of what it does.
+   If the approach creates or touches a Lambda, a Terraform resource, an IAM role, or a Secrets
+   Manager entry, shortlist EVERY live title containing that same noun, even with zero excerpt
+   overlap; do not rely on judgment alone here. Mark IRRELEVANT only when clearly off-topic. A
+   spurious read is cheap; a missed governing decision is not.
 
 4. **Targeted read.** For every shortlisted entry, locate its heading (`rg -n "^## Decision N:" docs/DECISIONS.md`) and Read with offset/limit spanning just that heading through the next -- one section, never the source file wholesale. Confirm or refine the provisional classification against the full text; a shortlisted entry's SPIRIT quote (step 8) may be any verbatim sentence from that section, not only the excerpt.
 
