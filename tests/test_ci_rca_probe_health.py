@@ -15,6 +15,10 @@ import pytest
 from scripts.ci_rca.probe_health import (
     ABSTENTION_MIN_SAMPLE,
     ABSTENTION_RATE_THRESHOLD,
+    _build_context,
+    _build_rec_fields,
+    _parse_ts_utc,
+    _row_ts,
     compute_abstention_rate,
     escalate,
     escalation_action,
@@ -39,8 +43,73 @@ def _rec(source: str, created_days_ago: float, rca_confidence: str | None = None
 
 
 # ---------------------------------------------------------------------------
+# _parse_ts_utc / _row_ts (pre-existing gaps, now in-diff since probe_health.py is touched)
+# ---------------------------------------------------------------------------
+
+
+class TestParseTsUtc:
+    def test_parses_z_suffix_iso(self) -> None:
+        dt = _parse_ts_utc("2026-01-01T00:00:00Z")
+        assert dt is not None
+        assert dt.tzinfo is not None
+
+    def test_parses_naive_date_only_format_gets_utc_tzinfo(self) -> None:
+        dt = _parse_ts_utc("2026-01-01")
+        assert dt is not None
+        assert dt.tzinfo == timezone.utc
+
+    def test_unparseable_timestamp_returns_none(self) -> None:
+        assert _parse_ts_utc("not-a-timestamp-at-all") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert _parse_ts_utc("") is None
+
+
+class TestRowTs:
+    def test_missing_field_returns_none(self) -> None:
+        assert _row_ts({}) is None
+
+    def test_datetime_instance_field(self) -> None:
+        dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert _row_ts({"created_timestamp": dt}) == dt
+
+    def test_datetime_instance_field_naive_gets_utc(self) -> None:
+        dt = datetime(2026, 1, 1)
+        result = _row_ts({"created_timestamp": dt})
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+
+    def test_object_with_isoformat_parsed(self) -> None:
+        class _FakeDate:
+            def isoformat(self) -> str:
+                return "2026-01-01T00:00:00"
+
+        result = _row_ts({"created_timestamp": _FakeDate()})
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+
+    def test_object_with_isoformat_that_fails_to_parse_returns_none(self) -> None:
+        class _BadDate:
+            def isoformat(self) -> str:
+                return "not-a-real-date"
+
+        assert _row_ts({"created_timestamp": _BadDate()}) is None
+
+    def test_string_field_delegates_to_parse_ts_utc(self) -> None:
+        result = _row_ts({"created_timestamp": "2026-01-01T00:00:00Z"})
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
 # compute_abstention_rate
 # ---------------------------------------------------------------------------
+
+
+class TestComputeAbstentionRateDefaultNow:
+    def test_default_now_used_when_not_provided(self) -> None:
+        """compute_abstention_rate([]) with no `now` kwarg exercises the datetime.now() default."""
+        undetermined, total, rate = compute_abstention_rate([])
+        assert (undetermined, total, rate) == (0, 0, 0.0)
 
 
 class TestComputeAbstentionRate:
@@ -233,6 +302,23 @@ class TestEscalate:
         assert result == {"action": "file", "rec_id": "rec-9003"}
         mock_file_rec.assert_called_once()
 
+    def test_default_portal_caller_uses_update_rec_for_update(self) -> None:
+        existing = [{"id": "rec-777", "source": "ci_rca_probe_health", "status": "open"}]
+        with patch("scripts.ops_data_portal.update_rec") as mock_update_rec:
+            result = escalate(undetermined_count=6, total_count=10, rate=0.6, open_recs=existing)
+        assert result == {"action": "update", "rec_id": "rec-777"}
+        mock_update_rec.assert_called_once()
+        assert mock_update_rec.call_args[0][0] == "rec-777"
+
+    def test_default_portal_caller_uses_update_rec_for_close(self) -> None:
+        existing = [{"id": "rec-777", "source": "ci_rca_probe_health", "status": "open"}]
+        with patch("scripts.ops_data_portal.update_rec") as mock_update_rec:
+            result = escalate(undetermined_count=1, total_count=20, rate=0.05, open_recs=existing)
+        assert result == {"action": "close", "rec_id": "rec-777"}
+        mock_update_rec.assert_called_once()
+        assert mock_update_rec.call_args[0][0] == "rec-777"
+        assert mock_update_rec.call_args[0][1]["status"] == "closed"
+
     def test_no_reader_constructed_in_read_path(self) -> None:
         """Critical divergence from convergence_health: escalate() never builds a DuckLake reader.
 
@@ -268,6 +354,13 @@ class TestEscalate:
         assert "5%" in updates["resolution"] or "0.05" in updates["resolution"] or "5.0%" in updates["resolution"]
         assert updates["status"] == "closed"
 
+    def test_unknown_action_falls_through_to_skipped(self) -> None:
+        """escalation_action's truth table has exactly four outcomes (file/update/close/none);
+        this exercises escalate()'s defensive fallback for anything else it might ever return."""
+        with patch("scripts.ci_rca.probe_health.escalation_action", return_value="bogus"):
+            result = escalate(undetermined_count=1, total_count=1, rate=1.0, open_recs=[])
+        assert result == {"action": "skipped", "rec_id": None}
+
     def test_threshold_boundary_over_threshold_when_rate_equals_threshold(self) -> None:
         portal_caller = MagicMock(return_value="rec-9005")
         result = escalate(
@@ -278,3 +371,67 @@ class TestEscalate:
             portal_caller=portal_caller,
         )
         assert result["action"] == "file"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-ci-rca-abstention-and-citation AC4/VP3: the gauge counts rca_confidence in {low,
+# undetermined}, and the auto-filed rec's prose describes that widened set truthfully.
+# ---------------------------------------------------------------------------
+
+
+class TestAbstentionGaugeWidened:
+    def test_low_confidence_row_contributes_to_count_and_rate(self) -> None:
+        rows = [
+            _rec("ci_rca", 1, rca_confidence="low"),
+            _rec("ci_rca", 2, rca_confidence="high"),
+        ]
+        undetermined, total, rate = compute_abstention_rate(rows, window_days=14, now=NOW)
+        assert undetermined == 1
+        assert total == 2
+        assert rate == pytest.approx(0.5)
+
+    def test_low_and_undetermined_both_contribute(self) -> None:
+        rows = [
+            _rec("ci_rca", 1, rca_confidence="low"),
+            _rec("ci_rca", 2, rca_confidence="undetermined"),
+            _rec("ci_rca", 3, rca_confidence="medium"),
+        ]
+        undetermined, total, rate = compute_abstention_rate(rows, window_days=14, now=NOW)
+        assert undetermined == 2
+        assert total == 3
+
+    def test_build_context_does_not_claim_probe_abstained(self) -> None:
+        context = _build_context(5, 10, 0.5, 14)
+        assert "abstained" not in context.lower()
+
+    def test_build_context_does_not_point_at_evidence_py(self) -> None:
+        context = _build_context(5, 10, 0.5, 14)
+        assert "scripts/ci_rca/evidence.py" not in context
+
+    def test_build_context_describes_self_rated_confidence(self) -> None:
+        context = _build_context(5, 10, 0.5, 14)
+        assert "low" in context.lower()
+        assert "undetermined" in context.lower()
+
+    def test_build_rec_fields_file_not_evidence_py(self) -> None:
+        fields = _build_rec_fields(5, 10, 0.5, 14)
+        assert fields["file"] != "scripts/ci_rca/evidence.py"
+
+    def test_build_rec_fields_title_does_not_claim_abstention(self) -> None:
+        fields = _build_rec_fields(5, 10, 0.5, 14)
+        assert "abstention" not in fields["title"].lower() and "abstained" not in fields["title"].lower()
+
+    def test_filed_rec_context_and_title_travel_together(self) -> None:
+        """The auto-filed rec (via escalate) carries the same non-abstention-claiming prose."""
+        portal_caller = MagicMock(return_value="rec-9010")
+        escalate(
+            undetermined_count=5,
+            total_count=10,
+            rate=0.5,
+            open_recs=[],
+            portal_caller=portal_caller,
+        )
+        fields = portal_caller.call_args[0][1]
+        assert "abstained" not in fields["context"].lower()
+        assert "scripts/ci_rca/evidence.py" not in fields["context"]
+        assert fields["file"] != "scripts/ci_rca/evidence.py"

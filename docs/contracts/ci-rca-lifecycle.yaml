@@ -130,6 +130,44 @@ constraints:
   - "The inactivity sweep reads via DuckLake reader named verbs only; never re-stages from logs/.recommendations-log.jsonl."
   - "All rec writes (fix-link stamp, regression filing, inactivity close) transit the ops portal (file_rec/update_rec) -- Decision 84 single-portal invariant."
 
+# PLAN-ci-rca-abstention-and-citation: the abstention-review surface (session_preflight's
+# "CI-RCA Abstention Review" section) and the probe-health gauge (scripts/ci_rca/probe_health.py)
+# both key on the SAME set, which is wider than a literal probe abstention.
+abstention_surface:
+  scope: >-
+    rca_confidence in {low, undetermined} -- not undetermined alone. A self-rated `low` RCA
+    confidence is not sound either, even though the deterministic evidence bundle did classify it
+    (undetermined is the probe's own abstention; low is the agent's own confidence rating). Both
+    the preflight abstention-review section (scripts/preflight/ci_rca_signals.py) and the
+    probe-health rate gauge (scripts/ci_rca/probe_health.py compute_abstention_rate /
+    scripts/preflight/ci_rca_gauges.py's `low_or_undetermined_count` gauge key) widen together --
+    moving one without the other relocates the one-word-two-sets defect instead of fixing it.
+  advisory_not_gating: >-
+    This surface is advisory visibility only, not a new gate. print_ci_rca_recs' SOFT/HARD open-rec
+    split (the actual /plan block) is untouched by this widening -- a rec can appear in the
+    abstention-review section while also being HARD BLOCK, SOFT, or neither, independently.
+  back_validate_reclassification: >-
+    The citation-pattern widening (_WHY_CHAIN_CITATION_RE now accepts `.yml`, not just `.yaml`) has
+    a benign second-order effect on back_validate_ci_rca (scripts/ops_portal/ci_rca_runtime.py):
+    any warn-period rec whose sole non-conformance was a `.yml` file:line citation the old pattern
+    rejected reclassifies non_conformant -> conformant the next time back-validation recomputes
+    against the current schema, since back-validation always re-checks against the schema live at
+    read time (docstring, ci_rca_runtime.py:264), never the schema live when the rec was filed.
+
+procedure:
+  correct_rec_context: >-
+    scripts.ops_portal.ci_rca_lifecycle.correct_rec_context(rec_id, context_updates,
+    row_updates=None, profile=None) -- the tested, portal-only route for correcting a
+    factually-wrong context_v2_json narrative on an OPEN ci_rca rec (never a closed head; bump_rule
+    above forbids mutating one). Shallow-merges context_updates into the FULL existing blob
+    (preserving fingerprint/evidence_bundle_ref/etc, never a partial-column overwrite), refuses to
+    write unless the read blob already carries a fingerprint, and refuses when the merged context
+    fails _validate_ci_rca_context_v2 -- both refusals raise before any write. row_updates carries
+    row-level fields (e.g. title) that update_rec content-gates in the same call. Example (rec-2923,
+    PLAN-ci-rca-abstention-and-citation step 6):
+    `bin/venv-python -c "from scripts.ops_portal.ci_rca_lifecycle import correct_rec_context;
+    correct_rec_context('rec-2923', {...}, row_updates={'title': '...'})"`.
+
 # PLAN-ci-rca-ops-plane-coverage (rec-2849): ci-rca.yml's workflow_run.workflows filter -- the
 # required-membership floor scripts/verify_ci_workflow.py's _check_ci_rca_filter guards against
 # silent removal. Growth beyond this set is governed by the per-entry adjudication requirement

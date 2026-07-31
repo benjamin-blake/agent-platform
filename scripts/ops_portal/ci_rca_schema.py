@@ -35,7 +35,7 @@ _WHY_CHAIN_SYSTEMIC_KEYWORDS = frozenset(
         "enforcement",
     }
 )
-_WHY_CHAIN_CITATION_RE = re.compile(r"[\w./-]+\.(py|yaml|tf|md|sh):\d+")
+_WHY_CHAIN_CITATION_RE = re.compile(r"[\w./-]+\.(py|yaml|yml|tf|md|sh):\d+")
 
 
 class _EvidenceBundleRef(BaseModel):
