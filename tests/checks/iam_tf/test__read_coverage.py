@@ -13,6 +13,7 @@ import pytest
 
 from scripts.checks.iam_tf._read_coverage import (
     CHECKED_TYPES,
+    _action_granted,
     _action_matches,
     _check_resource,
     _classify,
@@ -20,6 +21,8 @@ from scripts.checks.iam_tf._read_coverage import (
     _extract_capitalized_field,
     _literal_or_prefix_match,
     _parse_bootstrap_statements,
+    _parse_boundary_dataplane_statement,
+    _parse_managed_policy_statements,
     _resolve_resource_name,
     _resolve_role_statements,
     _resolve_value,
@@ -27,6 +30,19 @@ from scripts.checks.iam_tf._read_coverage import (
     _scan_resources,
     _split_top_level_objects,
 )
+
+# A customer-managed policy in the rec-2793 hoisted-local shape: its document is assigned in a
+# `locals` block ABOVE the resource that references it, which is the shape a size precondition forces.
+_MANAGED_POLICY_TF = """
+locals {
+  boundary_policy_json = jsonencode({
+    Statement = [{ Sid = "DataPlaneAllow", Effect = "Allow", Action = ["lambda:*", "iam:PassRole"], Resource = ["*"] }]
+  })
+}
+resource "aws_iam_policy" "github_ci_apply_boundary" {
+  policy = local.boundary_policy_json
+}
+"""
 
 
 class TestReadCoverageHelpers:
@@ -153,6 +169,28 @@ resource "aws_iam_role_policy" "github_ci_apply" {
 }
 """
         assert _parse_bootstrap_statements(text, "github_ci_apply") == []
+
+    def test_parse_managed_policy_statements_absent_resource_returns_empty(self) -> None:
+        """Load-bearing: an absent managed policy yields [] rather than raising, so a
+        single-inline-policy tree stays parseable; callers that REQUIRE it assert on the length."""
+        assert _parse_managed_policy_statements("# no aws_iam_policy here", "github_ci_apply_reads") == []
+
+    def test_parse_managed_policy_statements_parses_a_declared_policy(self) -> None:
+        stmts = _parse_managed_policy_statements(_MANAGED_POLICY_TF, "github_ci_apply_boundary")
+        assert len(stmts) == 1
+        assert (stmts[0]["sid"], stmts[0]["effect"]) == ("DataPlaneAllow", "Allow")
+
+    def test_parse_boundary_dataplane_statement_follows_the_hoisted_local(self) -> None:
+        """The boundary document lives in a `locals` block ABOVE its resource, so a forward search
+        from the resource match finds nothing -- the shared locator must resolve the indirection, or
+        every boundary-ceiling check fails closed the moment the boundary grows a size precondition."""
+        stmt = _parse_boundary_dataplane_statement(_MANAGED_POLICY_TF)
+        assert stmt is not None and stmt["sid"] == "DataPlaneAllow"
+        assert stmt["actions"] == ["lambda:*", "iam:PassRole"]
+
+    def test_parse_boundary_dataplane_statement_without_that_sid_returns_none(self) -> None:
+        """A boundary policy whose statements carry some other Sid is not the DataPlaneAllow ceiling."""
+        assert _parse_boundary_dataplane_statement(_MANAGED_POLICY_TF.replace("DataPlaneAllow", "SomeOtherSid")) is None
 
     def test_resolve_value_none_input_returns_none(self) -> None:
         assert _resolve_value(None, {}, {}) is None
@@ -397,3 +435,155 @@ class TestCheckResource:
         assert was_checked is True
         assert len(findings) == 1
         assert "is not refresh-read-covered" in findings[0]
+
+
+class TestActionGranted:
+    """_action_granted generalises on the GRANT side -- the mirror image of _action_matches.
+
+    A literal requirement is satisfied by a wildcard grant that genuinely covers it, and by
+    nothing else. This is what lets an exact ALL-OF set distinguish `secretsmanager:Get*` (which
+    does grant GetSecretValue) from `secretsmanager:Describe*` (which does not) -- the distinction
+    the shared Describe*/Get* marker pair structurally could not draw.
+    """
+
+    def test_literal_grant_satisfies_exact_requirement(self) -> None:
+        assert _action_granted("secretsmanager:GetSecretValue", ["secretsmanager:GetSecretValue"]) is True
+
+    def test_covering_wildcard_grant_satisfies_exact_requirement(self) -> None:
+        assert _action_granted("secretsmanager:GetSecretValue", ["secretsmanager:Get*"]) is True
+        assert _action_granted("secretsmanager:DescribeSecret", ["secretsmanager:Describe*"]) is True
+
+    def test_non_covering_wildcard_grant_does_not_satisfy(self) -> None:
+        """The load-bearing negative: a metadata wildcard must never stand in for the value read."""
+        assert _action_granted("secretsmanager:GetSecretValue", ["secretsmanager:Describe*"]) is False
+        assert _action_granted("secretsmanager:GetSecretValue", ["secretsmanager:List*"]) is False
+
+    def test_unrelated_literal_grant_does_not_satisfy(self) -> None:
+        assert _action_granted("secretsmanager:GetResourcePolicy", ["secretsmanager:GetSecretValue"]) is False
+
+
+class TestAllOfReadCoverage:
+    """The ALL-OF refinement: an exact conjunction, per resource instance.
+
+    Every case here is a POSITIVE/NEGATIVE pair, because a coverage rule that cannot fail is worse
+    than no rule -- it manufactures a green for the wrong reason and lets an AccessDenied live at
+    plan time on a future non-enumerated secret.
+    """
+
+    _KEY = "k:"
+    _PREFIX = "arn:aws:secretsmanager:eu-west-2:1234567890:secret:agent-platform-*"
+
+    def _stmt(self, actions: list[str], resource: str) -> dict:
+        return {"sid": None, "actions": actions, "resources_raw": f'"{resource}"', "effect": "Allow"}
+
+    def _version_attrs(self) -> dict:
+        return {("data:aws_secretsmanager_secret_version", "v"): {"secret_id": '"agent-platform-new-secret"'}}
+
+    def _secret_attrs(self) -> dict:
+        return {("aws_secretsmanager_secret", "s"): {"name": '"agent-platform-new-secret"'}}
+
+    def test_only_the_two_secrets_manager_types_declare_an_all_of_set(self) -> None:
+        declared = {rtype for rtype, spec in CHECKED_TYPES.items() if "read_actions_all_of" in spec}
+        assert declared == {"aws_secretsmanager_secret", "data:aws_secretsmanager_secret_version"}
+
+    def test_secret_version_requires_the_value_read_not_merely_a_get_class_action(self) -> None:
+        assert CHECKED_TYPES["data:aws_secretsmanager_secret_version"]["read_actions_all_of"] == (
+            "secretsmanager:GetSecretValue",
+        )
+
+    def test_secret_requires_describe_and_get_resource_policy(self) -> None:
+        assert CHECKED_TYPES["aws_secretsmanager_secret"]["read_actions_all_of"] == (
+            "secretsmanager:DescribeSecret",
+            "secretsmanager:GetResourcePolicy",
+        )
+
+    def test_value_read_at_the_prefix_covers_the_data_source(self) -> None:
+        role_statements = {"apply": [self._stmt(["secretsmanager:Get*"], self._PREFIX)]}
+        findings, was_checked = _check_resource(
+            "data:aws_secretsmanager_secret_version", "v", "n.tf", {}, self._version_attrs(), role_statements, self._KEY
+        )
+        assert findings == []
+        assert was_checked is True
+
+    def test_wide_describe_only_grant_leaves_the_data_source_uncovered(self) -> None:
+        """THE regression this refinement exists to kill: under the pre-split ANY-OF marker pair
+        (Describe*/Get*) this exact fixture passed -- a green for the wrong reason, which would let
+        a data source on a non-enumerated secret AccessDeny live at plan time."""
+        role_statements = {"apply": [self._stmt(["secretsmanager:Describe*", "secretsmanager:List*"], self._PREFIX)]}
+        findings, was_checked = _check_resource(
+            "data:aws_secretsmanager_secret_version", "v", "n.tf", {}, self._version_attrs(), role_statements, self._KEY
+        )
+        assert was_checked is True
+        assert len(findings) == 1, findings
+        assert findings[0].startswith(self._KEY)
+        assert "is not refresh-read-covered" in findings[0]
+        assert "expected ALL of" in findings[0]
+        assert "secretsmanager:GetSecretValue" in findings[0]
+
+    def test_secret_covered_when_both_halves_are_granted(self) -> None:
+        role_statements = {
+            "apply": [self._stmt(["secretsmanager:Describe*", "secretsmanager:GetResourcePolicy"], self._PREFIX)]
+        }
+        findings, was_checked = _check_resource(
+            "aws_secretsmanager_secret", "s", "n.tf", {}, self._secret_attrs(), role_statements, self._KEY
+        )
+        assert findings == []
+        assert was_checked is True
+
+    def test_secret_covered_when_the_two_halves_live_in_separate_statements(self) -> None:
+        """ALL-OF is per required action, not per statement: two statements each covering the
+        instance, one granting each half, is a correct grant surface."""
+        role_statements = {
+            "apply": [
+                self._stmt(["secretsmanager:Describe*"], self._PREFIX),
+                self._stmt(["secretsmanager:GetResourcePolicy"], self._PREFIX),
+            ]
+        }
+        findings, _ = _check_resource(
+            "aws_secretsmanager_secret", "s", "n.tf", {}, self._secret_attrs(), role_statements, self._KEY
+        )
+        assert findings == []
+
+    def test_secret_uncovered_when_only_the_describe_half_is_granted(self) -> None:
+        role_statements = {"apply": [self._stmt(["secretsmanager:Describe*"], self._PREFIX)]}
+        findings, was_checked = _check_resource(
+            "aws_secretsmanager_secret", "s", "n.tf", {}, self._secret_attrs(), role_statements, self._KEY
+        )
+        assert was_checked is True
+        assert len(findings) == 1, findings
+        assert "expected ALL of" in findings[0]
+        assert "secretsmanager:GetResourcePolicy" in findings[0]
+
+    def test_secret_uncovered_when_the_covering_statement_misses_the_resource(self) -> None:
+        """Both halves granted, but at a scope that does not reach this instance -- still a finding."""
+        other = "arn:aws:secretsmanager:eu-west-2:1234567890:secret:other-prefix-*"
+        role_statements = {"apply": [self._stmt(["secretsmanager:Describe*", "secretsmanager:GetResourcePolicy"], other)]}
+        findings, _ = _check_resource(
+            "aws_secretsmanager_secret", "s", "n.tf", {}, self._secret_attrs(), role_statements, self._KEY
+        )
+        assert len(findings) == 1, findings
+
+    def test_any_of_types_are_unchanged_by_the_refinement(self) -> None:
+        """Byte-for-byte behaviour preservation: a type with no read_actions_all_of key keeps the
+        historical ANY-OF semantics -- ONE marker action on a covering Resource is enough."""
+        assert "read_actions_all_of" not in CHECKED_TYPES["aws_lambda_function"]
+        statements = [{"actions": ["lambda:Get*"], "resources_raw": '"arn:aws:lambda:::function:agent-platform-*"'}]
+        assert (
+            _resource_covered(
+                "aws_lambda_function",
+                "fn",
+                "agent-platform-fn",
+                CHECKED_TYPES["aws_lambda_function"]["read_actions"],
+                statements,
+            )
+            is True
+        )
+
+    def test_all_of_flag_alone_flips_the_verdict_on_one_fixture(self) -> None:
+        """Same statements, same action tuple, opposite verdicts -- proof the flag is what bites,
+        not an incidental difference between two differently-spelled tuples."""
+        statements = [{"actions": ["secretsmanager:Describe*"], "resources_raw": f'"{self._PREFIX}"'}]
+        actions = ("secretsmanager:Describe*", "secretsmanager:GetResourcePolicy")
+        args = ("aws_secretsmanager_secret", "s", "agent-platform-new", actions, statements)
+        assert _resource_covered(*args) is True
+        assert _resource_covered(*args, all_of=True) is False

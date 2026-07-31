@@ -1,0 +1,147 @@
+schema_version: 1
+slug: github-actions-log-management
+intent: Close GAL-01 through GAL-04 from the GitHub Actions log-management audit through three serial, independently planned, critiqued,
+  implemented, and reviewed IMPLEMENTATION slices.
+audit:
+  authoritative_record: audits/github-actions-log-management-c144530f02d1.yaml
+  navigation_report: audits/github-actions-log-management-c144530f02d1.md
+  audited_commit: c144530f02d1  # pragma: allowlist secret
+  reconciliation: 'Read-only reconciliation on the work branch found every finding still survives: fetch_logs.py still widens from
+    --log-failed to an uncapped --log body; no shared risk-based diagnostic contract or purpose-based retention classes are enforced;
+    and ci-rca.yml still attributes its test -s backstop to Decision 143.'
+wave_plan:
+- wave: 1
+  slices:
+  - bounded-ci-rca-evidence
+  dispatch: serial
+  rationale: GAL-01 is the keystone and defines the bounded evidence envelope reused by GAL-02.
+- wave: 2
+  slices:
+  - actions-diagnostic-governance
+  dispatch: serial
+  rationale: GAL-02 and GAL-04 enforce diagnostic and retention policy using Wave 1 evidence classes.
+- wave: 3
+  slices:
+  - ci-rca-authority-anchor
+  dispatch: serial
+  rationale: GAL-03 is independent but overlaps ci-rca.yml and its structural validators, so lands last.
+slices:
+- plan_slug: bounded-ci-rca-evidence
+  findings:
+  - GAL-01
+  status: merged
+  plan_path: docs/plans/PLAN-bounded-ci-rca-evidence.yaml
+  current_evidence:
+  - scripts/ci_rca/fetch_logs.py widens to gh run view --log and writes stdout without a byte or line bound.
+  - .github/workflows/ci-rca.yml passes the resulting file directly to downstream CI-RCA processing.
+  plan_critique:
+    round_1: REVISE - schema/graduation, aggregate bounding, identity, confidentiality, atomic output, recovery/degraded semantics,
+      counterfactuals, rollback, and evidence.py integration required.
+    round_2: REVISE - loader schema v3, transport-time bounds, single-artifact atomicity, blocking live evidence, registry differential,
+      lifecycle SHA accuracy, and evidence.py SLOC decomposition required.
+    round_3: REVISE - literal blocking full validation, free-form metadata confidentiality adversaries, exact single-envelope AC,
+      and observed live-path evidence required.
+    round_4: 'REVISE - one HIGH contradiction: scope still allowed job name as display field despite name-omission confidentiality
+      contract.'
+    round_5: PROCEED - independent critique found no Critical/High/Medium/Low findings; scope, bounded transport, confidentiality,
+      atomicity, counterfactuals, blocking V3/full validation, rollback, and handoff are implementation-ready.
+  implementation: 63868b5
+  code_review: PROCEED after iterative coverage and fast-tier hermeticity corrections
+  pr: 797
+  ci: passed
+  merge: 63868b5
+- plan_slug: actions-diagnostic-governance
+  findings:
+  - GAL-02
+  - GAL-04
+  status: merged
+  plan_path: docs/plans/PLAN-actions-diagnostic-governance.yaml
+  depends_on:
+  - bounded-ci-rca-evidence
+  current_evidence:
+  - Wave 1 merged at 63868b5 and provides the bounded ci-rca-log-evidence/v1 envelope consumed by this slice.
+  - 'Four actions/upload-artifact call sites exist: ci.yml selection-manifest and pytest-junit at fourteen days, main-canary.yml pytest-junit
+    at fourteen days, and reconcile.yml reconcile-fresh-plan at one day.'
+  - No machine-readable contract currently classifies diagnostic risk, decisive surfaces, retention purposes, class bounds, or delayed-RCA
+    expiry and recovery semantics.
+  plan_critique:
+    round_1: 'REVISE - derive the complete governed and agent-consumed inventory from deploy-path and CI-RCA authorities; enforce selector
+      equality and composite delegation; map decisive surfaces to reachable failure emitters; explicitly link S1 producer/consumer;
+      add confidentiality mutations; reconcile pre/post-commit validation sequencing; and verify live retention through the Actions
+      artifacts API across representative upload workflows.'
+    round_2: 'REVISE - enumerate exact governed workflow/job/composite selection, add every possibly aligned surface to plan scope,
+      define executable display-name/path/job/local-uses derivation and bounded exclusions, and make stale/missing selector equality
+      testable against structured owners rather than narrative deploy-path prose.'
+    round_3: PROCEED - independent critique found no Critical, High, Medium, or Low findings; inventory authority, scope, diagnostic
+      reachability, S1 linkage, retention semantics, verification sequencing, live evidence, rollback, and degraded behavior are implementation-ready.
+  implementation: bfc8d17
+  implementation_evidence:
+  - Machine-readable evidence contract defines all four retention purposes, bounds, delayed-RCA expiry states, recovery routes, selected jobs, and exact artifact inventory.
+  - Authoritative validator is registered in pre and full tiers and checks selected diagnostic surfaces, S1 linkage, confidentiality-safe identifiers, exact upload classification, and retention bounds.
+  - Hermetic counterfactual and focused tests cover fail-closed contract mutations, current one-day and fourteen-day uploads, and available-versus-expired evidence states.
+  code_review: PROCEED
+  pr: 800
+  ci: passed
+  merge: cc33df8
+- plan_slug: ci-rca-authority-anchor
+  findings:
+  - GAL-03
+  status: implemented_pending_review
+  plan_path: docs/plans/PLAN-ci-rca-authority-anchor.yaml
+  depends_on:
+  - actions-diagnostic-governance
+  current_evidence:
+  - Wave 2 merged at cc33df8 and all GAL-02/GAL-04 validation passed.
+  - .github/workflows/ci-rca.yml still labels its retained non-empty failed-log backstop as a Decision 143 mitigation.
+  - Decision 143 governs privileged-verb Lambda decomposition, while Decision 72 explicitly owns CI-RCA failed-run log retrieval.
+  planning:
+    status: merged
+    scope: .github/workflows/ci-rca.yml, existing workflow guard and tests, and one graduated verification row.
+  plan_critique:
+    round_1: >-
+      REVISE - do not overclaim Decision 55/72 ownership of the local test-s guard; prove exact runtime
+      env/run preservation; define adjacent raw-source comment locality and bounded Decision-entry parsing;
+      add remote-comment/other-entry and malformed-boundary adversaries; and specify fail-closed parsing
+      plus atomic rollback behavior.
+    round_2: >-
+      PROCEED - independent critique found no Critical, High, Medium, or Low findings; retrieval-only
+      Decision 72 provenance, local-guard wording, runtime preservation, source locality, bounded parsing,
+      adversarial mutations, degraded behavior, verification, and atomic rollback are implementation-ready.
+  implementation_evidence:
+  - The adjacent workflow comment cites Decision 72 only as failed-run retrieval provenance and identifies test-s as a local YAML-side guard.
+  - The existing workflow guard bounds Decision 72 at the next Decision H2 and fails closed on malformed authority or nonlocal source comments.
+  - The canonical counterfactual snapshots the unchanged production env and run values and exercises stale, remote, malformed, duplicate, and wrong-entry mutations.
+  implementation: 18a96ff
+  code_review: pending
+  pr: pending
+  ci: pending
+finding_coverage:
+  GAL-01: bounded-ci-rca-evidence
+  GAL-02: actions-diagnostic-governance
+  GAL-03: ci-rca-authority-anchor
+  GAL-04: actions-diagnostic-governance
+gates:
+  g0_intake: confirmed
+  g1_decomposition: confirmed
+  g3_completion: pending
+autonomous_decision_log:
+- timestamp: '2026-07-29'
+  decision: Use three serial slices in keystone-first order and permit no overlapping editors.
+  rationale: The operator approved the slice graph and merge order; serial execution avoids overlap in ci-rca.yml, workflow validators,
+    tests, and verification-registry entries.
+- timestamp: '2026-07-29'
+  decision: Treat literal post-commit validation results as the only readiness evidence and block push, PR, and finding closure on any nonzero authoritative validator exit.
+  rationale: 'Wave 1 accumulated verification mistakes that must not recur: the plan named the removed tests/test_ci_rca_evidence.py;
+    validate --pre ran before the feat commit and therefore no-op''d the implementation VP replay; --pre was not rerun after commit;
+    literal plan step 3 and full-validation step 6 were not executed before readiness was claimed; test and PR evidence inaccurately
+    claimed commands had passed; the aggregate 74.71% result and 37% pytest threshold were misread as the failure while the changed-source
+    100%-per-file gate was ignored; and thousands of passing tests were treated as success despite validator exit 1. Going forward,
+    execute the plan''s literal commands against the committed tree, report only captured command evidence, distinguish aggregate coverage
+    from changed-source coverage, and stop the lifecycle whenever an authoritative validation command exits nonzero.'
+- timestamp: '2026-07-29'
+  decision: Enumerate fast-tier test modules in hermetic VP commands when a test package contains an explicitly full-tier module.
+  rationale: Directory-level pytest selection imports every matching module during collection before marker-based deferral can protect
+    the fast environment. Step 3 selected tests/ci_rca/evidence and therefore imported test_live_s3.py, whose deliberate boto3 heavy-dependency
+    marker cannot run when boto3 is absent from requirements-fast. Hermetic fast VP commands must enumerate the collectable non-live modules,
+    exclude only the explicitly full-tier live module, and carry a regression assertion that rejects directory-level selection or a
+    boto3 requirement in the fast tier.

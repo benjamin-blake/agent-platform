@@ -1,0 +1,808 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "iam-write-surface-completion"
+intent: >-
+  Close the confirmed gap sweep on the CD apply role in ONE human-gated bootstrap apply -- relocating
+  the read surface into a customer-managed policy to buy the bytes the fix needs -- and replace the
+  dead write-side exhaustiveness guard with a discovery-driven one whose companion table is
+  MANDATORY-DECLARATION (every write-managed type must declare create/update/delete companion tuples,
+  possibly empty-with-justification, or the check fails loud), so a missing companion verb becomes a
+  review-time failure instead of a production AccessDenied. Scoped honestly: this does NOT
+  mechanically close the defect class -- see the "CLASS-CLOSURE HONESTY" context entry; the
+  class-closing item is the CloudTrail observability follow-on, filed at High.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-iam-write-surface-completion.yaml
+closes_criteria: []
+phase: >-
+  Platform T2 -- residual of tier_item T2.48 (Phase-2 allow-list inversion, DEP-01/DEP-02, Decision 144):
+  rec-2882 (source=ci_rca, Critical) is the third instance of the same defect class. The DEP-02
+  live-proof teardown (probe role live, convergence record RED at 99eb274) is DECOUPLED from this plan
+  and SPLIT OUT to a sibling plan (suggested slug reconcile-stale-plan-coverage) that fixes rec-2847
+  first -- see the "TEARDOWN DECOUPLED" context entry for the two-way cross-plan dependency. Closes no T2.48
+  exit criterion (c1-c5 are already met; c6 is the recurring Decision-92 ratchet review, out of scope)
+  -- hence closes_criteria: []; the roadmap touch is a progress_note only.
+scope:
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-  # pragma: allowlist secret
+      (1) RELOCATE the 11 read-only Sids into a NEW customer-managed aws_iam_policy
+      "github_ci_apply_reads" (+ its aws_iam_role_policy_attachment), declared IN THIS SAME FILE;
+      (2) add every confirmed missing write verb at the scopes in the gap sweep, with
+      secretsmanager:UpdateSecret ENUMERATED at the five terraform/personal secret ARNs (S2 -- never
+      at a prefix); (3) extend the boundary DataPlaneAllow ceiling with the 3 new iam verbs;
+      (4) EXTEND DenyBoundaryPolicyModification's Resource list with the new reads-policy ARN (S5),
+      so the relocated grants land in a container protected by an EXPLICIT Deny rather than only by
+      the absence of iam:CreatePolicy*; (5) add rec-2793-style byte preconditions to the two managed
+      policy documents (the inline one keeps its existing 10,240 B precondition), hoisting the
+      boundary's policy JSON into a local so its precondition can self-reference the rendered
+      document -- this hoist is what forces the B1 parser work below; (6) add
+      `depends_on = [aws_iam_role_policy_attachment.github_ci_apply_reads]` to
+      aws_iam_role_policy.github_ci_apply (B3 -- forward-apply ordering, see constraints);
+      (7) collocate the by-design comments (probe-ARN retirement ordering hazard, DenyIAMEscalation
+      simulate artifact). SecretsManagerReadOnly's six enumerated ARNs are moved VERBATIM -- no
+      widening (S1).
+  - file: scripts/checks/iam_tf/_read_coverage.py
+    action: Modify
+    purpose: >-
+      Build ONE shared statement-array locator that handles BOTH the inline
+      `policy = jsonencode({...})` shape AND the rec-2793 hoisted-local shape, by GENERALISING the
+      `_POLICY_LOCAL_REF_RE` indirection `_parse_bootstrap_statements` already has here (B1-i), and
+      express BOTH the new named-`aws_iam_policy` parser (returns [] when the resource is absent) and
+      the RELOCATED `_parse_boundary_dataplane_statement` on top of it. The move of
+      `_parse_boundary_dataplane_statement` out of `_write_coverage` is required twice over: this
+      module already owns the shared HCL primitives, and the move breaks the otherwise-circular import
+      between the new `_write_companions` submodule and `_write_coverage`. Its docstring's
+      "the boundary policy is inline (no rec-2793 hoisted-local indirection)" assumption becomes FALSE
+      the moment this plan hoists it -- rewrite that docstring (B1-ii). ENUMERATED_IAM_TYPES stays
+      literal_only (the Decision 129 pt 2 / pt 4(iii) enumerated-IAM-read invariant is deliberately
+      NOT relaxed by this plan; see the P1-1 context entry).
+  - file: scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py
+    action: Modify
+    purpose: >-
+      UNION the inline role-policy statements with the relocated managed-policy statements before
+      passing apply_statements to every downstream assertion (without this, relocating the read Sids
+      makes this very gate red), and fail loud if the reads policy is declared with no matching
+      aws_iam_role_policy_attachment (an unattached document grants nothing, so crediting its
+      statements would be a silent false pass). Orchestrate the new (b)/(c) sub-checks.
+  - file: scripts/checks/iam_tf/_write_coverage.py
+    action: Modify
+    purpose: >-
+      Design (a): make the write side DISCOVERY-DRIVEN, mirroring the read side. Delete the
+      unsatisfiable APPLY_WRITTEN_TYPES = frozenset(WRITE_COVERAGE) branch, add WRITE_EXEMPT_TYPES
+      (each entry carrying a one-line justification), iterate the discovered terraform/personal types
+      and fail loud on any type that is neither WRITE_COVERAGE-mapped nor exempt; extend WRITE_COVERAGE
+      to cover every discovered write-managed type. Companion + symmetry checks move out (SLOC).
+      NOTE the honest scope limit: (a) alone would have caught NONE of the three historical instances
+      (aws_iam_role was already WRITE_COVERAGE-mapped in all three) -- (a) closes the "type never
+      mapped at all" hole; (b) below is what closes the "type mapped but its companion verbs were
+      never enumerated" hole that actually recurred.
+  - file: scripts/checks/iam_tf/_write_companions.py
+    action: Create
+    purpose: >-
+      Design (b), MANDATORY-DECLARATION (H5-b): collapse check_passrole_implies_coverage +
+      check_create_companion_scope_coverage into ONE phase-keyed LIFECYCLE_COMPANIONS table covering
+      create / update / delete, and require that EVERY WRITE_COVERAGE type declares a companion tuple
+      for each of the three phases -- a tuple MAY be empty, but only with a collocated one-line
+      justification string; a WRITE_COVERAGE type with NO declaration FAILS LOUD. This converts opt-in
+      enumeration into discovery-driven coverage: adding a type to WRITE_COVERAGE (design (a)'s output)
+      now forces the author to answer "what does its delete phase also call?" at review time, and it
+      kills the APPLY_WRITTEN_TYPES failure mode at the companion layer too. The checker skips inert
+      rows (trigger verb not granted), asserts each declared companion at its marker, and additionally
+      asserts every iam: companion against the boundary DataPlaneAllow ceiling. Also hosts the
+      relocated check_identity_iam_actions_subset_of_boundary (same ceiling-assertion family).
+  - file: scripts/checks/iam_tf/_write_symmetry.py
+    action: Create
+    purpose: >-
+      Design (c): the two mechanical symmetry rules -- (1) Tag/Untag symmetry (incl. the
+      ssm:AddTagsToResource <-> ssm:RemoveTagsFromResource alias pair) at an overlapping resource
+      entry; (2) read-scope >= write-scope parity per resource type, with a NAMED exemption table
+      whose sole entry is aws_iam_role (the retained Decision 129 pt 2 / pt 4(iii) + Decision 144 pt 5
+      enumeration). Rule 2's transitive-skip set is DERIVED PROGRAMMATICALLY from
+      `_read_coverage.TRANSITIVE_TYPES` (H1) -- never hand-enumerated, because a hand-list is the
+      exact root cause this plan exists to fix (the plan's own first draft hand-listed 10 of the 11
+      members, omitting aws_secretsmanager_secret_version).
+  - file: scripts/checks/iam_tf/validate_iam_policy_size.py
+    action: Create
+    purpose: >-
+      New registered check, PRECONDITION-PRESENCE ONLY (H3): every aws_iam_role_policy /
+      aws_iam_policy in terraform/bootstrap/*.tf carries a lifecycle precondition naming its correct
+      limit constant (10240 inline / 6144 managed). Pure text, zero drift, differential, cheap. It
+      does NOT render or minify HCL -- a hand-rolled HCL->JSON renderer in the fast tier would red
+      every PR on any shape it cannot parse, and this plan changes the shape twice. The byte
+      ASSERTION stays where terraform can evaluate it correctly: the lifecycle preconditions
+      themselves (admin plan time) plus the optional full-tier `terraform console` probe below.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: Register validate_iam_policy_size in BOTH the --pre and full tier sequences, adjacent to the other iam_tf checks.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: Add the facade re-export line for validate_iam_policy_size (without it, dispatch KeyErrors and tests/test_checks_registry.py fails).
+  - file: docs/contracts/iam-simulate-fixture.yaml
+    action: Create
+    purpose: >-
+      Design (d): the standing live-simulate contract -- (verb, target ARN template, expected_decision,
+      required_context_keys) triples from the gap sweep, PLUS the machine-readable by-design record
+      (the three OIDC-provider lifecycle verbs, s3:DeleteBucket, the self-grant/boundary denies) each
+      carrying a by_design justification, PLUS a NEW triple asserting explicitDeny for
+      iam:CreatePolicyVersion on the reads-policy ARN (S5 -- makes acceptance criterion 4 true by
+      construction rather than by absence), PLUS the DenyIAMEscalation simulate-artifact warning so no
+      future auditor "fixes" a false positive. Free-form registry shape (no contract_version/status
+      keys) per the deploy-paths.yaml / file-router.yaml precedent (Decision 118's ritual governs
+      RATIFIED contracts; Decision 95's telemetry contracts and the two free-form registries above are
+      the standing precedent that a collocated machine-readable fixture is not a ratification-class
+      artifact).
+  - file: scripts/ci/iam_simulate.py
+    action: Create
+    purpose: >-
+      POST-APPLY runner for the (d) fixture: iam simulate-principal-policy per triple under
+      agent_platform_admin, diff live decision vs expected, exit non-zero on any mismatch. Homed in
+      scripts/ci/ -- NOT scripts/verifiers/ (B2): validate_verifier_hermeticity AST-scans
+      scripts/verifiers/*.py and its `classes and all(...)` exemption is unreachable for a
+      class-less module, so ANY import boto3 (module-level or nested) reds the PR; and making it a
+      Verifier class would enrol it in run_all_verifiers(), executing a live-AWS call from CI -- the
+      exact opposite of intent. scripts/ci/ is the established home for admin/CI operational runners
+      (reconcile_target.py, ducklake_artifacts.py, plan_digest.py, review_verdict.py). Deliberately
+      NOT a validate.py check -- it asserts LIVE state, and between merge and the human admin apply the
+      code legitimately declares verbs the live policy lacks, so wiring it into --pre would red the very
+      PR that fixes the problem.
+  - file: docs/contracts/deploy-paths.yaml
+    action: Modify
+    purpose: >-
+      Add one step to admin_out_of_band.procedure.steps -- after any terraform/bootstrap apply that
+      changes the apply role's grant surface, run the (d) fixture via
+      `bin/venv-python -m scripts.ci.iam_simulate`. This is the sanctioned home for admin-tier
+      procedure steps (Decision 127 / T2.41).
+      TODO-M7 (advisory, implementer's call): terraform/bootstrap/CLAUDE.md has NO pointer to this new
+      post-apply step. Its config/prose_budgets.yaml entry is 5151, exactly its current size, and prose
+      budgets ratchet DOWN only -- so a NET-SMALLER edit is budget-legal. If the implementer can
+      replace its duplicated plan/apply block with a one-line pointer at a net byte DECREASE, do so and
+      lower the budget entry; if not, leave the file untouched and note why in the report.
+  - file: tests/checks/iam_tf/test__write_coverage.py
+    action: Modify
+    purpose: >-
+      Move the companion-check tests out to test__write_companions.py (frees SLOC headroom on a file
+      already at 455 SLOC), drop the monkeypatch(APPLY_WRITTEN_TYPES) test that only reached the dead
+      branch, and add positive + negative discovery tests (an unmapped discovered type FAILS; an
+      exempt type passes).
+  - file: tests/checks/iam_tf/test__write_companions.py
+    action: Create
+    purpose: >-
+      Positive + negative tests for LIFECYCLE_COMPANIONS, INCLUDING (i) the load-bearing regression test
+      that builds the PRE-FIX policy (iam:DeleteRole granted at role/agent-platform-*,
+      iam:ListInstanceProfilesForRole absent) and asserts the delete row FAILS -- i.e. proves the table
+      would have caught instance 3 at review time; and (ii) the MANDATORY-DECLARATION negative: a
+      WRITE_COVERAGE type with no companion declaration for some phase FAILS LOUD, and an
+      empty-tuple declaration WITHOUT a justification string also FAILS. Plus an inert-row test and a
+      boundary-ceiling test.
+  - file: tests/checks/iam_tf/test__write_symmetry.py
+    action: Create
+    purpose: >-
+      Positive + negative tests for both mechanical rules: a Tag* with no matching Untag* fails; the
+      ssm alias pair resolves; a read marker narrower than the widest write marker fails; a named
+      exemption suppresses exactly that one type and nothing else; and a test asserting the
+      transitive-skip set IS `_read_coverage.TRANSITIVE_TYPES` by identity (not a copy) so it can
+      never drift again.
+  - file: tests/checks/iam_tf/test_validate_iam_policy_size.py
+    action: Create
+    purpose: >-
+      Positive + negative tests for the precondition-presence check: a policy resource with no
+      lifecycle precondition FAILS; a precondition naming the WRONG limit constant (6144 on an inline
+      role policy, or 10240 on a managed policy) FAILS; the real tree PASSES. No rendering tests --
+      there is no renderer (H3).
+  - file: tests/test_iam_simulate.py
+    action: Create
+    purpose: >-
+      Credential-free unit tests for the (d) runner: fixture parsing, expected-vs-actual verdict logic,
+      required_context_keys assembly, and non-zero exit on mismatch -- with the AWS call boundary stubbed.
+      Path matches all four scripts/ci/ siblings (tests/test_reconcile_target.py,
+      test_ducklake_artifacts.py, test_plan_digest.py, test_review_verdict.py); map_source_to_test
+      returns None for scripts/ci/, so Decision 131's mirror rule imposes no different target here.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      TWO obligations, not one. (i) ADD the graduated-check rows for the VP steps dispositioned
+      `graduate`. (ii) REPAIR two EXISTING rows this plan would otherwise silently rot:
+      `boundary-dataplane-new-iam-verbs`, whose awk slices the file FORWARD from the boundary resource
+      match and therefore breaks once the boundary JSON is hoisted into a local (B1-iii) -- retarget it
+      to a POSITION-INDEPENDENT assertion; and
+      `write-coverage-asserts-passrole-identity-and-boundary`, whose greps target
+      scripts/checks/iam_tf/_write_coverage.py with guard_symbol
+      check_passrole_implies_coverage -- the exact symbol design (b) DELETES, so both greps go false
+      and nothing validates guard_symbol (H2) -- retarget it to the new module + the new checker symbol.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append ONE new `## Decision NNN:` entry recording the inline -> customer-managed
+      policy-architecture split. The human decided at plan time that this split earns a number;
+      the six things the entry MUST record, and the reasoning, are in the "POLICY-SPLIT DECISION
+      -- RESOLVED" context entry. NNN IS ALLOCATED AT IMPLEMENT TIME as the next free number --
+      docs/DECISIONS.md is the numbering authority (AGENTS.md), so this plan deliberately
+      hardcodes no number and the implementer re-checks for a collision immediately before
+      writing. Follow docs/contracts/decision-entry.yaml's grammar exactly: an h2 `## Decision
+      NNN: <title> (Decided)` header plus the three required markers (Status, Date, Decision),
+      using the canonical optional spellings (Problem, Rationale, Reversal conditions, Related,
+      Warehouse ID) where used.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerate the committed decisions index with
+      `bin/venv-python -m scripts.decisions_index --write` immediately after the DECISIONS.md
+      append -- it is a DERIVED export, never hand-edited. validate_decisions_index_freshness is
+      registered in BOTH presubmit tiers and fails on DRIFT or ABSENCE, so an un-regenerated
+      index reds `validate --pre` at VP step 11.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      T2.48 progress_note ONLY -- record the third-instance root cause, the relocation, the
+      retained-enumeration named exception, the number of the Decision authored by this plan, and
+      the fact that the DEP-02 teardown is OUT of this plan's scope and owned by the sibling plan
+      (suggested slug reconcile-stale-plan-coverage), with the probe role still live and the
+      convergence record still red at 99eb274. No criterion or item status flip
+      (Status-Trusted-Never-Inferred; c1-c5 already met, c6 out of scope).
+bundled_recommendations:
+  - rec-2882
+  - rec-2845
+infrastructure_dependencies:
+  - >-
+    terraform/bootstrap is NEVER auto-applied (terraform/bootstrap/CLAUDE.md; the
+    terraform-apply-sandbox.yml path filter is terraform/personal/** only). This change requires a
+    human-gated admin apply under the agent_platform_admin profile in the ADMIN container, mirroring
+    how the rec-2842 TagRole fix was applied. Guard classification is UNCHANGED by this plan.
+  - >-
+    Provider pin: hashicorp/aws ~> 5.0, resolved 5.100.0 (.terraform.lock.hcl). Every provider-side
+    call-set inference in the gap sweep is version-scoped to 5.100; the (d) fixture must be re-run on
+    any provider bump (the TagLogGroup -> TagResource migration risk).
+  - >-
+    terraform/bootstrap uses only hashicorp/* providers, so local `terraform init` succeeds
+    unconditionally (no Decision 119/120 provider-mirror dependency, unlike terraform/personal).
+  - >-
+    Managed-policy quota: this change attaches 1 customer-managed policy to the role (9 of the 10
+    attached-policy slots remain). The permissions boundary occupies a SEPARATE slot and is not
+    counted against that quota.
+  - >-
+    APPLY ORDERING (B3): terraform has NO implicit dependency ordering the reads-policy ATTACHMENT
+    before the inline-policy SHRINK -- both target the same role but neither references the other. A
+    forward apply is therefore free to update the inline policy FIRST; if the create-or-attach then
+    fails, the apply role holds ZERO refresh-read surface and every subsequent CD plan dies
+    AccessDenied BEFORE the guard runs, including any reconcile. The explicit
+    `depends_on = [aws_iam_role_policy_attachment.github_ci_apply_reads]` on
+    aws_iam_role_policy.github_ci_apply reduces the worst case to "the reads are granted twice for one
+    step" -- an identical allow-union, harmless.
+  - >-
+    NO reconcile.yml dependency. Earlier drafts of this plan routed the stranded DEP-02 teardown
+    through reconcile.yml; that is REMOVED (see the TEARDOWN DECOUPLED context entry). This plan
+    dispatches no workflow and requires no Environment approval beyond the single human-gated
+    bootstrap apply in VP step 12. The reconcile.yml route now belongs to the SIBLING plan
+    (suggested slug reconcile-stale-plan-coverage), which must repair rec-2847's recovery
+    semantics BEFORE using it -- and which cannot run its teardown until this plan's bootstrap
+    apply has landed. Conversely this plan leaves the red convergence latch at 99eb274 SET, so
+    terraform/personal CD applies stay blocked until the sibling completes.
+acceptance_criteria:
+  - >-
+    All three rendered policy documents are under their IAM hard limits with real headroom, verified
+    by the terraform lifecycle preconditions at admin plan time (the PR-time check asserts those
+    preconditions EXIST and name the right constant -- it does not re-derive the bytes): inline
+    aws_iam_role_policy 8,663 B / 10,240 (1,577 B headroom, 27 statements); managed
+    agent-platform-github-ci-apply-reads 4,227 B / 6,144 (1,917 B headroom, 12 statements); managed
+    agent-platform-github-ci-apply-boundary 1,548 B / 6,144 (4,596 B headroom, 4 statements). Baseline
+    reproduced this session with `terraform console` over the extracted locals (length-accurate
+    placeholder account id, region eu-west-2): inline 10,156 B / 33 statements, boundary 1,373 B --
+    both exact to the byte; the 11 relocated read Sids sum to 3,821 B of statement body.
+    RESTATED AFTER DECISION 157 (the Secrets Manager value-capability split, landed in this same
+    plan): the pre-157 model was inline 8,580 B / 27 and reads 3,998 B / 11. The split added the
+    SecretsManagerMetadataRead Sid to the reads document (11 -> 12 statements, +229 B) and the
+    ForceDeleteWithoutRecovery condition to the inline document (+83 B, statement count unchanged).
+    The figures above are the CURRENT measured values and are the ones to check against the admin
+    plan output; the superseded pair is recorded here only so a reviewer holding the earlier model
+    can see why it moved. The planner role's own inline policy also grew 7,242 -> 7,475 B / 10,240
+    (its own precondition) from the mirrored metadata-read statement.
+  - >-
+    Every confirmed gap from the sweep is closed at the recorded scope: P0-1 (iam:ListInstanceProfiles
+    ForRole + iam:RemoveRoleFromInstanceProfile in BOTH layers), P0-2 (the 3 lambda function-URL config
+    verbs), P0-3 (the 8-verb SNS write surface at agent-platform-alerts AND agent-platform-alerts:*),
+    P0-4 (logs:TagResource/UntagResource/UntagLogGroup), P0-5 (the S3 bucket-config Put* set),
+    P0-6 (Secrets Manager writes SPLIT: CreateSecret/DeleteSecret/TagResource/UntagResource at
+    secret:agent-platform-*, and UpdateSecret ENUMERATED at exactly the five terraform/personal
+    agent-platform-* secret ARNs -- never at a prefix), P0-7 (SSM writes across
+    parameter/agent-platform/* plus ssm:DeleteParameter), P1-2 (lambda:UpdateFunctionCode),
+    P1-3 (layer:agent-platform-* on both the read and write layer Sids), P1-4
+    (iam:UntagOpenIDConnectProvider in BOTH layers), and the granted P2 destroy verbs.
+    SecretsManagerReadOnly's six enumerated ARNs are UNCHANGED -- moved verbatim, not widened.
+  - >-
+    Every P1/P2 judgement call is EXPLICIT on disk -- granted with a collocated why-comment, or
+    recorded as a NAMED by-design exception in docs/contracts/iam-simulate-fixture.yaml with a
+    by_design justification. No undocumented silence remains for any verb the sweep named.
+  - >-
+    The T2.23 self-grant break and the non-strippable boundary survive the relocation: the inline
+    aws_iam_role_policy still carries EVERY iam: write Sid and BOTH Deny statements (nothing
+    escalation-relevant moves), DenySelfInlinePolicyWrite still denies iam:DetachRolePolicy on the
+    apply role's own ARN (so the role cannot detach the new reads policy from itself), the boundary
+    remains a permissions_boundary (not an attachment), and -- the load-bearing addition (S5) --
+    DenyBoundaryPolicyModification's Resource list now names the reads-policy ARN alongside the
+    boundary ARN, so the relocated grants sit behind an EXPLICIT Deny on
+    iam:CreatePolicyVersion/DeletePolicy/DeletePolicyVersion/SetDefaultPolicyVersion, not merely
+    behind the absence of an iam:CreatePolicy* grant. Proven by construction: the (d) fixture carries
+    a triple asserting explicitDeny for iam:CreatePolicyVersion on that ARN.
+  - >-
+    The write-side exhaustiveness guard is no longer dead code AND its companion layer is no longer
+    opt-in: validate_ci_refresh_read_coverage's PASS line reports strictly more than 5 write-managed
+    types; a terraform/personal resource type that is neither WRITE_COVERAGE-mapped nor in
+    WRITE_EXEMPT_TYPES fails validate --pre; and a WRITE_COVERAGE type with no create/update/delete
+    companion declaration (or an empty tuple with no justification) ALSO fails validate --pre.
+  - >-
+    A regression test proves the LIFECYCLE_COMPANIONS iam:DeleteRole row FAILS against the pre-fix
+    policy -- i.e. the table would have caught instance 3 (rec-2882) at review time, not in production.
+  - >-
+    The graduated-check estate survives the restructure with no silent rot: `_parse_boundary_dataplane
+    _statement` returns a non-None DataPlaneAllow on the POST-change tree (the boundary JSON is now
+    hoisted into a local, which the pre-change forward-search parser could not follow); the retargeted
+    `boundary-dataplane-new-iam-verbs` row is position-independent; and the retargeted
+    `write-coverage-asserts-passrole-identity-and-boundary` row names a symbol that still exists.
+  - >-
+    The (d) simulate fixture runs POST-APPLY only (it is not registered in validate.py, lives in
+    scripts/ci/ rather than scripts/verifiers/, and no VP step invokes it at pre-deploy), and on the
+    live post-apply policy every triple's decision matches its expected_decision with zero mismatches
+    -- including the two rec-2882 verbs (iam:ListInstanceProfilesForRole,
+    iam:RemoveRoleFromInstanceProfile) allowed on role/agent-platform-* under the identity/boundary
+    intersection. That simulate IS the rec-2882 closure evidence (see TEARDOWN DECOUPLED).
+  - >-
+    rec-2882 and rec-2845 are closed via the Resolves: trailer and VERIFIED closed in the synced read
+    cache post-merge (not merely asserted pre-merge).
+  - >-
+    The policy-architecture split is recorded as EXACTLY ONE new numbered Decision in
+    docs/DECISIONS.md -- its number allocated at implement time, never hardcoded by this plan --
+    and that entry records all six mandated elements (the WHAT, the byte-limit WHY, the reversal
+    hazard WITH its correct ordering, the post-move protection model, its own reversal
+    conditions, and the citation set) and names agent-platform-github-ci-apply-reads literally.
+    docs/decisions-index.json is regenerated in the SAME commit (validate --pre green at VP step
+    11), and post-merge the entry is machine-visible in ops_decisions via the sanctioned
+    DECISIONS.md ETL with failed=0 (VP step 15). No second Decision is minted.
+  - >-
+    Decision 128 held: every scripts/checks/iam_tf/*.py module is under 500 SLOC and
+    config/sloc_budgets.yaml gains NO iam_tf entry -- the growth was absorbed by decomposition into
+    _write_companions.py / _write_symmetry.py, never by a budget raise.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Assert the three new iam verbs are granted in BOTH layers, matching only real quoted action lines
+      (so a mention in a comment cannot inflate the count into a false pass).
+    command: |-
+      rc=0; for a in iam:ListInstanceProfilesForRole iam:RemoveRoleFromInstanceProfile iam:UntagOpenIDConnectProvider; do n=$(grep -cE "^[[:space:]]*\"$a\",?[[:space:]]*$" terraform/bootstrap/github_ci_apply.tf); echo "$a=$n"; [ "$n" -ge 2 ] || rc=1; done; exit $rc
+    expected: >-
+      Exit 0; each verb prints =2 (one identity Action entry + one boundary DataPlaneAllow entry). A
+      grant present in only one layer is silently denied by the identity/boundary intersection.
+    fix_if: >-
+      A verb prints 0 or 1 -- it is missing from the identity Sid or absent from the boundary ceiling.
+      Add it to IAMRoleDeleteBounded / OIDCProviderReconcile AND to DataPlaneAllow.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "instanceprofile-untagoidc-verbs-both-layers"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert the relocation actually happened in BOTH directions -- each relocated read Sid occurs
+      EXACTLY ONCE in the file and that single occurrence is inside the reads-policy slice -- and that
+      the attachment resource exists. Position-independent by construction (M1): it does not assume
+      where in the file the reads locals were inserted, and it writes its temporaries to mktemp, never
+      into the working tree. The Sid list is 12, not the 11 this plan was drafted against: the
+      Decision 157 read split replaced SecretsManagerReadOnly with SecretsManagerMetadataRead +
+      SecretsManagerValueReadEnumerated, so asserting the pre-split name would assert a Sid the tree
+      deliberately no longer has.
+    command: |-
+      f=terraform/bootstrap/github_ci_apply.tf; t=$(mktemp); awk '/aws_iam_policy" "github_ci_apply_reads"/{p=1} /github_ci_apply_reads_policy_json *= *jsonencode/{p=1} p' "$f" > "$t"; rc=0; for s in IAMRolesRead SecretsManagerMetadataRead SecretsManagerValueReadEnumerated DataLakeBucketManage LambdaRead SSMParameterRead EventBridgeRead SNSRead CloudWatchAlarmsRead SNSSubscriptionRead CloudWatchLogsRead SSMDescribeParameters; do all=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$f"); inr=$(grep -cE "Sid[[:space:]]*=[[:space:]]*\"$s\"" "$t"); [ "$all" -eq 1 ] || { echo "NOT-EXACTLY-ONCE $s ($all)"; rc=1; }; [ "$inr" -eq 1 ] || { echo "NOT-IN-READS-POLICY $s"; rc=1; }; done; grep -q 'resource "aws_iam_role_policy_attachment" "github_ci_apply_reads"' "$f" || { echo "MISSING attachment"; rc=1; }; rm -f "$t"; exit $rc
+    expected: >-
+      Exit 0 with no NOT-EXACTLY-ONCE / NOT-IN-READS-POLICY / MISSING lines -- all 12 Sids relocated,
+      none duplicated anywhere in the file, and the aws_iam_role_policy_attachment binding the reads
+      policy to the role is declared.
+    fix_if: >-
+      NOT-EXACTLY-ONCE -> the Sid was COPIED rather than moved (a duplicate grant that silently doubles
+      the byte cost), or it appears in a comment. NOT-IN-READS-POLICY -> it was not moved (inline byte
+      budget still blown). MISSING attachment -> the reads document exists but grants nothing; the
+      union-parse in validate_ci_refresh_read_coverage would then credit dead statements.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "reads-policy-relocation-complete"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert byte preconditions exist for ALL THREE policy documents with the correct limit constants
+      (the 10,240 inline ceiling plus a NEW 6,144 ceiling on each managed document). Counts
+      `precondition {` blocks, NOT the bare word (M2): the bare word appears 3 times today, TWO of
+      them in the rec-2793 PROSE comment at lines 72-73, so a >=5 threshold on it is boundary-exact
+      and would break if that comment is reworded during the restructure.
+    command: |-
+      f=terraform/bootstrap/github_ci_apply.tf; p=$(grep -c 'precondition {' "$f"); l1=$(grep -c 10240 "$f"); l2=$(grep -c 6144 "$f"); echo "precondition_blocks=$p limit10240=$l1 limit6144=$l2"; [ "$p" -ge 3 ] && [ "$l1" -ge 1 ] && [ "$l2" -ge 2 ]
+    expected: >-
+      Exit 0, printing `precondition_blocks=3` `limit10240=1` `limit6144=2` -- three precondition
+      blocks (was 1, the inline document only), the 10240 constant still present, and the 6144
+      constant present once per managed document. The backticked literals are deliberately the
+      tokens the command actually prints: validate_vp_replay extracts every backticked literal from
+      this field and requires it in the captured output, so quoting the HCL fragment here instead
+      would demand a string the command never emits and diverge on wording rather than on behaviour.
+    fix_if: >-
+      Counts below threshold -- a managed policy document shipped with no size precondition, so its
+      LimitExceeded would surface only as an apply-time failure with no plan-time signal (the exact
+      rec-2793 gap this plan is widening).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "all-three-policy-docs-carry-size-precondition"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Assert the by-design record exists and is machine-readable -- the three OIDC-provider lifecycle
+      verbs, s3:DeleteBucket, the DenyIAMEscalation simulate-artifact warning, and the S5
+      reads-policy-immutability triple are all present in the fixture, each under a by_design field.
+    command: |-
+      f=docs/contracts/iam-simulate-fixture.yaml; rc=0; for k in iam:CreateOpenIDConnectProvider iam:DeleteOpenIDConnectProvider iam:RemoveClientIDFromOpenIDConnectProvider s3:DeleteBucket DenyIAMEscalation iam:CreatePolicyVersion agent-platform-github-ci-apply-reads; do grep -q "$k" "$f" || { echo "MISSING $k"; rc=1; }; done; grep -q 'by_design' "$f" || { echo "MISSING by_design field"; rc=1; }; grep -q 'iam:PermissionsBoundary' "$f" || { echo "MISSING context-key artifact note"; rc=1; }; exit $rc
+    expected: >-
+      Exit 0 -- every deliberately-denied verb is named with a by_design justification, the
+      iam:CreatePolicyVersion-on-the-reads-policy triple is present, and the iam:PermissionsBoundary
+      context-key artifact is documented so a future auditor does not "complete" DenyIAMEscalation on
+      a false positive.
+    fix_if: >-
+      A MISSING line -- that verb is undocumented silence: a future sweep will either re-flag it as a gap
+      or a future auditor will grant it without knowing it was a deliberate exception.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "iam-simulate-fixture-by-design-record"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the two STRUCTURAL safety edits landed in HCL: (S5) DenyBoundaryPolicyModification's
+      Resource list names the reads-policy ARN as well as the boundary ARN; (B3) the inline
+      aws_iam_role_policy declares depends_on on the reads attachment. Both are invisible to every
+      other check and both fail SILENTLY if omitted -- S5 by leaving the relocated grants in a weaker
+      container, B3 by leaving a forward-apply ordering window that strips the refresh-read surface.
+    command: |-
+      f=terraform/bootstrap/github_ci_apply.tf; rc=0; awk '/Sid *= *"DenyBoundaryPolicyModification"/{d=1} d&&/agent-platform-github-ci-apply-reads/{found=1} END{exit !found}' "$f" || { echo "MISSING S5 reads-policy ARN in DenyBoundaryPolicyModification"; rc=1; }; awk '/resource "aws_iam_role_policy" "github_ci_apply"/{d=1} d&&/depends_on/&&/aws_iam_role_policy_attachment.github_ci_apply_reads/{found=1} d&&/^resource /&&!/aws_iam_role_policy" "github_ci_apply"/{exit} END{exit !found}' "$f" || { echo "MISSING B3 depends_on edge"; rc=1; }; exit $rc
+    expected: >-
+      Exit 0 with no MISSING lines -- the Deny covers both policy ARNs and the inline policy is
+      explicitly ordered after the attachment.
+    fix_if: >-
+      MISSING S5 -> the 11 relocated grants moved from a container protected by an EXPLICIT Deny into
+      one protected only by the ABSENCE of iam:CreatePolicy*; add the ARN (~71 B, the boundary has
+      4,596 B of headroom). MISSING B3 -> add `depends_on = [aws_iam_role_policy_attachment.
+      github_ci_apply_reads]`; without it a partial forward apply can leave the role read-blind.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "reads-policy-deny-and-depends-on"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Assert the B1 parser survives the boundary hoist. `_parse_boundary_dataplane_statement` locates
+      the boundary by regex and then FORWARD-SEARCHES for the next `Statement = [`; once this plan
+      hoists the boundary JSON into a local, that search returns None and BOTH
+      check_passrole_implies_coverage and check_identity_iam_actions_subset_of_boundary fail with
+      "could not locate the DataPlaneAllow statement" -- i.e. `validate --pre` goes RED on the very PR
+      that fixes the problem. This step asserts the rebuilt shared locator resolves BOTH shapes.
+    command: |-
+      bin/venv-python -c "from pathlib import Path; import scripts.checks.iam_tf._read_coverage as rc; t=Path('terraform/bootstrap/github_ci_apply.tf').read_text(encoding='utf-8'); b=rc._parse_boundary_dataplane_statement(t); r=rc._parse_managed_policy_statements(t,'github_ci_apply_reads'); assert b is not None and b['sid']=='DataPlaneAllow', 'boundary DataPlaneAllow not located after the hoist'; assert len(r)==12, f'reads policy parsed {len(r)} statements, expected 12'; assert rc._parse_managed_policy_statements(t,'no_such_policy')==[], 'absent-resource case must return []'; print('OK boundary=%d-actions reads=%d-statements'%(len(b['actions']),len(r)))"
+    expected: >-
+      Prints "OK boundary=<n>-actions reads=12-statements" and exits 0 -- the shared locator follows the
+      hoisted-local indirection for the boundary, parses all 12 relocated read statements from the new
+      named aws_iam_policy, and still returns [] for an absent resource (so the pre-existing synthetic
+      fixtures under tests/checks/iam_tf/validate_ci_refresh_read_coverage/ stay green unmodified). The
+      count is 12, not the 11 this plan was drafted against: the Decision 157 read split turned
+      SecretsManagerReadOnly into SecretsManagerMetadataRead + SecretsManagerValueReadEnumerated.
+    fix_if: >-
+      Boundary None -> the locator still forward-searches from the resource match instead of resolving
+      the `policy = local.<name>` indirection; generalise `_POLICY_LOCAL_REF_RE` and express BOTH
+      parsers on it. reads != 12 -> the named-aws_iam_policy branch is wrong or a Sid was not moved.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "iam-tf-parser-resolves-hoisted-and-inline-policy-shapes"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Run the two registered iam_tf gates against the REAL tree. Confirms the union-parse works (read
+      coverage still green after 11 Sids moved out of the inline policy), that design (a) is live (the
+      PASS line must report MORE than 5 write-managed types), that design (b)'s mandatory-declaration
+      layer passes on the real WRITE_COVERAGE table, and that every policy resource carries a
+      correctly-constanted size precondition.
+    command: "bin/venv-python -m scripts.checks.iam_tf.validate_ci_refresh_read_coverage && bin/venv-python -m scripts.checks.iam_tf.validate_iam_policy_size"
+    expected: >-
+      Both exit 0. The coverage gate prints "write-covers all N apply-role-written managed types" with
+      N > 5. The size gate prints, per policy resource, the precondition it found and the limit
+      constant it names.
+    fix_if: >-
+      Coverage red on a read type -> the union-parse or the attachment assertion is wrong. Coverage red
+      on an unmapped type -> add a WRITE_COVERAGE entry or a justified WRITE_EXEMPT_TYPES entry (never
+      widen the exempt set to silence a real gap). Coverage red on a missing companion declaration ->
+      declare the tuple (empty + justification is legal; silence is not). N still == 5 -> the discovery
+      loop is not wired and the guard is still dead code. Size gate red -> add the missing precondition
+      or correct its constant; NEVER change a limit constant to match a document (they are AWS hard
+      limits, not budgets).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates a standing gate rather than adding coverage: both checks are registered in
+      validate.py's --pre AND full tiers, so the assertion is already permanently enforced on every PR,
+      and a graduated row would re-run the identical work under a second runner. (The rec-2770
+      pure-shell objection that appeared in the pre-revision draft is RETIRED by Decision 148 cl.2 --
+      bin/venv-python now falls back to a PATH interpreter in venv-less CI -- so it is no longer a
+      reason for anything.)
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Run the design-(b) companion tests, whose load-bearing case builds the PRE-FIX policy
+      (iam:DeleteRole granted at role/agent-platform-*, iam:ListInstanceProfilesForRole absent) and
+      asserts the delete row FAILS -- proving the phase-keyed table would have caught instance 3
+      (rec-2882) at review time rather than in a live gated destroy. Also covers the
+      mandatory-declaration negatives.
+    command: "bin/venv-python -m pytest tests/checks/iam_tf/test__write_companions.py -q"
+    expected: >-
+      All tests pass, including: the pre-fix DeleteRole row FAILS; a WRITE_COVERAGE type with no
+      companion declaration FAILS; an empty companion tuple with no justification FAILS; an inert row
+      (trigger verb not granted) is skipped rather than failing; an iam: companion absent from the
+      boundary ceiling FAILS even when the identity grant is present.
+    fix_if: >-
+      The pre-fix regression case passes -- the delete row is vacuous (wrong trigger verb, wrong marker,
+      or the companion tuple is empty) and instance 4 of this class will still ship.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "iam-tf-delete-role-companion-regression"
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Run the whole iam_tf check suite plus the (d) runner's credential-free unit tests -- the positive
+      AND negative cases for design (a) discovery, design (c) symmetry, the size gate, and the fixture
+      runner's verdict logic.
+    command: "bin/venv-python -m pytest tests/checks/iam_tf/ tests/test_iam_simulate.py -q"
+    expected: >-
+      Green. Negative cases assert loud failure, not silent pass: unmapped discovered type FAILS;
+      Tag* without Untag* FAILS; read marker narrower than the widest write marker FAILS; a named
+      parity exemption suppresses exactly one type; the transitive-skip set IS
+      _read_coverage.TRANSITIVE_TYPES by identity; a policy resource with no size precondition FAILS;
+      a fixture mismatch exits non-zero.
+    fix_if: >-
+      Any negative case passes silently -- that assertion is vacuous and must be tightened before the
+      apply, because a vacuous guard is worse than none (it manufactures false confidence). A
+      transitive-skip test that passes against a hand-copied set -- assert identity with
+      _read_coverage.TRANSITIVE_TYPES, not equality against a literal.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A whole-directory pytest sweep is already a standing gate in validate.py's test tier, and the one
+      genuinely load-bearing assertion in it (the pre-fix DeleteRole regression) graduates on its own as
+      step 8's test_selector row -- graduating the sweep too would duplicate that row with a broader,
+      noisier selector.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Assert Decision 128 held -- every iam_tf module is under the 500-SLOC limit after the
+      decomposition, and no iam_tf budget entry was added to config/sloc_budgets.yaml.
+    command: |-
+      rc=0; for f in $(git ls-files 'scripts/checks/iam_tf/*.py'); do n=$(grep -cEv '^[[:space:]]*($|#)' "$f"); echo "$n $f"; [ "$n" -le 500 ] || rc=1; done; grep -q 'iam_tf' config/sloc_budgets.yaml && { echo "UNEXPECTED iam_tf budget entry"; rc=1; }; exit $rc
+    expected: >-
+      Exit 0 -- every module prints a SLOC count <= 500 and config/sloc_budgets.yaml has no iam_tf key.
+    fix_if: >-
+      A module over 500 -- decompose further into a cohesive submodule (Decision 80/104/124 facade
+      pattern); never register a budget or add a raise-approved marker for this work.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Tautological under the differential-admission gate: every iam_tf module is already under 500 SLOC
+      on the pre-change tree, so the check passes both before and after and would be rejected as
+      non-differential. The standing guard is validate_sloc_limits + validate_sloc_budget_raises.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Whole-tree fast presubmit. Confirms the new registered check is reachable through
+      scripts/validate.py's dispatch (the re-export line), the registry tier ordering is intact, the
+      two REPAIRED graduated rows still pass under validate_verification_registry, and no pre-existing
+      gate (authority-budget, boundary-attached, convergence-writer-isolation, verifier-hermeticity,
+      contract drift, placement, prose/SLOC budgets, public-repo secret guards) regressed on the
+      restructure.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 -- all registered --pre checks pass (advisory locally; authoritative when run by PR CI, Decision 73)."
+    fix_if: >-
+      A KeyError on validate_iam_policy_size -> the scripts/validate.py re-export line is missing. A
+      verifier-hermeticity failure -> the simulate runner was placed in scripts/verifiers/ instead of
+      scripts/ci/ (B2). A verification-registry failure -> a repaired row's command still slices the
+      file positionally. Any other FAIL -> fix that specific check; never patch around a red gate
+      (Decision 55).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate --pre is explicitly forbidden as a hermetic/graduated command (recursion -- the replay
+      and registry runners execute inside validate itself), and it is the presubmit tier by definition,
+      so graduating it is structurally impossible rather than merely undesirable.
+  - step: 12
+    phase: post-deploy
+    action: >-
+      [PR MERGED; ADMIN CONTAINER; HUMAN GATE -- terraform/bootstrap is NEVER auto-applied] Plan the
+      bootstrap root under agent_platform_admin and PRESENT the output. STOP and escalate if the plan
+      shows any destroy or replace of aws_iam_role.github_ci_apply or
+      aws_iam_role_policy.github_ci_apply -- destroying the live CD apply role would break every
+      in-flight CI job. Apply only on explicit human direction (Decision 126).
+    command: "terraform -chdir=terraform/bootstrap plan -var-file=terraform/bootstrap/terraform.bootstrap.tfvars   # then apply the SAME plan on explicit human direction"
+    expected: >-
+      Plan is 2 to add (aws_iam_policy.github_ci_apply_reads + aws_iam_role_policy_attachment) and 2 to
+      change (the inline role policy + the boundary managed policy), 0 to destroy. All three lifecycle
+      byte preconditions evaluate true during plan. The apply creates the reads policy AND its
+      attachment BEFORE it updates the inline policy (the B3 depends_on edge) -- confirm this ordering
+      in the apply log, not just the plan.
+    fix_if: >-
+      Any destroy/replace of the role or its inline policy -> STOP, do not apply; the import/state shape
+      drifted. A precondition failure -> the document is over its ceiling; relocate more statements
+      (never raise the constant). The inline policy updating BEFORE the attachment -> the depends_on
+      edge is missing; STOP and add it, because a failure between those two operations leaves the apply
+      role with no refresh-read surface at all. AccessDenied during the apply itself -> the admin
+      profile chain is broken, not the policy.
+  - step: 13
+    phase: post-deploy
+    action: >-
+      Run the design-(d) fixture against LIVE state under agent_platform_admin. This is the only layer
+      that can see condition-key evaluation, the identity/boundary intersection, and action-level
+      resource-scoping quirks -- all structurally invisible to any static text check. This step is also
+      the CLOSURE EVIDENCE for rec-2882 (see TEARDOWN DECOUPLED): a simulate proving both destroy
+      companion verbs are allowed under the intersection is a more direct proof of the fix than a
+      destroy would be, and it carries none of the destroy's stranded-workflow risk.
+    command: "bin/venv-python -m scripts.ci.iam_simulate --profile agent_platform_admin --fixture docs/contracts/iam-simulate-fixture.yaml"
+    expected: >-  # pragma: allowlist secret
+      Exit 0 with 0 mismatches across all triples. Specifically: iam:ListInstanceProfilesForRole and
+      iam:RemoveRoleFromInstanceProfile allowed on role/agent-platform-*; every newly granted verb
+      allowed at its recorded scope; secretsmanager:UpdateSecret allowed on each of the five enumerated
+      secret ARNs and implicitDeny on a non-enumerated agent-platform-* secret; iam:CreatePolicyVersion
+      explicitDeny on BOTH the boundary policy ARN and the new reads policy ARN; every other by_design
+      entry still implicitDeny/explicitDeny; the four DenyIAMEscalation-adjacent verbs allowed WHEN the
+      iam:PermissionsBoundary context entry is supplied (the documented simulate artifact).
+    fix_if: >-
+      A mismatch on a newly granted verb -> the boundary ceiling or the resource scope is wrong; fix in
+      HCL and re-apply through the same human gate. A mismatch on a by_design entry, or UpdateSecret
+      allowed on a non-enumerated secret -> a grant leaked wider than intended; treat as a security
+      regression, not a fixture error.
+  - step: 14
+    phase: post-deploy
+    action: >-
+      Verify the bundled recs actually closed in the WAREHOUSE-sourced read cache after the Resolves
+      trailer fired rec-autoclose (closure obligation -- verified post-merge, never asserted pre-merge).
+    command: |-
+      bin/venv-python -m scripts.ops_data_portal --sync >/dev/null && rc=0; for r in rec-2882 rec-2845; do grep "\"$r\"" logs/.recommendations-log.jsonl | tail -1 | grep -q '"status": "closed"' || { echo "STILL-OPEN $r"; rc=1; }; done; exit $rc
+    expected: "Exit 0 -- both rec-2882 and rec-2845 show status closed in the freshly synced cache."
+    fix_if: >-
+      STILL-OPEN -> the Resolves: trailer was malformed or rec-autoclose.yml failed; close via
+      `bin/venv-python -m scripts.ops_data_portal --update-rec <id> --status closed --resolution "..."`
+      (Decision 70 fallback). Never edit logs/*.jsonl directly (Single Portal Invariant), and never
+      call `scripts.sync.ops` or any drain/pull CLI directly (Single Portal Invariant, three-function
+      agent surface).
+  - step: 15
+    phase: post-deploy
+    action: >-
+      Assert the numbered Decision this plan authors LANDED and is MACHINE-VISIBLE. Two
+      assertions in one step: (i) its `## Decision NNN:` header exists in docs/DECISIONS.md --
+      located by the reads-policy name the entry is REQUIRED to state literally, so the check
+      needs no hardcoded number and cannot rot when the number shifts; (ii) the sanctioned
+      DECISIONS.md -> ops_decisions ETL succeeds, so the entry is retrievable from the warehouse.
+      Run POST-MERGE: the portal is the only write path for ops_decisions (Single Portal
+      Invariant) and a pre-merge run would inject a row for an entry not yet on main.
+    command: |-
+      hdr=$(awk '/^## Decision [0-9]+:/{h=$0} /agent-platform-github-ci-apply-reads/{if(h!=""){print h; exit}}' docs/DECISIONS.md); if [ -z "$hdr" ]; then echo "MISSING the policy-split Decision entry in docs/DECISIONS.md"; exit 1; fi; echo "FOUND $hdr"; bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md --profile agent_platform
+    expected: >-
+      One FOUND line naming the allocated `## Decision NNN:` header, then a JSON backfill summary
+      with "failed": 0 -- the new entry parses to a non-empty decision_text and an ISO
+      decided_date, so the DAF fidelity tripwire does not fire and no fidelity-baseline allowlist
+      edit is needed.
+    fix_if: >-
+      MISSING -> the Decision was never authored, or its body does not name
+      agent-platform-github-ci-apply-reads (which the entry is required to state); author it per
+      the execution step, regenerate docs/decisions-index.json, and re-run. Fidelity RuntimeError
+      -> the entry's `**Decision:**` body or `**Date:**` marker is malformed against
+      docs/contracts/decision-entry.yaml; fix the entry and re-run (the upsert is idempotent).
+      Portal unreachable -> confirm `aws sts get-caller-identity --profile agent_platform`; the
+      write FAILS LOUDLY and there is no offline outbox (Decision 84 I-4). Never hand-edit
+      logs/.decisions-index.jsonl or logs/.recommendations-log.jsonl.
+constraints:
+  - "IMPLEMENTATION plan_type only -- STRATEGIC plans are suspended repo-wide (AGENTS.md Temporary Operational Constraints); the >5-files/>8-steps complexity heuristic is suspended with it, so this ships as one larger IMPLEMENTATION plan."
+  - "ORDERING (hard): the new checks FAIL against the pre-fix policy, so the HCL fix and the check changes MUST land in the SAME PR. Splitting them means either a red main (checks first) or an unguarded apply (HCL first)."
+  - "Decision 101 (PUBLIC repo): no AWS account IDs, no ARNs carrying real account numbers, no ExternalIds, no credentials in this plan, in any commit, or in any PR body. HCL uses ${var.account_id} / ${var.aws_region}; prose uses [ACCOUNT_ID]. The pre-commit never-commit hook blocks 12-digit account ids."
+  - "SECRETS MANAGER READS ARE NOT WIDENED (S1). SecretsManagerReadOnly's six enumerated ARNs move VERBATIM into the reads policy. Decision 129 pt 2 says, verbatim, `iam:` reads and Secrets Manager stay enumerated ... secrets return VALUES, and its reversal conditions say they are out of scope and need no reversal. Decision 129 pt 1 broadened exactly TWO Sids (LambdaRead, EventBridgeRead) and excluded Secrets Manager BY NAME; SSMParameterRead's prefix predates 129. There is therefore NO established-129-pattern argument for a Secrets Manager read prefix, and none may be made in this plan."
+  - "secretsmanager:UpdateSecret IS ENUMERATED, NEVER PREFIXED (S2). It is value-capable by AWS API design (accepts SecretString), has no metadata-only variant and no narrowing condition key -- a worst verb under Decision 143 clause 1. Critically there is NO boundary intersection to narrow it: the boundary DataPlaneAllow already carries `secretsmanager:*`, so the identity policy is the SOLE control and a prefix grant would be fully effective over agent-platform-anthropic-api-key, -deepseek-api-key, -github-pat, BOTH -broker-alpaca-* envelopes, and every future agent-platform-* secret with no review. Split the Sid: CreateSecret/DeleteSecret/TagResource/UntagResource may take secret:agent-platform-*; UpdateSecret takes exactly the five terraform/personal aws_secretsmanager_secret ARNs. PutSecretValue is granted nowhere new. Cost is 527 B against 1,660 B of post-change headroom."
+  - "Decision 143 worst-verb scoping: prefer agent-platform-* prefixes; Resource: \"*\" ONLY where the API genuinely has no resource-level scoping (the existing sns:GetSubscriptionAttributes / cloudwatch:DescribeAlarms / logs:DescribeLogGroups / ssm:DescribeParameters precedents). Do NOT adopt layer:* for P1-3 -- use layer:agent-platform-* plus the retained ducklake-* literals."
+  - "Do NOT widen trust: iam:UpdateAssumeRolePolicy stays in the trust-only IAMRoleReconcile Sid at exactly the two enumerated branch/pr roles (DEP-05 still open; the narrow identity grant is the only control against a fleet-wide trust rewrite)."
+  - "Preserve the T2.23 self-grant break and the non-strippable boundary: relocate READ-ONLY Sids only. Every iam: write Sid, DenySelfInlinePolicyWrite, and the boundary's three Deny statements stay exactly where they are. An inline policy cannot be detached; DenySelfInlinePolicyWrite's iam:DetachRolePolicy carve-out on the apply role's own ARN is what protects the new attachment. AND extend DenyBoundaryPolicyModification to the reads-policy ARN (S5) -- without it the relocated grants trade an EXPLICIT Deny for the mere absence of an iam:CreatePolicy* grant, a weaker control in kind."
+  - "FORWARD-APPLY ORDERING (B3): aws_iam_role_policy.github_ci_apply MUST declare depends_on = [aws_iam_role_policy_attachment.github_ci_apply_reads]. Nothing else orders them. Without the edge, terraform may shrink the inline policy first; a failure before the attachment lands leaves the apply role with ZERO refresh-read surface and every subsequent CD plan dies AccessDenied BEFORE the guard runs."
+  - "Guard classification UNCHANGED: the deterministic guard still gates create/trust/destroy. This plan only makes ALREADY-APPROVED applies executable -- it grants verbs, it does not change what routes to tf-gated-apply. terraform/bootstrap/** must never be added to any auto-apply workflow or guard path."
+  - "Decision 128 SLOC governance: decompose by default. No entry may be added to config/sloc_budgets.yaml for this work, and no raise-approved marker may be introduced."
+  - "validate.py is the single source of truth for CI gates: validate_iam_policy_size must be registered via @register + inserted in BOTH tier sequences in scripts/checks/registry.py + re-exported in scripts/validate.py, with positive AND negative tests."
+  - "NO HCL RENDERER IN THE FAST TIER (H3). validate_iam_policy_size asserts precondition PRESENCE + the correct limit constant only. A fail-loud hand-rolled HCL->JSON renderer in --pre would red every PR on any shape it cannot parse, and this plan changes the shape twice (relocation + boundary hoist). If a byte assertion is wanted later it belongs in the FULL tier via `terraform console` evaluating the SAME length(jsonencode(jsondecode(...))) expression the precondition uses, with a tool-availability SKIP-with-note rather than fail-loud (precedent: terraform-validate is version-gated/fail-open, rec-2836)."
+  - "Design (d) is POST-APPLY ONLY and lives in scripts/ci/, not scripts/verifiers/ (B2). Do not register the simulate runner in validate.py, do not add it to any --pre VP step, do not give it a Verifier class, and do not gate the PR on it -- between merge and the human admin apply the code legitimately declares verbs the live policy lacks."
+  - "rec-2770's pure-shell constraint is RETIRED by Decision 148 (cl.2 fixed the bin/venv-python venv-less fallback; cl.3 restored hermetic: true as the correct pre-deploy default). bin/venv-python IS safe inside a hermetic or graduated command in every CI job. Do NOT re-import the pure-shell restriction into any waiver or registry row in this plan; a follow-on rec re-verifies and closes rec-2770."
+  - "Agents never self-direct terraform apply. Step 12 is human-gated: present the plan, wait for explicit human direction, then apply (Decision 126; terraform/CLAUDE.md break-glass carve-out)."
+  - "No rescue agents or workaround loops (Decision 55). A fresh AccessDenied on any verb during or after the apply is instance 4 of the defect class: extend LIFECYCLE_COMPANIONS and the fixture FIRST, then re-apply -- never hand-patch one verb and move on."
+  - "Single Portal Invariant: all rec writes go through scripts.ops_data_portal (file_rec / update_rec / sync). Never edit logs/.recommendations-log.jsonl, and never invoke scripts.sync.ops or any drain/compact/pull CLI directly."
+  - "Decision 86 + Decision 150 significance routing: this plan mints EXACTLY ONE numbered Decision -- the inline -> customer-managed policy-architecture split, resolved YES by the human at plan time (see the POLICY-SPLIT DECISION -- RESOLVED context entry). It clears Decision 150's bar as a durable architectural commitment with a reversal-relevant consequence: the reversal ORDER is load-bearing, and getting it backwards locks the CD path out of its own recovery path. NO second Decision may be minted here -- decision-scout's M1 Secrets-Manager candidate dissolved (see its context entry), and the by-design denial set and the DenyIAMEscalation artifact are field/grant semantics, so under Decision 150 clause 1 they route to the OWNING machine-readable surface (docs/contracts/iam-simulate-fixture.yaml, collocated with the runner that enforces them) plus HCL comments -- never a new standing prose doc under docs/ (Decision 86)."
+context:
+  - "Decision-scout verdict + CITE list: BLOCK -> REVISED. All five blocking items applied (S1 drop the Secrets Manager read widening; S2 enumerate UpdateSecret; S3 delete the parity-rule justification for widening; S4 fix the miscited decisions; S5 extend DenyBoundaryPolicyModification). Decisions this plan grounds itself in (verbatim ids): dec-55, dec-70, dec-73, dec-77, dec-86, dec-92, dec-94, dec-95, dec-98, dec-101, dec-104, dec-118, dec-119, dec-120, dec-126, dec-127, dec-128, dec-129, dec-131, dec-132, dec-143, dec-144, dec-148, dec-150. REMOVED from the pre-revision list: dec-35 (its live content is terraform apply-gating, NOT IAM read scoping -- the enumeration rule lives in Decision 129 pt 2 + pt 4(iii), with Decision 98 pt 2 for the per-ARN read-grant procedure) and dec-37 (SUPERSEDED by Decision 116, chain confirmed by Decision 146; its live content is Lambda + GitHub Models for scheduled agents). There is NO active ratified 'secret values are out-of-band' decision -- the live authority for treating secret values as sensitive is Decision 129 pt 2's 'secrets return VALUES' ground, and that is what this plan cites. AUTHORED, NOT MERELY CITED: this plan additionally AUTHORS one NEW numbered Decision -- the inline -> customer-managed policy-architecture split (number allocated at implement time; see POLICY-SPLIT DECISION -- RESOLVED). Its own **Related:** marker cites Decision 144, Decision 143, Decision 92 pt 5, Decision 77 and Decision 150, and its dec-NNN joins this CITE list in the same commit. Every one of those five ids is already in the verbatim list above, so the split introduces no new decision dependency -- only a new decision ENTRY."
+  - "gates: decision-scout=BLOCK -> REVISED (S1-S5 applied); plan-critique=APPROVE-WITH-CHANGES -> REVISED (B1-B4, H1-H5, M1-M3/M6 applied; M4/M7/M8 dispositioned advisory) after 1 round(s)"
+  - "THIRD INSTANCE of one defect class -- headline verb granted, structurally-required companion verb missing or narrower: rec-2831 (iam:PassRole for lambda:CreateFunction), rec-2842 (iam:TagRole at 2 enumerated ARNs while iam:CreateRole was at role/agent-platform-*), rec-2882 (iam:ListInstanceProfilesForRole, which killed the live gated DESTROY -- gated-apply run 30264239445, convergence RED at 99eb274, probe role still live). The human's explicit direction was to stop patching one verb per production failure and fix the whole class in ONE human-gated bootstrap apply."
+  - "CLASS-CLOSURE HONESTY (H5-a). Judged against all three historical instances, design (a) alone catches NONE of them: aws_iam_role was already WRITE_COVERAGE-mapped in all three, with write_actions hand-listed as (\"iam:CreateRole\",) -- so the discovery loop would have found nothing missing. Instances 1-2 are already caught by checkers that exist today (check_passrole_implies_coverage, check_create_companion_scope_coverage). Instance 3 is caught by design (b) ONLY because a human writes the delete row. What (b)'s MANDATORY-DECLARATION upgrade adds is that a human can no longer stay SILENT about a phase: every WRITE_COVERAGE type must answer create/update/delete, and an empty answer must carry a justification. That is discovery-driven at the phase axis, which is where the class actually lives -- but it still cannot enumerate a verb nobody knows the provider calls. The only mechanism that closes THAT is empirical: read-only CloudTrail for PlatformAdmin (or an Athena-backed CloudTrail table), filed as a High follow-on rec and named here as THE class-closing item. This plan is the necessary precondition for it, not a substitute."
+  - "ROOT CAUSE (the reason the class recurs): the write-side exhaustiveness guard is DEAD CODE. scripts/checks/iam_tf/_write_coverage.py defines APPLY_WRITTEN_TYPES as frozenset(WRITE_COVERAGE) and then branches on `rtype in APPLY_WRITTEN_TYPES and rtype not in WRITE_COVERAGE` -- unsatisfiable by construction. Its only test coverage reaches the branch via monkeypatch, proving the production path is unreachable. WRITE_COVERAGE hand-lists 5 types against 30 distinct resource types present in terraform/personal. By contrast _read_coverage IS discovery-driven, which is exactly why read gaps got closed while write gaps kept recurring."
+  - "BLOCKING CONSTRAINT, measured live and reproduced deterministically this session with `terraform console` over the extracted locals (length-accurate placeholder account id, region eu-west-2): the inline identity policy is 10,156 B minified of the 10,240 B IAM hard limit -- 84 B of headroom across 33 statements. Independently confirmed statement-by-statement: the 33 statement bodies sum to 10,085 B, plus 39 B of document wrapper and 32 inter-statement commas = 10,156 B exactly. The remediation costs +2,384 B across the identity+reads surface, which would land the inline document ~2,300 B OVER a hard AWS limit. The relocation is therefore a PREREQUISITE, not an optimisation."
+  - "RELOCATION DESIGN -- reads move, authority stays. The 11 READ-ONLY Sids (IAMRolesRead 1,114 B, DataLakeBucketManage 635 B, SecretsManagerReadOnly 631 B, LambdaRead 542 B, SSMParameterRead 170 B, EventBridgeRead 162 B, SNSRead 140 B, CloudWatchAlarmsRead 117 B, SNSSubscriptionRead 106 B, CloudWatchLogsRead 103 B, SSMDescribeParameters 101 B; 3,821 B of statement body) move to ONE new customer-managed aws_iam_policy attached to the role; every write Sid and both Deny statements stay inline. CORRECTED BYTE MODEL after S1/S2/S5: inline 8,580 B / 10,240 (1,660 B headroom, 27 statements -- 26 plus the S2 Sid split); reads 3,998 B / 6,144 (2,146 B headroom, 11 statements); boundary 1,548 B / 6,144 (4,596 B headroom, 4 statements). 1 of 10 attached-policy slots used; the boundary occupies a separate slot."
+  - "BYTE-MATH DERIVATION for the corrected numbers, so a reviewer can re-check without re-running terraform. Reads doc = 3,821 (statement bodies) + 39 (wrapper) + 10 (commas) = 3,870 B, plus 128 B for the two P1-3 layer ARNs added to LambdaRead = 3,998 B. Inline post-relocation = (10,085 - 3,821) + 39 + 21 = 6,324 B / 22 statements; plus 1,729 B of new grants across the 4 new Sids and the extended Sids = 8,053 B / 26 statements; plus 527 B for the S2 split (the single prefix Sid measures 300 B; the split measures 270 B + 556 B + 1 comma = 827 B) = 8,580 B / 27 statements. Boundary = 1,373 B baseline + 103 B (the three new iam verbs) + 72 B (the S5 reads-policy ARN plus its comma) = 1,548 B. NOTE for the reviewer: S1 is BYTE-NEUTRAL. The pre-revision draft claimed the Secrets Manager read widening 'saves roughly 410 B', but that saving was never actually deducted anywhere in its byte model -- 3,998 = 3,870 + 128 with the six enumerated ARNs retained. Dropping the widening therefore costs the plan nothing at all; the only thing that changes is that a ratified control is no longer traded away for a benefit the arithmetic never recorded."
+  - "The relocation FORCES a parser change or this plan reds its own gate: _parse_bootstrap_statements only reads the inline aws_iam_role_policy, so moving the read Sids would make validate_ci_refresh_read_coverage fail for aws_secretsmanager_secret / aws_ssm_parameter / aws_iam_role / etc. The facade must UNION inline + managed statements. The managed-policy parser returns [] when the resource is absent, so the existing synthetic fixtures under tests/checks/iam_tf/validate_ci_refresh_read_coverage/ stay green unmodified; the attachment assertion fires only when the reads policy IS declared."
+  - "THE BOUNDARY HOIST IS A SECOND, INDEPENDENT PARSER BREAK (B1) -- and the pre-revision draft's claim that the six existing graduated checks 'keep passing without churn' was FALSE. _write_coverage._parse_boundary_dataplane_statement locates the boundary via _BOUNDARY_RESOURCE_RE and then FORWARD-SEARCHES for the next `Statement = [` from the resource match end; its own docstring states the no-hoisted-local assumption verbatim ('that workaround exists only for the identity policy'). Execution step 2 hoists the boundary JSON into a local so its 6,144 B precondition can self-reference the rendered document -- after which the forward search finds nothing (the boundary resource is the LAST thing in the file) and returns None, making BOTH check_passrole_implies_coverage and check_identity_iam_actions_subset_of_boundary fail with 'could not locate the DataPlaneAllow statement' -> validate --pre RED. FIX: build ONE shared locator on the _POLICY_LOCAL_REF_RE indirection _parse_bootstrap_statements already has in _read_coverage, express BOTH the reads parser and _parse_boundary_dataplane_statement on it, and rewrite the now-false docstring. VP step 6 asserts it."
+  - "TWO GRADUATED REGISTRY ROWS ROT SILENTLY IF NOT REPAIRED IN THIS PR. (i) `boundary-dataplane-new-iam-verbs` runs `awk '/aws_iam_policy\" \"github_ci_apply_boundary\"/{b=1} b'` -- it slices the file FORWARD from the boundary resource match, so once the boundary Statement array moves into a local ABOVE that resource, every verb it greps for disappears from the slice and the row fails. Retarget it to a POSITION-INDEPENDENT assertion (grep the whole file for each verb, and separately assert the three Deny Sids exist). (ii) `write-coverage-asserts-passrole-identity-and-boundary` asserts `grep -q \"PassRole\" scripts/checks/iam_tf/_write_coverage.py` with guard_symbol check_passrole_implies_coverage -- the EXACT symbol design (b) deletes. Both greps go false and nothing in the registry validates guard_symbol, so the row would fail loudly on the PR (good) but its INTENT would be lost if someone just deleted it (bad). Retarget it to scripts/checks/iam_tf/_write_companions.py and the new checker symbol."
+  - "TEARDOWN DECOUPLED (B4) -- RESOLVED: SPLIT OUT to a sibling plan. The stranded DEP-02 teardown is NOT in this plan, and that is a deliberate, stated obligation rather than a silent drop. The pre-revision draft cited rec-2847 as SUPPORT for routing the teardown through reconcile.yml; rec-2847 (OPEN, High) says the OPPOSITE. Verified in .github/workflows/reconcile.yml: the apply step is `if: success() && steps.guard.outputs.routed != 'true'`, so on a guard-BLOCK (and a destroy ALWAYS blocks) it is SKIPPED, `steps.apply.outputs.stale` is never set, and the SIX DEP-10 fresh-replan fallthrough steps (reconcile.yml lines 402, 410, 419, 428, 437, 445 -- replan, guard_fresh, review_fresh, apply_fresh, upload_fresh_plan_sha256, and the upload-artifact step) -- all gated on `steps.apply.outputs.stale == 'true'` -- are STRUCTURALLY UNREACHABLE; gated-apply-reconcile then applies the saved plan.bin verbatim with no stale handling. The saved plan for this episode IS stale (the partial gated apply advanced the tfstate serial). reconcile.yml is NOT in ci-rca.yml's workflows filter [\"CI\", \"Main Canary\", \"terraform-apply-sandbox\", \"rec-autoclose\", \"deploy-ducklake-lambdas\"], so a failure files NO rec. And the job requires a human Environment approval. Predicted outcome of doing it here: burn a human approval, re-latch red, produce no rec. THE OBLIGATION SURVIVES: the probe role agent-platform-probe-liveproof-role remains LIVE and the sandbox convergence record remains RED at 99eb274 until it is cleared. ROUTE RESOLVED BY THE HUMAN -- NEITHER route is taken here: the probe teardown AND the clearing of the red convergence latch are OUT OF SCOPE for this plan and move to a SIBLING PLAN (suggested slug reconcile-stale-plan-coverage) that fixes rec-2847's reconcile.yml recovery semantics FIRST and only then performs the teardown through the repaired CD path. The split runs along the seam plan-critique's evidence supports: rec-2847 is a reconcile.yml recovery-semantics fix with ZERO dependency on the IAM policy surface, so bundling it here would mix two unrelated review contexts; plan-critique separately VERIFIED that THIS plan's own internals (the HCL fix plus the checks that guard it) cannot be split, so that seam stays intact. CROSS-PLAN DEPENDENCY, STATED IN BOTH DIRECTIONS: (a) the sibling's teardown CANNOT run until THIS plan's human-gated bootstrap admin apply has LANDED -- it needs iam:ListInstanceProfilesForRole and iam:RemoveRoleFromInstanceProfile live, which is precisely what this plan grants, so this plan is a hard predecessor; (b) THIS plan does NOT clear the red convergence latch at 99eb274, which therefore CONTINUES to block terraform/personal CD applies until the sibling completes -- an accepted, stated cost of the split, not an oversight. Record the split and both directions on T2.48's progress_note. rec-2847 stays REFERENCED here and is never bundled here -- the sibling bundles it. rec-2882's closure in this plan rests on VP step 13's simulate, which proves both destroy companion verbs are allowed under the identity-boundary intersection -- a more direct proof of the FIX than a destroy, which would only prove it transitively."
+  - "POLICY-SPLIT DECISION -- RESOLVED: YES, author ONE numbered Decision. The human decided this at plan time, resolving what was this plan's one open decision escalation; the implementing session EXECUTES it and does not re-litigate it. NUMBER ALLOCATION: NNN is the next free number, taken at implement time -- docs/DECISIONS.md is the numbering authority (AGENTS.md), the current maximum is not a stable value across the merge queue, and this plan therefore hardcodes NO number. Re-check for a collision IMMEDIATELY BEFORE writing (see the execution step for the pure command). THE ENTRY MUST RECORD SIX THINGS, so the implementer never has to re-derive them. (1) WHAT: 11 read-only Sids relocate out of the github_ci_apply INLINE role policy into a NEW customer-managed policy named agent-platform-github-ci-apply-reads, attached to the same role. The governing principle is READS MOVE, AUTHORITY STAYS -- every iam: write Sid and BOTH Deny statements remain inline. (2) WHY: the AWS inline-policy hard limit of 10,240 B. Measured this session -- the pre-change inline policy is 10,156 B across 33 statements (84 B of headroom) and the remediation adds ~2,384 B, which would land it at roughly 12,540 B, OVER a hard limit; and a LimitExceeded on an inline policy is INVISIBLE to terraform plan, surfacing only at apply. The split is therefore a PREREQUISITE for the fix, not an optimisation. (3) THE REVERSAL HAZARD -- the single most important thing the entry records, and the reason a numbered Decision was chosen over an HCL comment: do NOT roll back by detaching the reads policy alone. That strips the apply role's ENTIRE refresh-read surface, after which every subsequent CD terraform plan fails AccessDenied BEFORE the guard runs -- including the reconcile path that would otherwise be used to recover. The correct rollback ORDER is: restore the inline policy's read Sids FIRST, then detach. The forward-apply window is closed the other way, by the depends_on edge (attachment lands before the inline shrink). (4) THE PROTECTION MODEL after the move: the relocated grants are covered by extending DenyBoundaryPolicyModification's Resource list to the new policy ARN (S5), plus the absence of iam:CreatePolicy* from BOTH the identity policy and the boundary ceiling; and the role cannot detach the policy from itself because DenySelfInlinePolicyWrite -- which stays inline -- denies iam:DetachRolePolicy on the role's own ARN. (5) REVERSAL CONDITIONS for the Decision itself: if the identity policy later shrinks enough that everything fits inline again, or if AWS raises the inline-policy limit, the split MAY be reversed -- following the rollback ORDER in (3), never by a bare detach. (6) CITATIONS: Decision 144 (the allow-list inversion this serves), Decision 143 (worst-verb scoping preserved, not traded away), Decision 92 pt 5 and Decision 77 (guard classification UNCHANGED by the split), and Decision 150 (the significance bar this entry clears). Note in the entry that decision-scout raised this as its M2 finding. The entry must name agent-platform-github-ci-apply-reads literally -- VP step 15 locates the header by that string rather than by a hardcoded number."
+  - "DECISION-SCOUT M1 DISSOLVES. The scout raised a second candidate numbered Decision covering the Secrets Manager posture (the read widening + the value-capable UpdateSecret grant). With S1, S2 and S3 applied, nothing is widened any more: reads stay at their six ratified enumerated ARNs, and UpdateSecret is enumerated at five ARNs -- both strictly inside the existing Decision 129 pt 2 posture. There is no new architectural commitment and therefore nothing for a Decision to record. This is stated explicitly so a later reader does not mistake the absence of a Decision for an oversight."
+  - "P1-1 RECOMMENDATION -- KEEP the enumeration; record it as a NAMED exception; do NOT widen the IAM read quartet to role/agent-platform-*. Reasoning: (a) widening would require relaxing _read_coverage.ENUMERATED_IAM_TYPES' literal_only assertion, which is the live enforcement of a deliberate control (Decision 129 pt 2 + pt 4(iii), procedure from Decision 98 pt 2, write-side amendment from Decision 144 pt 5) -- trading that away deserves its own Decision and its own live-proof, not a side effect of an AccessDenied remediation; (b) the cost it imposes is friction, NOT a correctness risk -- a new agent-platform-* role with no enumerated ARN fails validate --pre with a clear message, so it is never a silent AccessDeny; (c) the byte pressure that made widening attractive is entirely relieved by the relocation; (d) this apply already carries enough blast radius. The exception is recorded as the single entry in _write_symmetry's READ_SCOPE_PARITY_EXEMPT table, collocated with the rule it exempts, and its justification string cites Decision 129 pt 2 / pt 4(iii) + Decision 144 pt 5 (NOT 'Decision 35/98' -- Decision 35's live content is terraform apply-gating). A follow-on rec revisits the widening on its own merits. CONSISTENCY NOTE: the pre-revision draft applied this reasoning to IAM reads (correctly refusing to trade a control to satisfy a check) and then did the exact opposite for Secrets Manager reads at P0-6. S1/S3 make the two consistent."
+  - "P1/P2 dispositions (each is granted with a collocated why-comment, or a NAMED by-design denial in the fixture): GRANT -- iam:RemoveRoleFromInstanceProfile (the same provider function deleteRoleInstanceProfiles() that calls the List verb also calls this one; leaving a known second call in the same loop ungranted is exactly the patch-one-verb pattern this plan exists to end); secretsmanager:DeleteSecret at BOTH the agent-platform-* prefix and the DSN ARN (closing the create/destroy asymmetry the sweep found; DeleteSecret has a 7-30 day recovery window); glue:DeleteDatabase and dynamodb:DeleteTable at their existing enumerated ARNs; athena:DeleteWorkGroup in a NEW narrow Sid scoped to workgroup/agent-platform-production -- deliberately NOT folded into the existing AthenaWorkgroup Sid, whose Resource is \"*\" and would grant deletion of any workgroup including primary; s3:DeleteBucketPolicy and s3:CreateBucket at the two literal bucket ARNs (destroy/replace symmetry for aws_s3_bucket_policy). DENY by design -- s3:DeleteBucket (the data lake holds tfstate, the tfplan artifacts AND the convergence record, so a CD-executable bucket delete would let one approved apply destroy the platform's own integrity anchor; bucket destruction stays admin-tier); the three OIDC-provider lifecycle verbs (destroying or replacing the provider breaks the pipeline executing the apply); ssm:DeleteParameters plural (the provider uses the singular form for aws_ssm_parameter); lambda:ListLayerVersions / ListLayers (account-level, unscopable, and not currently called -- granting them would require Resource: \"*\")."
+  - "P0-6 FINAL POSTURE (S1+S2+S3 applied). READS: SecretsManagerReadOnly's six enumerated ARNs are moved verbatim into the reads policy, unwidened -- Decision 129 pt 2 keeps Secrets Manager enumerated because secrets return VALUES, and pt 4(iii)/its reversal conditions put it explicitly out of scope. WRITES: split into two Sids. SecretsManagerMetadataWrite grants CreateSecret/DeleteSecret/TagResource/UntagResource at secret:agent-platform-* -- none of these can read or overwrite a value. A second Sid grants ONLY secretsmanager:UpdateSecret, at exactly the five enumerated terraform/personal agent-platform-* secret ARNs (the DSN secret keeps its own pre-existing SecretsManagerDuckLakeNeonDSN Sid). PutSecretValue is granted nowhere new. Rationale for enumerating rather than prefixing UpdateSecret: it is value-capable with no metadata-only variant and no narrowing condition key -- a worst verb under Decision 143 clause 1 -- and the boundary offers NO intersection to narrow it, because DataPlaneAllow already carries secretsmanager:*. The identity policy is the sole control, so a prefix grant would be fully effective over every current AND future agent-platform-* secret with no review. Residual accepted and recorded in the fixture: UpdateSecret can still overwrite a value on those five ARNs; mitigating context is that SecretsManagerReadOnly already grants Describe*/Get* on them, so write-over is a marginal rather than a new capability class -- but it is now bounded to a named, reviewable five rather than a prefix."
+  - "S3 -- THE PARITY-RULE JUSTIFICATION IS DELETED. With the write side enumerated per S2 and reads left at their six existing enumerated prefixes (a strict superset of the five write ARNs), design (c) rule 2 (read scope >= write scope) PASSES for aws_secretsmanager_secret with NO exemption and no widening. The pre-revision draft's argument -- widen a ratified credential read scope so that a rule invented by this same plan would pass -- was circular and is gone. aws_iam_role remains the SOLE entry in READ_SCOPE_PARITY_EXEMPT."
+  - "P1-3 RECOMMENDATION -- add layer:agent-platform-* and layer:agent-platform-*:* to BOTH LambdaRead and LambdaLayerVersionWrite and adopt agent-platform-* as the layer-naming convention, keeping the three ducklake-* literals. Do NOT adopt layer:* (Decision 143). Note the sharper reason this matters: _literal_or_prefix_match would let a new layer named agent-platform-mylayer match the FUNCTION prefix function:agent-platform-* and pass read coverage -- so a new layer is a silent gap on the READ side too, not just the write side. Measured cost of the two ARNs: 128 B."
+  - "Design (c) rule 2 is differential BECAUSE of P1-1: on the pre-fix tree aws_iam_role fails the parity rule (write at role/agent-platform-*, read at 15 literal ARNs). Post-fix it is the single named exemption. Rule 2 is skipped -- with a printed note, never silently -- for types whose read grant is transitive, and that skip set is DERIVED from _read_coverage.TRANSITIVE_TYPES at import time (H1). It is NEVER hand-enumerated: the pre-revision draft hand-listed 10 of TRANSITIVE_TYPES' 11 members, omitting aws_secretsmanager_secret_version -- which execution step 9 simultaneously ADDS to WRITE_COVERAGE -- i.e. the draft reproduced this plan's own root cause inside the fix for it."
+  - "Design (c) rule 1 is differential too: on the pre-fix tree logs:TagLogGroup has no UntagLogGroup and iam:TagOpenIDConnectProvider has no UntagOpenIDConnectProvider. The rule needs an ALIAS_TAG_PAIRS mapping because ssm spells the pair AddTagsToResource / RemoveTagsFromResource rather than Tag*/Untag*."
+  - "Adjacent finding DEFERRED to its own rec, not folded in: scripts/checks/roadmap/validate_platform_roadmap.py guards `if crit.status == \"met\" and crit.met_by:`, so a MISSING met_by escapes validation entirely, and `rehomed` is never checked at all -- even though docs/contracts/exit-criteria-ledger.yaml states met/rehomed REQUIRE a non-empty met_by. Reasoning for deferral: zero coupling to the IAM surface, a different owner (roadmap validation), and its own positive/negative test obligation; folding it into an already-large IAM apply would mix two review contexts for no sequencing benefit. Filed as a rec in this plan's execution steps."
+  - "Follow-on recs to file at implement time (execution steps, not scope): (1) PlatformAdmin read-only CloudTrail (or an Athena-backed CloudTrail table) so this ENTIRE defect class becomes OBSERVABLE rather than inferred -- FILE AT HIGH, and name it in the rec body as the class-closing item for the 'headline verb granted, companion verb missing' family (see CLASS-CLOSURE HONESTY); it is also what would have resolved the P0-4 tagging-family uncertainty empirically; (2) the P1-1 IAM-read-quartet widening decision on its own merits, incl. relaxing ENUMERATED_IAM_TYPES; (3) the existing AthenaWorkgroup Sid's pre-existing Resource: \"*\" on Create/Update/Tag/Untag (a Decision 143 narrowing candidate this plan deliberately does not touch); (4) the validate_platform_roadmap met_by hole above; (5) re-verify and CLOSE rec-2770 -- its pure-shell premise is retired by Decision 148 cl.2/cl.3 and it is still OPEN, which is why the pre-revision draft cited it as a live constraint; (6) M4 (advisory, filed rather than folded in): does the data-pipeline Lambda read docs/ROADMAP-PLATFORM.yaml at RUNTIME? If it does, the roadmap-file edit in this plan is a Lambda-artifact coupling and every future roadmap edit needs a deploy step; if it does not, the coupling claim can be retired from the lambda manifest patterns. Determining that is a manifest question with its own owner, not IAM scope."
+  - "M8 ADVISORY, dispositioned NOT-NOW: DataLakeBucketManage enumerates 18 s3:Get* actions that could collapse to [\"s3:ListBucket\", \"s3:Get*\"] under the rec-2305 per-service read-wildcard pattern, freeing ~450 B. Declined for THIS PR because (a) the corrected byte model already leaves 1,660 B / 2,146 B / 4,596 B of headroom, so no byte pressure motivates it; (b) it is a grant-SET change on a relocated Sid, which would make the relocation no longer byte-identical and defeat the rollback property in this plan's rollback block; (c) it is a clean, independently-reviewable rec. The implementer may file it as a rec; it must not be folded into this PR."
+  - "rec-2846 and rec-2847 are REFERENCED here, never bundled here: they are why the stranded DEP-02 teardown is DECOUPLED from this plan rather than routed through either recovery path (see TEARDOWN DECOUPLED). This plan neither consumes nor fixes them, so bundling either HERE would be a false closure claim. rec-2847 IS bundled by the sibling plan (suggested slug reconcile-stale-plan-coverage), which fixes it first and then performs the teardown -- so do NOT add rec-2847 to this plan's bundled_recommendations or Resolves: trailer, and do NOT let the sibling's ownership be read as this plan having closed it."
+  - "P0-4 tagging-family UNCERTAINTY is not resolved by this plan and is deliberately over-granted: which logs tagging family provider 5.100 calls on create could not be determined offline (cloudtrail:LookupEvents is AccessDenied to PlatformAdmin). All four verbs are granted because that is what the empirically-validated PlatformAdmin identity does, both families are non-escalating at the same log-group prefix, and logs:UntagLogGroup is missing regardless of which family is used. Blast radius if the provider uses TagResource: every new log group create -- hence every new Lambda -- fails today, unexercised only because logs:CreateLogGroup was added at DEP-01 and no new Lambda has landed since. This is the concrete case for the CloudTrail follow-on."
+  - "terraform/bootstrap/authority_budget.json is deliberately UNCHANGED: it mirrors the IAMRoleWriteBounded SCP, which stays inline and unmodified, and it is a guard INPUT for terraform/personal classification -- which this plan does not touch. Amending it would imply a guard-classification change that is explicitly out of scope."
+  - "Branch was 1 commit behind and 1 ahead of origin/main at planning time; the only file changed on main since the branch cut is docs/ROADMAP-PLATFORM.yaml, which IS in this plan's scope (progress_note). Rebase is deferred per the assessment-time rule (surface, do not auto-rebase); the implementing session auto-rebases at commit-flow time and must re-read T2.48's progress_note after the rebase before appending to it."
+  - "ci-rca HARD BLOCK satisfied by Related-Work condition 1 (same file): the sole unresolved ci-rca rec, rec-2882, cites terraform/bootstrap/github_ci_apply.tf as its source_file, which is scope row 1 of this plan. It is bundled, and the RCA-first protocol is honoured -- the rec was reviewed in this planning pass rather than inline-patched."
+  - "Preflight context (non-blocking): open_recs=840, non_automatable=713, ops_outbox shows 4 entries under ops_recommendations -- per Decision 84 I-4 migrated-table outboxes are retired and never drained, so those are anomalies to re-file via the portal and delete, not input to this plan. One fast-tier budget breach in the last 7 days (dominant phase validate_verification_registry) -- relevant because this plan adds AND repairs graduated registry rows; keep the new rows cheap and single-pass."
+pre_implementation_checklist:
+  - Branch confirmed not on main (git branch --show-current shows a claude/... harness branch)
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md read (at minimum 55, 86, 92, 95, 98, 101, 104, 118, 119, 126, 127, 128, 129, 131, 132, 143, 144, 148, 150) -- note that Decision 35 and Decision 37 are NOT governing constraints for this work; do not cite them"
+  - "docs/contracts/decision-entry.yaml read BEFORE authoring the new Decision -- it is the sole source of truth for the entry grammar (the h2 header form, the Status/Date/Decision required markers that validate_decision_entry_conformance forward-enforces on genuinely-NEW entries, the canonical optional-marker spellings, and the size_governance ceilings). Headroom is real but finite: docs/DECISIONS.md sits at roughly 480 KB of its 500,000 B ceiling and carries about 108 of the 120 permitted live h2 headers -- author ONE tight entry, never two, and never relieve pressure by raising a ceiling"
+  - terraform/CLAUDE.md and terraform/bootstrap/CLAUDE.md read (apply model, NEVER-auto-apply rule, admin runbook)
+  - All files in scope located and readable; the four new scripts/checks/iam_tf modules' current SLOC recorded before edits
+  - "Byte model reproduced independently before editing HCL: confirm the pre-change inline document minifies to 10,156 B across 33 statements and the boundary to 1,373 B, so the post-change numbers in acceptance_criteria are verifiable rather than trusted. Method: extract the locals block to a scratch dir with a length-accurate placeholder account_id and the real region default, then `terraform console` on length(jsonencode(jsondecode(local.<name>)))"
+  - "The two AT-RISK graduated registry rows re-read before editing HCL (boundary-dataplane-new-iam-verbs, write-coverage-asserts-passrole-identity-and-boundary) -- both MUST be repaired in this PR"
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "terraform/bootstrap/github_ci_apply.tf -- RELOCATION FIRST (it is the enabler): hoist a new local for the reads-policy JSON, declare `resource \"aws_iam_policy\" \"github_ci_apply_reads\"` (name agent-platform-github-ci-apply-reads) carrying the 11 read-only Sids MOVED (not copied) out of github_ci_apply_policy_json, and declare `resource \"aws_iam_role_policy_attachment\" \"github_ci_apply_reads\"` binding it to aws_iam_role.github_ci_apply. Add `depends_on = [aws_iam_role_policy_attachment.github_ci_apply_reads]` to `resource \"aws_iam_role_policy\" \"github_ci_apply\"` (B3). Keep everything in this same file. Move SecretsManagerReadOnly's six ARNs VERBATIM -- no widening (S1)."
+  - "terraform/bootstrap/github_ci_apply.tf -- add a rec-2793-style `lifecycle { precondition { condition = length(jsonencode(jsondecode(local.<name>))) <= 6144 ... } }` to BOTH managed policy resources (reads + boundary), hoisting the boundary's policy JSON into a local so its precondition can self-reference the rendered document. Leave the inline policy's existing 10,240 B precondition untouched. THIS HOIST IS THE B1 TRIGGER -- do not land it without the parser work in the next steps."
+  - "terraform/bootstrap/github_ci_apply.tf -- extend DenyBoundaryPolicyModification's Resource list with `arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-reads` (S5, measured 71 B + 1 comma against 4,596 B of post-change boundary headroom), with a collocated comment stating why: the relocated read grants must sit behind the same EXPLICIT Deny that protects the boundary document, not merely behind the absence of an iam:CreatePolicy* grant."
+  - "terraform/bootstrap/github_ci_apply.tf -- apply every grant change: extend IAMRoleDeleteBounded, LambdaFunctionWrite, CloudWatchLogsWrite, SecretsManagerDuckLakeNeonDSN, OIDCProviderReconcile, GlueCatalog, DynamoDBCounters and LambdaLayerVersionWrite; rescope SSMFeatureFlagsManage to SSMParameterProvisioning at parameter/agent-platform/* with ssm:DeleteParameter; add the layer prefixes to LambdaRead (in the relocated reads policy); add the new Sids SNSTopicWrite, DataLakeBucketConfigWrite, AthenaWorkgroupDelete, SecretsManagerMetadataWrite (CreateSecret/DeleteSecret/TagResource/UntagResource at secret:agent-platform-*) and a SEPARATE Sid granting ONLY secretsmanager:UpdateSecret at the five enumerated terraform/personal agent-platform-* secret ARNs (S2 -- never a prefix, and PutSecretValue nowhere new); extend the boundary DataPlaneAllow with iam:ListInstanceProfilesForRole, iam:RemoveRoleFromInstanceProfile and iam:UntagOpenIDConnectProvider. Every addition carries a collocated why-comment naming the provider behaviour or rec that motivates it; the UpdateSecret Sid's comment must state the enumeration rationale (worst verb, no boundary intersection because DataPlaneAllow carries secretsmanager:*)."
+  - "terraform/bootstrap/github_ci_apply.tf -- collocate the two records: an HCL comment on the IAMRolesRead Sid stating the retirement ORDERING rule (prune a role's ARN only AFTER its destroy has applied; the read-coverage check stops requiring it the moment the resource leaves terraform/personal, but the destroy's refresh GetRole still needs it), and an HCL comment on DenyIAMEscalation recording the simulate artifact (its four verbs return explicitDeny/implicitDeny ONLY when iam:PermissionsBoundary is omitted from the simulate context -- it is NOT a gap; do not 'fix' it)."
+  - "scripts/checks/iam_tf/_read_coverage.py -- B1: generalise the rec-2793 hoisted-local indirection into ONE shared statement-array locator that resolves BOTH `policy = jsonencode({...})` and `policy = local.<name>` for ANY named resource; add `_parse_managed_policy_statements(text, name)` for a named aws_iam_policy (returning [] when absent) on top of it; MOVE `_parse_boundary_dataplane_statement` here from _write_coverage and re-express it on the same locator, re-exporting it so existing importers keep working; and REWRITE its docstring, whose 'the boundary policy is inline, no rec-2793 hoisted-local indirection' assumption this plan makes false."
+  - "scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py -- union the inline statements with the reads-policy statements into apply_statements before any downstream assertion; fail loud if the reads policy resource is declared but no aws_iam_role_policy_attachment binds it to the role; wire in the new (b) and (c) sub-checks alongside check_write_coverage."
+  - "scripts/checks/iam_tf/_write_companions.py (new) -- design (b), MANDATORY-DECLARATION: the phase-keyed LIFECYCLE_COMPANIONS table with a create/update/delete entry for EVERY WRITE_COVERAGE type (an entry may be an empty tuple ONLY with a justification string; a type with no entry for a phase FAILS LOUD). Seed rows include iam:CreateRole/create, lambda:CreateFunction/create, logs:CreateLogGroup/create+update, and the row that did not exist: iam:DeleteRole/delete -> iam:ListInstanceProfilesForRole + iam:RemoveRoleFromInstanceProfile, why='provider deleteRole() unconditionally calls deleteRoleInstanceProfiles()'. One checker that skips inert rows (trigger verb not granted), asserts each declared companion at its marker, and for iam: companions ALSO asserts presence in the boundary DataPlaneAllow ceiling. Move check_identity_iam_actions_subset_of_boundary here. Delete the two hard-coded CREATE-only checkers."
+  - "scripts/checks/iam_tf/_write_symmetry.py (new) -- design (c): rule 1 Tag/Untag symmetry over the union statements (with ALIAS_TAG_PAIRS for the ssm AddTagsToResource/RemoveTagsFromResource spelling and an exempt set carrying per-entry justifications); rule 2 read-scope >= write-scope parity per resource type, with READ_SCOPE_PARITY_EXEMPT whose SOLE entry is aws_iam_role and whose justification cites Decision 129 pt 2 / pt 4(iii) + Decision 144 pt 5, and a transitive-skip set IMPORTED from _read_coverage.TRANSITIVE_TYPES (never copied) with an explicit printed skip line per type."
+  - "scripts/checks/iam_tf/_write_coverage.py -- design (a): delete APPLY_WRITTEN_TYPES and its unsatisfiable branch, add WRITE_EXEMPT_TYPES (neon_project/neon_role/neon_database -- non-AWS, Neon API-key auth; null_resource -- local-exec only; data: sources -- read-only), iterate `{rtype for rtype, _, _ in resources}` and fail loud on any discovered type that is neither WRITE_COVERAGE-mapped nor exempt, and extend WRITE_COVERAGE with an entry per remaining discovered type (the six aws_s3_bucket_* config types, aws_sns_topic, aws_sns_topic_subscription, aws_secretsmanager_secret, aws_secretsmanager_secret_version, aws_ssm_parameter, aws_lambda_layer_version, aws_lambda_function_url, aws_lambda_permission, aws_cloudwatch_event_target, aws_athena_workgroup, aws_glue_catalog_database, aws_dynamodb_table, aws_iam_openid_connect_provider, aws_iam_role_policy, aws_s3_bucket). Do NOT list aws_iam_role_policy_attachment here -- it does NOT exist in terraform/personal (M6); enumerate the actual discovered set at implement time from the resource sweep rather than from this prose. Update the module docstring -- the current one makes a claim (\"FAILS LOUD\") that is false today."
+  - "scripts/checks/iam_tf/validate_iam_policy_size.py (new) + scripts/checks/registry.py + scripts/validate.py -- the PRECONDITION-PRESENCE gate (H3): for every aws_iam_role_policy / aws_iam_policy resource in terraform/bootstrap/*.tf, assert a lifecycle precondition exists and names the correct limit constant (10240 for inline role policies, 6144 for managed policies). Pure text; no HCL rendering, no minification, no var substitution. Register in BOTH tier sequences and add the validate.py re-export line. Include a __main__ runner mirroring validate_ci_refresh_read_coverage's."
+  - "docs/contracts/iam-simulate-fixture.yaml (new) -- design (d): free-form registry (no contract_version/status keys, per the deploy-paths.yaml / file-router.yaml precedent) holding the (verb, target_arn_template, expected_decision, required_context_keys, why) triples from the sweep, including the RULED-OUT allowed set as regression anchors, the S5 triple (iam:CreatePolicyVersion -> explicitDeny on the reads-policy ARN AND on the boundary ARN), an UpdateSecret negative triple (implicitDeny on a NON-enumerated agent-platform-* secret), every by_design denial with its justification, and the DenyIAMEscalation / iam:PassedToService context-key artifact notes. Use ${account_id} / ${region} placeholders -- never a literal account id (Decision 101)."
+  - "scripts/ci/iam_simulate.py (new) -- the POST-APPLY runner (B2: scripts/ci/, NOT scripts/verifiers/): load the fixture, resolve placeholders from sts get-caller-identity, call iam simulate-principal-policy per triple with its required_context_keys, print a per-triple table plus a mismatch count, exit non-zero on any mismatch. Do NOT register it in validate.py or the check registry, and do NOT give it a Verifier class."
+  - "docs/contracts/deploy-paths.yaml -- add one step to admin_out_of_band.procedure.steps: after any terraform/bootstrap apply that changes the apply role's grant surface, run `bin/venv-python -m scripts.ci.iam_simulate --profile agent_platform_admin --fixture docs/contracts/iam-simulate-fixture.yaml`, because a static PR-time check structurally cannot see condition-key evaluation or the identity/boundary intersection. Re-run it on any hashicorp/aws provider bump. THEN evaluate TODO-M7 (the terraform/bootstrap/CLAUDE.md pointer) -- land it only if the edit is a NET byte decrease with a matching config/prose_budgets.yaml ratchet-down; otherwise skip and say so."
+  - "Tests -- move the companion tests out of tests/checks/iam_tf/test__write_coverage.py into tests/checks/iam_tf/test__write_companions.py (dropping the monkeypatch(APPLY_WRITTEN_TYPES) test, which only ever reached the dead branch), add the load-bearing pre-fix DeleteRole regression test AND the mandatory-declaration negatives, and create tests/checks/iam_tf/test__write_symmetry.py, tests/checks/iam_tf/test_validate_iam_policy_size.py and tests/test_iam_simulate.py. Every new check gets a POSITIVE and a NEGATIVE case; no new test module imports another test module (validate_no_cross_test_imports)."
+  - "config/agent/verification_registry/registry.yaml -- (i) REPAIR the two at-risk rows FIRST: retarget `boundary-dataplane-new-iam-verbs` to a POSITION-INDEPENDENT command (its awk currently slices forward from the boundary resource match, which the hoist breaks), and retarget `write-coverage-asserts-passrole-identity-and-boundary` to scripts/checks/iam_tf/_write_companions.py with the new checker symbol in guard_symbol (design (b) deletes check_passrole_implies_coverage). (ii) ADD the graduated rows for VP steps 1, 2, 3, 4, 5, 6 (command_exit_zero / grep_count) and step 8 (test_selector, node_id tests/checks/iam_tf/test__write_companions.py), each with plan_slug iam-write-surface-completion. Confirm each passes the differential-admission gate (fails on the reverted tree) -- do NOT graduate steps 7, 9, 10 or 11. bin/venv-python IS permitted in a graduated command (Decision 148 cl.2)."
+  - "docs/DECISIONS.md + docs/decisions-index.json -- AUTHOR THE NUMBERED DECISION for the inline -> customer-managed policy-architecture split. The human resolved this YES at plan time; do not re-litigate it, and do not skip it. ALLOCATE NNN AT IMPLEMENT TIME, never from this plan: run `grep -hoE \"^#{2,3} Decision [0-9]+:\" docs/DECISIONS.md docs/DECISIONS_ARCHIVE.md | grep -oE \"[0-9]+\" | sort -n | tail -1` to read the highest number allocated across BOTH files, take the next one, and RE-RUN that same command immediately before writing to confirm no collision appeared while you worked (a concurrent merge moves it). Append the entry to docs/DECISIONS.md following docs/contracts/decision-entry.yaml exactly -- h2 `## Decision NNN: <title> (Decided)` plus the Status / Date / Decision required markers -- carrying the SIX mandated contents verbatim from the POLICY-SPLIT DECISION -- RESOLVED context entry (what moves and the reads-move-authority-stays principle; the 10,240 B byte reason and its plan-invisibility; the reversal hazard AND its correct order; the post-move protection model; the entry's own reversal conditions; and the Decision 144 / 143 / 92 pt 5 / 77 / 150 citations plus the decision-scout M2 provenance). The body MUST name agent-platform-github-ci-apply-reads literally -- VP step 15 locates the header by that string, not by a number. THEN regenerate the derived index: `bin/venv-python -m scripts.decisions_index --write`. Skipping the regen reds validate --pre (validate_decisions_index_freshness fails on drift OR absence). Do NOT run the portal backfill here -- that is post-merge, VP step 15."
+  - "docs/ROADMAP-PLATFORM.yaml -- append a T2.48 progress_note paragraph ONLY (third-instance root cause, the relocation, the retained-enumeration named exception, the honest class-closure scope, the number of the Decision just authored, and the fact that the DEP-02 teardown is OUT of this plan and owned by the sibling plan (suggested slug reconcile-stale-plan-coverage) -- with the probe role still live, the convergence record still red at 99eb274 blocking terraform/personal CD applies until the sibling completes, and this plan a hard predecessor of the sibling's teardown). No criterion status flip, no item status flip."
+  - "Execute the pre-deploy Verification Plan (steps 1-11); loop until every step passes. Do not proceed to the apply while any step is red."
+  - "Commit, push, open the PR, subscribe to PR activity, and end the turn. Squash-merge on confirmed-green CI with the body trailer `Resolves: rec-2882, rec-2845`."
+  - "POST-MERGE, ADMIN CONTAINER, HUMAN GATE: run VP step 12 -- terraform -chdir=terraform/bootstrap plan under agent_platform_admin, PRESENT the redacted plan (0 destroy expected), wait for explicit human direction, then apply. Confirm in the apply log that the attachment was created BEFORE the inline policy update. Never self-direct this apply."
+  - "POST-APPLY: run VP step 13 (the (d) fixture against live state). This is rec-2882's closure evidence. Fix any mismatch in HCL and re-apply through the same human gate -- do not proceed on a red fixture."
+  - "Run VP step 14 -- sync the read cache via the portal and verify rec-2882 and rec-2845 are closed."
+  - "Run VP step 15 -- confirm the new Decision's `## Decision NNN:` header is present in docs/DECISIONS.md and ETL it into ops_decisions via `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md --profile agent_platform` (post-merge only; the portal is the sole write path, Single Portal Invariant)."
+  - "File the follow-on recs via `bin/venv-python -m scripts.ops_data_portal` (calling get_rec_write_guidance() before file_rec, Decision 66): (1) PlatformAdmin read-only CloudTrail AT HIGH, named as the class-closing item; (2) the P1-1 widening decision; (3) the AthenaWorkgroup Resource:\"*\" narrowing; (4) the validate_platform_roadmap met_by hole; (5) re-verify and close rec-2770 (retired by Decision 148); (6) the M4 roadmap/data-pipeline runtime-coupling question; (7) optionally M8 (DataLakeBucketManage s3:Get* collapse)."
+  - "DO NOT attempt the DEP-02 teardown in this session, and do NOT clear the red convergence latch (TEARDOWN DECOUPLED -- both are SPLIT OUT to the sibling plan, suggested slug reconcile-stale-plan-coverage, which fixes rec-2847's reconcile.yml recovery semantics first and then tears down through the repaired CD path). Report its status explicitly: probe role agent-platform-probe-liveproof-role still live; convergence record still red at 99eb274 and therefore still blocking terraform/personal CD applies until the sibling completes; and THIS plan's bootstrap admin apply now landed, which is the sibling's unblocking precondition (it needs iam:ListInstanceProfilesForRole and iam:RemoveRoleFromInstanceProfile live). Do NOT file rec-2847 as resolved and do NOT add it to this PR's Resolves: trailer -- the sibling bundles it."
+  - "FOLLOW-UP PR (never in this one): prune the agent-platform-probe-liveproof-role ARN from the relocated IAMRolesRead Sid, ONLY after the teardown has actually removed the role from live AWS."
+  - "Report: what was implemented, the three documents' post-apply byte sizes and headroom against the modelled 8,580 / 3,998 / 1,548, every P1/P2 disposition as landed, the simulate results, the two repaired graduated rows, the TODO-M7 disposition, the NUMBER allocated to the new Decision plus confirmation the backfill returned failed=0, and the outstanding teardown now owned by the sibling plan."
+rollback: >-
+  Code side: revert the PR on main; the checks and the fixture are inert without the HCL, and no
+  runtime path consumes them. Live IAM side: the change is additive at the identity layer plus one new
+  attached managed policy, so rollback is a second human-gated bootstrap apply that reverts
+  github_ci_apply.tf and re-inlines the 11 read Sids -- the relocation is reversible because the reads
+  document's statements are byte-identical to the ones removed from the inline policy (the grant SET is
+  unchanged by the move, only its container; this is also why the M8 s3:Get* collapse is deliberately
+  NOT folded in). ORDERING HAZARD, IN BOTH DIRECTIONS: the reads policy and the inline policy are a
+  single logical read surface split across two resources with no natural dependency between them. On a
+  FORWARD apply the `depends_on` edge (B3) guarantees attach-then-shrink, so a mid-apply failure leaves
+  the reads granted twice rather than zero times. On ROLLBACK the same hazard runs the other way -- do
+  NOT detach or delete the reads policy before the inline policy has been restored, and NEVER detach the
+  reads policy alone: that strips the apply role's entire refresh-read surface and every subsequent
+  `terraform plan` fails AccessDenied before the guard runs, including any reconcile. THIS ORDERING
+  HAZARD IS THE LOAD-BEARING CONTENT OF THE NUMBERED DECISION THIS PLAN AUTHORS (see the POLICY-SPLIT
+  DECISION -- RESOLVED context entry); cite that Decision's number here at implement time, and treat its
+  clause (3) as the authoritative rollback ORDER -- restore the inline read Sids FIRST, then detach. If the post-apply
+  fixture shows an over-grant, prefer a forward-fix apply that narrows the offending Sid over a full
+  revert. The convergence record must never be hand-edited during any rollback -- only a converged apply
+  may write it green.

@@ -28,7 +28,10 @@ class TestGetChangedFilesOriginMain:
             result.stdout = "scripts/validate.py\ntests/conftest.py\n"
             return result
 
-        with patch("scripts.checks._common.run", side_effect=mock_run):
+        with (
+            patch("scripts.checks._common.push_context_base", return_value=None),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+        ):
             files = get_changed_files()
 
         assert "scripts/validate.py" in files
@@ -49,7 +52,10 @@ class TestGetChangedFilesOriginMain:
                 result.stdout = "scripts/validate.py\n"
             return result
 
-        with patch("scripts.checks._common.run", side_effect=mock_run):
+        with (
+            patch("scripts.checks._common.push_context_base", return_value=None),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+        ):
             files = get_changed_files()
 
         assert "scripts/validate.py" in files

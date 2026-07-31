@@ -181,7 +181,7 @@ class TestTelemetryMappings:
 
         expected = {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_execution_plans"}
         assert set(sync_ops._TABLE_TO_LOCAL) == expected
-        assert sync_ops._DUCKLAKE_MIGRATED_TABLES == frozenset(expected)
+        assert sync_ops.DUCKLAKE_MIGRATED_TABLES == frozenset(expected)
         # The Athena pull estate is gone: no view map, no per-table Athena pull.
         assert not hasattr(sync_ops, "_TABLE_TO_VIEW")
         assert not hasattr(sync_ops, "_pull_single_table_athena")

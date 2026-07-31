@@ -1,8 +1,9 @@
 """Shared singleton load of scripts/test_coverage_checker.py under the "test_coverage_checker"
 module name.
 
-The three tests/test_coverage_checker_*.py files (post rec-2709 Wave 6b decomposition of the
-former tests/test_coverage_checker.py monolith) need `check_test_file_exists()` /
+The five modules under tests/test_coverage_checker/ (post rec-2709 Wave 6b decomposition of the
+former tests/test_coverage_checker.py monolith, now the checker's own concern-split test package)
+need `check_test_file_exists()` /
 `check_per_file_coverage()` plus `patch("test_coverage_checker.<name>")` interception to keep
 working: those functions resolve module-global names (e.g. map_source_to_test, ROOT, subprocess)
 on THEIR OWN module object, while `unittest.mock.patch` resolves the "test_coverage_checker.<name>"

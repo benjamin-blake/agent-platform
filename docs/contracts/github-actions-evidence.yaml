@@ -1,0 +1,269 @@
+schema_version: 1
+required_retention_classes:
+- ephemeral_handoff
+- ordinary_ci
+- governed_deployment
+- security_evidence
+retention_classes:
+  ephemeral_handoff:
+    purpose: Short-lived transfer between governed jobs
+    minimum_days: 1
+    maximum_days: 2
+    delayed_rca_days: 1
+    expiry_state: unavailable_expired
+    recovery: rerun_governed_workflow
+  ordinary_ci:
+    purpose: Ordinary CI diagnostics consumed by delayed RCA
+    minimum_days: 7
+    maximum_days: 14
+    delayed_rca_days: 14
+    expiry_state: unavailable_expired
+    recovery: rerun_ci
+  governed_deployment:
+    purpose: Governed deployment and reconciliation evidence
+    minimum_days: 7
+    maximum_days: 30
+    delayed_rca_days: 30
+    expiry_state: unavailable_expired
+    recovery: rerun_human_gated_workflow
+  security_evidence:
+    purpose: Security investigation evidence
+    minimum_days: 30
+    maximum_days: 90
+    delayed_rca_days: 90
+    expiry_state: unavailable_expired
+    recovery: consult_security_event_source
+diagnostic_classes:
+  native_step_failure:
+    bounded_surface: annotation
+    description: GitHub native step failure annotation; bounded to one selected critical step
+  ci_rca_log_evidence:
+    bounded_surface: typed_artifact
+    schema: ci-rca-log-evidence/v1
+s1_linkage:
+  schema: ci-rca-log-evidence/v1
+  producer: scripts/ci_rca/fetch_logs.py
+  extractor: scripts/ci_rca/log_evidence.py
+  consumer: scripts/ci_rca/evidence.py
+governed_jobs:
+- workflow: .github/workflows/ci.yml
+  workflow_name: CI
+  job: pr-validate
+  critical_step:
+    name: Set up Python 3.12
+  diagnostic_id: ACTIONS_CI_PR_VALIDATE
+  surface:
+    class: native_step_failure
+    step:
+      name: Set up Python 3.12
+- workflow: .github/workflows/ci.yml
+  workflow_name: CI
+  job: main-validate
+  critical_step:
+    name: Configure AWS credentials (OIDC -- branch role)
+  diagnostic_id: ACTIONS_CI_MAIN_VALIDATE
+  surface:
+    class: native_step_failure
+    step:
+      name: Configure AWS credentials (OIDC -- branch role)
+- workflow: .github/workflows/ci.yml
+  workflow_name: CI
+  job: terraform-validate
+  critical_step:
+    id: mirror_oidc
+  diagnostic_id: ACTIONS_CI_TERRAFORM_VALIDATE
+  surface:
+    class: native_step_failure
+    step:
+      id: mirror_oidc
+- workflow: .github/workflows/ci.yml
+  workflow_name: CI
+  job: signal-green
+  critical_step:
+    name: Signal green CI (wake a watching session)
+  diagnostic_id: ACTIONS_CI_SIGNAL_GREEN
+  surface:
+    class: native_step_failure
+    step:
+      name: Signal green CI (wake a watching session)
+- workflow: .github/workflows/main-canary.yml
+  workflow_name: Main Canary
+  job: canary
+  critical_step:
+    name: Configure AWS credentials (OIDC -- branch role)
+  diagnostic_id: ACTIONS_MAIN_CANARY_CANARY
+  surface:
+    class: native_step_failure
+    step:
+      name: Configure AWS credentials (OIDC -- branch role)
+- workflow: .github/workflows/reconcile.yml
+  workflow_name: reconcile
+  job: resolve-target
+  critical_step:
+    id: target
+  diagnostic_id: ACTIONS_RECONCILE_RESOLVE_TARGET
+  surface:
+    class: native_step_failure
+    step:
+      id: target
+- workflow: .github/workflows/reconcile.yml
+  workflow_name: reconcile
+  job: apply-reconcile
+  critical_step:
+    id: tfver
+  diagnostic_id: ACTIONS_RECONCILE_APPLY_RECONCILE
+  surface:
+    class: native_step_failure
+    step:
+      id: tfver
+- workflow: .github/workflows/reconcile.yml
+  workflow_name: reconcile
+  job: gated-apply-reconcile
+  critical_step:
+    id: tfver
+  diagnostic_id: ACTIONS_RECONCILE_GATED_APPLY_RECONCILE
+  surface:
+    class: native_step_failure
+    step:
+      id: tfver
+- workflow: .github/workflows/deploy-ducklake-lambdas.yml
+  workflow_name: deploy-ducklake-lambdas
+  job: deploy-maintenance
+  critical_step:
+    id: oidc_deploy
+  diagnostic_id: ACTIONS_DEPLOY_DUCKLAKE_LAMBDAS_DEPLOY_MAINTENANCE
+  surface:
+    class: native_step_failure
+    step:
+      id: oidc_deploy
+- workflow: .github/workflows/deploy-ducklake-lambdas.yml
+  workflow_name: deploy-ducklake-lambdas
+  job: maintenance-smoke
+  critical_step:
+    name: Configure AWS credentials (OIDC -- github_ci_branch role, DuckLake maintenance-smoke invoke)
+  diagnostic_id: ACTIONS_DEPLOY_DUCKLAKE_LAMBDAS_MAINTENANCE_SMOKE
+  surface:
+    class: native_step_failure
+    step:
+      name: Configure AWS credentials (OIDC -- github_ci_branch role, DuckLake maintenance-smoke invoke)
+- workflow: .github/workflows/deploy-ducklake-lambdas.yml
+  workflow_name: deploy-ducklake-lambdas
+  job: reconcile-gate
+  critical_step:
+    name: Setup Python 3.12
+  diagnostic_id: ACTIONS_DEPLOY_DUCKLAKE_LAMBDAS_RECONCILE_GATE
+  surface:
+    class: native_step_failure
+    step:
+      name: Setup Python 3.12
+- workflow: .github/workflows/deploy-ducklake-lambdas.yml
+  workflow_name: deploy-ducklake-lambdas
+  job: deploy-serving
+  critical_step:
+    id: oidc_deploy
+  diagnostic_id: ACTIONS_DEPLOY_DUCKLAKE_LAMBDAS_DEPLOY_SERVING
+  surface:
+    class: native_step_failure
+    step:
+      id: oidc_deploy
+- workflow: .github/workflows/deploy-ducklake-lambdas.yml
+  workflow_name: deploy-ducklake-lambdas
+  job: smoke
+  critical_step:
+    name: Configure AWS credentials (OIDC -- github_ci_branch role, DuckLake writer+reader invoke)
+  diagnostic_id: ACTIONS_DEPLOY_DUCKLAKE_LAMBDAS_SMOKE
+  surface:
+    class: native_step_failure
+    step:
+      name: Configure AWS credentials (OIDC -- github_ci_branch role, DuckLake writer+reader invoke)
+- workflow: .github/workflows/deploy-prod-lambdas.yml
+  workflow_name: deploy-prod-lambdas
+  job: deploy
+  critical_step:
+    id: oidc_deploy
+  diagnostic_id: ACTIONS_DEPLOY_PROD_LAMBDAS_DEPLOY
+  surface:
+    class: native_step_failure
+    step:
+      id: oidc_deploy
+- workflow: .github/workflows/deploy-prod-lambdas.yml
+  workflow_name: deploy-prod-lambdas
+  job: smoke
+  critical_step:
+    name: Configure AWS credentials (OIDC -- github_ci_branch role, prod-class invoke)
+  diagnostic_id: ACTIONS_DEPLOY_PROD_LAMBDAS_SMOKE
+  surface:
+    class: native_step_failure
+    step:
+      name: Configure AWS credentials (OIDC -- github_ci_branch role, prod-class invoke)
+- workflow: .github/workflows/terraform-apply-sandbox.yml
+  workflow_name: terraform-apply-sandbox
+  job: apply-sandbox
+  critical_step:
+    id: tfver
+  diagnostic_id: ACTIONS_TERRAFORM_APPLY_SANDBOX_APPLY_SANDBOX
+  surface:
+    class: native_step_failure
+    step:
+      id: tfver
+- workflow: .github/workflows/terraform-apply-sandbox.yml
+  workflow_name: terraform-apply-sandbox
+  job: speculative-plan
+  critical_step:
+    id: oidc_plan
+  diagnostic_id: ACTIONS_TERRAFORM_APPLY_SANDBOX_SPECULATIVE_PLAN
+  surface:
+    class: native_step_failure
+    step:
+      id: oidc_plan
+- workflow: .github/workflows/terraform-apply-sandbox.yml
+  workflow_name: terraform-apply-sandbox
+  job: advisory-status
+  critical_step:
+    name: Configure AWS credentials (OIDC -- PR read-only role)
+  diagnostic_id: ACTIONS_TERRAFORM_APPLY_SANDBOX_ADVISORY_STATUS
+  surface:
+    class: native_step_failure
+    step:
+      name: Configure AWS credentials (OIDC -- PR read-only role)
+- workflow: .github/workflows/terraform-apply-sandbox.yml
+  workflow_name: terraform-apply-sandbox
+  job: gated-apply
+  critical_step:
+    id: tfver
+  diagnostic_id: ACTIONS_TERRAFORM_APPLY_SANDBOX_GATED_APPLY
+  surface:
+    class: native_step_failure
+    step:
+      id: tfver
+- workflow: .github/workflows/rec-autoclose.yml
+  workflow_name: rec-autoclose
+  job: autoclose
+  critical_step:
+    id: detect-decisions
+  diagnostic_id: ACTIONS_REC_AUTOCLOSE_AUTOCLOSE
+  surface:
+    class: native_step_failure
+    step:
+      id: detect-decisions
+artifact_uploads:
+- workflow: .github/workflows/ci.yml
+  job: pr-validate
+  step: Upload affected-set selection manifest
+  artifact: selection-manifest
+  retention_class: ordinary_ci
+- workflow: .github/workflows/ci.yml
+  job: main-validate
+  step: Upload pytest junit report (v2 fingerprint substrate)
+  artifact: pytest-junit
+  retention_class: ordinary_ci
+- workflow: .github/workflows/main-canary.yml
+  job: canary
+  step: Upload pytest junit report (v2 fingerprint substrate)
+  artifact: pytest-junit
+  retention_class: ordinary_ci
+- workflow: .github/workflows/reconcile.yml
+  job: apply-reconcile
+  step: Upload fresh plan.bin as a run-scoped artifact (RECONCILE_FRESH_PLAN_ARTIFACT)
+  artifact: reconcile-fresh-plan-${{ github.run_id }}
+  retention_class: ephemeral_handoff

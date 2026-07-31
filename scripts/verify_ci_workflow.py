@@ -147,8 +147,9 @@ def _check_fetch_depth() -> None:
     assert pr_with.get("fetch-depth") == 0, f"pr-validate checkout fetch-depth is {pr_with.get('fetch-depth')!r}, expected 0"
 
     main_with = main_checkout.get("with", {}) or {}
-    assert "fetch-depth" not in main_with, (
-        f"main-validate checkout has unexpected fetch-depth: {main_with.get('fetch-depth')!r}"
+    assert main_with.get("fetch-depth") == 2, (
+        f"main-validate checkout fetch-depth is {main_with.get('fetch-depth')!r}, expected 2 "
+        "(Decision 159: HEAD~1 must resolve for the push-context diff base, squash-merge convention)"
     )
 
 
@@ -391,26 +392,224 @@ _PATTERN_MATCHING_CONSTRUCT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CI_RCA_FETCH_STEP = "      - name: Fetch failed run logs"
+
+
+def _read_ci_rca_authority_sources() -> tuple[str, str]:
+    return tuple(Path(path).read_text(encoding="utf-8") for path in (".github/workflows/ci-rca.yml", "docs/DECISIONS.md"))  # type: ignore[return-value]
+
+
+def _ci_rca_fetch_source_comment(workflow_source: str) -> str:
+    matches = re.findall(rf"((?:^      #.*\n)+)(?=^{re.escape(_CI_RCA_FETCH_STEP)}$)", workflow_source, re.MULTILINE)
+    assert workflow_source.count(_CI_RCA_FETCH_STEP) == 1, "GAL-03: Fetch source anchor is missing or duplicated"
+    assert len(matches) == 1, "GAL-03: Fetch anchor is missing, duplicated, or lacks immediately adjacent provenance"
+    return matches[0]
+
+
+def _decision_72_entry(decisions_source: str) -> str:
+    headers = list(re.finditer(r"^## Decision (\d+):", decisions_source, re.MULTILINE))
+    decision_72 = [match for match in headers if match.group(1) == "72"]
+    assert len(decision_72) == 1, "GAL-03: docs/DECISIONS.md must contain exactly one well-formed Decision 72 H2 header"
+    start = decision_72[0]
+    end = next((match.start() for match in headers if match.start() > start.start()), None)
+    assert end is not None, "GAL-03: Decision 72 entry has no following Decision H2 boundary"
+    return decisions_source[start.start() : end]
+
+
+def _check_ci_rca_authority_anchor() -> None:
+    workflow_source, decisions_source = _read_ci_rca_authority_sources()
+    comment = _ci_rca_fetch_source_comment(workflow_source)
+    provenance = ("Decision 72 is provenance", "workflow_run-triggered CI-RCA failed-run log retrieval")
+    assert all(fragment in comment for fragment in provenance), (
+        "GAL-03: adjacent comment must identify Decision 72 only as CI-RCA failed-run log retrieval provenance"
+    )
+    assert all(fragment in comment for fragment in ("local", "YAML-side fail-closed guard")), (
+        "GAL-03: adjacent comment must identify test -s as a local YAML-side fail-closed guard"
+    )
+    assert "Decision 143" not in comment, "GAL-03: adjacent comment retains the stale Decision 143 mitigation claim"
+    assert "Decision 72 mitigation" not in comment and "Decision 72 guard" not in comment, (
+        "GAL-03: adjacent comment must not claim Decision 72 owns the local guard"
+    )
+
+    authority = ("On CI failure", "`workflow_run`-triggered", ".github/workflows/ci-rca.yml", "failed run logs", "gh run view")
+    missing = [fragment for fragment in authority if fragment not in _decision_72_entry(decisions_source)]
+    assert not missing, f"GAL-03: bounded Decision 72 entry does not establish CI-RCA failed-run log retrieval: {missing}"
+
 
 def _check_ci_rca_fetch_classification() -> None:
-    """ALLOWLIST guard (rec-2857 forward fix): the "Fetch failed run logs" step's run: body must
-    invoke scripts.ci_rca.fetch_logs and must contain NO pattern-matching construct at all --
-    grep/egrep/rg/awk/sed/case/=~/inline `python -c`. An allowlist (assert the ABSENCE of the
-    whole construct class) is strictly stronger than a blocklist of known evasion shapes: the
-    post-change step body reduces to just the module invocation plus `test -s`, so there is no
-    legitimate pattern-matching construct left that a blocklist would need to carve out. This
-    guards against the log-body content grep (rec-2857) being reintroduced in any shell form.
-    """
+    """Reject pattern matching in the bounded failed-log retrieval step (rec-2857)."""
+    _check_ci_rca_authority_anchor()
     data = _load(".github/workflows/ci-rca.yml")
     job = data.get("jobs", {}).get("rca", {})
     run_text = _get_step_run_text(job, "Fetch failed run logs")
+    evidence_run_text = _get_step_run_text(job, "Generate evidence bundle")
 
     assert "scripts.ci_rca.fetch_logs" in run_text, "'Fetch failed run logs' step no longer invokes scripts.ci_rca.fetch_logs"
+    assert "--out /tmp/ci-rca-log-evidence.json" in run_text, "GAL-01: fetch output is not the typed retrieval envelope"
+    assert "scripts.ci_rca.log_evidence --validate" in run_text, "GAL-01: bounded retrieval envelope is not validated"
+    assert "--extract-body /tmp/ci-rca-failed.log" in run_text, "GAL-01: agent log is not extracted from validated evidence"
+    assert "test -s /tmp/ci-rca-log-evidence.json" in run_text, "GAL-01: retrieval envelope false-green guard is missing"
+    assert "test -s /tmp/ci-rca-failed.log" in run_text, "GAL-01: extracted body false-green guard is missing"
+    assert "--retrieval-envelope /tmp/ci-rca-log-evidence.json" in evidence_run_text, (
+        "GAL-01: durable evidence generation does not consume the validated retrieval envelope"
+    )
+    assert "gh run view" not in run_text or "--log" not in run_text, (
+        "GAL-01: workflow contains an uncapped direct log retrieval"
+    )
+    fetch_source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
+    for required in (
+        "_run_log(primary_command, max_bytes, max_lines)",
+        'remaining = max_bytes - len("".join(fragments).encode("utf-8"))',
+        "remaining_lines = max_lines -",
+        "_run_log(command, remaining, remaining_lines)",
+        'selected.sort(key=lambda item: item["job_id"])',
+    ):
+        assert required in fetch_source, f"GAL-01: bounded retrieval invariant missing: {required}"
 
     match = _PATTERN_MATCHING_CONSTRUCT_RE.search(run_text)
     assert match is None, (
         f"'Fetch failed run logs' step run: body contains a pattern-matching construct "
         f"({match.group(0)!r}) -- the log-body content check must never be reintroduced (rec-2857)"
+    )
+
+
+# rec-2847 part (c), narrowed to reconcile.yml's red-recovery topology. The six DEP-10
+# fresh-replan fallthrough steps; the seventh (the upload-artifact step) carries no `id` and is
+# located by its `uses:` below.
+_RECOVERY_FALLTHROUGH_STEP_IDS = (
+    "replan",
+    "guard_fresh",
+    "review_fresh",
+    "apply_fresh",
+    "upload_fresh_plan_sha256",
+)
+_RECOVERY_FRESH_PLAN_SIGNAL = "steps.route.outputs.needs_fresh_plan == 'true'"
+# The pre-fix, single-cause signal. A saved-plan guard-BLOCK SKIPS the `apply` step, so this
+# output is never set on exactly the episodes that most need the fallthrough -- gating any
+# fallthrough step on it makes that step structurally unreachable on the BLOCK route.
+_RECOVERY_LEGACY_STALE_SIGNAL = "steps.apply.outputs.stale"
+_RECOVERY_STALE_DETECTION_MARKERS = (
+    "saved plan is stale|plan file can no longer be applied|state was changed",
+    "stale=true",
+    "STALE_PLAN_FRESH_REPLAN",
+)
+_RECOVERY_FRESH_PLAN_PENDING = "needs.apply-reconcile.outputs.fresh_plan_pending == 'true'"
+_RECOVERY_FRESH_PLAN_NOT_PENDING = "needs.apply-reconcile.outputs.fresh_plan_pending != 'true'"
+
+
+def _recovery_step_body(step: dict[str, Any]) -> str:
+    """Flatten one step's `run:` body and `env:` block into a single searchable string."""
+    env = step.get("env") or {}
+    env_text = "\n".join(f"{key}: {value}" for key, value in env.items())
+    return f"{step.get('run') or ''}\n{env_text}"
+
+
+def _check_recovery_workflow_topology() -> None:
+    """rec-2847: reconcile.yml's red-recovery flow must stay reachable on BOTH fresh-plan causes.
+
+    Four invariants, asserted over the PARSED workflow (never a whole-file grep):
+      (i)   the `route` aggregator exists and reads BOTH cause signals;
+      (ii)  no fresh-replan fallthrough step is gated on the pre-fix stale-only signal, and every
+            one of them is gated on the aggregate `needs_fresh_plan` signal;
+      (iii) the saved-plan apply step still carries its stale-signature detection -- the union
+            ADDS to the DEP-10 stale route, it must never replace it;
+      (iv)  the cross-job hand-off is intact: the `fresh_plan_pending` / `fresh_plan_sha256` job
+            outputs are declared, gated-apply-reconcile's download + sha256 VERIFY steps are gated
+            on pending, and fetch-saved-plan is gated on its negation (mutually exclusive sources).
+    """
+    data = _load(".github/workflows/reconcile.yml")
+    jobs = data.get("jobs", {})
+
+    apply_job = jobs.get("apply-reconcile")
+    assert apply_job is not None, "reconcile.yml has no apply-reconcile job"
+    gated_job = jobs.get("gated-apply-reconcile")
+    assert gated_job is not None, "reconcile.yml has no gated-apply-reconcile job"
+
+    steps = apply_job.get("steps", []) or []
+    by_id = {step.get("id"): step for step in steps if step.get("id")}
+
+    # (i) the route aggregator exists and unions BOTH causes.
+    route = by_id.get("route")
+    assert route is not None, (
+        "reconcile.yml apply-reconcile has no `route` step -- without it the fresh-replan "
+        "fallthrough is gated on a single cause and is structurally unreachable on a saved-plan "
+        "guard-BLOCK (rec-2847)"
+    )
+    route_body = _recovery_step_body(route)
+    for cause in (_RECOVERY_LEGACY_STALE_SIGNAL, "steps.guard.outputs.routed"):
+        assert cause in route_body, (
+            f"`route` step does not read cause signal {cause!r} -- needs_fresh_plan must be the "
+            "UNION of the stale-saved-plan and saved-plan-guard-routed causes, or the defect is "
+            "merely relocated"
+        )
+    assert "needs_fresh_plan" in route_body, "`route` step does not emit a needs_fresh_plan output"
+
+    # (ii) every fallthrough step rides the aggregate signal, none the pre-fix stale-only one.
+    upload_artifact = next(
+        (step for step in steps if str(step.get("uses", "")).startswith("actions/upload-artifact")),
+        None,
+    )
+    assert upload_artifact is not None, "reconcile.yml apply-reconcile has no upload-artifact fallthrough step"
+
+    gated_steps: list[tuple[str, dict[str, Any]]] = [
+        (step_id, by_id[step_id]) for step_id in _RECOVERY_FALLTHROUGH_STEP_IDS if step_id in by_id
+    ]
+    missing = [step_id for step_id in _RECOVERY_FALLTHROUGH_STEP_IDS if step_id not in by_id]
+    assert not missing, f"reconcile.yml apply-reconcile is missing fresh-replan fallthrough step(s): {missing}"
+    gated_steps.append(("upload-artifact", upload_artifact))
+
+    for label, step in gated_steps:
+        condition = str(step.get("if", ""))
+        assert _RECOVERY_LEGACY_STALE_SIGNAL not in condition, (
+            f"fallthrough step {label!r} is still gated on {_RECOVERY_LEGACY_STALE_SIGNAL!r} -- "
+            "a saved-plan guard-BLOCK skips the apply step, so that output is never set and this "
+            "step can never run on the BLOCK route (rec-2847)"
+        )
+        assert _RECOVERY_FRESH_PLAN_SIGNAL in condition, (
+            f"fallthrough step {label!r} is not gated on {_RECOVERY_FRESH_PLAN_SIGNAL!r}: {condition!r}"
+        )
+
+    # (iii) the DEP-10 stale route survived -- the union ADDS to it, never replaces it.
+    apply_step = by_id.get("apply")
+    assert apply_step is not None, "reconcile.yml apply-reconcile has no saved-plan `apply` step"
+    apply_body = apply_step.get("run") or ""
+    for marker in _RECOVERY_STALE_DETECTION_MARKERS:
+        assert marker in apply_body, (
+            f"saved-plan `apply` step lost its stale-signature detection ({marker!r}) -- the "
+            "guard-BLOCK cause must be UNIONED with the stale cause, not substituted for it"
+        )
+
+    # (iv) the cross-job hand-off is intact.
+    outputs = apply_job.get("outputs", {}) or {}
+    assert "steps.upload_fresh_plan_sha256.outcome" in str(outputs.get("fresh_plan_pending", "")), (
+        "apply-reconcile does not declare a fresh_plan_pending job output derived from steps.upload_fresh_plan_sha256.outcome"
+    )
+    assert "steps.upload_fresh_plan_sha256.outputs.sha256" in str(outputs.get("fresh_plan_sha256", "")), (
+        "apply-reconcile does not declare a fresh_plan_sha256 job output"
+    )
+
+    gated_job_steps = gated_job.get("steps", []) or []
+    download = next(
+        (step for step in gated_job_steps if str(step.get("uses", "")).startswith("actions/download-artifact")),
+        None,
+    )
+    assert download is not None, "gated-apply-reconcile has no download-artifact step"
+    assert _RECOVERY_FRESH_PLAN_PENDING in str(download.get("if", "")), (
+        f"gated-apply-reconcile's download step is not gated on {_RECOVERY_FRESH_PLAN_PENDING!r}: {download.get('if')!r}"
+    )
+
+    verify = next((step for step in gated_job_steps if "FRESH_PLAN_SHA256" in _recovery_step_body(step)), None)
+    assert verify is not None, "gated-apply-reconcile has no fresh plan.bin sha256 VERIFY step"
+    assert _RECOVERY_FRESH_PLAN_PENDING in str(verify.get("if", "")), (
+        f"gated-apply-reconcile's sha256 VERIFY step is not gated on {_RECOVERY_FRESH_PLAN_PENDING!r}: {verify.get('if')!r}"
+    )
+
+    fetch_plan = next((step for step in gated_job_steps if step.get("id") == "fetch_plan"), None)
+    assert fetch_plan is not None, "gated-apply-reconcile has no fetch_plan step"
+    assert _RECOVERY_FRESH_PLAN_NOT_PENDING in str(fetch_plan.get("if", "")), (
+        "gated-apply-reconcile's fetch-saved-plan step is not gated on "
+        f"{_RECOVERY_FRESH_PLAN_NOT_PENDING!r} -- the fresh and saved plan sources must stay "
+        f"mutually exclusive: {fetch_plan.get('if')!r}"
     )
 
 
@@ -426,6 +625,7 @@ _COMMANDS = {
     "terraform-apply-concurrency": _check_terraform_apply_concurrency,
     "ci-rca-fetch-classification": _check_ci_rca_fetch_classification,
     "full-tier-runtime-lock": _check_full_tier_runtime_lock,
+    "recovery-workflow-topology": _check_recovery_workflow_topology,
 }
 
 

@@ -4,15 +4,71 @@ Split from the former tests/test_ci_rca_evidence.py monolith: TestMain, TestEmit
 """
 
 import json
+import runpy
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from scripts.ci_rca.evidence import main
+from scripts.ci_rca.log_evidence import SCHEMA, bound_text, publish_envelope
 
 
 class TestEmitDir:
+    def test_emit_dir_preserves_validated_retrieval_provenance(self, log_file, taxonomy_file, tmp_path, capsys):
+        body = log_file.read_text(encoding="utf-8")
+        _, limits = bound_text(body, len(body.encode("utf-8")) + 1, len(body.splitlines()) + 1)
+        envelope_path = tmp_path / "retrieval.json"
+        publish_envelope(
+            envelope_path,
+            {
+                "schema": SCHEMA,
+                "identity": {"repository": "owner/repo", "run_id": 42},
+                "failed_jobs": [
+                    {
+                        "job_id": 7,
+                        "conclusion": "failure",
+                        "failed_steps": [{"step_index": 2, "conclusion": "failure"}],
+                    }
+                ],
+                "retrieval_path": "primary",
+                "fallback_selection": {"queried_job_ids": [7], "unqueried_job_ids": [], "unqueried_reason": None},
+                "body": body,
+                "limits": limits,
+                "recovery": {"url": "https://github.com/owner/repo/actions/runs/42", "state": "available"},
+            },
+        )
+        emit_dir = tmp_path / "emit_retrieval"
+        with (
+            patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)),
+            patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}),
+            patch("scripts.ci_rca.evidence._upload_to_s3"),
+            patch("scripts.ci_rca.evidence._resolve_bucket", return_value="test-bucket"),
+        ):
+            main(
+                [
+                    "--log-file",
+                    str(log_file),
+                    "--retrieval-envelope",
+                    str(envelope_path),
+                    "--workflow-name",
+                    "CI",
+                    "--workflow-run-id",
+                    "42",
+                    "--taxonomy-path",
+                    str(taxonomy_file),
+                    "--emit-dir",
+                    str(emit_dir),
+                ]
+            )
+        local_path = next(
+            line.split("=", 1)[1] for line in capsys.readouterr().out.splitlines() if line.startswith("BUNDLE_LOCAL=")
+        )
+        retrieval = json.loads(Path(local_path).read_text(encoding="utf-8"))["retrieval_evidence"]
+        assert retrieval["limits"] == limits
+        assert retrieval["recovery"]["url"] == "https://github.com/owner/repo/actions/runs/42"
+
     def test_emit_dir_writes_local_bundle(self, log_file, taxonomy_file, tmp_path, capsys):
         """--emit-dir writes <dir>/<sha>.json independent of S3 outcome and prints BUNDLE_LOCAL=<path>."""
         emit_dir = tmp_path / "emit"
@@ -106,3 +162,13 @@ class TestMain:
                         )
         out = capsys.readouterr().out
         assert "BUNDLE_SHA=" in out
+
+
+def test_module_entrypoint_rejects_missing_log(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["evidence", "--log-file", str(tmp_path / "missing"), "--workflow-name", "CI", "--workflow-run-id", "1"],
+    )
+    with pytest.raises(SystemExit):
+        runpy.run_module("scripts.ci_rca.evidence", run_name="__main__")

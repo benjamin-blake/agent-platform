@@ -23,8 +23,6 @@ class TestOpsWriterOutbox:
 
     def test_s3_failure_writes_to_outbox(self, tmp_path):
         """When put_object raises, entry is written to outbox directory."""
-        from pathlib import Path
-
         from scripts.ops_writer import OpsWriter
 
         writer = OpsWriter()
@@ -32,6 +30,7 @@ class TestOpsWriterOutbox:
 
         with (
             patch("scripts.ops_writer._BOTO3_AVAILABLE", True),
+            patch("scripts.ops_writer._OUTBOX_BASE", tmp_path / ".ops-outbox"),
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
             patch.object(
@@ -39,24 +38,10 @@ class TestOpsWriterOutbox:
                 "_get_client",
                 return_value=MagicMock(put_object=MagicMock(side_effect=Exception("SSO expired"))),
             ),
-            patch("scripts.ops_writer.Path", lambda *args: tmp_path.joinpath(*args) if args else Path()),
         ):
-            # Use _write_to_outbox directly with a patched outbox dir
-            outbox_dir = tmp_path / ".ops-outbox" / "ops_decisions"
-
-            def fake_write_to_outbox(table, staged_entry):
-                outbox_dir.mkdir(parents=True, exist_ok=True)
-                import uuid as _uuid
-
-                out_file = outbox_dir / f"{_uuid.uuid4()}.jsonl"
-                out_file.write_text(
-                    __import__("json").dumps(staged_entry, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-
-            writer._write_to_outbox = fake_write_to_outbox
             writer.write("ops_decisions", {"id": "dec-042", **{k: v for k, v in entry.items() if k != "id"}})
 
+        outbox_dir = tmp_path / ".ops-outbox" / "ops_decisions"
         files = list(outbox_dir.glob("*.jsonl"))
         assert len(files) == 1
         saved = __import__("json").loads(files[0].read_text(encoding="utf-8"))
@@ -70,30 +55,14 @@ class TestOpsWriterOutbox:
 
         entry = {"id": "rec-002", "title": "test"}
         table = "ops_recommendations"
-        test_outbox = tmp_path / ".ops-outbox" / table
-        test_outbox.mkdir(parents=True, exist_ok=True)
 
         writer = OpsWriter()
-        # Patch the outbox base directory so no files are written to the real repo
-        with patch("scripts.ops_writer.Path") as mock_path_cls:
-            real_path = __import__("pathlib").Path
+        with patch("scripts.ops_writer._OUTBOX_BASE", tmp_path / ".ops-outbox"):
+            writer._write_to_outbox(table, entry)
 
-            def path_side_effect(*args):
-                p = real_path(*args)
-                return p
-
-            mock_path_cls.side_effect = path_side_effect
-            # Call the real method directly with the tmp outbox
-            writer._write_to_outbox.__func__(writer, table, entry)  # type: ignore[attr-defined]
-
-        # Fallback: write directly to verify the logic shape
-        import uuid as _uuid
-
-        out_file = test_outbox / f"{_uuid.uuid4()}.jsonl"
-        out_file.write_text(_json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
-
+        test_outbox = tmp_path / ".ops-outbox" / table
         files = list(test_outbox.glob("*.jsonl"))
-        assert len(files) >= 1
+        assert len(files) == 1
         saved = _json.loads(files[0].read_text(encoding="utf-8"))
         assert saved["id"] == "rec-002"
 
@@ -156,7 +125,12 @@ class TestOpsWriterOutbox:
         from scripts.ops_writer import OpsWriter
 
         writer = OpsWriter()
-        with patch("scripts.ops_writer.Path", side_effect=Exception("disk full")):
+        # An existing FILE where the outbox base should be a directory makes mkdir(parents=True)
+        # raise NotADirectoryError for real -- no mocking of the write path itself.
+        unwritable_base = tmp_path / "not-a-dir"
+        unwritable_base.write_text("blocking file")
+
+        with patch("scripts.ops_writer._OUTBOX_BASE", unwritable_base):
             # Should not raise
             writer._write_to_outbox("ops_recommendations", {"id": "rec-006"})
 

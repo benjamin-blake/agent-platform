@@ -51,6 +51,22 @@ def _clear_executor_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _clear_push_context_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip GITHUB_EVENT_NAME/GITHUB_EVENT_BEFORE for every test.
+
+    GITHUB_EVENT_NAME is a GitHub Actions default env var present for the WHOLE job
+    process (e.g. "push" throughout main-validate's push-triggered run), not just for
+    actual git operations. Left unmasked, scripts.checks._common.push_context_base()
+    would activate unconditionally for every test in a push-triggered CI run, breaking
+    mocked-subprocess tests that assume today's non-push get_changed_files() /
+    get_status_aware_diff() / get_changed_source_files() behaviour. Individual
+    push-context tests opt back in via their own monkeypatch.setenv.
+    """
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_BEFORE", raising=False)
+
+
 _NONEXISTENT_AWS_DIR_SEGMENT = "nonexistent-aws-config-dir"
 
 
@@ -237,6 +253,57 @@ def _block_llm_cli_subprocess(request: pytest.FixtureRequest, monkeypatch: pytes
         return _orig_run(args, *a, **kw)
 
     monkeypatch.setattr(_sp, "run", _guarded_run)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _outbox_hermeticity_session_guard() -> None:
+    """Session-start check: fail loudly if a RETIRED outbox dir already holds a file.
+
+    Decision 149 -- a pre-existing file in a retired-table dir (ops_recommendations,
+    ops_decisions, ops_priority_queue, ops_execution_plans, or any *_pending sibling) must
+    never be silently baselined into a per-machine tolerance; it is the resurrection shape
+    the warehouse-as-source-of-truth invariant (AGENTS.md) warns about. Legacy staging dirs
+    (telemetry, ops_session_log) may legitimately hold pending drain data and are not
+    checked here -- only retired dirs are ever illegitimate to find non-empty.
+    """
+    from tests.fixtures.outbox_guard import OUTBOX_BASE, retired_files, snapshot  # noqa: PLC0415
+
+    existing = retired_files(snapshot())
+    if existing:
+        remediation = "\n".join(f"  rm -f {p}" for p in sorted(existing))
+        pytest.exit(
+            f"Pre-existing file(s) found under a retired dir of {OUTBOX_BASE} -- these "
+            f"must never be committed or baselined (Decision 149). Remove them first:\n{remediation}",
+            returncode=1,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _outbox_hermeticity_per_test_guard(request: pytest.FixtureRequest):  # type: ignore[misc]
+    """Fail any individual test that writes into the real logs/.ops-outbox.
+
+    Snapshots before the test body runs and diffs in teardown (after the yield), so a leak
+    fails the test that produced it rather than surviving silently (gitignored, so neither
+    git nor CI would otherwise notice). Both tiers run pytest with -n auto (xdist), so all
+    workers share one working directory -- a file observed here may have been written by a
+    sibling test on another worker. The failure names the REPORTING test plus the path; it
+    does not claim the reporting test is necessarily the writer.
+    """
+    from tests.fixtures.outbox_guard import diff_new_files, snapshot  # noqa: PLC0415
+
+    before = snapshot()
+    yield
+    new_files = diff_new_files(before, snapshot())
+    for path in new_files:
+        path.unlink(missing_ok=True)
+    if new_files:
+        offending = ", ".join(str(p) for p in sorted(new_files))
+        pytest.fail(
+            f"logs/.ops-outbox gained new file(s) during {request.node.nodeid}: {offending}. "
+            "A test must never write into the real outbox -- point it at tmp_path instead. "
+            "(Under -n auto, the reporting test may not be the writer.)",
+            pytrace=False,
+        )
 
 
 @pytest.fixture

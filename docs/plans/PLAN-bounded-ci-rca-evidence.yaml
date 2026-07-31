@@ -1,0 +1,278 @@
+schema_version: 3
+slug: bounded-ci-rca-evidence
+intent: Close audit finding GAL-01 by replacing CI-RCA's uncapped whole-run fallback with a typed, deterministic, bounded evidence
+  envelope that retains failed-job identity and the associated failed-step metadata (without pretending GitHub's rendered log is
+  step-isolated), reports completeness and truncation without ambiguity, and gives an operator a credential-free reference to GitHub's
+  raw evidence recovery surface while preserving existing retry, confidentiality, and fail-closed behavior.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-bounded-ci-rca-evidence.yaml
+phase: Ad hoc audit remediation approved at overseer G1; GAL-01 keystone for GAL-02 and GAL-04.
+scope:
+- file: scripts/ci_rca/fetch_logs.py
+  action: Modify
+  purpose: Orchestrate failed-log-first retrieval under one shared aggregate cap and a bounded fallback. Remove the uncapped `gh
+    run view --log` agent-input path; obtain structured job metadata first, deterministically order failed jobs by metadata (validated
+    numeric job database id; free-form workflow/job/step names are omitted entirely), and associate each selected job with its metadata-declared
+    failed steps. Emit a typed envelope with source, run/job identity and associated failed-step metadata, configured byte and line
+    limits, observed/included counts, completeness, truncation reason, omitted counts when knowable, and recovery reference. Cap
+    primary `--log-failed` and every fallback fragment against the same aggregate byte/line budget, rather than applying a fresh
+    cap per job. Preserve stdout/stderr separation, successful-return-code classification, three-attempt retry/backoff, and nonzero
+    no-evidence exit.
+- file: scripts/ci_rca/log_evidence.py
+  action: Create
+  purpose: Own typed envelope/schema, metadata-derived ordering, streaming aggregate line/byte limiter with early child termination,
+    https/github.com recovery URL allowlist, single-JSON atomic publication and crash semantics, and schema-validating atomic body
+    extraction.
+- file: .github/workflows/ci-rca.yml
+  action: Modify
+  purpose: Feed only a schema-validated bounded evidence body plus its machine-readable metadata to downstream CI-RCA. A nonempty
+    body without a valid matching envelope must fail before the evidence generator or agent invocation. Pass the envelope to the
+    existing deterministic evidence generator where useful so the two evidence layers integrate rather than silently diverge. retain
+    the native error annotation and `test -s` false-green guard, and expose the recovery reference without embedding a token or credential.
+    Do not alter the designed-refusal, JUnit, fingerprint, or recommendation lifecycle semantics.
+- file: scripts/verify_ci_workflow.py
+  action: Modify
+  purpose: Extend the existing CI-RCA workflow structural oracle to reject an uncapped whole-run fallback and require the bounded
+    envelope invocation and false-green guard.
+- file: scripts/checks/ci_guards/validate_ci_workflow_guards.py
+  action: Modify
+  purpose: Update the allowlisted Fetch failed run logs body and guard the security- and correctness-critical invocation shape through
+    the authoritative validate path.
+- file: tests/test_ci_rca_fetch_logs.py
+  action: Modify
+  purpose: Retain retry, stderr-classification, HTTP-body, empty-output, and CLI tests while replacing uncapped-fallback expectations
+    with bounded-selection and envelope assertions.
+- file: tests/test_ci_rca_log_evidence.py
+  action: Create
+  purpose: Exercise complete and truncated envelopes, exact line/byte boundary behavior, UTF-8 boundaries, deterministic failed job/step
+    selection, omitted metadata, and safe recovery references.
+- file: scripts/ci_rca/evidence.py
+  action: Modify
+  purpose: Delegate existing log/jobs input loading to the new evidence_input.py adapter, consume validated extracted retrieval evidence
+    without changing cause/fingerprint lifecycle, and finish below the current 481 effective SLOC.
+- file: scripts/ci_rca/evidence_input.py
+  action: Create
+  purpose: 'Exact Decision-128 decomposition: extract evidence.py log/jobs input parsing and implement the validated retrieval-envelope
+    adapter here, leaving both modules below 500 effective SLOC.'
+- file: tests/test_ci_rca_evidence.py
+  action: Modify
+  purpose: Prove the existing generator accepts the validated bounded input/envelope, preserves relevant retrieval provenance, and
+    rejects or fails closed on malformed/nonempty-but-invalid envelopes.
+- file: tests/verify_ci_workflow/test_ci_rca_and_canary.py
+  action: Modify
+  purpose: Add workflow mutation/counterfactual coverage proving uncapped fallback and removal of the bounded invocation, annotation,
+    or non-empty guard are rejected.
+- file: config/agent/verification_registry/registry.yaml
+  action: Modify
+  purpose: Graduate the historical uncapped-fallback counterfactual as check id `ci-rca-bounded-retrieval-envelope`, targeting the
+    new guard and its exact pytest node. Do not add decorative or non-executable evidence.
+bundled_recommendations: []
+closes_criteria: []
+acceptance_criteria:
+- 'AC1: No successful CI-RCA path supplies uncapped material to an agent: primary failed-log output and all fallback fragments share
+  one aggregate byte/line budget, including multi-byte UTF-8 input.'
+- 'AC2: The envelope identifies the Actions run and selected failed jobs, associates metadata-declared failed steps without claiming
+  rendered-log step isolation, states whether evidence is complete, states each configured/observed/included limit, and reports truncation
+  and omitted content explicitly rather than allowing downstream truncation to masquerade as complete.'
+- 'AC3: Every bounded envelope provides a recovery URL whose scheme is `https`, whose host is exactly `github.com`, and whose path
+  is derived only from validated owner/repository/run identifiers (and job id when GitHub supports that stable view). Generated metadata
+  fields contain no token, authorization header, query credential, userinfo, AWS identifier, or internal hostname. Raw log content
+  is not claimed sanitized; it remains subject to the workflow''s existing trust boundary and is never copied into metadata or URLs.
+  Job/step metadata stores numeric IDs, ordinal indexes, and fixed-enum conclusions only; free-form GitHub job/step names are omitted
+  from the public typed envelope rather than trusted or weakly sanitized.'
+- 'AC4: Failed-log-first selection, gh stdout/stderr classification, transient retry/backoff, HTTP-like strings in a successful log
+  body, native error annotation, and `test -s` false-green protection retain their current semantics. Empty, unavailable, expired,
+  malformed, identity-less, or nonempty-body/invalid-envelope evidence fails closed before evidence generation or agent dispatch,
+  with a named terminal state and never an uncapped fallback.'
+- 'AC6: Retrieval publishes exactly one atomic canonical JSON envelope containing the bounded body and typed metadata: same-directory
+  temporary write, fsync, schema validation, then os.replace. A separate schema-validating extractor may atomically materialize a
+  legacy plain-text body only after the envelope exists; that derivative is not part of a two-file transaction and is deleted/rebuilt
+  after interruption. Successful fetch means the envelope is valid; evidence generation/agent dispatch additionally requires successful
+  extraction from that same envelope.'
+- 'AC5: An authoritative presubmit oracle rejects reintroduction of `gh run view --log` as an uncapped agent-input fallback and rejects
+  removal of the bounded envelope invocation or workflow backstops.'
+verification_plan:
+- step: 1
+  phase: pre-deploy
+  action: 'Historical GAL-01 and mutation matrix: exercise the pre-fix uncapped whole-run command plus mutations that remove the
+    primary cap, reset the cap per fallback job, remove deterministic metadata ordering, or allow nonempty body plus malformed envelope.'
+  command: bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_and_canary.py::TestCiRcaBoundedRetrievalCounterfactuals
+    -q
+  expected: The current implementation passes by rejecting every mutation; the embedded historical pre-fix fixture demonstrably fails
+    the guard with GAL-01/bounded-retrieval diagnostics.
+  fix_if: 'Any mutation passes, or the historical fixture is not rejected: strengthen the production guard rather than weakening
+    or deleting the counterfactual.'
+  hermetic: true
+  graduation: graduate
+  graduation_check_id: ci-rca-bounded-retrieval-envelope
+- step: 2
+  phase: pre-deploy
+  action: 'Retrieval and envelope property suite: primary and fallback aggregate caps, exact encoded byte and line counts, UTF-8
+    split boundaries, deterministic job ordering, associated step metadata, complete/truncated/unknown omitted counts, recovery URL
+    allowlist, single-envelope atomic publication and crash recovery, and all retry/error regressions. Include adversarial free-form
+    metadata and recovery-URL injection cases.'
+  command: bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py tests/test_ci_rca_log_evidence.py -q
+  expected: All cases pass, including primary-over-cap, multiple fallback jobs sharing one cap, exact-boundary complete evidence,
+    one-byte/one-line-over truncation, token/query/userinfo URL rejection, unknown omitted counts, transient stderr, successful HTTP-like
+    body, and no partial final outputs. Source metadata containing 12-digit values, auth/token-like strings, URL userinfo/query credentials,
+    and internal hostnames is omitted/rejected and never serialized.
+  fix_if: Correct selection/bounding/schema/publication logic; never increase a cap or relabel incomplete evidence complete to satisfy
+    a fixture.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: Permanent focused tests run in the full suite and the decisive uncapped-path property is separately graduated
+    in step 1; registering every boundary example would duplicate standing suite coverage.
+- step: 3
+  phase: pre-deploy
+  action: 'Integration with the existing cause evidence generator and workflow: valid bounded envelope is consumed; malformed, mismatched,
+    missing, and nonempty-body/invalid-envelope cases fail before evidence generation or agent dispatch; annotation and `test -s`
+    backstops remain.'
+  command: bin/venv-python -m pytest tests/ci_rca/evidence/test_bucket_pending.py tests/ci_rca/evidence/test_fingerprint.py
+    tests/ci_rca/evidence/test_generate.py tests/ci_rca/evidence/test_hashing.py tests/ci_rca/evidence/test_main_emit.py tests/ci_rca/evidence/test_multi_pre_runtime.py
+    tests/test_ci_rca_evidence_input.py tests/verify_ci_workflow/test_ci_rca_and_canary.py -q
+  expected: All integration and workflow mutation cases pass with no change to fingerprint/cause grouping.
+  fix_if: Repair the explicit retrieval-envelope/evidence.py boundary or workflow sequencing; do not bypass schema validation or
+    let the agent read an unvalidated body.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: The integration suite is standing full-tier coverage; step 1 graduates the critical presubmit regression
+    oracle.
+- step: 4
+  phase: pre-deploy
+  action: Run ruff lint on every touched Python file, prove the verification-registry differential adds exactly the graduated check
+    without removing prior checks, then run authoritative fast presubmit including SLOC, workflow guards, plan graduation, and registry
+    validation.
+  command: bin/venv-python -m ruff check scripts/ci_rca/fetch_logs.py scripts/ci_rca/log_evidence.py scripts/ci_rca/evidence.py scripts/ci_rca/evidence_input.py
+    tests/test_ci_rca_fetch_logs.py tests/test_ci_rca_log_evidence.py tests/test_ci_rca_evidence_input.py tests/ci_rca/evidence/test_main_emit.py
+    && git show origin/main:config/agent/verification_registry/registry.yaml
+    > /tmp/ci-rca-registry-base.yaml && bin/venv-python -c 'import yaml; b=yaml.safe_load(open("/tmp/ci-rca-registry-base.yaml",encoding="utf-8"));
+    c=yaml.safe_load(open("config/agent/verification_registry/registry.yaml",encoding="utf-8")); ids=lambda x:{r["check_id"] for
+    r in x["checks"]}; assert ids(c)-ids(b)=={"ci-rca-bounded-retrieval-envelope"}; assert not ids(b)-ids(c)' && bin/venv-python
+    -m scripts.validate --pre
+  expected: Ruff exits zero; registry differential is exactly one added check id and zero removals; validate --pre exits zero and
+    resolves/executes the exact graduated pytest node.
+  fix_if: Fix production code, tests, plan row, or registry row. Do not waive the graduated check or raise an SLOC budget; decompose
+    if necessary.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: Ruff and aggregate presubmit are orchestration gates, not one canonical property suitable for a verification-registry
+    row; their constituent checks are already registered.
+- step: 5
+  phase: pre-deploy
+  action: Blocking V3 read-only live verification against a suitable failed Actions run using the production fetch CLI. Inspect generated
+    metadata/counts and bounded body size without pasting raw logs. Authentication and a representative run are required for GAL-01
+    closure. Record `retrieval_path=primary|fallback` from the envelope in ledger evidence.
+  command: bin/venv-python -m scripts.ci_rca.fetch_logs --run-id "$RUN_ID" --repo "$GITHUB_REPOSITORY" --out /tmp/ci-rca-evidence.json
+    && bin/venv-python -m scripts.ci_rca.log_evidence --validate /tmp/ci-rca-evidence.json --extract-body /tmp/ci-rca-failed.log
+  expected: Exit zero; envelope identity agrees with GitHub metadata, primary or fallback evidence respects the aggregate caps, completeness/count
+    semantics are truthful, recovery URL opens the intended github.com run view, and extracted body matches the envelope. This is
+    a blocking PASS requirement, not skippable evidence. Closure evidence states the observed retrieval path; fallback live proof
+    is claimed only when `retrieval_path=fallback` was actually observed.
+  fix_if: 'If product behavior fails, revise implementation. If credentials or a suitable representative run are unavailable, return
+    BLOCKED to the overseer: do not commit/open/merge the implementation PR and do not claim GAL-01 closure. If only primary is observed,
+    record primary-only live coverage and do not claim fallback live proof; obtain a representative fallback run before GAL-01 closure.'
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: Live GitHub transport and authentication are nondeterministic and cannot be a registry check, but this
+    commissioned audit explicitly requires live verification, so the human/overseer gate blocks release when it cannot run.
+- step: 6
+  phase: pre-deploy
+  action: Blocking full repository validation before commit, after focused and live checks. This is literal full-tier validation,
+    not --pre.
+  command: bin/venv-python -m scripts.validate
+  expected: Exits zero within the implementation handoff window. The implementation subagent records the command, exit status, and
+    elapsed time before committing.
+  fix_if: Fix any regression attributable to the slice and rerun. If the full validator fails for a proven pre-existing/environmental
+    condition or times out, return BLOCKED with exact evidence; do not commit, open a PR, weaken the command, substitute --pre, or
+    override schema-v3 handoff_policy.timeout_disposition=blocked.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: The full validator is the authoritative aggregate post-merge suite and is required literally here as
+    a blocking handoff gate; it is orchestration, not one canonical property suitable for another registry row.
+rollback: 'Revert the implementation PR as one unit. Reversion restores the prior failed-log-first plus uncapped fallback behavior,
+  so it is an emergency availability rollback rather than an acceptable steady state. Before any revert, the repository owner disables
+  `.github/workflows/ci-rca.yml` through the GitHub Actions workflow-disable control (or lands a minimal job-level `if: false` emergency
+  PR if the control is unavailable), records GAL-01 open in this ledger, and leaves CI-RCA recommendation filing paused until a replacement
+  bounded retriever is green. Never recover by silently removing limits or truncation metadata; re-enable only after steps 1-4 pass
+  on the repaired commit.'
+context:
+- 'authoritative_finding: audits/github-actions-log-management-c144530f02d1.yaml#GAL-01'
+- 'current_state: At current HEAD, fetch_run_log first calls `gh run view --log-failed`; when that result is empty or unsuccessful
+  it calls the same command with `--log` and writes all stdout. FetchOutcome carries only fetched/attempts/diagnostic. ci-rca.yml
+  then checks only that the file is non-empty. Later changes since c144530f02d1 improved stdout/stderr classification and retry correctness
+  but did not cap either the primary or fallback body, add metadata-backed job/step association, truncation metadata, or a recovery
+  path, so GAL-01 survives.'
+- 'sequencing: This slice lands first. S2 may reuse its evidence-envelope vocabulary and must not independently redesign the retrieval
+  representation. GAL-03''s citation correction is deliberately deferred to S3 even though ci-rca.yml is touched here.'
+- 'evidence_reuse_assessment: scripts.ci_rca.evidence already converts a fetched log plus jobs/JUnit metadata into persistent cause
+  bundles and fingerprints. It does not retrieve or bound logs and must not absorb GitHub I/O. This plan therefore adds a retrieval
+  envelope beside fetch_logs.py, then validates and passes that envelope into evidence.py so provenance is preserved without merging
+  the two different grains.'
+- 'plan_gate_status: Independent critique round 4 found one HIGH contradiction in the job-name display clause. Round 5 removes it
+  and unambiguously omits all free-form names from generated surfaces; no implementation verification has run.'
+- Use GitHub run/job metadata as identity authority; never infer job or step identity from free-form log text alone.
+- Choose explicit finite defaults for both lines and encoded UTF-8 bytes and expose them in metadata.
+- Order failed jobs by validated numeric database id and associated failed steps by their metadata index; never parse identity or
+  ordering from rendered log text.
+- A raw recovery path is an allowlisted https://github.com reference, not duplicated uncapped raw content.
+- Do not catch imports, raise during import, use eval/exec, or invoke plain python/python3 in tests or scripts.
+- No Terraform apply, production deployment, recommendation write, or operational-data mutation is in scope.
+- 'Decision 72: CI-RCA failed-log-first and architectural-review authority.'
+- 'Decision 55: counterfactual and non-vacuous enforcement rather than ornamental checks.'
+- 'Decision 73: validate --pre is the authoritative PR gate when run in CI.'
+- 'Root AGENTS.md `PUBLIC repository / confidential-data boundary`: authoritative public-content boundary (it attributes the rule
+  to Decisions 73, 83, and 101 collectively; Decision 101 alone is not the authority).'
+- 'Decision 132: each executable pre-deploy verification row has command/expected/fix_if/hermetic and an explicit graduate/waive
+  disposition.'
+- 'Decision 128: decompose before raising SLOC budgets.'
+- 'Degraded and exit semantics: When failed job/step metadata, raw evidence, or GitHub retrieval is absent, expired, malformed, or
+  over limit, a valid bounded body may publish and exit zero only as `complete=false` with a valid recovery URL and explicit reason/counts.
+  Missing usable body, invalid metadata/URL/schema, identity uncertainty, absence of an allowlisted recovery URL, or single-envelope
+  validation/publication mismatch emits the native error annotation, removes final outputs, and exits nonzero before evidence generation/agent
+  dispatch. Unknown omitted counts are `null` plus a reason, never zero. If raw evidence is known expired, the envelope may retain
+  the syntactically valid historical GitHub recovery URL only as `recovery_state=expired` (not available) while bounded evidence
+  remains usable and incomplete; if no bounded evidence remains, `raw_expired` exits nonzero. A URL is never fabricated from invalid
+  identity. Downstream processing never reinterprets incomplete as complete.'
+constraints:
+- 'The maximum applies to bytes/lines consumed into the parent process, not merely the serialized result: stream stdout in bounded
+  chunks, stop reading and terminate the gh child immediately when either aggregate limit is reached, keep the application buffer
+  at or below the byte cap, and report total/omitted counts as null when early termination makes them unknowable. Tests must constrain
+  read sizes and prove early termination; do not claim a bound on bytes GitHub or gh may already have placed in transport/kernel
+  buffers.'
+- 'Use one atomic publication unit: write a single canonical JSON envelope containing the bounded body and metadata to a same-directory
+  temporary file, fsync it, schema-validate it, then os.replace it onto the final --out path. Remove any stale final output before
+  retrieval. A crash before replace leaves no new final artifact; after replace leaves one complete validated envelope. A separate
+  extractor validates that one artifact and atomically materializes the body for legacy evidence.py/agent consumers.'
+- Generated metadata and recovery URL confidentiality follow root AGENTS.md public-content boundary; raw log content is not claimed
+  sanitized.
+- No Terraform apply, deployment, ops-data write, plain python/python3 invocation, eval, or exec is in scope.
+- 'Decision 128: evidence.py has 481 effective SLOC against the 500 default, only 19 lines headroom. Extract its log/jobs input parsing
+  plus bounded-envelope adapter into scripts/ci_rca/evidence_input.py; evidence.py imports the cohesive helper and must finish below
+  its current 481 effective SLOC. Do not register or raise a budget.'
+- Free-form workflow, job, and step names are never serialized in the envelope, emitted in annotations or recovery URLs, or included
+  in extracted-body metadata; they are omitted entirely from every generated surface. Raw log lines may inherently contain runner-emitted
+  names and remain bounded opaque evidence, not generated metadata. Identity metadata is limited to validated numeric job IDs, ordinal
+  step indexes, and fixed-enum conclusions. Adversarial fixtures inject 12-digit identifiers, authorization/token-like strings, URL
+  userinfo/query credentials, and internal hostnames into source names/URLs and prove none enters generated surfaces.
+execution_steps:
+- Add scripts/ci_rca/log_evidence.py with typed envelope schema, deterministic metadata ordering, bounded streaming/early-child-termination,
+  allowlisted recovery URL construction, canonical single-file atomic publication, and validated atomic body extraction.
+- Refactor fetch_logs.py to query structured jobs, stream both primary and fallback retrieval through one aggregate limiter, publish
+  only the single validated envelope, preserve retries/annotations, and use null totals/omitted counts when early termination prevents
+  knowledge.
+- Create scripts/ci_rca/evidence_input.py by extracting existing evidence.py log/jobs input loading and adding the retrieval-envelope
+  validation/compatibility adapter; update evidence.py to use it while preserving fingerprints and reduce evidence.py below 481 effective
+  SLOC.
+- Update ci-rca.yml so the validated envelope is fetched first, its body is materialized only by the schema-validating extractor,
+  and evidence generation/agent dispatch cannot run on a merely nonempty invalid artifact; retain native annotation and test -s.
+- Update workflow guards, focused tests, historical/mutation fixtures, and verification registry with exact check id ci-rca-bounded-retrieval-envelope
+  and its exact pytest node.
+- Execute every pre-deploy VP step 1-6 before commit. Step 5 must observe and record the relevant primary/fallback live paths; step
+  6 must run literal full `bin/venv-python -m scripts.validate`. Any timeout/failure returns BLOCKED under handoff_policy and prevents
+  commit/PR/closure.
+- After all pre-deploy steps pass, commit and open the PR. The overseer verifies required checks on the implementation head SHA before
+  merge, then records the distinct squash-merge SHA as lifecycle evidence; neither SHA is inferred from the other.
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked

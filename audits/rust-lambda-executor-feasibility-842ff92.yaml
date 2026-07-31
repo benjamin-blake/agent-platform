@@ -1,0 +1,2105 @@
+audit:
+  meta:
+    audited_commit: 842ff92
+    base_branch: main
+    model: GPT-5.6 Sol
+    methodology_version: 1
+    scope_surfaces:
+    - ducklake_runtime_lambdas
+    - prod_class_lambdas
+    - lambda_build_deploy
+    - current_executor
+    - future_step_functions
+    - future_deterministic_lambdas
+    - future_durable_personas
+    - ci_test_tooling
+    degraded_dedup: false
+    degraded_external_research: false
+    degraded_adversarial_review: false
+    contract_notes: 'git fetch origin main failed: no origin remote; no origin/main existed, so current HEAD substituted and repository-wide
+      conclusions downgraded where not directly traced; preflight refreshed read cache successfully; manifest validation/list-patterns
+      passed; expected test modules tests/test_ducklake_writer_handler.py and tests/test_ducklake_runtime.py were absent; enum-bearing
+      fields manually compared with OUTPUT contract; validate --pre completed checks but exited 1 solely because fast tier exceeded
+      5-minute budget (5.5 minutes; dominant validate_verification_registry); validation auto-filed rec-2892 outside the audit write
+      boundary'
+    stale_anchors:
+    - origin/main unavailable
+    - build-lambda contract count says three prod artifacts while active manifests define two prod-class artifacts
+    - ROADMAP CD.27 runtime list omits current C# Durable support
+  external_sources:
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html
+    accessed: '2026-07-29'
+    claim_scope: product semantics, one-year execution, replay, SDK languages, Step Functions comparison
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html
+    accessed: '2026-07-29'
+    claim_scope: managed runtimes, OCI requirements, SDK pinning, container cold starts
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/durable-testing.html
+    accessed: '2026-07-29'
+    claim_scope: local/cloud tests, operation history, nondeterminism
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/durable-monitoring.html
+    accessed: '2026-07-29'
+    claim_scope: CloudWatch, EventBridge and X-Ray observability
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/durable-best-practices.html
+    accessed: '2026-07-29'
+    claim_scope: version pinning and replay-safe changes
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/lambda-rust.html
+    accessed: '2026-07-29'
+    claim_scope: regular Lambda Rust OS-only runtime and runtime client
+  - url: https://aws.amazon.com/lambda/pricing/
+    accessed: '2026-07-29'
+    claim_scope: compute, replay requests, durable operations/data/retention pricing
+  question_answers:
+  - q: Q1
+    verdict: transformational
+    basis:
+    - RLE-01
+    - RLE-02
+    - T4.1
+    - T4.2
+    - T4.3
+    - T4.8
+    - T4.9a
+    - T4.12
+    prose: 'Six of the nine compose-time T4.x items directly touch Lambda runtime code: T4.1, T4.2, T4.3, T4.8, T4.9a, and T4.12.
+      Midpoint sum is 104 days (28+60+3.5+3.5+3.5+3.5+1+1); no overlap deduction is taken because runtime, manifest/CI, and verification
+      deliver distinct outputs. Rust Durable support would also require reversal or bespoke replacement of CD.27 semantics, independently
+      triggering transformational.'
+  - q: Q2
+    verdict: mixed
+    basis:
+    - RLE-01
+    - RLE-03
+    prose: Rust offers compile-time ownership, enum/exhaustiveness, Send/Sync and type benefits plus plausible regular-Lambda startup/CPU
+      gains. It cannot establish IAM, JSON/schema, API, replay determinism, idempotency, cloud integration or business behavior.
+      Runtime savings are unmeasured and agent productivity, native dependency parity, and dual supply-chain cost are adverse or
+      unknown.
+    external_checklist:
+    - property: Durable managed runtimes/languages
+      surface: future_durable_personas
+      applicability: relevant
+      rating: missed
+      evidence: AWS supported-runtimes page omits Rust and lists Node.js, Python, Java, C#.
+      compensating_control: Python 3.13 is first-class.
+      control_property_match: The Python SDK exercises AWS checkpoint protocol; a forced-timeout replay test fails if it repeats
+        a completed operation.
+    - property: Durable OCI/custom runtime
+      surface: future_durable_personas
+      applicability: relevant
+      rating: missed
+      evidence: OCI is allowed only with a durable SDK installed; no official Rust SDK is listed.
+      compensating_control: None for Rust.
+      control_property_match: ''
+    - property: Checkpoint/replay semantics
+      surface: future_durable_personas
+      applicability: relevant
+      rating: met
+      evidence: AWS documents restart-from-beginning with completed checkpoint results replayed.
+      compensating_control: T4.2 forced-timeout criterion.
+      control_property_match: It detects re-issued completed LLM/tool calls.
+    - property: Region availability
+      surface: future_durable_personas
+      applicability: relevant
+      rating: partial
+      evidence: ROADMAP CD.27 records official-doc verification for eu-west-2; the current general Lambda page does not expose a
+        durable regional matrix.
+      compensating_control: Recheck create/config API during T4.2 planning.
+      control_property_match: A read-only capability probe fails before implementation if durable config is unavailable.
+    - property: Local/cloud testing
+      surface: future_durable_personas
+      applicability: relevant
+      rating: met
+      evidence: AWS testing page provides local/cloud SDK tests and operation-history inspection.
+      compensating_control: T4.2 e2e forced timeout.
+      control_property_match: Behavioral replay fails if execution history duplicates operations.
+    - property: Pricing
+      surface: future_durable_personas
+      applicability: relevant
+      rating: partial
+      evidence: AWS prices compute/replay requests plus durable operations, data written, and retention; repository volumes are absent.
+      compensating_control: Symbolic break-even model.
+      control_property_match: No cost claim graduates without measured N, GB-s, operations and storage.
+    - property: Observability
+      surface: future_durable_personas
+      applicability: relevant
+      rating: met
+      evidence: AWS documents CloudWatch metrics/logs, EventBridge status and X-Ray.
+      compensating_control: T4.1/T4.2 metrics criteria.
+      control_property_match: Execution/replay alarms expose failures and replay rates.
+    - property: Product maturity/change safety
+      surface: future_durable_personas
+      applicability: relevant
+      rating: partial
+      evidence: AWS best practices require version pinning because code/SDK changes can break in-flight replay.
+      compensating_control: CD.27 12-month monitor and 14-day gate.
+      control_property_match: Pinned aliases and replay grace gate fail on incompatible in-flight behavior.
+    - property: Regular Lambda Rust runtime
+      surface: future_deterministic_lambdas
+      applicability: relevant
+      rating: met
+      evidence: AWS documents Rust via runtime client on OS-only runtime.
+      compensating_control: ''
+      control_property_match: ''
+    - property: Cold-start/duration evidence
+      surface: future_deterministic_lambdas
+      applicability: relevant
+      rating: missed
+      evidence: AWS states native deployment mechanics but repository has no comparative workload result.
+      compensating_control: Measure-first policy.
+      control_property_match: Predeclared benchmark threshold prevents reputation-based adoption.
+    - property: Native DuckDB/PostgreSQL ecosystem
+      surface: ducklake_runtime_lambdas
+      applicability: relevant
+      rating: partial
+      evidence: Manifests show Python DuckDB/psycopg2 and three native layers; no Rust parity build was observed.
+      compensating_control: Keep Python.
+      control_property_match: Existing deploy and smoke gates fail if packaged native extensions or DB behavior break.
+    - property: Step Functions boundary
+      surface: future_step_functions
+      applicability: relevant
+      rating: met
+      evidence: T4.1 defines JSON-shaped worker results, task tokens, SHA correlation and managed states independent of worker language.
+      compensating_control: Versioned contracts.
+      control_property_match: Schema/correlation tests fail on incompatible workers regardless of language.
+  - q: Q3
+    verdict: material-overhead
+    basis:
+    - RLE-02
+    prose: One manifest can contain the duplication, but the current schema, builders, coverage mapper and workflows are Python-specific.
+      Rust adds pinned targets, Cargo caches/locks, fmt/clippy, audit/license, cross-build, coverage aggregation, reproducibility
+      and architecture smoke checks; behavior tests must fail when feature code is deleted, not merely compile.
+  - q: Q4
+    verdict: none
+    basis:
+    - RLE-03
+    prose: No existing Python surface has measured pre-MVP pain or a necessary Rust-only capability. Preserve Python, measure first,
+      and retire ops-compaction/findings/scheduled machinery where roadmap disposition beats a port.
+  - q: Q5
+    verdict: python-only-until-post-mvp
+    basis:
+    - RLE-01
+    - RLE-02
+    prose: Use Python for T4.1 regular glue and T4.2 Durable personas through MVP; apply the same rule to later Lambda-bearing T4.3/T4.8/T4.9a/T4.12.
+      Architecture owner may approve a post-MVP whole-artifact Rust pilot after a language-neutral manifest and measured threshold;
+      review at stable T4.2 plus representative T4.1 telemetry. Current .py handler/pip schema needs a versioned change.
+  - q: Q6
+    verdict: do-not-adopt-rust
+    basis:
+    - RLE-01
+    - RLE-02
+    - RLE-03
+    prose: Do not establish a Rust production default now. Reopen when AWS supplies first-class Rust Durable support or T4.2 no longer
+      requires it, a regular-worker benchmark clears predeclared end-to-end thresholds, and a language-neutral governed delivery
+      path exists.
+    domain_policies:
+    - domain: future_deterministic_lambdas
+      policy: python
+      rationale: Necessary regular-Lambda Rust advantage is unmeasured before MVP.
+    - domain: future_durable_personas
+      policy: python
+      rationale: Python has a first-class Durable SDK; Rust does not.
+    - domain: later_t4_lambdas
+      policy: python
+      rationale: Keep one governed path until post-MVP evidence supports a whole-artifact pilot.
+    - domain: existing_python
+      policy: measure_first
+      rationale: Migrate only measured bottlenecks; prefer planned retirement where applicable.
+  - q: Q7
+    answers:
+    - question: What evidence falsifies the Rust hypothesis?
+      answer: No material behavioral defect reduction after controlling for tests, or end-to-end savings below added engineering/CI
+        cost, falsifies it.
+      basis:
+      - RLE-03
+    - question: Which defects survive compilation?
+      answer: IAM, authorization, schemas, API contracts, nondeterminism, tool idempotency, stale callbacks, data correctness, deployment
+        configuration and incident response.
+      basis:
+      - DD-B
+      - RLE-03
+    - question: Does Durable Functions support Rust?
+      answer: Not through a current first-class managed runtime or official Durable SDK. Regular Lambda custom-runtime support and
+        OCI packaging do not preserve Durable guarantees without that SDK.
+      basis:
+      - RLE-01
+    - question: How do replay and tool calls interact?
+      answer: Replay reruns handler code and suppresses only completed durable operations; every LLM/tool side effect must be inside
+        an operation with stable ordering/idempotency and forced-timeout tests.
+      basis:
+      - AWS durable functions
+      - T4.2
+    - question: Is decomposition more important than language?
+      answer: Yes. Managed orchestration, typed boundaries, isolated personas, token/SHA correlation and bounded retries address
+        more observed risk classes than a worker compiler.
+      basis:
+      - T4.1
+      - T4.2
+      - T4.11
+    - question: What are region, native dependency, operations, ownership and rollback implications?
+      answer: Revalidate eu-west-2 at plan time; cross-build both architectures; do not port DuckDB/native layers without parity;
+        train incident owners; roll back by Lambda alias at whole-artifact boundaries, never mixed-language shared-library coupling.
+      basis:
+      - DD-D
+      - RLE-01
+    - question: Could retirement beat migration?
+      answer: Yes for ops-compaction and potentially findings/scheduled surfaces already carrying retirement or rehome intent; porting
+        them creates stranded cost.
+      basis:
+      - T2.26
+      - T4.12
+    - question: What is the cheapest decision-relevant experiment?
+      answer: After a stable T4.1 contract exists, implement one low-side-effect deterministic glue worker in both languages and
+        compare behavior catches, cold/warm p50/p99, GB-s, build minutes and operator time behind alias rollback.
+      basis:
+      - RLE-03
+  per_surface_assessment:
+  - surface: ducklake_runtime_lambdas
+    implementation_state: built
+    decision_readiness: frontier
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps: []
+  - surface: prod_class_lambdas
+    implementation_state: built
+    decision_readiness: frontier
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps: []
+  - surface: lambda_build_deploy
+    implementation_state: built
+    decision_readiness: frontier
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps:
+    - RLE-02
+  - surface: current_executor
+    implementation_state: built
+    decision_readiness: frontier
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps: []
+  - surface: future_step_functions
+    implementation_state: designed_unbuilt
+    decision_readiness: frontier
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps: []
+  - surface: future_deterministic_lambdas
+    implementation_state: designed_unbuilt
+    decision_readiness: frontier
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps:
+    - RLE-03
+  - surface: future_durable_personas
+    implementation_state: designed_unbuilt
+    decision_readiness: strong
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps:
+    - RLE-01
+  - surface: ci_test_tooling
+    implementation_state: built
+    decision_readiness: frontier
+    strengths: Governed Python path and/or explicit managed CD.27 boundary.
+    top_gaps: []
+  rubric_ratings:
+  - surface: ducklake_runtime_lambdas
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ducklake_runtime_lambdas
+    dimension: VD2
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ducklake_runtime_lambdas
+    dimension: VD3
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ducklake_runtime_lambdas
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ducklake_runtime_lambdas
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ducklake_runtime_lambdas
+    dimension: VD6
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ducklake_runtime_lambdas
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ducklake_runtime_lambdas
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD2
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD3
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD6
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: prod_class_lambdas
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: lambda_build_deploy
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: lambda_build_deploy
+    dimension: VD2
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: lambda_build_deploy
+    dimension: VD3
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: lambda_build_deploy
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: lambda_build_deploy
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: lambda_build_deploy
+    dimension: VD6
+    rating: weak
+    evidence: RLE-02
+    note: Python-specific path.
+  - surface: lambda_build_deploy
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: lambda_build_deploy
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD2
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD3
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD6
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: current_executor
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD2
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD3
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD6
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_step_functions
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD2
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD3
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD6
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_deterministic_lambdas
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_durable_personas
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_durable_personas
+    dimension: VD2
+    rating: weak
+    evidence: RLE-01
+    note: Rust support/measurement gap.
+  - surface: future_durable_personas
+    dimension: VD3
+    rating: weak
+    evidence: RLE-01
+    note: Rust support/measurement gap.
+  - surface: future_durable_personas
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_durable_personas
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_durable_personas
+    dimension: VD6
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_durable_personas
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: future_durable_personas
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ci_test_tooling
+    dimension: VD1
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ci_test_tooling
+    dimension: VD2
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ci_test_tooling
+    dimension: VD3
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ci_test_tooling
+    dimension: VD4
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ci_test_tooling
+    dimension: VD5
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ci_test_tooling
+    dimension: VD6
+    rating: weak
+    evidence: RLE-02
+    note: Python-specific path.
+  - surface: ci_test_tooling
+    dimension: VD7
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  - surface: ci_test_tooling
+    dimension: VD8
+    rating: adequate
+    evidence: CD.27
+    note: Existing evidence supports a conservative decision.
+  candidate_adjudications:
+  - candidate_id: C1
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C1
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C1
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C1
+    surface: current_executor
+    adjudication: fully-covered
+    destination_ids: []
+    basis: Layered Python schemas, tests and managed decomposition cover current risk; Rust compiler scope remains narrower than
+      behavior.
+  - candidate_id: C1
+    surface: future_step_functions
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C1
+    surface: future_deterministic_lambdas
+    adjudication: fully-covered
+    destination_ids: []
+    basis: Layered Python schemas, tests and managed decomposition cover current risk; Rust compiler scope remains narrower than
+      behavior.
+  - candidate_id: C1
+    surface: future_durable_personas
+    adjudication: fully-covered
+    destination_ids: []
+    basis: Layered Python schemas, tests and managed decomposition cover current risk; Rust compiler scope remains narrower than
+      behavior.
+  - candidate_id: C1
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C2
+    surface: ducklake_runtime_lambdas
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-03
+    basis: No repository-specific performance/cost baseline exists.
+  - candidate_id: C2
+    surface: prod_class_lambdas
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-03
+    basis: No repository-specific performance/cost baseline exists.
+  - candidate_id: C2
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C2
+    surface: current_executor
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C2
+    surface: future_step_functions
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C2
+    surface: future_deterministic_lambdas
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-03
+    basis: No repository-specific performance/cost baseline exists.
+  - candidate_id: C2
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C2
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C3
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C3
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C3
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C3
+    surface: current_executor
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C3
+    surface: future_step_functions
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C3
+    surface: future_deterministic_lambdas
+    adjudication: planned-insufficient
+    destination_ids:
+    - RLE-02
+    basis: A mandate would add unsupported Durable or unbuilt delivery work before MVP.
+  - candidate_id: C3
+    surface: future_durable_personas
+    adjudication: planned-insufficient
+    destination_ids:
+    - RLE-01
+    basis: A mandate would add unsupported Durable or unbuilt delivery work before MVP.
+  - candidate_id: C3
+    surface: ci_test_tooling
+    adjudication: planned-insufficient
+    destination_ids:
+    - RLE-02
+    basis: A mandate would add unsupported Durable or unbuilt delivery work before MVP.
+  - candidate_id: C4
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C4
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C4
+    surface: lambda_build_deploy
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-02
+    basis: The common manifest is a containment point but is Python-specific.
+  - candidate_id: C4
+    surface: current_executor
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C4
+    surface: future_step_functions
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C4
+    surface: future_deterministic_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C4
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C4
+    surface: ci_test_tooling
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-02
+    basis: The common manifest is a containment point but is Python-specific.
+  - candidate_id: C5
+    surface: ducklake_runtime_lambdas
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-03
+    basis: No measured narrow pre-MVP Rust candidate exists.
+  - candidate_id: C5
+    surface: prod_class_lambdas
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-03
+    basis: No measured narrow pre-MVP Rust candidate exists.
+  - candidate_id: C5
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C5
+    surface: current_executor
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C5
+    surface: future_step_functions
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C5
+    surface: future_deterministic_lambdas
+    adjudication: planned-unbuilt
+    destination_ids:
+    - RLE-03
+    basis: No measured narrow pre-MVP Rust candidate exists.
+  - candidate_id: C5
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C5
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C6
+    surface: ducklake_runtime_lambdas
+    adjudication: fully-covered
+    destination_ids: []
+    basis: Existing Python behavior suites are a useful oracle; import coupling raises cost but is not itself a defect without migration.
+  - candidate_id: C6
+    surface: prod_class_lambdas
+    adjudication: fully-covered
+    destination_ids: []
+    basis: Existing Python behavior suites are a useful oracle; import coupling raises cost but is not itself a defect without migration.
+  - candidate_id: C6
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C6
+    surface: current_executor
+    adjudication: fully-covered
+    destination_ids: []
+    basis: Existing Python behavior suites are a useful oracle; import coupling raises cost but is not itself a defect without migration.
+  - candidate_id: C6
+    surface: future_step_functions
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C6
+    surface: future_deterministic_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C6
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C6
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C7
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C7
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C7
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C7
+    surface: current_executor
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: C7
+    surface: future_step_functions
+    adjudication: fully-covered
+    destination_ids: []
+    basis: CD.27 already selects managed orchestration and decomposed workers; no monolithic-port premise remains.
+  - candidate_id: C7
+    surface: future_deterministic_lambdas
+    adjudication: fully-covered
+    destination_ids: []
+    basis: CD.27 already selects managed orchestration and decomposed workers; no monolithic-port premise remains.
+  - candidate_id: C7
+    surface: future_durable_personas
+    adjudication: fully-covered
+    destination_ids: []
+    basis: CD.27 already selects managed orchestration and decomposed workers; no monolithic-port premise remains.
+  - candidate_id: C7
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Candidate is not a defect on this surface under the current keep-Python policy.
+  - candidate_id: T4-INVENTORY
+    surface: future_step_functions
+    adjudication: not-a-defect
+    destination_ids: []
+    basis: Excluded T4.9 (contract/workflow only), T4.10 (contract governance only), and T4.11 (managed Step Functions counters only);
+      included T4.1, T4.2, T4.3, T4.8, T4.9a, T4.12.
+  t4_topology:
+  - tier_item: T4.1
+    node: state machine/EventBridge
+    substrate: step_functions
+    role: managed orchestration, retries, budgets, parallelism
+    proposed_language: managed_n/a
+    aws_support: not_applicable
+    evidence: docs/ROADMAP-PLATFORM.yaml:6656-6733
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: pick_rec
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: prepare_workspace
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: critique_gate
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: file_pr
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: emit_telemetry
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: await_verdict
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: merge
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: deploy_dispatch
+    substrate: lambda
+    role: deterministic glue
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6667-6696
+    confidence: CONFIRMED
+  - tier_item: T4.2
+    node: plan_agent
+    substrate: lambda_durable_function
+    role: checkpointed agent persona
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6735-6811
+    confidence: CONFIRMED
+  - tier_item: T4.2
+    node: plan_critic
+    substrate: lambda_durable_function
+    role: checkpointed agent persona
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6735-6811
+    confidence: CONFIRMED
+  - tier_item: T4.2
+    node: decision_scout
+    substrate: lambda_durable_function
+    role: checkpointed agent persona
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6735-6811
+    confidence: CONFIRMED
+  - tier_item: T4.2
+    node: implement_agent
+    substrate: lambda_durable_function
+    role: checkpointed agent persona
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6735-6811
+    confidence: CONFIRMED
+  - tier_item: T4.2
+    node: code_reviewer
+    substrate: lambda_durable_function
+    role: checkpointed agent persona
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6735-6811
+    confidence: CONFIRMED
+  - tier_item: T4.1
+    node: ESCAPE
+    substrate: ecs_escape_hatch
+    role: deterministic tasks over 15 minutes
+    proposed_language: managed_n/a
+    aws_support: not_applicable
+    evidence: docs/ROADMAP-PLATFORM.yaml:6680-6682
+    confidence: CONFIRMED
+  - tier_item: T4.3
+    node: ducklake_writer producer verbs
+    substrate: lambda
+    role: priority queue write-path repoint
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:6811-6860
+    confidence: CONFIRMED
+  - tier_item: T4.8
+    node: ducklake_reader/writer lease verbs
+    substrate: lambda
+    role: semantic lease persistence
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:7014-7044
+    confidence: CONFIRMED
+  - tier_item: T4.9a
+    node: executor_callback
+    substrate: lambda
+    role: authenticated task-token callback
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:7104-7147
+    confidence: CONFIRMED
+  - tier_item: T4.9a
+    node: GitHub Actions callback
+    substrate: github_actions
+    role: sole validation runner and verdict emitter
+    proposed_language: managed_n/a
+    aws_support: not_applicable
+    evidence: docs/ROADMAP-PLATFORM.yaml:7104-7147
+    confidence: CONFIRMED
+  - tier_item: T4.12
+    node: scheduled dispatcher/findings processor
+    substrate: lambda
+    role: re-enable, route providers, then repoint legacy surfaces
+    proposed_language: python
+    aws_support: first_class
+    evidence: docs/ROADMAP-PLATFORM.yaml:7290-7340
+    confidence: CONFIRMED
+  work_breakdown:
+  - surface: future_deterministic_lambdas
+    tier_items:
+    - T4.1
+    changes:
+    - 8 regular workers, contracts, IAM, state integration
+    dependencies:
+    - T4.1 contracts
+    effort: L
+    engineer_day_range: 16-40
+    assumptions:
+    - Rust regular runtime is technically supported; excludes Step Functions build
+    confidence: HYPOTHESIS
+  - surface: future_durable_personas
+    tier_items:
+    - T4.2
+    changes:
+    - 5 personas plus unsupported Durable SDK compatibility or CD.27 reversal
+    dependencies:
+    - first-class checkpoint/replay SDK
+    effort: XL
+    engineer_day_range: '>40'
+    assumptions:
+    - 60-day midpoint is conservative; bespoke SDK is not recommended
+    confidence: CONFIRMED
+  - surface: future_deterministic_lambdas
+    tier_items:
+    - T4.3
+    changes:
+    - writer producer-path change
+    dependencies:
+    - existing DuckLake Python runtime
+    effort: S
+    engineer_day_range: 2-5
+    assumptions:
+    - Keep Python; Rust would port shared boundary
+    confidence: HYPOTHESIS
+  - surface: future_deterministic_lambdas
+    tier_items:
+    - T4.8
+    changes:
+    - reader/writer lease verbs
+    dependencies:
+    - existing DuckLake Python runtime
+    effort: S
+    engineer_day_range: 2-5
+    assumptions:
+    - Keep Python
+    confidence: HYPOTHESIS
+  - surface: future_deterministic_lambdas
+    tier_items:
+    - T4.9a
+    changes:
+    - callback handler
+    dependencies:
+    - handshake contract
+    effort: S
+    engineer_day_range: 2-5
+    assumptions:
+    - Small isolated regular Lambda
+    confidence: HYPOTHESIS
+  - surface: prod_class_lambdas
+    tier_items:
+    - T4.12
+    changes:
+    - existing dispatcher/findings runtime rehome
+    dependencies:
+    - retirement/routing choice
+    effort: S
+    engineer_day_range: 2-5
+    assumptions:
+    - Do not port before disposition
+    confidence: HYPOTHESIS
+  - surface: lambda_build_deploy
+    tier_items:
+    - T4.1
+    - T4.2
+    - T4.9a
+    changes:
+    - versioned manifest, Cargo builds, provenance
+    dependencies:
+    - RLE-02
+    effort: XS
+    engineer_day_range: <2
+    assumptions:
+    - Schema design only; implementation accounted in CI
+    confidence: HYPOTHESIS
+  - surface: ci_test_tooling
+    tier_items:
+    - T4.1
+    - T4.2
+    - T4.9a
+    changes:
+    - toolchain, gates, coverage, cross-build, smoke
+    dependencies:
+    - language-neutral manifest
+    effort: XS
+    engineer_day_range: <2
+    assumptions:
+    - Incremental setup slice only; workload tests accounted per item
+    confidence: HYPOTHESIS
+  ci_delta:
+  - area: toolchain pinning/cache
+    required_change: Pin rust-toolchain and Cargo lock/cache
+    python_rust_duplication: new alongside uv/pip
+    critical_path_effect: adds cache miss/build time
+    anti_vacuity_control: Rust feature build must consume locked target
+    effort: S
+  - area: formatting/lint
+    required_change: rustfmt, Clippy deny policy
+    python_rust_duplication: parallel to ruff
+    critical_path_effect: small
+    anti_vacuity_control: delete feature logic causes contract test failure, not green compile
+    effort: S
+  - area: dependency/license audit
+    required_change: cargo audit/deny with ownership
+    python_rust_duplication: parallel vulnerability queue
+    critical_path_effect: small
+    anti_vacuity_control: known-bad fixture proves gate
+    effort: S
+  - area: unit/integration/contract tests
+    required_change: Rust unit plus language-neutral payload/replay contracts
+    python_rust_duplication: shared fixtures, separate runners
+    critical_path_effect: material
+    anti_vacuity_control: replace handler by stub and contract/e2e tests fail
+    effort: M
+  - area: coverage aggregation/diff ratchet
+    required_change: collect llvm coverage and merge policy
+    python_rust_duplication: two formats
+    critical_path_effect: material
+    anti_vacuity_control: deleted feature lines cannot evade changed-code coverage
+    effort: M
+  - area: Lambda target builds
+    required_change: cross-build AL2023 x86_64/arm64
+    python_rust_duplication: new
+    critical_path_effect: material on cold cache
+    anti_vacuity_control: wrong architecture fixture fails load smoke
+    effort: M
+  - area: architecture/reproducibility
+    required_change: digest compare and ELF/ABI inspection
+    python_rust_duplication: new
+    critical_path_effect: material
+    anti_vacuity_control: non-reproducible rebuild and wrong target fail
+    effort: M
+  - area: smoke tests
+    required_change: extend existing artifact deploy record gates
+    python_rust_duplication: contained in workflows
+    critical_path_effect: material
+    anti_vacuity_control: compile-only stub fails real invocation assertions
+    effort: M
+  - area: vulnerability response
+    required_change: RustSec ownership and lock update SLA
+    python_rust_duplication: new ecosystem
+    critical_path_effect: small
+    anti_vacuity_control: expired advisory fixture fails
+    effort: S
+  - area: developer setup
+    required_change: rustup/cargo docs via wrapper
+    python_rust_duplication: new
+    critical_path_effect: small
+    anti_vacuity_control: clean environment builds pinned target
+    effort: S
+  migration_decisions:
+  - surface: ducklake_runtime_lambdas
+    verdict: measure-first
+    trigger_or_evidence: Post-MVP measured bottleneck and, for Durable, first-class AWS Rust SDK.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: Avoid pre-MVP rewrite and preserve the governed Python path.
+    confidence: CONFIRMED
+  - surface: prod_class_lambdas
+    verdict: retire-instead
+    trigger_or_evidence: T2.26/T4.12 disposition precedes any port.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: Avoid pre-MVP rewrite and preserve the governed Python path.
+    confidence: CONFIRMED
+  - surface: lambda_build_deploy
+    verdict: keep-python
+    trigger_or_evidence: Post-MVP measured bottleneck and, for Durable, first-class AWS Rust SDK.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: Avoid pre-MVP rewrite and preserve the governed Python path.
+    confidence: CONFIRMED
+  - surface: current_executor
+    verdict: keep-python
+    trigger_or_evidence: Post-MVP measured bottleneck and, for Durable, first-class AWS Rust SDK.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: Avoid pre-MVP rewrite and preserve the governed Python path.
+    confidence: CONFIRMED
+  - surface: future_step_functions
+    verdict: keep-python
+    trigger_or_evidence: Post-MVP measured bottleneck and, for Durable, first-class AWS Rust SDK.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: No present measured pain or necessary Rust-only capability; future_step_functions is managed orchestration, not migratable.
+    confidence: CONFIRMED
+  - surface: future_deterministic_lambdas
+    verdict: keep-python
+    trigger_or_evidence: Post-MVP measured bottleneck and, for Durable, first-class AWS Rust SDK.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: Avoid pre-MVP rewrite and preserve the governed Python path.
+    confidence: CONFIRMED
+  - surface: future_durable_personas
+    verdict: keep-python
+    trigger_or_evidence: Post-MVP measured bottleneck and, for Durable, first-class AWS Rust SDK.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: Avoid pre-MVP rewrite and preserve the governed Python path.
+    confidence: CONFIRMED
+  - surface: ci_test_tooling
+    verdict: keep-python
+    trigger_or_evidence: Post-MVP measured bottleneck and, for Durable, first-class AWS Rust SDK.
+    parity_or_retirement_gate: Contract tests, deploy record and smoke parity; or consumers removed.
+    rollback: Whole-artifact Lambda alias rollback; Step Functions is managed and not migratable.
+    rationale: Avoid pre-MVP rewrite and preserve the governed Python path.
+    confidence: CONFIRMED
+  strategy_costs:
+  - strategy: python-only-through-mvp
+    one_time_cost: Existing roadmap work, bounded 45-80 engineer-days; no language-platform detour.
+    recurring_cost: One Python toolchain and current dependency response.
+    runtime_cost_model: C_py=N*(request + GBs_py*rate)+durable operations/data/retention.
+    opportunity_cost: Lowest; delivers CD.27 evidence first.
+    break_even: Baseline comparator; optimize only if measured AWS cost or incidents are material.
+    confidence: HYPOTHESIS
+  - strategy: bounded-dual-language-pilot
+    one_time_cost: Add 16-40 days for manifest/CI and one whole-artifact duplicate.
+    recurring_cost: Two toolchains, advisories, coverage and operator skills.
+    runtime_cost_model: Savings=N*(GBs_py-GBs_rs)*rate minus added CI/maintenance; Durable stays Python.
+    opportunity_cost: Delays one or more T4 slices.
+    break_even: N*(GBs_py-GBs_rs)*rate + monetized avoided defects > pilot + recurring engineering cost.
+    confidence: HYPOTHESIS
+  - strategy: rust-default-now
+    one_time_cost: '>40 extra days plus an unbounded bespoke Durable SDK/CD.27 reversal.'
+    recurring_cost: Rust-first plus Python exceptions until ports/retirements finish.
+    runtime_cost_model: Unknown; network/LLM/database waits may dominate compute.
+    opportunity_cost: Transformational MVP delay and support risk.
+    break_even: Not computable while required Durable semantics are unsupported and measurements absent.
+    confidence: CONFIRMED
+  adversarial_reviews:
+    packet_evidence:
+    - claim: Rust Durable support is absent
+      citation: https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html
+      evidence_kind: static
+    - claim: Regular Rust Lambda uses OS-only runtime client
+      citation: https://docs.aws.amazon.com/lambda/latest/dg/lambda-rust.html
+      evidence_kind: static
+    - claim: Replay restarts and skips completed checkpoints
+      citation: https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html
+      evidence_kind: static
+    - claim: Current manifest is .py/pip-specific
+      citation: scripts/lambda_manifest.py:26-40
+      evidence_kind: static
+    - claim: T4.2 requires nonduplicating forced-timeout replay
+      citation: docs/ROADMAP-PLATFORM.yaml:6777
+      evidence_kind: static
+    - claim: 128 bounded Python tests passed
+      citation: pytest bounded sample 2026-07-29
+      evidence_kind: observed
+    - claim: No Rust files or toolchain tracked
+      citation: git ls-files '*.rs' Cargo.toml Cargo.lock rust-toolchain.toml
+      evidence_kind: observed
+    - claim: Recent cache sample defect classes are not compiler-proven
+      citation: logs/.recommendations-log.jsonl first 12 by timestamp
+      evidence_kind: observed
+    rounds:
+    - round: 1
+      reviewers:
+      - perspective: compiler-safety-skeptic
+        challenges:
+        - claim: Scope Q6 as current T4/MVP, not permanent
+          evidence_or_counterexample: First-class Durable blocker does not make Rust unsuitable forever
+          disposition: revise
+        - claim: 104-day estimate lacks source precision
+          evidence_or_counterexample: No measured calibration or overlap evidence
+          disposition: needs-evidence
+        - claim: Compiler/schema wording is too absolute
+          evidence_or_counterexample: Types can prevent some local invalid payloads and duplicate-consumption patterns
+          disposition: revise
+        - claim: Allow a non-critical-path experiment
+          evidence_or_counterexample: A bounded experiment need not impose production support
+          disposition: revise
+        - claim: No measured candidate now
+          evidence_or_counterexample: Absence of empirical case supports rejecting a mandate
+          disposition: sustain
+        - claim: Mandate delays MVP
+          evidence_or_counterexample: Unsupported Durable plus new delivery work is on critical path
+          disposition: sustain
+        - claim: Python-specific delivery is real but mutable
+          evidence_or_counterexample: Manifest can be generalized rather than duplicated
+          disposition: sustain
+        - claim: Test count is switching-cost evidence only
+          evidence_or_counterexample: Passing units do not prove cloud/replay correctness
+          disposition: revise
+        - claim: Managed decomposition matters more
+          evidence_or_counterexample: It directly governs observed risk classes
+          disposition: sustain
+        - claim: Not every Rust CI job must be serial
+          evidence_or_counterexample: Parallel execution can reduce wall-clock effect
+          disposition: revise
+        - claim: Keep population grains distinct
+          evidence_or_counterexample: Personas, functions, artifacts and scope surfaces are different counts
+          disposition: needs-evidence
+        missing_questions:
+        - Define exact component/count grains.
+        - Document bottom-up estimate uncertainty.
+        - Keep reopen criteria explicit.
+        - Distinguish serial from parallel CI.
+        verdict_pressure: toward_do_not_adopt
+      - perspective: rust-performance-advocate
+        challenges:
+        - claim: Estimate is directional, not decision-grade precision
+          evidence_or_counterexample: No Rust spike or port-velocity calibration exists
+          disposition: needs-evidence
+        - claim: Regular glue may still benefit
+          evidence_or_counterexample: Cold start/memory/serialization differ from network-bound personas
+          disposition: revise
+        - claim: Do not turn Durable blocker into universal ban
+          evidence_or_counterexample: Regular Lambda remains technically feasible
+          disposition: revise
+        - claim: Python for Durable personas
+          evidence_or_counterexample: No first-class Rust Durable SDK meets replay criterion
+          disposition: sustain
+        - claim: Compiler cannot establish hardest properties
+          evidence_or_counterexample: Behavioral integration remains required
+          disposition: sustain
+        - claim: Missing telemetry means unknown, not no opportunity
+          evidence_or_counterexample: Instrument and revisit
+          disposition: revise
+        - claim: Python tests need language-neutral extraction
+          evidence_or_counterexample: Imports and mocks are not cross-language contracts
+          disposition: revise
+        - claim: Tooling costs are mutable but real
+          evidence_or_counterexample: Manifest can dispatch multiple builders
+          disposition: sustain
+        - claim: Mature CI controls can be staged
+          evidence_or_counterexample: Measure minimum pilot critical path
+          disposition: revise
+        - claim: Managed decomposition is primary reliability lever
+          evidence_or_counterexample: Retry and persistence scope are service properties
+          disposition: sustain
+        - claim: Recent sample is not a full defect census
+          evidence_or_counterexample: It cannot quantify all compiler-addressable defects
+          disposition: needs-evidence
+        - claim: No pre-MVP production pilot
+          evidence_or_counterexample: Post-MVP threshold-triggered benchmark preserves optionality
+          disposition: revise
+        - claim: Sidecar does not supply Durable semantics
+          evidence_or_counterexample: No measured hotspot justifies coupling
+          disposition: sustain
+        - claim: Function count is not migration cost
+          evidence_or_counterexample: Cost by handlers/shared code/artifacts/contracts
+          disposition: revise
+        missing_questions:
+        - Measure CPU/memory-bound candidates and thresholds.
+        - Test shared persona-engine leverage.
+        - Compare Python optimization alternatives.
+        - Set a post-MVP review trigger.
+        verdict_pressure: toward_caveats
+      - perspective: delivery-operations-reviewer
+        challenges:
+        - claim: Durable language support inventory
+          evidence_or_counterexample: C# is now listed too, but Rust remains absent
+          disposition: sustain
+        - claim: Estimate precision is unaudited
+          evidence_or_counterexample: No calibration or staffing model
+          disposition: needs-evidence
+        - claim: Compiler does not prove distributed properties
+          evidence_or_counterexample: IAM/replay/callback/budget need behavioral controls
+          disposition: sustain
+        - claim: Delivery path is materially Python-specific
+          evidence_or_counterexample: Cargo requires build/release additions
+          disposition: sustain
+        - claim: 128 tests are safety-net, not intrinsic safety
+          evidence_or_counterexample: Classify contract versus implementation-coupled tests
+          disposition: revise
+        - claim: No telemetry defeats performance mandate
+          evidence_or_counterexample: Network-bound dominance remains inference
+          disposition: sustain
+        - claim: Use measure-first, not permanent ban
+          evidence_or_counterexample: Future isolated deterministic worker can qualify
+          disposition: revise
+        - claim: Decomposition is stronger near-term lever
+          evidence_or_counterexample: It constrains permissions/retries/blast radius
+          disposition: sustain
+        - claim: Incident/rollback complexity is broader than CI
+          evidence_or_counterexample: Symbols, panic diagnosis, schemas and in-flight executions matter
+          disposition: revise
+        - claim: Supply chains need symmetric comparison
+          evidence_or_counterexample: Cargo build scripts/native crates also add risk
+          disposition: sustain
+        - claim: Missing expected tests are stale anchors or gaps
+          evidence_or_counterexample: They do not support Rust
+          disposition: revise
+        - claim: Team/agent operability favors Python now
+          evidence_or_counterexample: No Rust ownership or repair-loop evidence exists
+          disposition: sustain
+        missing_questions:
+        - Calibrate work breakdown.
+        - Define canary and in-flight rollback.
+        - Inventory native target compatibility.
+        - Name exception authority and operator ownership.
+        verdict_pressure: toward_do_not_adopt
+      reconciliation:
+      - challenge: 'compiler-safety-skeptic: Scope Q6 as current T4/MVP, not permanent'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'compiler-safety-skeptic: 104-day estimate lacks source precision'
+        disposition: deferred-needs-evidence
+        basis: Ranges remain explicitly HYPOTHESIS with assumptions; no repository calibration exists. This uncertainty strengthens
+          measure-first and does not change Q6.
+      - challenge: 'compiler-safety-skeptic: Compiler/schema wording is too absolute'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'compiler-safety-skeptic: Allow a non-critical-path experiment'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'compiler-safety-skeptic: No measured candidate now'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'compiler-safety-skeptic: Mandate delays MVP'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'compiler-safety-skeptic: Python-specific delivery is real but mutable'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'compiler-safety-skeptic: Test count is switching-cost evidence only'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'compiler-safety-skeptic: Managed decomposition matters more'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'compiler-safety-skeptic: Not every Rust CI job must be serial'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'compiler-safety-skeptic: Keep population grains distinct'
+        disposition: deferred-needs-evidence
+        basis: Ranges remain explicitly HYPOTHESIS with assumptions; no repository calibration exists. This uncertainty strengthens
+          measure-first and does not change Q6.
+      - challenge: 'rust-performance-advocate: Estimate is directional, not decision-grade precision'
+        disposition: deferred-needs-evidence
+        basis: Ranges remain explicitly HYPOTHESIS with assumptions; no repository calibration exists. This uncertainty strengthens
+          measure-first and does not change Q6.
+      - challenge: 'rust-performance-advocate: Regular glue may still benefit'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'rust-performance-advocate: Do not turn Durable blocker into universal ban'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'rust-performance-advocate: Python for Durable personas'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'rust-performance-advocate: Compiler cannot establish hardest properties'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'rust-performance-advocate: Missing telemetry means unknown, not no opportunity'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'rust-performance-advocate: Python tests need language-neutral extraction'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'rust-performance-advocate: Tooling costs are mutable but real'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'rust-performance-advocate: Mature CI controls can be staged'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'rust-performance-advocate: Managed decomposition is primary reliability lever'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'rust-performance-advocate: Recent sample is not a full defect census'
+        disposition: deferred-needs-evidence
+        basis: Ranges remain explicitly HYPOTHESIS with assumptions; no repository calibration exists. This uncertainty strengthens
+          measure-first and does not change Q6.
+      - challenge: 'rust-performance-advocate: No pre-MVP production pilot'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'rust-performance-advocate: Sidecar does not supply Durable semantics'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'rust-performance-advocate: Function count is not migration cost'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'delivery-operations-reviewer: Durable language support inventory'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'delivery-operations-reviewer: Estimate precision is unaudited'
+        disposition: deferred-needs-evidence
+        basis: Ranges remain explicitly HYPOTHESIS with assumptions; no repository calibration exists. This uncertainty strengthens
+          measure-first and does not change Q6.
+      - challenge: 'delivery-operations-reviewer: Compiler does not prove distributed properties'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'delivery-operations-reviewer: Delivery path is materially Python-specific'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'delivery-operations-reviewer: 128 tests are safety-net, not intrinsic safety'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'delivery-operations-reviewer: No telemetry defeats performance mandate'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'delivery-operations-reviewer: Use measure-first, not permanent ban'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'delivery-operations-reviewer: Decomposition is stronger near-term lever'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'delivery-operations-reviewer: Incident/rollback complexity is broader than CI'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'delivery-operations-reviewer: Supply chains need symmetric comparison'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      - challenge: 'delivery-operations-reviewer: Missing expected tests are stale anchors or gaps'
+        disposition: accepted
+        basis: Wording/records explicitly preserve local Rust benefits, post-MVP reopening, parallel CI, language-neutral tests,
+          and whole-artifact operational rollback. This does not change a question verdict or create a high-severity risk.
+      - challenge: 'delivery-operations-reviewer: Team/agent operability favors Python now'
+        disposition: rejected-with-basis
+        basis: The draft already distinguishes local compiler benefits from end-to-end guarantees and applies the claim only to current
+          adoption.
+      stable: true
+    unresolved:
+    - Repository has no invocation/duration/memory baseline or controlled AI-generated defect comparison.
+    - Current official regional availability matrix was not independently located; re-probe eu-west-2 at T4.2 planning.
+  findings:
+  - id: RLE-01
+    surface: future_durable_personas
+    question: Q6
+    dimension: VD2
+    title: Rust lacks a first-class Lambda Durable Functions SDK/runtime
+    evidence: https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html
+    evidence_kind: static
+    current_behavior: AWS lists Node.js, Python, Java, and C# managed support; OCI images still require a durable execution SDK.
+      Rust is absent.
+    ideal_behavior: Every required T4.2 checkpoint/replay semantic uses a first-class supported SDK with test and operations guarantees.
+    gap: A Rust persona would require a bespoke protocol/SDK compatibility layer not justified for MVP.
+    compensating_controls_considered: A container image changes packaging but does not supply the missing Rust durable SDK. Self-checkpointing
+      changes CD.27 semantics.
+    change_type: clarify
+    proposed_change: Keep T4.2 personas on a first-class supported language and make first-class Durable SDK support a Rust reconsideration
+      gate.
+    acceptance: T4.2 atomic plans name Python and reject Rust custom-runtime emulation unless AWS ships and the repository verifies
+      first-class Rust Durable support.
+    severity: high
+    severity_rationale: Assuming regular-Lambda Rust equivalence would remove checkpoint/replay guarantees from the executor persona
+      layer.
+    confidence: CONFIRMED
+    roadmap_crossref:
+      classification: planned-insufficient
+      item_ids:
+      - CD.27
+      - T4.2
+      dedup_search_terms:
+      - Rust durable SDK
+      - Lambda Durable Functions runtime
+      - checkpoint replay
+      dedup_hit_count: 6
+      note: CD.27 monitors maturity but does not govern worker-language compatibility.
+    effort: XS
+    depends_on: []
+    sequencing:
+      safe_to_queue_now: false
+      blocked_behind:
+      - T4.2 atomic planning
+      note: Decision input, not implementation work.
+  - id: RLE-02
+    surface: lambda_build_deploy
+    question: Q3
+    dimension: VD6
+    title: Lambda delivery contracts are Python-specific and have no governed Rust path
+    evidence: scripts/lambda_manifest.py:26-40|scripts/test_coverage_checker.py:108-142
+    evidence_kind: static
+    current_behavior: Manifests model .py handlers and pip packages; test mapping and both deploy workflows install and build Python.
+    ideal_behavior: A versioned language-neutral manifest preserves provenance, coverage, architecture, deploy records, and non-vacuous
+      smoke gates.
+    gap: Adding Rust today creates ungoverned or parallel build/test semantics.
+    compensating_controls_considered: The existing per-artifact manifest is a strong unification point but its fields and builders
+      are not language-neutral.
+    change_type: unify
+    proposed_change: Only if a Rust pilot is approved, version the manifest with language, target, entrypoint, dependency-lock, architecture,
+      and build-command fields and extend the existing governed workflows.
+    acceptance: Deleting or stubbing Rust feature code fails behavioral contract and smoke gates; reproducible target builds, provenance,
+      coverage, and vulnerability checks share one manifest source.
+    severity: medium
+    severity_rationale: This is material delivery overhead but no Rust code exists and the gap does not affect current production.
+    confidence: CONFIRMED
+    roadmap_crossref:
+      classification: planned-unbuilt
+      item_ids:
+      - CD.24
+      - T4.1
+      dedup_search_terms:
+      - Rust manifest
+      - Cargo Lambda
+      - language-neutral Lambda manifest
+      dedup_hit_count: 0
+      note: CD.24 governs Python artifacts; T4.1 requires manifests but does not specify multi-language schema.
+    effort: L
+    depends_on:
+    - RLE-01
+    sequencing:
+      safe_to_queue_now: false
+      blocked_behind:
+      - approved Rust production pilot
+      note: Avoid speculative dual-language infrastructure.
+  - id: RLE-03
+    surface: future_deterministic_lambdas
+    question: Q2
+    dimension: VD3
+    title: Repository lacks decision-grade Lambda performance and defect measurements
+    evidence: docs/ROADMAP-PLATFORM.yaml:6656-6733|logs/.recommendations-log.jsonl sample 2026-07-27..29
+    evidence_kind: observed
+    current_behavior: No invocation-frequency, cold-start, duration, memory, package-size, or language-attributable defect baseline
+      exists for the T4 workers or existing Lambdas.
+    ideal_behavior: A production-language default follows comparable workload measurements and a defect taxonomy.
+    gap: Rust latency, cost, and AI-defect benefits remain hypotheses; sampled recent defects were IAM, authority, service, documentation,
+      or CI-budget classes.
+    compensating_controls_considered: Python tests and static gates reduce baseline risk but do not measure Rust counterfactuals.
+    change_type: persist
+    proposed_change: Before reopening adoption, run one contract-identical regular-Lambda canary in Python and Rust and classify
+      escaped defects against compiler/test/runtime controls.
+    acceptance: Publish cold/warm p50/p99, memory, artifact, billed GB-s, build minutes, defect catches, and engineering time with
+      rollback and a predeclared threshold.
+    severity: medium
+    severity_rationale: A mandate without measurements can delay MVP and optimize a negligible cost component.
+    confidence: CONFIRMED
+    roadmap_crossref:
+      classification: planned-unbuilt
+      item_ids:
+      - T4.1
+      dedup_search_terms:
+      - Rust benchmark
+      - Lambda language measurement
+      - compiler defect taxonomy
+      dedup_hit_count: 0
+      note: T4.1 requires observability after implementation, not a pre-adoption comparison.
+    effort: S
+    depends_on: []
+    sequencing:
+      safe_to_queue_now: false
+      blocked_behind:
+      - stable T4.1 worker contract
+      note: Measure only when a representative contract exists.
+  rejected_candidates:
+  - candidate_id: C1
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C1
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C1
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C1
+    surface: current_executor
+    adjudication: fully-covered
+    why_dismissed: Layered Python schemas, tests and managed decomposition cover current risk; Rust compiler scope remains narrower
+      than behavior.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.24
+  - candidate_id: C1
+    surface: future_step_functions
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C1
+    surface: future_deterministic_lambdas
+    adjudication: fully-covered
+    why_dismissed: Layered Python schemas, tests and managed decomposition cover current risk; Rust compiler scope remains narrower
+      than behavior.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.27
+  - candidate_id: C1
+    surface: future_durable_personas
+    adjudication: fully-covered
+    why_dismissed: Layered Python schemas, tests and managed decomposition cover current risk; Rust compiler scope remains narrower
+      than behavior.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.27
+  - candidate_id: C1
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C2
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C2
+    surface: current_executor
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C2
+    surface: future_step_functions
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C2
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C2
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C3
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C3
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C3
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C3
+    surface: current_executor
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C3
+    surface: future_step_functions
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C4
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C4
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C4
+    surface: current_executor
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C4
+    surface: future_step_functions
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C4
+    surface: future_deterministic_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C4
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C5
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C5
+    surface: current_executor
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C5
+    surface: future_step_functions
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C5
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C5
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C6
+    surface: ducklake_runtime_lambdas
+    adjudication: fully-covered
+    why_dismissed: Existing Python behavior suites are a useful oracle; import coupling raises cost but is not itself a defect without
+      migration.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.24
+  - candidate_id: C6
+    surface: prod_class_lambdas
+    adjudication: fully-covered
+    why_dismissed: Existing Python behavior suites are a useful oracle; import coupling raises cost but is not itself a defect without
+      migration.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.24
+  - candidate_id: C6
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C6
+    surface: current_executor
+    adjudication: fully-covered
+    why_dismissed: Existing Python behavior suites are a useful oracle; import coupling raises cost but is not itself a defect without
+      migration.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.24
+  - candidate_id: C6
+    surface: future_step_functions
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C6
+    surface: future_deterministic_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C6
+    surface: future_durable_personas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.27
+  - candidate_id: C6
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C7
+    surface: ducklake_runtime_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C7
+    surface: prod_class_lambdas
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C7
+    surface: lambda_build_deploy
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C7
+    surface: current_executor
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: C7
+    surface: future_step_functions
+    adjudication: fully-covered
+    why_dismissed: CD.27 already selects managed orchestration and decomposed workers; no monolithic-port premise remains.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.27
+  - candidate_id: C7
+    surface: future_deterministic_lambdas
+    adjudication: fully-covered
+    why_dismissed: CD.27 already selects managed orchestration and decomposed workers; no monolithic-port premise remains.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.27
+  - candidate_id: C7
+    surface: future_durable_personas
+    adjudication: fully-covered
+    why_dismissed: CD.27 already selects managed orchestration and decomposed workers; no monolithic-port premise remains.
+    compensating_control: Existing governed Python path and CD.27 typed/decomposed boundaries.
+    control_property_match: Behavioral tests and state-machine contracts fail on property violations rather than compiler success.
+    decision_or_item_id: CD.27
+  - candidate_id: C7
+    surface: ci_test_tooling
+    adjudication: not-a-defect
+    why_dismissed: Candidate is not a defect on this surface under the current keep-Python policy.
+    compensating_control: Not applicable to this surface.
+    control_property_match: No relevant property is asserted on this surface.
+    decision_or_item_id: CD.24
+  - candidate_id: T4-INVENTORY
+    surface: future_step_functions
+    adjudication: not-a-defect
+    why_dismissed: T4.9, T4.10, and T4.11 do not directly create or modify Lambda/Durable runtime code.
+    compensating_control: Runtime inclusions are separately enumerated in topology/work breakdown.
+    control_property_match: Direct files/acceptance tracing prevents indirect CD.27 references from being counted as language work.
+    decision_or_item_id: T4.9,T4.10,T4.11
+  summary:
+    total_findings: 3
+    novel_count: 0
+    planned_insufficient_count: 1
+    planned_unbuilt_count: 2
+    top_improvements:
+    - RLE-01
+    - RLE-02
+    - RLE-03
+    highest_leverage_change: RLE-01
+    overall_policy: do-not-adopt-rust
+    decision_readiness_ducklake_runtime_lambdas: frontier
+    decision_readiness_prod_class_lambdas: frontier
+    decision_readiness_lambda_build_deploy: frontier
+    decision_readiness_current_executor: frontier
+    decision_readiness_future_step_functions: frontier
+    decision_readiness_future_deterministic_lambdas: frontier
+    decision_readiness_future_durable_personas: strong
+    decision_readiness_ci_test_tooling: frontier

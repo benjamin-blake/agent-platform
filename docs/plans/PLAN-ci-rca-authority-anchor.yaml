@@ -1,0 +1,168 @@
+schema_version: 3
+slug: ci-rca-authority-anchor
+intent: >-
+  Close GAL-03 by replacing the CI-RCA failed-log backstop's unrelated Decision 143 citation with
+  Decision 72 retrieval provenance and by enforcing that narrow semantic anchor through the
+  existing workflow guard, without changing runtime behavior or claiming general prose validation.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-authority-anchor.yaml
+phase: Ad hoc audit remediation approved at overseer G1; Wave 3 follows merged GAL-01, GAL-02, and GAL-04 remediation.
+scope:
+- file: .github/workflows/ci-rca.yml
+  action: Modify
+  purpose: >-
+    Replace only the stale "Decision 143 mitigation" wording beside the retained `test -s` guards.
+    Cite Decision 72 only as provenance for CI-RCA failed-run log retrieval and describe `test -s`
+    as a local YAML-side fail-closed guard, without claiming that a Decision owns the guard itself.
+    Preserve the step's `env` mapping and complete `run` scalar byte-for-byte.
+- file: scripts/verify_ci_workflow.py
+  action: Modify
+  purpose: >-
+    Extend the existing `_check_ci_rca_fetch_classification` structural guard with one targeted source
+    check: the source comment immediately adjacent to the `Fetch failed run logs` step must name
+    Decision 72 only as retrieval provenance, must identify `test -s` as a local guard, and must not
+    call the backstop a Decision 143 mitigation. Parse exactly one Decision 72 entry from its H2 header
+    through the next H2 header and require that bounded entry to establish workflow_run CI-RCA failed-log
+    retrieval. Fail closed on missing, duplicate, or malformed boundaries; do not let a remote workflow
+    comment or another Decision entry satisfy the check.
+- file: tests/verify_ci_workflow/test_ci_rca_and_canary.py
+  action: Modify
+  purpose: >-
+    Add positive and mutation coverage for the authority anchor, including stale Decision 143 wording,
+    missing Decision 72 wording, non-adjacent/remote comments, another Decision entry carrying the
+    required words, duplicate/missing/malformed Decision 72 boundaries, and a bounded Decision 72 entry
+    that does not describe CI-RCA failed-run logs. Snapshot the production step's exact `env` mapping and
+    `run` scalar so comment-only implementation cannot alter runtime configuration.
+- file: config/agent/verification_registry/registry.yaml
+  action: Modify
+  purpose: >-
+    Graduate the canonical GAL-03 authority-anchor mutation test so the semantic mismatch remains an
+    executable presubmit property rather than a one-time textual correction.
+acceptance_criteria:
+- >-
+  The raw-source comment block immediately adjacent to the `Fetch failed run logs` step cites Decision
+  72 only as provenance for CI-RCA failed-run log retrieval, calls `test -s` a local YAML-side
+  fail-closed guard, and contains no claim that Decision 143 or Decision 72 owns the guard itself.
+- >-
+  The `Fetch failed run logs` step's parsed `env` mapping and complete `run` scalar exactly equal their
+  pre-change values; the implementation changes only adjacent comment text. The run scalar therefore
+  continues to invoke bounded fetch, validate/extract the envelope, and retain both non-empty guards.
+- >-
+  The existing authoritative workflow guard fails with stable GAL-03 diagnostics if the stale Decision
+  143 claim is restored, the adjacent Decision 72 provenance is removed or moved elsewhere, or the
+  bounded Decision 72 entry no longer establishes CI-RCA failed-run log retrieval. Words placed in a
+  remote comment or another Decision entry cannot produce a pass.
+- >-
+  Decision parsing requires exactly one `## Decision 72:` header and bounds its authority text at the
+  next `## Decision N:` header. Missing, duplicate, reordered, or malformed boundaries fail closed with
+  a stable diagnostic rather than widening the search to the entire decision corpus.
+- >-
+  The semantic check is explicitly scoped to this known workflow comment and Decision entry; it does
+  not infer ownership for arbitrary prose citations or create a second decision-authority contract.
+- >-
+  A new verification-registry row graduates the canonical counterfactual, and both authoritative
+  validation tiers continue to reach the guard through the existing registry dispatch.
+- >-
+  Every changed Python source line is exercised under the repository's changed-file 100 percent
+  coverage gate, and literal post-commit fast and full validation both exit zero before PR readiness.
+verification_plan:
+- step: 1
+  phase: pre-deploy
+  action: Run the canonical authority-anchor counterfactual.
+  command: bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_and_canary.py::TestCiRcaAuthorityAnchor -q
+  expected: >-
+    The current adjacent provenance passes; mutations restoring Decision 143, removing or relocating
+    Decision 72, putting matching words in a remote comment/other Decision, corrupting entry boundaries,
+    or replacing Decision 72's CI-RCA subject fail with stable GAL-03 diagnostics. The production
+    environment and complete runtime snapshots remain unchanged.
+  fix_if: >-
+    Correct the narrow workflow-source/decision-entry check or its fixture; do not weaken the mutation,
+    remove the runtime `test -s` guards, or introduce a general prose-reference validator.
+  hermetic: true
+  graduation: graduate
+  graduation_check_id: ci-rca-authority-anchor
+- step: 2
+  phase: pre-deploy
+  action: Run the full CI-RCA workflow structural suite.
+  command: bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_and_canary.py -q
+  expected: >-
+    Authority mutations and all existing bounded retrieval, envelope, false-green, filter, and canary
+    regressions pass without behavioral changes.
+  fix_if: >-
+    Repair the comment anchor or additive guard integration; do not relax existing GAL-01 controls.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: The focused module is standing coverage; step 1 graduates the new property.
+- step: 3
+  phase: pre-deploy
+  action: Run the authoritative CI workflow guard wrapper and its failure-aggregation tests.
+  command: >-
+    bin/venv-python -m scripts.checks.ci_guards.validate_ci_workflow_guards && bin/venv-python -m
+    pytest tests/checks/ci_guards/test_validate_ci_workflow_guards.py -q
+  expected: The production workflow passes and existing independent guard failures remain aggregated.
+  fix_if: Fix additive integration without bypassing the authoritative wrapper or masking another guard.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: Existing standing wrapper coverage is unchanged.
+- step: 4
+  phase: pre-deploy
+  action: >-
+    Run focused lint plus fast presubmit before commit, then rerun this literal command after the feat
+    commit exists so implementation VP replay and differential graduation observe committed state.
+  command: >-
+    bin/venv-python -m ruff check scripts/verify_ci_workflow.py
+    tests/verify_ci_workflow/test_ci_rca_and_canary.py && bin/venv-python -m scripts.validate --pre
+  expected: Ruff and the complete fast validator exit zero on both working and committed trees.
+  fix_if: Stop and repair the implementation, test, registry row, or plan; never report constituent passes as gate success.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: Aggregate lint and presubmit are orchestration gates.
+- step: 5
+  phase: pre-deploy
+  action: >-
+    Run literal full validation before commit and again after the feat commit; retain both zero exit
+    statuses as blocking release evidence.
+  command: bin/venv-python -m scripts.validate
+  expected: >-
+    Exit zero, including 100 percent changed-source coverage, full pytest, workflow guards, plan replay,
+    verification registry, and pre-commit checks.
+  fix_if: >-
+    Stop before push or PR and add behavior-relevant tests or correct the failure; do not waive coverage,
+    lower thresholds, or characterize a nonzero validator as unrelated.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: The full repository validator is not one stable registry node.
+rollback: >-
+  Revert the comment, targeted guard assertion, tests, and registry row atomically as one commit if the
+  parser or locality check proves semantically unstable. Before accepting rollback, rerun the existing
+  CI-RCA structural suite and compare the parsed Fetch-step `env` and complete `run` scalar to the
+  pre-change snapshot; bounded fetch/envelope behavior and both `test -s` guards must remain untouched.
+  A missing/duplicate/malformed Decision boundary or missing adjacent source comment is a blocking,
+  named failure - never degrade to a corpus-wide search, accept remote matching prose, silently skip the
+  check, or partially roll back only the registry/test side. Re-plan the anchor instead of restoring an
+  unrelated citation.
+context:
+- Decision 55 - general fail-loud principle; not claimed as ownership provenance for the local `test -s` guard.
+- Decision 72 - provenance for workflow_run-triggered CI-RCA retrieval of failed-run logs; not ownership of `test -s`.
+- Decision 73 - scripts.validate is the authoritative two-tier gate; workflow-only checking is insufficient.
+- Decision 86 - do not create a companion prose authority document for one targeted semantic anchor.
+- Decision 101 - preserve the public-repository confidentiality boundary; this slice adds no runtime evidence.
+- Decision 131 - tests remain in the existing verify_ci_workflow mirror and do not cross-import tests.
+- >-
+  current_state: On merged main at cc33df8, GAL-01's bounded retrieval and GAL-02/GAL-04's evidence
+  governance are complete, but ci-rca.yml still says `Decision 143 mitigation`. Decision 143 governs
+  privileged-verb Lambda decomposition; Decision 72 explicitly owns CI-RCA failed-run log retrieval.
+constraints:
+- Do not change workflow execution, fetch limits, envelope semantics, annotations, summaries, retries, or false-green guards.
+- Do not claim general semantic validation of arbitrary Decision citations.
+- Do not edit docs/DECISIONS.md; Decision 72 already supplies the applicable authority.
+- Any changed Python source must satisfy the 100 percent changed-file coverage gate without a waiver.
+execution_steps:
+- Snapshot the target step's parsed `env` and full `run` scalar, then correct only its immediately adjacent raw-source comment.
+- Add the bounded Decision-entry/locality assertion and adversarial tests, then graduate the canonical counterfactual.
+- Execute literal steps 1 through 5 before commit and stop on any nonzero result.
+- Commit, rerun steps 4 and 5 so VP replay sees feat(ci-rca-authority-anchor), and open a PR only after both pass.
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked

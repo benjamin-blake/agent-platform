@@ -160,15 +160,18 @@ jobs:
       # BODY) now lives in scripts/ci_rca/fetch_logs.py, unit-tested and structurally guarded by
       # _check_ci_rca_fetch_classification (an allowlist over this step's run: body -- see
       # scripts/checks/ci_guards/validate_ci_workflow_guards.py). The rec-2117 / rec-2118 /
-      # rec-2718 retry provenance lives in that module's docstring. `test -s` below is retained
-      # as a YAML-side fail-closed backstop (Decision 143 mitigation) pinned to this
-      # default-branch-checked-out file, independent of the module's own exit status.
+      # rec-2718 retry provenance lives in that module's docstring. Decision 72 is provenance
+      # for workflow_run-triggered CI-RCA failed-run log retrieval. `test -s` below is a local
+      # YAML-side fail-closed guard pinned to this default-branch-checked-out file, independent
+      # of the module's own exit status.
       - name: Fetch failed run logs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ steps.meta.outputs.run_id }}"
-          bin/venv-python -m scripts.ci_rca.fetch_logs --run-id "$RUN_ID" --repo "${{ github.repository }}" --out /tmp/ci-rca-failed.log
+          bin/venv-python -m scripts.ci_rca.fetch_logs --run-id "$RUN_ID" --repo "${{ github.repository }}" --out /tmp/ci-rca-log-evidence.json
+          bin/venv-python -m scripts.ci_rca.log_evidence --validate /tmp/ci-rca-log-evidence.json --extract-body /tmp/ci-rca-failed.log
+          test -s /tmp/ci-rca-log-evidence.json
           test -s /tmp/ci-rca-failed.log
 
       - name: Fetch jobs JSON
@@ -261,6 +264,7 @@ jobs:
           fi
           .venv/bin/python -m scripts.ci_rca.evidence \
             --log-file /tmp/ci-rca-failed.log \
+            --retrieval-envelope /tmp/ci-rca-log-evidence.json \
             --jobs-file /tmp/ci-rca-jobs.json \
             --workflow-name "$WORKFLOW_NAME" \
             --workflow-run-id "$RUN_ID" \

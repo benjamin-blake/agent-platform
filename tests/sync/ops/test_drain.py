@@ -154,7 +154,7 @@ class TestDrainSkipsRecsOutbox:
         assert result.get("ops_recommendations", 0) == 0
 
     def test_drain_skips_every_ducklake_migrated_table_and_pending_dirs(self, tmp_path, caplog):
-        """drain() skips all _DUCKLAKE_MIGRATED_TABLES dirs and any *_pending dir, with a loud warning.
+        """drain() skips all DUCKLAKE_MIGRATED_TABLES dirs and any *_pending dir, with a loud warning.
 
         Decision 84 I-1/I-4: entries under these dirs are anomalies -- they must never be
         re-staged to Iceberg via OpsWriter (stale-store hazard); the files stay in place.

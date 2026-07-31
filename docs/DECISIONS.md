@@ -2,6 +2,95 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 158: Reconcile's recovery path may substitute a freshly-planned artifact for the saved plan.bin, and its complete terminal route set narrows the tf-gated-apply Environment's reach (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-30
+**Warehouse ID:** dec-158 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`reconcile.yml`'s DEP-10 fresh-replan fallthrough was gated solely on the saved-plan apply step's `stale` output. A destroy or out-of-budget IAM change ALWAYS guard-BLOCKs, which SKIPS that apply step, so the output is never set and all six fallthrough steps were STRUCTURALLY UNREACHABLE on exactly the episodes most likely to need them (rec-2847) -- a guard-BLOCK episode's own partial gated apply advances the tfstate serial and thereby stales its own saved plan, so that is the MOST PROBABLE red shape. The recovery path was total on paper and empty in practice: dispatching burned a human approval and re-latched red. Separately, the pre-existing right of a fresh re-plan to SUBSTITUTE for the saved plan.bin AT ALL -- live on the STALE route since DEP-10 -- was sanctioned only in a `reconcile.yml` workflow comment and in `terraform/CLAUDE.md` prose, never in a numbered Decision.
+
+**Decision:** Both narrowings are recorded here, in ONE entry.
+
+1. **The substitution is sanctioned.** On the recovery path a fresh re-plan MAY stand in for the saved plan.bin. Its entry condition is a UNION of two causes -- saved plan stale, OR saved-plan guard-routed -- collapsed by `reconcile.yml`'s `route` step into one `needs_fresh_plan` signal, so no fallthrough step reads one cause in isolation again.
+
+2. **The COMPLETE terminal route set out of a saved-plan guard-BLOCK is exactly these three. There is no fourth, and no episode entering that path ends anywhere else.**
+   - (i) **fresh guard-PASS** -> the digest-fed subagent review runs, then `apply_fresh` AUTO-APPLIES inside `apply-reconcile`. That review is the ONLY gate; there is NO `tf-gated-apply` Environment approval. Pre-fix this cell was structurally impossible.
+   - (ii) **fresh guard-ROUTE** -> the fresh plan.bin crosses to `gated-apply-reconcile` as `RECONCILE_FRESH_PLAN_ARTIFACT` (run-scoped artifact, symmetric sha256 EMIT/VERIFY over the job boundary) and is applied behind the Environment approval.
+   - (iii) **fresh re-plan failure** -> every downstream step short-circuits on `success()` and the always-run record write latches RED. Pre-ratified: Decision 154 point 5(i) deliberately EXCLUDES `replan` from the closed pre-apply-failure allow-list, fail-closed and safe.
+
+3. **What Decision 77 preserves, stated precisely -- this is the whole basis for consistency rather than amendment.** Decision 77's operative property is guard-to-apply ARTIFACT IDENTITY: `guard_fresh` inspects the SAME plan.bin that is applied, and the sha256 pair protects byte integrity across the job boundary. That holds on every route above; nothing is ever applied unguarded. Decision 77 nowhere ratifies reviewer-vs-apply DIFF identity -- that a human or PR reviewer saw the same DIFF that is applied. Artifact identity is preserved; diff identity was never promised. An account that blurs the two either overclaims Decision 77 or falsely implies this breaks it.
+
+4. **The accepted cost, not softened.** Route (i) NARROWS the `tf-gated-apply` Environment control's REACH, permanently and not merely for the episode that motivated the fix: pre-fix a saved-plan guard-BLOCK ALWAYS terminated at the Environment; post-fix a guard-BLOCK recovery whose fresh re-plan comes back fully in-budget APPLIES WITHOUT REACHING A HUMAN. The HUMAN adjudicated this at plan time and accepted it. The reasoning: anything the deterministic guard PASSes is by definition in-budget, non-IAM-trust and non-destroy, and such a change ALREADY auto-applies elsewhere under the sandbox CD contract -- the guard, not the Environment, is the classifier of "does this need a human", and a fresh-guard PASS is that classifier speaking about the artifact that will actually be applied.
+
+**Reversal conditions:** Re-narrow if a fresh-guard-PASS auto-apply lands a change a human would have caught, or if evidence shows the guard's in-budget classification is weaker than the Environment gate it displaces on this path. **The mechanism is a TWO-SITE change, not a one-liner** -- recorded because a later reader will otherwise assume the narrowing was declined on taste and is cheap to undo. Adding a `fresh_reason != 'guard_routed'` conjunct to `apply_fresh`/`review_fresh` ALONE strands a fresh-guard-PASS episode with NO UPLOADER: `upload_fresh_plan_sha256` and the upload-artifact step are gated on `guard_fresh.outputs.routed == 'true'`, so no artifact is produced, `fresh_plan_pending` stays false, `gated-apply-reconcile` falls back to fetch-saved-plan, and the episode ends applying the STALE saved plan -- the exact failure this entry exists to remove, reached by a longer road. A reverser needs BOTH sites plus matching updates to the `recovery-workflow-topology` guard's assertions (ii) and (iv).
+
+**Related:** Decision 77 (speculative plan / no-TOCTOU; the artifact-vs-diff distinction in point 3), Decision 92 (the `tf-gated-apply` Environment as the authorization boundary -- whose reach point 4 narrows), Decision 126 / T2.37 (one dispatch, one approval: why a second Environment approval was rejected), Decision 154 (point 5(i) pre-ratifies route (iii)'s red latch; point 2's dispatch-ref side-checkout narrowing is why the re-plan runs against the RED_SHA checkout, not the dispatch ref), Decision 150 (the significance bar this entry clears). Provenance: decision-scout judged the newly-reachable cell a durable architectural commitment with reversal-relevant consequences, and separately found that the pre-existing STALE-route substitution had never been numbered. Roadmap/queue refs (not DECISIONS.md entries): T2.47/T2.48, rec-2847.
+
+## Decision 159: push-context diff-base class fix restores the post-merge diff-aware validation layer; a bounded, tamper-guarded coverage baseline unblocks the 100%-coverage gate going live (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-30
+**Warehouse ID:** dec-159 (canonical; per Decision 84)
+
+**Problem:** `get_status_aware_diff()` and `test_coverage_checker.get_changed_source_files()` resolve their base via `merge-base(origin/main, HEAD)`, which equals HEAD on a clean post-merge main checkout; `get_changed_files()` diffs `origin/main` directly, also HEAD on main. Same result either way: every diff-aware full-tier check silently no-ops post-merge. A MEASUREMENT CORRECTION (Decision 82 framing), not a relaxation.
+
+**Decision:**
+1. **`push_context_base()`** (sole home: `scripts/checks/_common.py`) returns a base ONLY in push context -- `GITHUB_EVENT_NAME == "push"`, OR (branch == "main" AND `merge-base(origin/main, HEAD) == HEAD`) -- else `None`. The branch-name conjunct is required: `merge-base == HEAD` alone also matches a fresh session branch before its first commit. Prefers `GITHUB_EVENT_BEFORE` when non-zero/local, else `HEAD~1`; `None` with a loud warning if `HEAD~1` doesn't resolve. Each of the three consumers tries it first and falls back to its OWN existing base on `None` (Decision 135 pt 3 unchanged-contract holds); `get_changed_files()` newly changes behaviour ON main in push context, which is the correction itself. `ci.yml` main-validate and `main-canary.yml` checkout `fetch-depth: 2` (squash convention, Decision 76).
+2. **`config/coverage_baseline.yaml`** is a one-time grandfather roster (Decision 130 style): an entry-bearing file fails iff measured < entry; unbaselined files keep 100% -- narrowing Decision 48's V2 row by forward reference. rec-943's parent-directory `--cov` spec fix (a single-file/dotted spec silently collects no data) makes previously info-skipped files measurable.
+3. **Tamper guard** (Decision 128 mirror): `validate_coverage_baseline_edits` fails a lowered/new-sub-100 entry lacking an inline `# baseline-lowered: dec-NNN <reason>` marker naming a real Decision header; raises/removals unrestricted. Missing-base (this seeding PR) SKIPs.
+4. **Amends Decision 124's premise** by forward reference: "the merge-base diff is empty on main post-merge" is corrected; the `scripts/ops_portal/**` carve-out is unaffected, VP-verified.
+5. **Accepted residuals:** full-tier-only tripwire (Decision 73); a multi-commit direct push under-selects with `HEAD~1` (Decision 76 squash assumption). `tests/test_checks_registry.py` takes one marked SLOC raise (mechanism-mirror role) -- test-SLOC debt re-introduced after rec-2709 retired all 24 Decision 130 grandfathers.
+
+**Reversal / retirement conditions:** net roster growth over any 90-day window triggers a gate-design re-audit (Decision 62 alarm-not-gate); when the roster empties, the baseline clauses retire and Decision 48's V2 row reads unamended; the SLOC raise retires by folding `_CHECKS_REGISTRY_MECHANISM_FILES` into a concern-split test package; a diff-line-coverage ratchet (Platform End-State section 6) would likely obsolete this mechanism outright, in which case this Decision is revisited rather than extended.
+
+**Related:** Decision 104/148 (`_common.py` sole-home), Decision 135 pt 3, Decision 73/142 (two-tier presubmit), Decision 82 (measurement-correction framing), Decision 48 (100% coverage V2 row, narrowed), Decision 124 (amended), Decision 128 (tamper-guard mirror), Decision 130 (roster precedent), Decision 76 (squash-merge), Decision 55/72/129 (fix the generator -- supersedes rec-2903's fetch-depth-alone fix). Bundled: rec-2903, rec-943.
+
+## Decision 157: Secrets Manager split by value-capability -- metadata verbs ride the agent-platform-* prefix, value verbs enumerated (amends Decision 129 pt 2) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-30
+**Warehouse ID:** dec-157 (canonical; per Decision 84)
+
+**Problem:**
+Decision 129 pt 2 holds Secrets Manager enumerated on the ground that "secrets return VALUES". Advice-consult VERIFIED against hashicorp/aws v5.100.0 source: `aws_secretsmanager_secret`'s refresh (`resourceSecretRead`) calls ONLY `DescribeSecret` + `GetResourcePolicy`, NEVER `GetSecretValue` (tags ride that response); values come solely from `aws_secretsmanager_secret_version` (resource and data source) -- here the neon api key data source and the DuckLake DSN version, both already enumerated. Pt 2's GROUND is thus a `GetSecretValue`-class argument that does not bear on metadata reads, while its unqualified TEXT forbids them. Why now: the new read/write scope-parity check found, first outing, that the pipeline could `CreateSecret agent-platform-newthing` at the prefix yet not refresh-read it -- AccessDenied at the NEXT plan, silent and deferred. The three obvious fixes were worse: narrowing the write buys NO security (metadata reads are value-free) at a human-gated bootstrap apply per new secret; widening `Get*` reads is the control-trade a review gate already BLOCKED; an exemption spends the rule's first genuine finding on suppression.
+
+**Decision:** Restate pt 2 by value-capability, not by service.
+1. **Value-capable actions stay ENUMERATED per-ARN**: `secretsmanager:GetSecretValue`, and `secretsmanager:UpdateSecret` per Decision 143 clause 1 (worst reachable verb).
+2. **Value-free metadata actions -- `Describe*`, `List*`, `GetResourcePolicy` -- MAY ride the `agent-platform-*` prefix, on BOTH the read and write side.** Decision 129's resource-axis reasoning carries over; only its Secrets Manager carve-out narrows.
+
+**Rationale (decisive: autonomy):** a secret whose value is human-seeded out-of-band (five of six existing secrets) now costs ZERO bootstrap applies: one PR, auto-applied. The human gate fires ONLY when terraform needs the VALUE -- the control paying out exactly when value-plane access is requested.
+
+**Invariant and its fragility:** "metadata = `Describe*`/`List*`/`GetResourcePolicy`" must stay true as AWS adds verbs. A new METADATA verb outside those classes fails loud at refresh (the accepted rec-2305 read-wildcard closure risk). A new VALUE verb inside `Describe*`/`List*` would silently widen -- vanishingly unlikely (AWS deliberately named `BatchGetSecretValue` outside the `Get*` pattern), but NAMED so review catches it.
+
+**Accepted residuals:** (a) at the prefix, `DescribeSecret`/`GetResourcePolicy` expose any `agent-platform-*` secret's description, tags, rotation config and resource policy to CI; names are already public in this repo's HCL (Decision 101) -- acceptable. (b) `CreateSecret` takes a SecretString, so force-delete-then-recreate-same-name is value-REPLACEMENT (not disclosure) inside the prefix -- closed here by a `BoolIfExists` `ForceDeleteWithoutRecovery = false` condition making the 7-30 day recovery window mandatory.
+
+**Corollary:** parity must compare a type's REFRESH-READ set, not its whole service read class -- `data:aws_secretsmanager_secret_version` requires `GetSecretValue` specifically; without that, a wide `Describe*` satisfies parity falsely and reinstates the silent deferred failure this rule kills.
+
+**Reversal conditions:** re-narrow the metadata prefix to enumerated ARNs if (a) an `agent-platform-*` secret appears whose metadata CI must not see; (b) AWS adds a value-returning verb inside those metadata classes; or (c) an incident shows prefix metadata exposure was material. Revert: pt 2's enumerated form -- a Resource-list edit per side.
+
+**Related:** Decision 129 (pt 2 amended -- see its forward pointer; resource-axis model extended), Decision 143 (clause 1 worst-verb scoping: why `UpdateSecret` stays enumerated), Decision 156 (the policy split this lands with), Decision 101 (public-repo boundary).
+
+## Decision 156: github_ci_apply identity-policy split -- read grants relocate to the customer-managed agent-platform-github-ci-apply-reads policy, write authority stays inline (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-30
+**Warehouse ID:** dec-156 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The `agent-platform-github-ci-apply` role's entire authority lives in ONE inline `aws_iam_role_policy` in `terraform/bootstrap/github_ci_apply.tf`. Measured with `terraform console` over the extracted locals (length-accurate placeholder account id, region eu-west-2), that document is **10,156 B minified against the AWS 10,240 B inline-policy hard limit -- 84 B of headroom across 33 statements** (confirmed statement-by-statement: 10,085 B of statement bodies + 39 B of document wrapper + 32 inter-statement commas = 10,156 B exactly). The rec-2882 / rec-2845 companion-verb remediation adds **~2,384 B**, which would land the inline document roughly 2,300 B OVER a hard AWS limit. Decisively: an inline-policy `LimitExceeded` is **INVISIBLE to `terraform plan`** -- it surfaces only at apply, i.e. inside the human-gated admin window, after the approval has already been spent. The split is therefore a PREREQUISITE for the fix, not an optimisation.
+
+**Decision:**
+1. **What moves -- READS MOVE, AUTHORITY STAYS.** The 11 read-only Sids (IAMRolesRead, DataLakeBucketManage, SecretsManagerReadOnly, LambdaRead, SSMParameterRead, EventBridgeRead, SNSRead, CloudWatchAlarmsRead, SNSSubscriptionRead, CloudWatchLogsRead, SSMDescribeParameters -- 3,821 B of statement body) are MOVED, not copied, out of the inline policy into ONE new customer-managed `aws_iam_policy` named **`agent-platform-github-ci-apply-reads`**, attached to the same role. Every write Sid -- every `iam:` write included -- and BOTH Deny statements stay INLINE. Post-change byte model: inline 8,580 B / 10,240 (27 statements), reads 3,998 B / 6,144 (11 statements), boundary 1,548 B / 6,144 (4 statements); one attached-policy slot consumed beyond the boundary's own slot, of ten.
+2. **Reversal hazard -- the ORDER is load-bearing.** Do NOT roll this back by detaching `agent-platform-github-ci-apply-reads` alone. A bare detach strips the apply role's ENTIRE refresh-read surface, after which every subsequent CD `terraform plan` fails AccessDenied BEFORE the deterministic guard runs -- including the reconcile path that would otherwise be the recovery, so the detach locks the CD path out of its own remedy. **Correct rollback order: restore the read Sids into the inline policy FIRST, then detach.** The forward-apply window is closed the other way, by the `depends_on` edge that lands the attachment BEFORE the inline shrink applies.
+3. **Protection model after the move.** The relocated grants sit behind the same EXPLICIT Deny that protects the boundary document: `DenyBoundaryPolicyModification`'s Resource list is extended with the new policy's ARN. `iam:CreatePolicy*` is absent from BOTH the identity policy and the boundary ceiling, so the role cannot mint or version a replacement; and `DenySelfInlinePolicyWrite` -- which stays INLINE -- denies `iam:DetachRolePolicy` on the role's own ARN, so the role cannot detach the reads policy from itself.
+4. **Guard classification is UNCHANGED.** This is a policy-ARCHITECTURE change only: no verb's scope changes (the moved Sids move verbatim, unwidened), no apply-routing changes, no authority-budget input changes. Decision 92 point 5's in-budget inline-policy/attachment UPDATE classification and Decision 77's deterministic guard behave exactly as they did before the split.
+
+**Reversal conditions:** The split MAY be reversed if (a) the identity policy later shrinks enough that the whole surface fits inline under 10,240 B again, or (b) AWS raises the inline-policy limit. In either case the reversal MUST follow the order in point 2 -- restore the inline read Sids first, then detach -- never a bare detach.
+
+**Related:** Decision 144 (the allow-list inversion this split serves -- the split is the enabler for that remediation, not a change to its target model), Decision 143 (worst-verb scoping preserved, not traded away: relocation is byte-motivated and scope-neutral), Decision 92 point 5 and Decision 77 (guard classification and apply-routing unchanged by the split; see point 4), Decision 150 (the significance bar this entry clears -- a durable architectural commitment whose reversal ORDER is itself the reversal-relevant consequence, which is why this is a numbered Decision rather than an HCL comment). Provenance: raised as decision-scout's M2 finding against PLAN-iam-write-surface-completion and resolved YES by the human at plan time. Roadmap/queue refs (not DECISIONS.md entries): T2.48, rec-2882, rec-2845.
+
 ## Decision 155: The DCG-03 orphan guard tolerates a deterministically-classified transient reader outage: skip-with-marker, not job failure (amends Decision 149 clause 3's guard failure-contract by forward reference) (Decided)
 
 **Status:** Decided
@@ -1495,6 +1584,13 @@ agent-first repository principle this whole-repo coverage extends to test files)
 **Date:** 2026-07-15
 **Warehouse ID:** dec-129 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
 
+> **Amended by Decision 157 (2026-07-30):** point 2's "Secrets Manager stays enumerated" is
+> narrowed to VALUE-CAPABLE actions only (`secretsmanager:GetSecretValue`, and
+> `secretsmanager:UpdateSecret` per Decision 143 clause 1); value-free metadata actions
+> (`Describe*`, `List*`, `GetResourcePolicy`) MAY ride the `agent-platform-*` prefix on both
+> the read and the write side. This body is otherwise unedited; see Decision 157 for the
+> derivation, accepted residuals, and reversal conditions.
+
 **Problem:**
 `github_ci_apply` refresh-reads the ENTIRE `terraform/personal` state on every plan, but its grants
 live out-of-band in `terraform/bootstrap/github_ci_apply.tf` (self-grant break, T2.23) and are
@@ -1905,6 +2001,11 @@ masked-drift observability gap are follow-on recs, never inline-patched here).
 **Status:** Decided
 **Date:** 2026-07-10
 **Warehouse ID:** dec-124 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+> **Amended by Decision 159 (2026-07-30):** the coverage-gate mapping bullet's premise -- "on
+> main post-merge the merge-base diff is empty so it no-ops" -- is corrected: `push_context_base()`
+> now supplies a real post-merge diff base. The `scripts/ops_portal/**` carve-out itself is
+> UNCHANGED -- verified by Decision 159's VP step 7. Body otherwise unedited; see Decision 159.
 
 **Problem:**
 scripts/ops_data_portal.py is the Single Portal write gateway and had accreted the entire

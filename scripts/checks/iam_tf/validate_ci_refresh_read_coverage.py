@@ -15,6 +15,8 @@ import them from this module path) keep passing unmodified.
 
 from __future__ import annotations
 
+import re
+
 from scripts.checks import _common, registry
 from scripts.checks.iam_tf._read_coverage import (
     _BOOTSTRAP_TF_REL,
@@ -26,6 +28,7 @@ from scripts.checks.iam_tf._read_coverage import (
     _extract_capitalized_field,  # noqa: F401 -- re-exported for tests
     _literal_or_prefix_match,  # noqa: F401 -- re-exported for tests
     _parse_bootstrap_statements,
+    _parse_managed_policy_statements,
     _resolve_resource_name,  # noqa: F401 -- re-exported for tests
     _resolve_role_statements,
     _resolve_value,  # noqa: F401 -- re-exported for tests
@@ -33,7 +36,31 @@ from scripts.checks.iam_tf._read_coverage import (
     _scan_resources,
     _split_top_level_objects,  # noqa: F401 -- re-exported for tests
 )
+from scripts.checks.iam_tf._write_companions import (
+    check_identity_iam_actions_subset_of_boundary,
+    check_lifecycle_companions,
+)
 from scripts.checks.iam_tf._write_coverage import check_write_coverage
+from scripts.checks.iam_tf._write_symmetry import check_read_write_scope_parity, check_tag_untag_symmetry
+
+_READS_ATTACHMENT_RE = re.compile(
+    r'resource\s+"aws_iam_role_policy_attachment"\s+"\w+"\s*\{(?P<body>[^}]*)\}',
+    re.DOTALL,
+)
+
+
+def _reads_policy_attached(bootstrap_text: str) -> bool:
+    """True iff some attachment binds aws_iam_policy.github_ci_apply_reads to the apply role.
+
+    Both halves are asserted: a bare `aws_iam_role_policy_attachment` substring proves nothing (it
+    could bind any policy to any role), and an unattached managed policy is INERT -- the relocated
+    read grants would silently stop applying while every static grep still found them in the file.
+    """
+    for m in _READS_ATTACHMENT_RE.finditer(bootstrap_text):
+        body = m.group("body")
+        if "aws_iam_policy.github_ci_apply_reads" in body and "aws_iam_role.github_ci_apply" in body:
+            return True
+    return False
 
 
 @registry.register("validate_ci_refresh_read_coverage", owner="platform")
@@ -76,11 +103,30 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
         print(f"  FAIL: cannot read oidc.tf: {exc}")
         return
 
-    apply_statements = _parse_bootstrap_statements(bootstrap_text, "github_ci_apply")
-    if not apply_statements:
+    inline_statements = _parse_bootstrap_statements(bootstrap_text, "github_ci_apply")
+    if not inline_statements:
         failed.append(f"{key} no statements parsed from the github_ci_apply policy in {bootstrap_tf.name}")
         print("  FAIL: could not parse the apply role's inline policy statements -- has the HCL shape changed?")
         return
+
+    # Policy-architecture split: the apply role's EFFECTIVE grant surface is the UNION of its inline
+    # identity policy and the attached customer-managed reads policy (the 11 read-only Sids relocated
+    # to buy inline bytes). Every downstream assertion must see the union, or relocating a read grant
+    # would read as deleting it. The parser returns [] when the reads policy is absent, so the
+    # synthetic single-inline-policy fixtures stay green unmodified.
+    reads_statements = _parse_managed_policy_statements(bootstrap_text, "github_ci_apply_reads")
+    if reads_statements and not _reads_policy_attached(bootstrap_text):
+        failed.append(
+            f"{key} the github_ci_apply_reads policy is declared but no aws_iam_role_policy_attachment "
+            f"binds it to aws_iam_role.github_ci_apply -- its grants would be inert"
+        )
+        print("  FAIL: reads policy declared with no attachment binding it to the role.")
+    apply_statements = inline_statements + reads_statements
+    if reads_statements:
+        print(
+            f"  reads-policy split: {len(inline_statements)} inline + {len(reads_statements)} managed "
+            f"= {len(apply_statements)} effective statements"
+        )
 
     planner_statements = _resolve_role_statements(oidc_text)
     if planner_statements is None:
@@ -103,7 +149,15 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
         if was_checked:
             checked += 1
 
+    # Design (a) discovery + (b) mandatory-declaration companions + (c) the two mechanical scope
+    # rules. Each is a sibling sub-check orchestrated HERE, not nested inside another checker: the
+    # facade is the single production entry point every guard must be reachable from (the PR #752
+    # REVISE lesson -- a checker that is defined and unit-tested but never called is dead in --pre).
     write_types = check_write_coverage(apply_statements, resources, failed, key)
+    check_lifecycle_companions(apply_statements, failed, key)
+    check_identity_iam_actions_subset_of_boundary(apply_statements, failed, key)
+    check_tag_untag_symmetry(apply_statements, failed, key)
+    check_read_write_scope_parity(apply_statements, failed, key)
 
     if not any(f.startswith(key) for f in failed):
         print(
