@@ -229,6 +229,7 @@ from scripts.checks.sloc.sloc_limits import (  # noqa: E402
     validate_sloc_limits,  # noqa: F401
 )
 from scripts.checks.sloc.validate_sloc_budget_raises import validate_sloc_budget_raises  # noqa: F401,E402
+from scripts.checks.typing.mypy_baseline import validate_mypy_baseline_edits, validate_mypy_ratchet  # noqa: F401,E402
 from scripts.checks.verification.validate_differential_gate_baseline import (  # noqa: F401,E402
     validate_differential_gate_baseline,
 )
@@ -309,12 +310,6 @@ def run_python_checks(failed: list[str]) -> None:
     def _scaffold_unit_tests() -> None:
         _common.invoke_step("Unit tests + coverage", _build_unit_test_cmd(), failed)
 
-    def _scaffold_mypy_full() -> None:
-        print("\n=== mypy (informational) ===")
-        result = _common.run([_common.PYTHON, "-m", "mypy", "src/"], cwd=_common.ROOT)
-        if result.returncode != 0:
-            print("mypy: type errors found (informational - not blocking). Fix progressively.")
-
     def _scaffold_terraform_checks() -> None:
         run_terraform_checks(failed)
 
@@ -330,7 +325,6 @@ def run_python_checks(failed: list[str]) -> None:
     scaffold_fns = {
         "lint": _scaffold_lint,
         "unit_tests": _scaffold_unit_tests,
-        "mypy_full": _scaffold_mypy_full,
         "terraform_checks": _scaffold_terraform_checks,
         "dependency_health": _scaffold_dependency_health,
         "ensure_fresh_dq": _scaffold_ensure_fresh_dq,

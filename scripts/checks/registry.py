@@ -117,6 +117,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_prose_limits"),
         _c("validate_sloc_budget_raises"),
         _c("validate_coverage_baseline_edits"),
+        _c("validate_mypy_baseline_edits"),
         _c("validate_prose_budget_raises"),
         _c("validate_subprocess_encoding"),
         _c("validate_test_count_coupling", pre_globs=("tests/**",)),
@@ -220,6 +221,7 @@ def full_sequence() -> list[Step]:
         _c("validate_dq_manifest_gate"),
         _c("validate_test_coverage"),
         _c("validate_coverage_baseline_edits"),
+        _c("validate_mypy_baseline_edits"),
         _c("validate_no_underscore_instructions"),
         _c("validate_claude_md_pointer_invariant"),
         _c("validate_environment_taxonomy"),
@@ -256,7 +258,7 @@ def full_sequence() -> list[Step]:
         _c("validate_lockfile_sync"),
         _c("validate_dependency_graph_freshness"),
         _s("unit_tests"),
-        _s("mypy_full"),
+        _c("validate_mypy_ratchet"),
         # run_terraform_checks() -- a single bundled call site (validate_terraform_try +
         # run_terraform_creds_free + the informational drift check); it is also called and
         # tested directly as one unit (tests/test_validate.py::TestRunTerraformChecks), so it
