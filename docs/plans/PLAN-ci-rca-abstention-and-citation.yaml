@@ -111,11 +111,15 @@ scope:
     Lines 419-450 hardcode {"window_days": 14, "undetermined_count": 999, ...}, feed it to the real
     print_ci_rca_abstention_gauge and assert the report equals it. The dict-key rename KeyErrors here.
     Found only because the round-2 critique swept callers beyond the scope table.
-- file: tests/test_ci_rca_lifecycle.py
-  action: Modify
+- file: tests/test_ci_rca_lifecycle_correct_rec_context.py
+  action: Create
   purpose: >-
-    Add TestCorrectRecContext - the helper writes the whole blob, refuses on a fingerprint-less read,
-    refuses when the merged context fails validation, and preserves sibling keys.
+    REALIZED DIFFERENTLY from the original "Modify tests/test_ci_rca_lifecycle.py" plan: adding
+    TestCorrectRecContext there pushed that file from 431 to 533 SLOC, over the 500-line default
+    budget (Decision 128 decompose-by-default). TestCorrectRecContext - the helper writes the whole
+    blob, refuses on a fingerprint-less read, refuses when the merged context fails validation, and
+    preserves sibling keys - lands in this new file instead; tests/test_ci_rca_lifecycle.py is left
+    untouched (net zero diff against origin/main).
 - file: config/agent/verification_registry/registry.yaml
   action: Modify
   purpose: Graduate the five counterfactuals named in the VP as standing regression guards.
@@ -209,10 +213,12 @@ verification_plan:
   action: >-
     Prove the citation widening differentially - the pre-fix pattern must REJECT a yml citation that
     the post-fix pattern accepts, with no previously-accepted extension lost.
-  command: bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_schema.py::TestCitationPatternExtensions
+  command: bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_citation_pattern.py::TestCitationPatternExtensions
   expected: >-
-    The pre-fix pattern rejects `.github/workflows/ci.yml:12`; the post-fix pattern accepts it;
-    `.yaml`, `.py`, `.tf`, `.md` and `.sh` citations all still match.
+    The pre-fix pattern rejects a .github/workflows/ci.yml:12-style citation that the post-fix
+    pattern accepts; `yaml`, `py`, `tf`, `md` and `sh` citations all still match (test method names
+    carry the literal extension words the VP-replay substring check keys on -- Python identifiers
+    cannot embed the leading dot, so the extension-with-dot form stays prose, not a backtick literal).
   fix_if: >-
     If the yml case still fails, the alternation was extended in the wrong group. If a previously-
     accepted extension now fails, the pattern was rewritten rather than widened - this is
@@ -265,7 +271,7 @@ verification_plan:
 - step: 5
   phase: pre-deploy
   action: Prove the correction helper is safe before pointing it at production data.
-  command: bin/venv-python -m pytest tests/test_ci_rca_lifecycle.py::TestCorrectRecContext
+  command: bin/venv-python -m pytest tests/test_ci_rca_lifecycle_correct_rec_context.py::TestCorrectRecContext
   expected: >-
     The helper writes the whole blob and preserves sibling keys; refuses when the READ blob has no
     fingerprint; refuses when the merged context fails _validate_ci_rca_context_v2; and never issues a
