@@ -234,6 +234,25 @@ _PASSING_FETCH_STEP_BODY = (
     "test -s /tmp/ci-rca-failed.log\n"
 )
 
+_EXPECTED_FETCH_ENV = {"GH_TOKEN": "${{ github.token }}"}
+_AUTHORITY_COMMENT = (
+    "      # Decision 72 is provenance for workflow_run-triggered CI-RCA failed-run log retrieval. "
+    "`test -s` below is a local\n"
+    "      # YAML-side fail-closed guard.\n"
+)
+_AUTHORITY_WORKFLOW = _AUTHORITY_COMMENT + "      - name: Fetch failed run logs\n"
+_DECISION_72_ENTRY = """## Decision 72: RCA-as-Plan-Source for CI Merge Gate Failures (Decided)
+
+On CI failure, a `workflow_run`-triggered GitHub Actions workflow
+(`.github/workflows/ci-rca.yml`) reads the failed run logs via `gh run view`.
+
+"""
+_AUTHORITY_DECISIONS = _DECISION_72_ENTRY + "## Decision 70: Next boundary (Decided)\n"
+_REAL_AUTHORITY_SOURCES = (
+    Path(".github/workflows/ci-rca.yml").read_text(encoding="utf-8"),
+    Path("docs/DECISIONS.md").read_text(encoding="utf-8"),
+)
+
 
 def _rca_data_with_fetch_step(run_body: str) -> dict[str, Any]:
     return {
@@ -251,6 +270,72 @@ def _rca_data_with_fetch_step(run_body: str) -> dict[str, Any]:
             }
         }
     }
+
+
+class TestCiRcaAuthorityAnchor:
+    def _check(self, workflow: str = _AUTHORITY_WORKFLOW, decisions: str = _AUTHORITY_DECISIONS) -> None:
+        with (
+            patch("scripts.verify_ci_workflow._read_ci_rca_authority_sources", return_value=(workflow, decisions)),
+            patch("scripts.verify_ci_workflow._load", return_value=_rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)),
+        ):
+            _check_ci_rca_fetch_classification()
+
+    def test_production_step_runtime_is_unchanged(self) -> None:
+        data = yaml.safe_load(Path(".github/workflows/ci-rca.yml").read_text(encoding="utf-8"))
+        step = next(step for step in data["jobs"]["rca"]["steps"] if step.get("name") == "Fetch failed run logs")
+        assert step["env"] == _EXPECTED_FETCH_ENV
+        assert step["run"] == _PASSING_FETCH_STEP_BODY
+        _check_ci_rca_fetch_classification()
+
+    def test_accepts_adjacent_retrieval_provenance_and_bounded_decision(self) -> None:
+        self._check()
+
+    @pytest.mark.parametrize(
+        ("workflow", "match"),
+        [
+            (_AUTHORITY_WORKFLOW.replace("Decision 72", "Decision 143"), "Decision 72 only"),
+            (_AUTHORITY_WORKFLOW.replace("Decision 72 is provenance", "retrieval provenance"), "Decision 72 only"),
+            (_AUTHORITY_WORKFLOW.replace("a local\n      # YAML-side", "a\n      # YAML-side"), "local YAML-side"),
+            (_AUTHORITY_WORKFLOW.replace("is provenance", "mitigation"), "Decision 72 only"),
+            (_AUTHORITY_WORKFLOW.replace("is provenance", "guard"), "Decision 72 only"),
+            (
+                "      # Decision 72 is provenance for workflow_run-triggered CI-RCA failed-run log retrieval.\n\n"
+                + _AUTHORITY_WORKFLOW.split("\n", 2)[2],
+                "immediately adjacent",
+            ),
+            (_AUTHORITY_WORKFLOW + "      - name: Fetch failed run logs\n", "missing or duplicated"),
+        ],
+    )
+    def test_rejects_invalid_or_nonlocal_workflow_authority(self, workflow: str, match: str) -> None:
+        with pytest.raises(AssertionError, match=match):
+            self._check(workflow=workflow)
+
+    def test_remote_matching_comment_cannot_satisfy_locality(self) -> None:
+        workflow = (
+            _AUTHORITY_COMMENT
+            + "      - name: Other step\n\n      # local unrelated comment\n      - name: Fetch failed run logs\n"
+        )
+        with pytest.raises(AssertionError, match="Decision 72 only"):
+            self._check(workflow=workflow)
+
+    @pytest.mark.parametrize(
+        ("decisions", "match"),
+        [
+            (_AUTHORITY_DECISIONS.replace("## Decision 72:", "## Decision seventy-two:"), "exactly one"),
+            (_AUTHORITY_DECISIONS + _DECISION_72_ENTRY, "exactly one"),
+            (_DECISION_72_ENTRY, "no following"),
+            (_AUTHORITY_DECISIONS.replace("failed run logs", "diagnostic material"), "does not establish"),
+            (
+                "## Decision 72: unrelated\n\nNo retrieval authority.\n\n## Decision 71: boundary\n"
+                + _DECISION_72_ENTRY.replace("## Decision 72:", "## Decision 70:")
+                + "## Decision 69: boundary\n",
+                "does not establish",
+            ),
+        ],
+    )
+    def test_rejects_missing_duplicate_malformed_or_wrong_decision_entry(self, decisions: str, match: str) -> None:
+        with pytest.raises(AssertionError, match=match):
+            self._check(decisions=decisions)
 
 
 class TestCheckCiRcaFetchClassification:
@@ -377,6 +462,7 @@ class TestCiRcaBoundedRetrievalCounterfactuals:
         source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
         with (
             patch("scripts.verify_ci_workflow._load", return_value=_rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)),
+            patch("scripts.verify_ci_workflow._read_ci_rca_authority_sources", return_value=_REAL_AUTHORITY_SOURCES),
             patch("pathlib.Path.read_text", return_value=source.replace(fragment, "removed", 1)),
             pytest.raises(AssertionError, match="bounded retrieval invariant"),
         ):
@@ -387,6 +473,7 @@ class TestCiRcaBoundedRetrievalCounterfactuals:
         reset = source.replace("_run_log(command, remaining, remaining_lines)", "_run_log(command, max_bytes, max_lines)", 1)
         with (
             patch("scripts.verify_ci_workflow._load", return_value=_rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)),
+            patch("scripts.verify_ci_workflow._read_ci_rca_authority_sources", return_value=_REAL_AUTHORITY_SOURCES),
             patch("pathlib.Path.read_text", return_value=reset),
             pytest.raises(AssertionError, match="bounded retrieval invariant"),
         ):

@@ -392,16 +392,53 @@ _PATTERN_MATCHING_CONSTRUCT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CI_RCA_FETCH_STEP = "      - name: Fetch failed run logs"
+
+
+def _read_ci_rca_authority_sources() -> tuple[str, str]:
+    return tuple(Path(path).read_text(encoding="utf-8") for path in (".github/workflows/ci-rca.yml", "docs/DECISIONS.md"))  # type: ignore[return-value]
+
+
+def _ci_rca_fetch_source_comment(workflow_source: str) -> str:
+    matches = re.findall(rf"((?:^      #.*\n)+)(?=^{re.escape(_CI_RCA_FETCH_STEP)}$)", workflow_source, re.MULTILINE)
+    assert workflow_source.count(_CI_RCA_FETCH_STEP) == 1, "GAL-03: Fetch source anchor is missing or duplicated"
+    assert len(matches) == 1, "GAL-03: Fetch anchor is missing, duplicated, or lacks immediately adjacent provenance"
+    return matches[0]
+
+
+def _decision_72_entry(decisions_source: str) -> str:
+    headers = list(re.finditer(r"^## Decision (\d+):", decisions_source, re.MULTILINE))
+    decision_72 = [match for match in headers if match.group(1) == "72"]
+    assert len(decision_72) == 1, "GAL-03: docs/DECISIONS.md must contain exactly one well-formed Decision 72 H2 header"
+    start = decision_72[0]
+    end = next((match.start() for match in headers if match.start() > start.start()), None)
+    assert end is not None, "GAL-03: Decision 72 entry has no following Decision H2 boundary"
+    return decisions_source[start.start() : end]
+
+
+def _check_ci_rca_authority_anchor() -> None:
+    workflow_source, decisions_source = _read_ci_rca_authority_sources()
+    comment = _ci_rca_fetch_source_comment(workflow_source)
+    provenance = ("Decision 72 is provenance", "workflow_run-triggered CI-RCA failed-run log retrieval")
+    assert all(fragment in comment for fragment in provenance), (
+        "GAL-03: adjacent comment must identify Decision 72 only as CI-RCA failed-run log retrieval provenance"
+    )
+    assert all(fragment in comment for fragment in ("local", "YAML-side fail-closed guard")), (
+        "GAL-03: adjacent comment must identify test -s as a local YAML-side fail-closed guard"
+    )
+    assert "Decision 143" not in comment, "GAL-03: adjacent comment retains the stale Decision 143 mitigation claim"
+    assert "Decision 72 mitigation" not in comment and "Decision 72 guard" not in comment, (
+        "GAL-03: adjacent comment must not claim Decision 72 owns the local guard"
+    )
+
+    authority = ("On CI failure", "`workflow_run`-triggered", ".github/workflows/ci-rca.yml", "failed run logs", "gh run view")
+    missing = [fragment for fragment in authority if fragment not in _decision_72_entry(decisions_source)]
+    assert not missing, f"GAL-03: bounded Decision 72 entry does not establish CI-RCA failed-run log retrieval: {missing}"
+
 
 def _check_ci_rca_fetch_classification() -> None:
-    """ALLOWLIST guard (rec-2857 forward fix): the "Fetch failed run logs" step's run: body must
-    invoke scripts.ci_rca.fetch_logs and must contain NO pattern-matching construct at all --
-    grep/egrep/rg/awk/sed/case/=~/inline `python -c`. An allowlist (assert the ABSENCE of the
-    whole construct class) is strictly stronger than a blocklist of known evasion shapes: the
-    post-change step body reduces to just the module invocation plus `test -s`, so there is no
-    legitimate pattern-matching construct left that a blocklist would need to carve out. This
-    guards against the log-body content grep (rec-2857) being reintroduced in any shell form.
-    """
+    """Reject pattern matching in the bounded failed-log retrieval step (rec-2857)."""
+    _check_ci_rca_authority_anchor()
     data = _load(".github/workflows/ci-rca.yml")
     job = data.get("jobs", {}).get("rca", {})
     run_text = _get_step_run_text(job, "Fetch failed run logs")
