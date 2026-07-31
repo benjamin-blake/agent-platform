@@ -17,6 +17,11 @@ boto3 = pytest.importorskip("boto3")
 
 from tests.fixtures.session_preflight_module import preflight as _preflight  # noqa: E402
 
+# TestAbstentionLabelAccuracy lives in test_ci_rca_gauges_abstention_label.py -- this file's
+# module-level `boto3 = pytest.importorskip("boto3")` guard (line 16 above) would skip it on the
+# fast pr-validate tier (no boto3 there), which the interactive VP-replay gate reads as a hard
+# failure rather than a benign skip.
+
 
 class TestAbstentionGauge:
     """T1.13 c12(i): _compute_ci_rca_abstention / _escalate_ci_rca_probe_health / preflight report JSON."""
@@ -29,7 +34,7 @@ class TestAbstentionGauge:
             gauge = _preflight._compute_ci_rca_abstention([{"id": "rec-1"}], window_days=14)
         mock_compute.assert_called_once_with([{"id": "rec-1"}], window_days=14)
         assert gauge == {
-            "undetermined_count": 2,
+            "low_or_undetermined_count": 2,
             "total_count": 5,
             "rate": 0.4,
             "window_days": 14,
@@ -38,7 +43,9 @@ class TestAbstentionGauge:
     def test_escalate_skipped_when_creds_not_ok(self) -> None:
         with patch("scripts.ci_rca.probe_health.escalate") as mock_escalate:
             result = _preflight._escalate_ci_rca_probe_health(
-                "unavailable", [{"id": "rec-1"}], {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
+                "unavailable",
+                [{"id": "rec-1"}],
+                {"low_or_undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14},
             )
         assert result is None
         mock_escalate.assert_not_called()
@@ -46,7 +53,7 @@ class TestAbstentionGauge:
     def test_escalate_skipped_when_cache_unavailable(self) -> None:
         with patch("scripts.ci_rca.probe_health.escalate") as mock_escalate:
             result = _preflight._escalate_ci_rca_probe_health(
-                "ok", None, {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
+                "ok", None, {"low_or_undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
             )
         assert result is None
         mock_escalate.assert_not_called()
@@ -62,7 +69,7 @@ class TestAbstentionGauge:
             {"id": "rec-1", "status": "open"},
             {"id": "rec-2", "status": "closed"},
         ]
-        gauge = {"undetermined_count": 3, "total_count": 6, "rate": 0.5, "window_days": 14}
+        gauge = {"low_or_undetermined_count": 3, "total_count": 6, "rate": 0.5, "window_days": 14}
         with patch(
             "scripts.ci_rca.probe_health.escalate", return_value={"action": "file", "rec_id": "rec-9"}
         ) as mock_escalate:
@@ -77,16 +84,16 @@ class TestAbstentionGauge:
         assert args[3] == [{"id": "rec-1", "status": "open"}]
 
     def test_escalate_failure_is_non_fatal(self) -> None:
-        gauge = {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
+        gauge = {"low_or_undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
         with patch("scripts.ci_rca.probe_health.escalate", side_effect=RuntimeError("portal down")):
             result = _preflight._escalate_ci_rca_probe_health("ok", [], gauge)
         assert result is None
 
     def test_print_gauge_line_format(self, capsys: pytest.CaptureFixture) -> None:
-        gauge = {"undetermined_count": 2, "total_count": 8, "rate": 0.25, "window_days": 14}
+        gauge = {"low_or_undetermined_count": 2, "total_count": 8, "rate": 0.25, "window_days": 14}
         _preflight.print_ci_rca_abstention_gauge(gauge)
         out = capsys.readouterr().out
-        assert "CI-RCA probe abstention (last 14d): 2/8 undetermined (25%)" in out
+        assert "CI-RCA probe abstention (last 14d): 2/8 low-confidence/undetermined (25%)" in out
 
     def test_print_gauge_noop_when_none(self, capsys: pytest.CaptureFixture) -> None:
         _preflight.print_ci_rca_abstention_gauge(None)
@@ -145,7 +152,7 @@ class TestAbstentionGauge:
         assert "ci_rca_abstention_gauge" in data
         gauge = data["ci_rca_abstention_gauge"]
         assert gauge["total_count"] == 1
-        assert gauge["undetermined_count"] == 0
+        assert gauge["low_or_undetermined_count"] == 0
         assert data["ci_rca_probe_health_escalation"] == {"action": "none", "rec_id": None}
         mock_escalate.assert_called_once()
 

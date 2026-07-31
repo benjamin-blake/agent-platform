@@ -421,3 +421,9 @@ class TestFetchCiRcaUndeterminedRecs:
         assert "Mandatory" not in out
         assert "CI-RCA Abstention Review" in out
         assert "Decision 73 L5" in out
+
+
+# TestAbstentionSurfaceConfidenceMatrix lives in test_ci_rca_signals_abstention_matrix.py --
+# this file's module-level `boto3 = pytest.importorskip("boto3")` guard (line 15) would skip
+# it on the fast pr-validate tier (no boto3 there), which the interactive VP-replay gate reads
+# as a hard failure rather than a benign skip.

@@ -42,7 +42,9 @@ def _derive_ci_rca_dispute_open(rows: list[dict]) -> list[dict]:
 
 
 def _derive_ci_rca_undetermined_open(cache_rows: list[dict]) -> list[dict]:
-    """Return ALL open source=ci_rca recs, rca_confidence=undetermined (untruncated; CIRCA-10 moved the cap to print time)."""
+    """Return ALL open source=ci_rca recs with rca_confidence in {low, undetermined} -- a
+    self-rated-low-confidence RCA is not sound either, not just a literal abstention (untruncated;
+    CIRCA-10 moved the cap to print time)."""
     import json as _json  # noqa: PLC0415
 
     results = []
@@ -58,7 +60,7 @@ def _derive_ci_rca_undetermined_open(cache_rows: list[dict]) -> list[dict]:
             ctx = _json.loads(ctx_raw)
         except Exception:
             continue
-        if ctx.get("rca_confidence") == "undetermined":
+        if ctx.get("rca_confidence") in ("low", "undetermined"):
             results.append(row)
     return results
 
@@ -93,7 +95,7 @@ def _derive_ci_rca_since(rows: list[dict], since_ts: str) -> list[dict]:
 
 
 def _fetch_ci_rca_undetermined_recs(cache_rows: object = _common._READER_SENTINEL) -> list[dict]:
-    """Return all open ci_rca recs with rca_confidence=undetermined -- from warm cache only."""
+    """Return all open ci_rca recs with rca_confidence in {low, undetermined} -- from warm cache only."""
     if cache_rows is not _common._READER_SENTINEL:
         return [] if cache_rows is None else _derive_ci_rca_undetermined_open(cache_rows)  # type: ignore[arg-type]
     return []
@@ -101,13 +103,13 @@ def _fetch_ci_rca_undetermined_recs(cache_rows: object = _common._READER_SENTINE
 
 def print_ci_rca_undetermined_recs(recs: list[dict]) -> None:
     """Print advisory abstention-review section (CIRCA-10): displays <=5, notes overflow past 5."""
-    print("\n--- CI-RCA Abstention Review (advisory; rca_confidence=undetermined) ---")
+    print("\n--- CI-RCA Abstention Review (advisory; rca_confidence in {low, undetermined}) ---")
     if not recs:
         print("  (none)")
         print()
         return
-    print("  Evidence bundle abstained on these recs -- review the proximate cause manually.")
-    print("  Advisory only: open ci_rca recs already hard-block /plan via Decision 73 L5.")
+    print("  A self-rated low-confidence or undetermined RCA classification -- review the proximate cause manually.")
+    print("  Advisory only: open ci_rca recs are triaged under Decision 73 L5 into a hard block or a likely-resolved prompt.")
     for rec in recs[:5]:
         rec_id = rec.get("id", "unknown")
         title = rec.get("title", "")
@@ -115,7 +117,7 @@ def print_ci_rca_undetermined_recs(recs: list[dict]) -> None:
         created = rec.get("created_timestamp", "")
         print(f"  {rec_id} [{priority}] {created}: {title}")
     if len(recs) > 5:
-        print(f"  ... showing 5 of {len(recs)} open undetermined recs")
+        print(f"  ... showing 5 of {len(recs)} open low-confidence/undetermined recs")
     print()
 
 

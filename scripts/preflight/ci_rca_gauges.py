@@ -22,7 +22,7 @@ def _compute_ci_rca_abstention(cache_rows: list[dict] | None, window_days: int =
 
     undetermined_count, total_count, rate = compute_abstention_rate(cache_rows, window_days=window_days)
     return {
-        "undetermined_count": undetermined_count,
+        "low_or_undetermined_count": undetermined_count,
         "total_count": total_count,
         "rate": rate,
         "window_days": window_days,
@@ -47,7 +47,7 @@ def _escalate_ci_rca_probe_health(
 
         open_recs = [r for r in cache_rows if r.get("status") == "open"]
         return escalate(
-            gauge["undetermined_count"],
+            gauge["low_or_undetermined_count"],
             gauge["total_count"],
             gauge["rate"],
             open_recs,
@@ -63,7 +63,7 @@ def print_ci_rca_abstention_gauge(gauge: dict | None) -> None:
         return
     print(
         f"CI-RCA probe abstention (last {gauge['window_days']}d): "
-        f"{gauge['undetermined_count']}/{gauge['total_count']} undetermined ({gauge['rate']:.0%})"
+        f"{gauge['low_or_undetermined_count']}/{gauge['total_count']} low-confidence/undetermined ({gauge['rate']:.0%})"
     )
 
 

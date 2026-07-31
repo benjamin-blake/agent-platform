@@ -232,6 +232,50 @@ def stamp_fixed_by_sha(rec_id: str, fixed_by_sha: str, profile: Optional[str] = 
     update_rec(rec_id, {"context_v2_json": json.dumps(ctx)}, profile=profile)
 
 
+def correct_rec_context(
+    rec_id: str,
+    context_updates: dict,
+    row_updates: Optional[dict] = None,
+    profile: Optional[str] = None,
+) -> None:
+    """Correct fields within an existing ci_rca rec's context_v2_json, in place, via the portal.
+
+    Mirrors stamp_fixed_by_sha's _fetch_rec_from_reader -> mutate -> update_rec shape, but for
+    correcting a factually-wrong narrative rather than stamping a fix commit. `context_updates` is
+    shallow-merged into the FULL existing context (never applied as a partial column write --
+    update_rec would otherwise replace context_v2_json wholesale, losing sibling keys like
+    fingerprint/evidence_bundle_ref). Refuses to write unless the read blob already carries a
+    fingerprint (a rec with no fingerprint predates CIRCA-03 dedup metadata and is not a safe
+    target for this helper), and refuses when the merged context fails
+    _validate_ci_rca_context_v2 -- both refusal paths raise before any write. `row_updates` carries
+    row-level fields (e.g. `title`), which live outside context_v2_json and are content-gated by
+    update_rec itself; they land in the SAME update_rec call as the corrected blob.
+    """
+    from scripts.ops_data_portal import _fetch_rec_from_reader, update_rec  # noqa: PLC0415
+    from scripts.ops_portal.ci_rca_schema import _validate_ci_rca_context_v2  # noqa: PLC0415
+
+    existing = _fetch_rec_from_reader(rec_id, profile=profile)
+    if existing is None:
+        raise RuntimeError(f"correct_rec_context: {rec_id} does not exist in the current projection.")
+    ctx_raw = existing.get("context_v2_json") or "{}"
+    try:
+        ctx = json.loads(ctx_raw) if isinstance(ctx_raw, str) else dict(ctx_raw or {})
+    except (json.JSONDecodeError, TypeError):
+        ctx = {}
+    if not ctx.get("fingerprint"):
+        raise RuntimeError(f"correct_rec_context: {rec_id}'s context_v2_json carries no fingerprint -- refusing to write.")
+
+    merged = {**ctx, **context_updates}
+    deficiencies = _validate_ci_rca_context_v2(merged)
+    if deficiencies:
+        raise RuntimeError(f"correct_rec_context: merged context_v2_json for {rec_id} fails validation: {deficiencies}")
+
+    updates: dict = {"context_v2_json": json.dumps(merged)}
+    if row_updates:
+        updates.update(row_updates)
+    update_rec(rec_id, updates, profile=profile)
+
+
 def check_flake_escalation(fingerprint: str, profile: Optional[str] = None) -> bool:
     """True when the fingerprint's chain has reached (or exceeds) the flake-escalation length --
     the caller should tag flaky + quarantine instead of filing another fresh critical."""

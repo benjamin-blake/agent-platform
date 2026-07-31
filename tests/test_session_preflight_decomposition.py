@@ -416,11 +416,12 @@ class TestMockInterceptionThroughFacade:
             (aws_infra, "check_credentials"): "ok",
             (recs_cache, "_count_recommendations_reader"): (7, 1, 0, []),
             (ci_rca_signals, "_fetch_ci_rca_recs"): [{"id": "rec-ci-rca-signals-intercept"}],
-            # print_ci_rca_abstention_gauge (real, not mocked) indexes window_days/undetermined_count/
-            # total_count/rate -- keep the shape valid, use an out-of-range count as the marker.
+            # print_ci_rca_abstention_gauge (real, not mocked) indexes window_days/
+            # low_or_undetermined_count/total_count/rate -- keep the shape valid, use an
+            # out-of-range count as the marker.
             (ci_rca_gauges, "_compute_ci_rca_abstention"): {
                 "window_days": 14,
-                "undetermined_count": 999,
+                "low_or_undetermined_count": 999,
                 "total_count": 1000,
                 "rate": 0.999,
             },
@@ -441,7 +442,7 @@ class TestMockInterceptionThroughFacade:
         assert report["ci_rca_recs"] == [{"id": "rec-ci-rca-signals-intercept"}]
         assert report["ci_rca_abstention_gauge"] == {
             "window_days": 14,
-            "undetermined_count": 999,
+            "low_or_undetermined_count": 999,
             "total_count": 1000,
             "rate": 0.999,
         }

@@ -1,9 +1,9 @@
-"""CI-RCA evidence probe abstention health sensor (T1.13 c12(i)).
+"""CI-RCA sustained low-confidence RCA rate sensor (T1.13 c12(i)).
 
-Detects when the deterministic evidence probe is systematically abstaining
-(rca_confidence="undetermined" mirrored from evidence_bundle_ref.earliest_viable_gate)
-across source=ci_rca recs and files a deduped source=ci_rca_probe_health rec so the
-self-improving loop cannot silently disable its own depth enforcement.
+Detects when a sustained share of source=ci_rca recs self-rate rca_confidence low or
+undetermined (undetermined mirrored from evidence_bundle_ref.earliest_viable_gate; low is the
+agent's own confidence rating) and files a deduped source=ci_rca_probe_health rec so the
+self-improving loop cannot silently accumulate unsound RCA output unnoticed.
 
 Mirrors scripts/convergence_health/escalate.py's idempotent escalation pattern (file/update/close
 exactly one rec per episode). Reads ONLY the warm recommendation cache injected by the
@@ -87,11 +87,13 @@ def compute_abstention_rate(
     window_days: int = DEFAULT_WINDOW_DAYS,
     now: Optional[datetime] = None,
 ) -> tuple[int, int, float]:
-    """Return (undetermined_count, total_count, rate) for source=ci_rca recs in the trailing window.
+    """Return (undetermined_count, total_count, rate) for source=ci_rca recs in the trailing window,
+    counting rca_confidence in {low, undetermined} -- a self-rated-low-confidence RCA is not sound
+    either, not just a literal abstention.
 
     Counts every source=ci_rca row created within the trailing window_days, regardless of status
-    (open/closed) -- abstention is a property of the probe's classification at filing time, not the
-    rec's current lifecycle state. rate is 0.0 when total_count is 0 (zero-total guard).
+    (open/closed) -- this counts the recorded classification at filing time, not the rec's current
+    lifecycle state. rate is 0.0 when total_count is 0 (zero-total guard).
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -106,7 +108,7 @@ def compute_abstention_rate(
         if ts is None or ts < cutoff:
             continue
         total_count += 1
-        if _row_rca_confidence(row) == "undetermined":
+        if _row_rca_confidence(row) in ("low", "undetermined"):
             undetermined_count += 1
 
     rate = (undetermined_count / total_count) if total_count else 0.0
@@ -146,23 +148,23 @@ def escalation_action(over_threshold: bool, open_rec_exists: bool) -> str:
 
 def _build_context(undetermined_count: int, total_count: int, rate: float, window_days: int) -> str:
     return (
-        f"The CI-RCA evidence probe abstained (rca_confidence=undetermined) on {undetermined_count}/"
-        f"{total_count} ({rate:.0%}) source=ci_rca recs filed in the trailing {window_days} days, at or "
-        f"above the {ABSTENTION_RATE_THRESHOLD:.0%} escalation threshold. Sustained abstention means the "
-        "deterministic evidence bundle is systematically unable to classify earliest_viable_gate / "
-        "escape_mode -- the probe's depth-enforcement gate is silently degrading to a pass-through. "
-        "Investigate scripts/ci_rca/evidence.py and recent bundle payloads under "
-        "logs/.ci-rca-evidence-pending/ or s3://agent-platform-data-lake/ci-rca-evidence/ for a common "
-        "failure shape (a missing log field, a new CI step the probe doesn't parse, etc). This rec closes "
-        "automatically once the abstention rate returns under threshold (escalate() runs the close branch "
-        "on the next session preflight tick)."
+        f"{undetermined_count}/{total_count} ({rate:.0%}) source=ci_rca recs filed in the trailing "
+        f"{window_days} days self-rated rca_confidence low or undetermined, at or above the "
+        f"{ABSTENTION_RATE_THRESHOLD:.0%} escalation threshold. A sustained low-confidence rate means a "
+        "meaningful share of recent RCA output is not sound -- treat each flagged rec as advisory, not "
+        "verified, until reviewed (see the CI-RCA Abstention Review preflight section). This is not by "
+        "itself proof of a deterministic evidence-probe defect: review the flagged recs' individual "
+        "proximate_cause / detection_gap fields for a common failure shape (a missing log field, a new CI "
+        "step the probe doesn't parse, genuinely ambiguous evidence) before assuming the probe itself is "
+        "broken. This rec closes automatically once the rate returns under threshold (escalate() runs the "
+        "close branch on the next session preflight tick)."
     )
 
 
 def _build_rec_fields(undetermined_count: int, total_count: int, rate: float, window_days: int) -> dict[str, Any]:
     return {
-        "title": "CI-RCA evidence probe sustained abstention -- depth-enforcement degrading",
-        "file": "scripts/ci_rca/evidence.py",
+        "title": "CI-RCA sustained low-confidence/undetermined RCA rate -- review flagged recs before trusting them",
+        "file": "scripts/ci_rca/probe_health.py",
         "status": "open",
         "source": "ci_rca_probe_health",
         "priority": "High",
@@ -171,10 +173,10 @@ def _build_rec_fields(undetermined_count: int, total_count: int, rate: float, wi
         "verification_tier": "V2",
         "context": _build_context(undetermined_count, total_count, rate, window_days),
         "acceptance": (
-            "The abstention rate (undetermined_count/total_count for source=ci_rca recs filed in the "
-            f"trailing {window_days} days) returns below the {ABSTENTION_RATE_THRESHOLD:.0%} threshold, and "
-            "this rec is closed automatically by ci_rca_probe_health.escalate() with the sub-threshold rate "
-            "recorded as the closure proof (Decision 103/70)."
+            "The low-confidence/undetermined rate (undetermined_count/total_count for source=ci_rca recs "
+            f"filed in the trailing {window_days} days) returns below the {ABSTENTION_RATE_THRESHOLD:.0%} "
+            "threshold, and this rec is closed automatically by ci_rca_probe_health.escalate() with the "
+            "sub-threshold rate recorded as the closure proof (Decision 103/70)."
         ),
     }
 
