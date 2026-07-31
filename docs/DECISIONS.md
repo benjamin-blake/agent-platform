@@ -147,6 +147,32 @@ raise, is the sanctioned response.
     (buckets, severity taxonomy, quality gates, `Decisions triaged: N of M` echo, Verdict line) is
     UNCHANGED and stays the stable interface across that future swap.
 
+14. **Recall measurement and the `category_tags` fix (VP step 9).** Live decision-scout dispatches --
+    whole-file baseline vs bounded protocol, same probe briefs -- measured a REAL recall regression in
+    the first cut of the bounded index-pass triage: a decision that governs by ARTIFACT TYPE (e.g. any
+    new Lambda touches the Lambda-packaging/deploy-channel decisions regardless of what it does) rather
+    than shared vocabulary was being silently discarded as IRRELEVANT before ever reaching a targeted
+    read, because a per-entry judgment call over ~113 live entries in one context is unreliable --
+    empirically demonstrated across three rounds of SKILL.md prose-only tightening, each of which
+    recovered some entries and left others (e.g. Decision 126's title says "deployment model", not
+    "deploy", so a prose rule enumerating only "Lambda/Terraform/IAM/Secrets Manager" nouns missed it
+    even though the scout followed the rule as written). A Fable advice-consult diagnosed the residual
+    as a prompt-level instruction-following ceiling, not a further-fixable prose problem, and
+    recommended converting the shortlist from an LLM judgment call into a mechanical lookup:
+    `scripts/decisions_index.py` now derives a deterministic `category_tags` list per entry (regex
+    classes over title + `triage_excerpt` only, never the full body: `lambda`, `terraform`, `iam`,
+    `secrets`, `deploy`, `egress`, `decisions-corpus`, `prose-docs`; each class verified to cover <!-- pragma: allowlist secret -->
+    <=~17% of live entries so the shortlist stays materially smaller than the corpus), and
+    `.claude/skills/decision-scout/SKILL.md` Phase 2 step 3 shortlists by tag-set intersection FIRST,
+    before any judgment-based triage. This closed the fully-missed-entry failure mode measured in
+    rounds 1-3. A SEPARATE, smaller residual remains and is NOT closed by `category_tags`: two
+    decisions that WERE shortlisted and targeted-read were bucketed RELATED instead of CITE relative
+    to the baseline -- post-read classification variance the Fable consult attributes to ordinary
+    inter-run LLM judgment noise (the same class of variance two whole-file baseline runs would likely
+    also show), not a bounded-retrieval-specific defect. `category_tags` is generator-internal and
+    revisable without Decision ceremony -- a retrieval aid, not a governance taxonomy; the tag
+    vocabulary may grow as new artifact classes accrue decisions, without amending this entry.
+
 **Reversal conditions:** Revisit if the header ceiling (120) or the combined ceiling (700,000) is
 breached before the per-entry authoring size norm (point 11's named owner) lands -- a breach at that
 point would mean the runway was mis-measured or the norm arrived too late, and the response is to

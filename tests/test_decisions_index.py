@@ -1,19 +1,20 @@
 """Tests for scripts/decisions_index.py (DCG-08, PLAN-dcg-decisions-index -- Decision 104/131
-mirror of the generator; PLAN-decision-scout-bounded-retrieval adds the `live` and
-triage_excerpt_* coverage below).
+mirror of the generator; PLAN-decision-scout-bounded-retrieval adds the `live`, triage_excerpt_*,
+and `category_tags` coverage below).
 
 Covers: build_index() determinism (byte-stable, no volatile-field leak), both-files coverage
 (Decision 146), typed-edge spot-checks spanning both derivation paths (title extraction,
 superseded_by inverse map, title-borne supersedes) and both files (live + archive), the
 superseded_by string->int coercion, the stable-field-only projection shape, the `live` provenance
-flag, and the triage_excerpt/triage_excerpt_source/triage_excerpt_truncated fallback logic.
+flag, the triage_excerpt/triage_excerpt_source/triage_excerpt_truncated fallback logic, and the
+category_tags deterministic pattern-matching (the recall-gap fix from the Fable advice-consult).
 """
 
 from __future__ import annotations
 
 import json
 
-from scripts.decisions_index import _LIVE_PATH, _build_triage_excerpt, build_index
+from scripts.decisions_index import _LIVE_PATH, _build_triage_excerpt, _derive_category_tags, build_index
 from scripts.decisions_md import decision_header_numbers, parse_decisions_md
 
 
@@ -48,6 +49,7 @@ class TestDeterminism:
             "triage_excerpt",
             "triage_excerpt_source",
             "triage_excerpt_truncated",
+            "category_tags",
         }
         for entry in idx["decisions"]:
             assert set(entry.keys()) == expected_keys
@@ -304,3 +306,87 @@ class TestTriageExcerptIntegration:
                 assert entry["triage_excerpt"] == raw[:320]
             else:
                 assert entry["triage_excerpt"] == raw
+
+
+class TestCategoryTagsUnit:
+    """VP-9-driven fix (Fable advice-consult): _derive_category_tags as a pure unit, independent
+    of real corpus content -- covers each pattern class and the sorted/dedup/no-match shapes."""
+
+    def test_lambda_tag_matches_lambda_mention(self) -> None:
+        assert "lambda" in _derive_category_tags("Ratify per-Lambda packaging manifests", "")
+
+    def test_terraform_tag_matches_terraform_mention(self) -> None:
+        assert "terraform" in _derive_category_tags("Terraform apply routing", "")
+
+    def test_iam_tag_matches_role_or_boundary(self) -> None:
+        assert "iam" in _derive_category_tags("A new IAM role", "")
+        assert "iam" in _derive_category_tags("", "extends the mandatory permissions boundary")
+
+    def test_secrets_tag_matches_secrets_manager(self) -> None:
+        assert "secrets" in _derive_category_tags("Secrets Manager split by value-capability", "")
+
+    def test_deploy_tag_matches_deployment_noun(self) -> None:
+        """Regression pin: Decision 126's title says 'deployment model', not 'deploy' -- the
+        pattern must match the noun form too, not just the bare verb."""
+        assert "deploy" in _derive_category_tags("Two-verb deployment model", "")
+
+    def test_egress_tag_matches_neon_or_budget(self) -> None:
+        assert "egress" in _derive_category_tags("Neon catalog egress is a first-class budget", "")
+
+    def test_decisions_corpus_tag_matches_decisions_md(self) -> None:
+        assert "decisions-corpus" in _derive_category_tags("DECISIONS.md is the canonical corpus", "")
+
+    def test_prose_docs_tag_matches_docs_path(self) -> None:
+        assert "prose-docs" in _derive_category_tags("Sanctioned-prose taxonomy", "")
+
+    def test_no_match_returns_empty_list(self) -> None:
+        assert _derive_category_tags("Some entirely unrelated title", "and an unrelated excerpt") == []
+
+    def test_multiple_matches_are_sorted_and_deduped(self) -> None:
+        tags = _derive_category_tags("Lambda Terraform Lambda deploy", "")
+        assert tags == sorted(set(tags))
+        assert tags.count("lambda") == 1
+
+    def test_matches_against_excerpt_too_not_only_title(self) -> None:
+        assert _derive_category_tags("Untitled", "reads a Secrets Manager credential") == ["secrets"]
+
+
+class TestCategoryTagsIntegration:
+    """Real-corpus regression pins for the two decisions the category_tags fix specifically
+    targets (VP step 9's measured recall gap, closed via the Fable advice-consult) -- Decision
+    126 ('deployment model' title, no Lambda/Terraform/IAM/Secrets keyword) and Decision 157
+    ('Secrets Manager' in title) must both carry a non-empty category_tags list so decision-scout's
+    mechanical shortlist step can find them without relying on per-entry judgment."""
+
+    def test_decision_126_carries_deploy_tag(self) -> None:
+        idx = build_index()
+        d = {x["number"]: x for x in idx["decisions"]}
+        assert "deploy" in d[126]["category_tags"]
+
+    def test_decision_157_carries_secrets_tag(self) -> None:
+        idx = build_index()
+        d = {x["number"]: x for x in idx["decisions"]}
+        assert "secrets" in d[157]["category_tags"]
+
+    def test_every_entry_carries_a_list_of_strings(self) -> None:
+        idx = build_index()
+        for entry in idx["decisions"]:
+            assert isinstance(entry["category_tags"], list)
+            assert all(isinstance(t, str) for t in entry["category_tags"])
+
+    def test_category_tags_is_sorted_and_deduped_for_every_entry(self) -> None:
+        idx = build_index()
+        for entry in idx["decisions"]:
+            tags = entry["category_tags"]
+            assert tags == sorted(set(tags)), f"dec-{entry['number']} category_tags not sorted/deduped: {tags}"
+
+    def test_no_tag_covers_more_than_forty_percent_of_live_entries(self) -> None:
+        """Keeps the shortlist materially smaller than the full corpus -- an over-broad tag would
+        silently rebuild the whole-file-read cost this plan removes."""
+        idx = build_index()
+        live = [x for x in idx["decisions"] if x["live"]]
+        from collections import Counter
+
+        counts = Counter(tag for entry in live for tag in entry["category_tags"])
+        for tag, count in counts.items():
+            assert count / len(live) <= 0.40, f"tag {tag!r} covers {count}/{len(live)} live entries -- too broad"

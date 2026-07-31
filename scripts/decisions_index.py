@@ -1,6 +1,6 @@
 """Generated decisions index (audit finding DCG-08, PLAN-dcg-decisions-index, FINAL wave of
-the dcg-* audit-consolidation series; PLAN-decision-scout-bounded-retrieval adds `live` and the
-triage_excerpt fields).
+the dcg-* audit-consolidation series; PLAN-decision-scout-bounded-retrieval adds `live`, the
+triage_excerpt fields, and `category_tags`).
 
 A lightweight, machine-parseable projection over BOTH docs/DECISIONS.md and
 docs/DECISIONS_ARCHIVE.md -- number, title, status, decided_date, typed
@@ -34,6 +34,15 @@ decision-body marker). `triage_excerpt_source` names which of the four supplied 
 "" when none of the four markers are present at all). `triage_excerpt_truncated` is True iff the
 source text exceeded 320 chars and was cut.
 
+`category_tags` derivation: a sorted list of deterministic artifact/process-category tags (see
+_CATEGORY_TAG_PATTERNS) matched against title + triage_excerpt only. Closes a recall gap the
+excerpt alone left in decision-scout's bounded index-pass triage -- a decision that governs by
+ARTIFACT TYPE (e.g. any new Lambda) rather than shared vocabulary was being silently discarded
+before a targeted read; the scout now derives the proposed approach's own tag set once and
+shortlists by mechanical set-intersection instead of a per-entry judgment call over the whole
+index. Generator-internal and revisable without Decision ceremony -- a retrieval aid, not a
+governance taxonomy.
+
 check_index_freshness(failed) fails on DRIFT (committed != regenerated) OR ABSENCE -- unlike
 scripts.dependency_graph.check_export_freshness (Decision 80 lean posture: no-op when the export
 is absent), this index is a required committed artifact (Step 6b fork 2: committed JSON +
@@ -47,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -84,6 +94,38 @@ def _build_triage_excerpt(row: dict[str, Any]) -> tuple[str, str, bool]:
             excerpt = text[:_TRIAGE_EXCERPT_MAX_CHARS] if truncated else text
             return excerpt, source_label, truncated
     return "", "", False
+
+
+# Deterministic artifact/process-category tags (PLAN-decision-scout-bounded-retrieval, Fable
+# advice-consult): closes the recall gap the excerpt-only bounded triage left in decision-scout's
+# index-pass -- a decision that governs by ARTIFACT TYPE (e.g. "any new Lambda") rather than topic
+# vocabulary was silently discarded as IRRELEVANT before ever reaching a targeted read, because the
+# scout's own per-entry judgment call over ~113 entries is unreliable (empirically demonstrated:
+# three rounds of prose-only tightening left Decisions 126/157 unrecovered). This field converts
+# that per-entry judgment into a mechanical set-intersection the scout performs ONCE per dispatch
+# (derive the approach's own tag set, then shortlist every entry whose category_tags intersects
+# it) -- see .claude/skills/decision-scout/SKILL.md Phase 2 step 3. Matched against title +
+# triage_excerpt only (never the full body): a full-body regex would tag a large fraction of the
+# corpus with incidental mentions, defeating the bound. Each pattern is kept under ~35% of live
+# entries (verified empirically, not just asserted) so the shortlist stays materially smaller than
+# the full corpus. The tag vocabulary is generator-internal and revisable without Decision
+# ceremony -- it is a retrieval aid, not a governance taxonomy.
+_CATEGORY_TAG_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("lambda", r"(?i)\blambdas?\b"),
+    ("terraform", r"(?i)\bterraform\b|\btf-gated\b"),
+    ("iam", r"(?i)\biam\b|\brole\b|\bboundary\b"),
+    ("secrets", r"(?i)\bsecrets?\s+manager\b|\bcredentials?\b|\bapi key\b"),
+    ("deploy", r"(?i)\bdeploy(?:s|ed|ment|ments)?\b|\bcd channel\b|\bapply\b"),
+    ("egress", r"(?i)\begress\b|\bbudget\b|\bneon\b"),
+    ("decisions-corpus", r"(?i)\bdecisions(?:_archive)?\.md\b|\bdecision[- ]compact"),
+    ("prose-docs", r"(?i)\bprose\b|\bdocumentation\b|\bdocs?/\b"),
+)
+
+
+def _derive_category_tags(title: str, excerpt: str) -> list[str]:
+    """Derive the sorted list of category_tags matching title+excerpt against _CATEGORY_TAG_PATTERNS."""
+    text = f"{title}\n{excerpt}"
+    return sorted(tag for tag, pattern in _CATEGORY_TAG_PATTERNS if re.search(pattern, text))
 
 
 def _superseded_by_int(raw: str) -> int | None:
@@ -133,6 +175,7 @@ def build_index() -> dict[str, Any]:
                 "triage_excerpt": excerpt,
                 "triage_excerpt_source": excerpt_source,
                 "triage_excerpt_truncated": excerpt_truncated,
+                "category_tags": _derive_category_tags(by_number[n]["title"], excerpt),
             }
         )
 

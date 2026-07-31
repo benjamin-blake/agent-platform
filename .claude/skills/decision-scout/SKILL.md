@@ -23,7 +23,7 @@ The index-plus-targeted-reads mechanism is the INTERIM arrangement, not the T1.5
 
 ### Phase 1: Load Inputs (MANDATORY)
 
-1. **Triage source.** Read `docs/decisions-index.json` -- committed, generated solely from `docs/DECISIONS.md` and `docs/DECISIONS_ARCHIVE.md` by `scripts.decisions_index`; used instead of the gitignored `ops_decisions` cache because CI PR roles lack reader access there and this gate stays credential-free and hermetic (Decision 105's R1-R3 guard relies on the same file-header hermeticity). Derive **M** = count of `live: true` entries -- the live-file header count, excluding the archive and distinct from the max decision number (numbering gaps). Each live entry's `title` and `triage_excerpt` (<=320 chars, Intent/Problem/Context/Decision fallback order; `triage_excerpt_source` names which; a small terse-historical band carries none) is the Phase 2 signal -- never a whole-file load here.
+1. **Triage source.** Read `docs/decisions-index.json` -- committed, generated solely from `docs/DECISIONS.md` and `docs/DECISIONS_ARCHIVE.md` by `scripts.decisions_index`; used instead of the gitignored `ops_decisions` cache because CI PR roles lack reader access there and this gate stays credential-free and hermetic (Decision 105's R1-R3 guard relies on the same file-header hermeticity). Derive **M** = count of `live: true` entries -- the live-file header count, excluding the archive and distinct from the max decision number (numbering gaps). Each live entry's `title`, `triage_excerpt` (<=320 chars, Intent/Problem/Context/Decision fallback order; `triage_excerpt_source` names which; a small terse-historical band carries none), and `category_tags` (deterministic artifact/process tags, e.g. `lambda`/`terraform`/`iam`/`secrets`/`deploy`/`egress`) is the Phase 2 signal -- never a whole-file load here.
 
 2. Read the caller's input brief, which is mandated to include:
    - **Intent** (1-2 sentences from `/plan` Step 3 clarification)
@@ -36,17 +36,18 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
 
 ### Phase 2: Triage Each Decision
 
-3. **Index pass.** For each live entry, classify PROVISIONALLY against the proposed approach using only its title + `triage_excerpt` into one of four buckets:
-   - **CITE** -- the decision directly governs the approach and the plan MUST reference it.
-   - **CONTRADICT** -- the proposed approach violates an active decision.
-   - **RELATED** -- in the neighbourhood but does not directly govern; worth mentioning, not mandatory.
-   - **IRRELEVANT** -- discard now; every other bucket, plus any SPIRIT candidate (step 8), is SHORTLISTED.
-   MANDATORY CATEGORY SHORTLIST: many decisions govern by ARTIFACT TYPE, not topic keyword -- e.g.
-   ANY new Lambda touches the Lambda-packaging/deploy-channel decisions regardless of what it does.
-   If the approach creates or touches a Lambda, a Terraform resource, an IAM role, or a Secrets
-   Manager entry, shortlist EVERY live title containing that same noun, even with zero excerpt
-   overlap; do not rely on judgment alone here. Mark IRRELEVANT only when clearly off-topic. A
-   spurious read is cheap; a missed governing decision is not.
+3. **Shortlist.** FIRST, mechanically: derive the approach's own tag set (`lambda` = creates/touches
+   a Lambda; `terraform`/`iam` = touches a terraform/ or IAM surface; `secrets` = reads/stores a
+   credential or authenticates externally; `deploy` = ships code/infra by any channel; `egress` =
+   reads Neon/warehouse; `decisions-corpus`/`prose-docs` = edits governance docs) and shortlist
+   EVERY live entry whose `category_tags` intersects it -- a mechanical set-intersection, never
+   per-entry judgment (many decisions govern by ARTIFACT TYPE, not topic keyword). THEN classify
+   every REMAINING entry PROVISIONALLY via title + `triage_excerpt`:
+   - **CITE** -- governs the approach; the plan MUST reference it.
+   - **CONTRADICT** -- the approach violates an active decision.
+   - **RELATED** -- in the neighbourhood, not mandatory.
+   - **IRRELEVANT** -- discard. Tag-matched + non-IRRELEVANT + any SPIRIT candidate (step 8) =
+     the final SHORTLIST.
 
 4. **Targeted read.** For every shortlisted entry, locate its heading (`rg -n "^## Decision N:" docs/DECISIONS.md`) and Read with offset/limit spanning just that heading through the next -- one section, never the source file wholesale. Confirm or refine the provisional classification against the full text; a shortlisted entry's SPIRIT quote (step 8) may be any verbatim sentence from that section, not only the excerpt.
 
@@ -122,7 +123,7 @@ Decisions triaged: N of M
 ## Quality Gate (self-check before output)
 
 Verify before returning:
-- [ ] You triaged every live entry via the index (biased toward inclusion, step 3) and read ONLY shortlisted entries as targeted sections -- never a whole-file load
+- [ ] You applied the mechanical tag shortlist (step 3) before judgment, and read ONLY shortlisted entries as targeted sections -- never a whole-file load
 - [ ] Every CITE and CONTRADICT entry names a decision number that exists in the index
 - [ ] Every CONTRADICT entry has both a clause-level citation AND a severity
 - [ ] The Verdict line is one of the three exact strings (no variations)
