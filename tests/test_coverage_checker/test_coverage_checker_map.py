@@ -1,9 +1,10 @@
 """Tests for test_coverage_checker.map_source_to_test() and the post-retirement mirror rule.
 
 Split from the former tests/test_coverage_checker.py monolith (rec-2709 Wave 6b -- SLOC governance
-per Decision 128, not a mirror-roster retirement: scripts/test_coverage_checker.py is excluded from
-its own coverage scan by name and isn't one of the 24 _ALL_MIRROR_TARGET_HOMES roster entries). See
-tests/fixtures/coverage_checker_module.py for the shared module-under-test singleton.
+per Decision 128, not a mirror-roster retirement: scripts/test_coverage_checker.py isn't one of the
+24 _ALL_MIRROR_TARGET_HOMES roster entries -- it resolves via the direct
+_CONCERN_SPLIT_TEST_PACKAGES membership check instead). See tests/fixtures/coverage_checker_module.py
+for the shared module-under-test singleton.
 """
 
 from pathlib import Path

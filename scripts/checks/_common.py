@@ -12,6 +12,7 @@ at module scope).
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -22,6 +23,7 @@ PYTHON = sys.executable  # Use same interpreter that's running this script
 
 PLAN_PATH_RE = re.compile(r"^docs/plans/PLAN-([^/]+)\.yaml$")
 _FEAT_COMMIT_RE = re.compile(r"^feat\(([^)]+)\):")
+_ZERO_SHA = "0" * 40
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -35,9 +37,70 @@ def invoke_step(name: str, cmd: list[str], failed: list[str], cwd: Path | None =
         failed.append(name)
 
 
+def push_context_base() -> str | None:
+    """Return the diff base for a POST-MERGE (push-context) validation run, else None.
+
+    Push context is GITHUB_EVENT_NAME == "push", OR (current branch == "main" AND
+    merge-base(origin/main, HEAD) == HEAD). The branch-name conjunct is load-bearing:
+    merge-base == HEAD alone also matches every fresh harness session branch before its
+    first commit, which would otherwise pull the previous merge's files into every
+    session-start --pre run.
+
+    In push context, prefers GITHUB_EVENT_BEFORE when it names a non-zero commit present
+    locally, else HEAD~1. Returns None (with a loud warning) when HEAD~1 does not resolve
+    (root/shallow checkout) so callers fall back to their own existing base instead of
+    silently mis-scoping.
+
+    Outside push context, always returns None -- each consumer then keeps its own current
+    base unchanged (Decision 135 pt 3: contract unchanged for existing callers).
+    """
+    is_push_event = os.environ.get("GITHUB_EVENT_NAME") == "push"
+    on_main = False
+    if not is_push_event:
+        branch_result = run(["git", "branch", "--show-current"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+        branch = branch_result.stdout.strip() if branch_result.returncode == 0 else ""
+        if branch == "main":
+            merge_base_result = run(
+                ["git", "merge-base", "origin/main", "HEAD"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT
+            )
+            head_result = run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+            on_main = (
+                merge_base_result.returncode == 0
+                and head_result.returncode == 0
+                and bool(merge_base_result.stdout.strip())
+                and merge_base_result.stdout.strip() == head_result.stdout.strip()
+            )
+
+    if not (is_push_event or on_main):
+        return None
+
+    event_before = os.environ.get("GITHUB_EVENT_BEFORE", "").strip()
+    if event_before and event_before != _ZERO_SHA:
+        exists_result = run(
+            ["git", "cat-file", "-e", event_before], capture_output=True, text=True, encoding="utf-8", cwd=ROOT
+        )
+        if exists_result.returncode == 0:
+            return event_before
+
+    head_tilde_result = run(
+        ["git", "rev-parse", "--verify", "-q", "HEAD~1"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT
+    )
+    if head_tilde_result.returncode == 0 and head_tilde_result.stdout.strip():
+        return head_tilde_result.stdout.strip()
+
+    print(
+        "WARNING: push_context_base() detected push context but HEAD~1 does not resolve "
+        "(root/shallow checkout) -- falling back to the caller's existing behaviour.",
+        file=sys.stderr,
+    )
+    return None
+
+
 def get_changed_files() -> list[str]:
     """Get files changed vs origin/main, falling back to HEAD. Excludes deleted paths."""
-    result = run(["git", "diff", "--name-only", "origin/main"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+    push_base = push_context_base()
+    base = push_base if push_base is not None else "origin/main"
+    result = run(["git", "diff", "--name-only", base], capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
     if result.returncode == 0:
         files = result.stdout.strip().splitlines()
     else:
@@ -73,12 +136,18 @@ def get_status_aware_diff() -> list[tuple[str, str]]:
     """
     entries: list[tuple[str, str]] = []
 
-    merge_base_result = run(
-        ["git", "merge-base", "origin/main", "HEAD"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT
-    )
-    base_ref = (
-        merge_base_result.stdout.strip() if merge_base_result.returncode == 0 and merge_base_result.stdout.strip() else None
-    )
+    push_base = push_context_base()
+    if push_base is not None:
+        base_ref = push_base
+    else:
+        merge_base_result = run(
+            ["git", "merge-base", "origin/main", "HEAD"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT
+        )
+        base_ref = (
+            merge_base_result.stdout.strip()
+            if merge_base_result.returncode == 0 and merge_base_result.stdout.strip()
+            else None
+        )
 
     diff_result = run(
         ["git", "diff", "--name-status", "--no-renames", base_ref or "HEAD"],

@@ -14,8 +14,6 @@ Usage:
 
 import argparse
 import ast
-import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -208,6 +206,9 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = set()
 # concern into multiple test_*.py modules under one directory. Entries are dormant until
 # their _RETIRING_GRANDFATHER_HOMES line is deleted; each wave finalises its own membership
 # (this seed is the known monolith roster at foundation time, not a closed list).
+# Membership here is independently sufficient to route a source to its test package
+# directory -- it no longer depends on the source's grandfathered home having retired (see
+# map_source_to_test's direct membership check, which fires before the final `return home`).
 _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
     {
         "scripts/ops_writer.py",
@@ -231,6 +232,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/session/postflight.py",
         "scripts/ci_rca/evidence.py",
         "scripts/checks/deps/affected_tests.py",
+        "scripts/test_coverage_checker.py",
     }
 )
 
@@ -312,23 +314,40 @@ def map_source_to_test(source_path: Path) -> Path | None:
     scripts/validate.py resolves to (not the generic per-file mirror target) -- see
     _ORCHESTRATION_SCAFFOLDING_FILES.
 
-    Returns None for paths not under src/ or scripts/, or with no grandfathered home.
+    3. DIRECT CONCERN-SPLIT (independent of retirement): a source path listed in
+       _CONCERN_SPLIT_TEST_PACKAGES resolves to its test PACKAGE DIRECTORY even if its
+       grandfathered home's basename is still in _RETIRING_GRANDFATHER_HOMES (i.e. has not
+       retired) or has no grandfathered home under _ALL_MIRROR_TARGET_HOMES at all. This
+       decouples "is this source a declared concern-split monolith?" from "has this source's
+       grandfathered home retired?" -- previously the only entry point into
+       _CONCERN_SPLIT_TEST_PACKAGES was inside _mirror_source_to_test, reachable solely via
+       the MIRROR branch above, so registering a file whose grandfathered home was not itself
+       in _ALL_MIRROR_TARGET_HOMES was inert (the membership check was never consulted).
+
+    Returns None for paths not under src/ or scripts/, or with no grandfathered home (unless
+    the path is itself a declared concern-split entry, which is checked independently of
+    having a grandfathered home).
     """
     home = _grandfathered_source_to_test(source_path)
-    if home is None:
-        return None
-    if home.name in _RETIRING_GRANDFATHER_HOMES:
-        return home
-    if home.name in _ALL_MIRROR_TARGET_HOMES:
-        try:
-            rel_name = source_path.resolve().relative_to(ROOT).name
-        except ValueError:
-            rel_name = source_path.name
-        if home.name == "test_validate.py" and rel_name in _ORCHESTRATION_SCAFFOLDING_FILES:
-            return ROOT / "tests" / "validate"
-        # smoke_actions.py shares ducklake_writer's concern-split handler package (Edit C, rec-2709 Wave 8).
-        if home.name == "test_ducklake_writer_handler.py" and rel_name == "smoke_actions.py":
-            return ROOT / "tests" / "lambdas" / "ducklake_writer" / "handler"
+    if home is not None:
+        if home.name in _RETIRING_GRANDFATHER_HOMES:
+            return home
+        if home.name in _ALL_MIRROR_TARGET_HOMES:
+            try:
+                rel_name = source_path.resolve().relative_to(ROOT).name
+            except ValueError:
+                rel_name = source_path.name
+            if home.name == "test_validate.py" and rel_name in _ORCHESTRATION_SCAFFOLDING_FILES:
+                return ROOT / "tests" / "validate"
+            # smoke_actions.py shares ducklake_writer's concern-split handler package (Edit C, rec-2709 Wave 8).
+            if home.name == "test_ducklake_writer_handler.py" and rel_name == "smoke_actions.py":
+                return ROOT / "tests" / "lambdas" / "ducklake_writer" / "handler"
+            return _mirror_source_to_test(source_path)
+    try:
+        rel_str = source_path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        rel_str = None
+    if rel_str is not None and rel_str in _CONCERN_SPLIT_TEST_PACKAGES:
         return _mirror_source_to_test(source_path)
     return home
 
@@ -368,109 +387,57 @@ def _is_empty_directory_target(test_path: Path) -> bool:
     return test_path.is_dir() and not any(test_path.glob("test_*.py"))
 
 
-def check_per_file_coverage(source_files: list[Path]) -> list[str]:
-    """Run pytest coverage for each source file and return files below 100%.
+# The subprocess/pytest measurement mechanics live in coverage_baseline.py (Decision 102/128
+# decompose-by-default: this file stays under its SLOC budget). ROOT/map_source_to_test/
+# _is_empty_directory_target/subprocess are passed in explicitly (not imported by the callee) so
+# the lookup happens on THIS module's own globals -- what keeps `patch("test_coverage_checker.
+# <name>")` intercepting correctly, including the ad hoc module copy the legacy split test suite
+# (tests/fixtures/coverage_checker_module.py) loads under a bare module name.
+def _measure_and_check(source_files: list[Path]) -> tuple[dict[str, float | None], list[str]]:
+    from scripts.checks.misc import coverage_baseline
 
-    Returns a list of error strings for files with < 100% line coverage.
-    If coverage.py is not available, returns an informational warning (not blocking).
+    return coverage_baseline.measure_and_check(
+        source_files,
+        root=ROOT,
+        map_source_to_test=map_source_to_test,
+        is_empty_dir=_is_empty_directory_target,
+        subprocess_module=subprocess,
+    )
+
+
+def measure_per_file_coverage(source_files: list[Path]) -> dict[str, float | None]:
+    """Single measurement entry point -- {str(resolved path): measured pct | None}."""
+    pcts, _ = _measure_and_check(source_files)
+    return pcts
+
+
+def check_per_file_coverage(source_files: list[Path]) -> list[str]:
+    """Run pytest coverage for each source file and return baseline-aware failures.
+
+    A changed file WITH a `config/coverage_baseline.yaml` entry fails iff measured < that
+    entry's threshold; a file WITHOUT an entry fails iff measured < 100 (unchanged default).
     """
-    errors: list[str] = []
+    from scripts.checks.misc import coverage_baseline
+
+    pcts, errors = _measure_and_check(source_files)
+    baseline = coverage_baseline.load_baseline()
 
     for source_path in source_files:
+        key = str(source_path.resolve())
+        pct = pcts.get(key)
+        if pct is None:
+            continue  # already accounted for (hard error) or silently skipped upstream
         try:
             rel = source_path.resolve().relative_to(ROOT)
         except ValueError:
             continue
-
-        # Convert path to module-style for --cov argument
-        # e.g. src/common/config.py -> src.common.config
-        module_str = ".".join(rel.with_suffix("").parts)
-
-        # Run only the corresponding test file instead of the full suite.
-        # Running `pytest tests/` for each source file triggers a recursive
-        # fork explosion: test collection re-invokes validate.py, which
-        # re-invokes check_per_file_coverage, each spawning more pytest processes.
-        test_path = map_source_to_test(source_path)
-        if test_path is None or not test_path.exists():
-            continue
-        # Concern-split mirror target (post-retirement): run pytest against the whole test
-        # package directory (test_path_str below); skip if not yet populated -- mirrors the
-        # check_test_file_exists directory guard.
-        if _is_empty_directory_target(test_path):
-            continue
-        test_path_str = str(test_path.relative_to(ROOT)).replace("\\", "/")
-        print(f"  mapping: {rel} -> {test_path_str} (--cov={module_str})")
-
-        # Set _COVERAGE_SUBPROCESS=1 so any validate.py invoked transitively
-        # (e.g. by a test calling subprocess) knows it's inside a coverage run
-        # and skips the coverage check, breaking the recursion chain.
-        child_env = os.environ.copy()
-        child_env["_COVERAGE_SUBPROCESS"] = "1"
-
-        with subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                test_path_str,
-                f"--cov={module_str}",
-                "--cov-report=json:.coverage.json",
-                "-q",
-                "--no-header",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=ROOT,
-            env=child_env,
-        ) as proc:
-            try:
-                proc.communicate(timeout=300)
-            except subprocess.TimeoutExpired:
-                # Kill entire process tree to prevent orphan accumulation
-                from scripts.llm.utils import kill_process_tree
-
-                kill_process_tree(proc.pid)
-                proc.wait()
-                errors.append(f"{rel}: coverage check timed out (300s)")
-                continue
-
-        coverage_json = ROOT / ".coverage.json"
-        if not coverage_json.exists():
-            # coverage.py unavailable or file not tracked — informational, not blocking
-            print(f"  [info] no coverage data for {rel} (coverage.py unavailable or file not tracked)")
-            continue
-
-        try:
-            data = json.loads(coverage_json.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        finally:
-            try:
-                coverage_json.unlink()
-            except OSError:
-                pass
-
-        files_data = data.get("files", {})
-        matched: dict[str, float] = {}
         rel_str = str(rel).replace("\\", "/")
-        for file_key, file_data in files_data.items():
-            normalised_key = file_key.replace("\\", "/")
-            if rel_str in normalised_key or normalised_key.endswith(rel_str):
-                summary = file_data.get("summary", {})
-                pct = summary.get("percent_covered", 0.0)
-                matched[file_key] = pct
-
-        if not matched:
-            # No coverage data means no tests exercised this file
-            errors.append(f"{rel}: 0% coverage (no tests exercise this file)")
-            continue
-
-        for file_key, pct in matched.items():
-            if pct < 100.0:
+        threshold = baseline.get(rel_str, 100.0)
+        if not coverage_baseline.compare(pct, rel_str, baseline):
+            if threshold >= 100.0:
                 errors.append(f"{rel}: {pct:.1f}% line coverage (expected 100%)")
+            else:
+                errors.append(f"{rel}: {pct:.1f}% line coverage (expected >= {threshold:.1f}%)")
 
     return errors
 
@@ -491,19 +458,12 @@ def get_changed_source_files(files: list[str] | None = None) -> list[Path]:
                 p = ROOT / p
             paths.append(p.resolve())
     else:
-        # Get merge-base for accurate feature-branch diff
-        merge_base_result = subprocess.run(
-            ["git", "merge-base", "origin/main", "HEAD"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=ROOT,
-        )
-        if merge_base_result.returncode != 0:
-            # Fallback: diff against HEAD
+        from scripts.checks import _common  # noqa: PLC0415
+
+        push_base = _common.push_context_base()
+        if push_base is not None:
             diff_result = subprocess.run(
-                ["git", "diff", "--name-only", "HEAD"],
+                ["git", "diff", "--name-only", push_base],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -512,16 +472,37 @@ def get_changed_source_files(files: list[str] | None = None) -> list[Path]:
             )
             raw = diff_result.stdout.strip().splitlines()
         else:
-            merge_base = merge_base_result.stdout.strip()
-            diff_result = subprocess.run(
-                ["git", "diff", "--name-only", merge_base],
+            # Get merge-base for accurate feature-branch diff
+            merge_base_result = subprocess.run(
+                ["git", "merge-base", "origin/main", "HEAD"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 cwd=ROOT,
             )
-            raw = diff_result.stdout.strip().splitlines()
+            if merge_base_result.returncode != 0:
+                # Fallback: diff against HEAD
+                diff_result = subprocess.run(
+                    ["git", "diff", "--name-only", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=ROOT,
+                )
+                raw = diff_result.stdout.strip().splitlines()
+            else:
+                merge_base = merge_base_result.stdout.strip()
+                diff_result = subprocess.run(
+                    ["git", "diff", "--name-only", merge_base],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=ROOT,
+                )
+                raw = diff_result.stdout.strip().splitlines()
 
         paths = [ROOT / f for f in raw if f.endswith(".py")]
 
@@ -531,9 +512,6 @@ def get_changed_source_files(files: list[str] | None = None) -> list[Path]:
         if not p.suffix == ".py":
             continue
         if p.name in excluded_names:
-            continue
-        # Exclude test files
-        if p.name.startswith("test_") or p.name == "conftest.py":
             continue
         try:
             rel = p.resolve().relative_to(ROOT)

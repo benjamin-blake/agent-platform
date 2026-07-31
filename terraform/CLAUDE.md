@@ -83,7 +83,7 @@ classification.
 |---|---|---|
 | Apply a guard-PASS (non-IAM or in-budget IAM) `terraform/personal` change | Open a PR; CD (`terraform-apply-sandbox.yml`) plans on the PR and applies the SAME reviewed plan.bin at merge (T2.21, no re-plan) | N/A -- this is the primary path |
 | Apply an out-of-budget IAM / trust / destroy `terraform/personal` change | Open a PR; CD routes to the `tf-gated-apply` GitHub Environment | Approve in GitHub Actions (benjamin-blake); CD applies the same reviewed plan.bin -- never from a laptop |
-| Recover from a red convergence record (failed/refused apply, or drift) | Run `terraform-apply-sandbox` via `workflow_dispatch` acknowledge-and-retry (names the red commit / open rec id) AFTER the `ci-rca` rec is reviewed (Decision 55/72) | Nothing auto-remediates; T2.37 (Reconcile, not yet landed) will be the lower-friction path |
+| Recover from a red convergence record (failed/refused apply, or drift) | guard-BLOCK: dispatch Reconcile (`reconcile.yml`, LANDED) -- re-plans, re-guards, routes to `tf-gated-apply`. guard-PASS: `terraform-apply-sandbox` `workflow_dispatch` acknowledge-and-retry. AFTER `ci-rca` rec review (Decision 55/72) | No auto-remediation |
 | Apply `terraform/` (legacy hashicorp/*-only roots) or `terraform/github` | Same PR -> CD path where a workflow exists | See "Operator-only / break-glass" below |
 | Apply `terraform/bootstrap`, or apply `terraform/personal` by hand (bootstrap, reversing a manual admin change, or a guard-BLOCKed case with no CD path yet) | Operator action only | See "Operator-only / break-glass" below |
 

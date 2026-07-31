@@ -23,6 +23,7 @@ def _load_guards() -> list[tuple[str, Callable[[], None]]]:
         _check_concurrency,
         _check_fetch_depth,
         _check_jobs_and_flags,
+        _check_recovery_workflow_topology,
         _check_signal_green_needs,
         _check_terraform_apply_concurrency,
         _check_validate_single_source,
@@ -38,6 +39,7 @@ def _load_guards() -> list[tuple[str, Callable[[], None]]]:
         ("signal-green-needs", _check_signal_green_needs),
         ("terraform-apply-concurrency", _check_terraform_apply_concurrency),
         ("ci-rca-fetch-classification", _check_ci_rca_fetch_classification),
+        ("recovery-workflow-topology", _check_recovery_workflow_topology),
     ]
 
 
@@ -63,8 +65,8 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
 
     Wires _check_jobs_and_flags, _check_fetch_depth, _check_concurrency, _check_canary,
     _check_apply_rca_fallback, _check_validate_single_source, _check_signal_green_needs,
-    _check_terraform_apply_concurrency, and _check_ci_rca_fetch_classification from
-    scripts/verify_ci_workflow.py into the presubmit tier.
+    _check_terraform_apply_concurrency, _check_ci_rca_fetch_classification, and
+    _check_recovery_workflow_topology from scripts/verify_ci_workflow.py into the presubmit tier.
     Each guard failure appends a distinct label; a non-AssertionError exception
     records a failure rather than crashing presubmit (rec-2027 pattern).
     """

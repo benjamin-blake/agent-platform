@@ -1,0 +1,259 @@
+schema_version: 3
+slug: actions-diagnostic-governance
+intent: Close audit findings GAL-02 and GAL-04 with one machine-readable GitHub Actions evidence contract and an authoritative,
+  risk-based validator that governs diagnostic surfaces and artifact retention without imposing cosmetic conventions on ordinary
+  low-risk workflow steps.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-actions-diagnostic-governance.yaml
+phase: Ad hoc audit remediation approved at overseer G1; Wave 2 consumes the bounded CI-RCA evidence vocabulary delivered by Wave 1.
+scope:
+- file: docs/contracts/github-actions-evidence.yaml
+  action: Create
+  purpose: Collocate the contract schema, governed and agent-consumed workflow/job selectors, bounded diagnostic-envelope classes,
+    decisive-surface requirements, and four purpose-based retention classes. Define class ids for ephemeral handoff, ordinary CI,
+    governed deployment or reconciliation, and security evidence; each class states purpose, minimum and maximum days, delayed-RCA
+    availability window, expiry state, and recovery behavior. Derive the selected inventory from deploy intents in docs/contracts/deploy-paths.yaml,
+    CI-RCA workflow_run producer/consumer sets, and delegated composite-action callers; encode exclusions with bounded reason enums.
+    Normalize workflow display names to paths by exact top-level `name` equality (reject zero or multiple matches), select the explicit
+    job keys below, and traverse only exact local composite-action references recursively with cycle/missing-target rejection.
+    Classify every current actions/upload-artifact call by workflow, job,
+    step, artifact name, and retention class. The contract stores identifiers and policy, not duplicated workflow prose or evidence.
+- file: scripts/checks/ci_guards/validate_actions_evidence.py
+  action: Create
+  purpose: Parse workflow YAML and the evidence contract, enumerate all non-comment actions/upload-artifact uses, and assert exact
+    equality with the classified upload inventory. Reject missing, duplicate, stale, or unknown classifications; absent or non-integer
+    retention-days; values outside class bounds; and a contract missing any required purpose class. For risk-selected governed or
+    agent-consumed jobs, require a stable job key, named critical steps with stable step ids, stable diagnostic identifiers, and at
+    least one bounded decisive surface (annotation, job summary, or typed artifact) mapped to named failure conditions. Trace each
+    surface to an actual reachable workflow step or delegated composite-action emitter; reject declaration-only surfaces, broken delegation,
+    and missing/stale selectors. Validate the merged S1 `ci-rca-log-evidence/v1` producer/extractor/consumer linkage. Leave unselected
+    ordinary jobs free of global step-id, naming, and annotation uniformity. Report expired delayed-RCA evidence as a
+    typed unavailable state with the contract recovery route; never infer availability after the class window.
+- file: scripts/checks/registry.py
+  action: Modify
+  purpose: Register validate_actions_evidence in both pre and full authoritative sequences adjacent to existing CI workflow guards,
+    with pre-tier globs covering workflows, the evidence contract, and validator implementation.
+- file: scripts/validate.py
+  action: Modify
+  purpose: Re-export validate_actions_evidence so registry dispatch reaches the check through the authoritative validator facade.
+- file: tests/checks/ci_guards/test_validate_actions_evidence.py
+  action: Create
+  purpose: Provide hermetic temporary-repository fixtures for governed-path pass and every fail-closed property - missing stable diagnostic
+    code, unnamed or un-id'd critical step, missing bounded decisive surface, unknown diagnostic or retention class, missing upload
+    classification, stale/extra classification, missing retention-days, and retention below or above bounds. Include an ordinary
+    low-risk job that remains valid without governed conventions, all four retention classes, and delayed-RCA available versus expired/unrecoverable
+    states. Cover derived inventory and exclusions, stale/missing selectors, composite delegation, unreachable surfaces, S1 schema-link
+    drift, and confidential-data-shaped stable identifiers and recovery metadata.
+- file: .github/workflows/ci.yml
+  action: Modify
+  purpose: Validate selected jobs pr-validate, main-validate, terraform-validate, and signal-green; align the selection-manifest and
+    pytest-junit uploads with their contract inventory and only add stable diagnostic step
+    ids or bounded decisive-surface declarations where the risk selection requires them. Preserve native annotations, summaries,
+    CI-RCA consumption, false-green behavior, and current fourteen-day retention unless the contract's purpose analysis requires a
+    bounded change.
+- file: .github/workflows/main-canary.yml
+  action: Modify
+  purpose: Validate selected job canary; align the pytest-junit upload and its agent-consumed diagnostics with the contract while preserving the current fourteen-day
+    delayed-RCA surface and existing CI-RCA identity lifecycle.
+- file: .github/workflows/reconcile.yml
+  action: Modify
+  purpose: Validate selected jobs resolve-target, apply-reconcile, and gated-apply-reconcile. Classify the one-day fresh-plan artifact
+    as ephemeral handoff and ensure the governed reconciliation path exposes stable
+    critical-step and decisive-surface identifiers without changing approvals, saved-plan identity, apply behavior, or Terraform
+    execution. The artifact remains one day unless the class bounds demonstrably require otherwise.
+- file: .github/workflows/deploy-ducklake-lambdas.yml
+  action: Modify
+  purpose: Validate and, only where nonconformant, align selected jobs deploy-maintenance, maintenance-smoke, reconcile-gate, deploy-serving,
+    and smoke as governed code-deploy diagnostics. A proven conformant file remains unedited but stays in declared review scope.
+- file: .github/workflows/deploy-prod-lambdas.yml
+  action: Modify
+  purpose: Validate and, only where nonconformant, align selected jobs deploy and smoke as governed code-deploy diagnostics.
+- file: .github/workflows/terraform-apply-sandbox.yml
+  action: Modify
+  purpose: Validate and, only where nonconformant, align selected jobs apply-sandbox, speculative-plan, advisory-status, and gated-apply,
+    including local composite delegation, without changing Terraform routing or approval behavior.
+- file: .github/workflows/rec-autoclose.yml
+  action: Modify
+  purpose: Validate and, only where nonconformant, align selected job autoclose as an agent-consumed CI-RCA producer and governed ops write.
+- file: .github/actions/materialise-tfvars/action.yml
+  action: Modify
+  purpose: Validate reachable diagnostic emitters delegated by selected Terraform and Reconcile jobs; edit only if a selected failure
+    condition lacks the contracted stable bounded surface.
+- file: .github/actions/terraform-init-retry/action.yml
+  action: Modify
+  purpose: Validate reachable retry-failure diagnostics delegated by selected Terraform and Reconcile jobs.
+- file: .github/actions/fetch-saved-plan/action.yml
+  action: Modify
+  purpose: Validate reachable saved-plan failure diagnostics delegated by selected Terraform and Reconcile jobs.
+- file: .github/actions/deterministic-guard/action.yml
+  action: Modify
+  purpose: Validate reachable routing/refusal diagnostics delegated by selected Terraform and Reconcile jobs.
+- file: .github/actions/subagent-plan-review/action.yml
+  action: Modify
+  purpose: Validate reachable review-refusal diagnostics delegated by selected Terraform and Reconcile jobs.
+- file: .github/actions/write-convergence-record/action.yml
+  action: Modify
+  purpose: Validate reachable convergence-write diagnostics delegated by selected Terraform and Reconcile jobs.
+- file: .github/actions/build-ducklake-artifacts/action.yml
+  action: Modify
+  purpose: Validate reachable build diagnostics delegated by selected terraform-apply-sandbox jobs.
+- file: config/agent/verification_registry/registry.yaml
+  action: Modify
+  purpose: Graduate one canonical diagnostic/retention mutation matrix under check id actions-evidence-governance, with an exact focused
+    pytest node that fails on origin/main and passes only when the validator and contract land together.
+bundled_recommendations: []
+closes_criteria: []
+acceptance_criteria:
+- 'AC1: One machine-readable contract contains exactly four purpose-based retention classes - ephemeral handoff, ordinary CI, governed
+  deployment or reconciliation, and security evidence - and gives every class explicit minimum/maximum days plus delayed-RCA availability,
+  expiry, and recovery semantics. Every current actions/upload-artifact use has exactly one classification, including the existing
+  one-day reconcile artifact and fourteen-day CI/JUnit artifacts.'
+- 'AC2: The authoritative scripts.validate path rejects any upload that is unclassified, multiply classified, classified by an unknown
+  class, missing an explicit integer retention-days value, or outside its selected class bounds; it also rejects stale contract inventory
+  entries and omission of any of the four required classes.'
+- 'AC3: The governed and agent-consumed inventory is deterministically derived from docs/contracts/deploy-paths.yaml deploy/reconcile
+  intents, CI-RCA workflow_run producers/consumers, and delegated composite-action call graphs. The explicit contract inventory is
+  authoritative because deploy-path status prose is not a stable parser API; validation anchors it to existing workflow paths/display
+  names/job keys, ci-rca.yml `on.workflow_run.workflows`, contract-named deploy-channel workflow paths, and recursively resolved local
+  `uses: ./.github/actions/<slug>` edges. Contract selectors exactly cover that derived set; exclusions use bounded reason enums, and
+  stale, missing, duplicate, or unjustified selectors fail validation.'
+- 'AC4: Every selected job has a stable YAML job key, named critical steps with stable ids, stable machine-searchable diagnostic identifiers,
+  and at least one bounded annotation, summary, or typed-artifact surface. Each surface maps to named failure conditions and validation
+  traces its reachable workflow or delegated composite-action emitter rather than trusting declarations. Ordinary low-risk jobs remain
+  valid without cosmetic global uniformity.'
+- 'AC5: The contract explicitly links the Wave 1 `ci-rca-log-evidence/v1` producer, extractor, and evidence consumer as one bounded typed-evidence
+  path, and schema/producer/consumer mutations fail validation. It preserves fail-closed behavior, confidentiality controls, native
+  annotations, summaries, typed artifacts, and false-green guards. Stable identifiers and recovery metadata reject credentials, secret-like
+  values, account-shaped identifiers, internal hostnames, URL userinfo, and query credentials. Expired evidence is unavailable with
+  its declared recovery route and is never silently retained beyond the class maximum.'
+- 'AC6: Hermetic pass/fail fixtures and mutations prove every governed diagnostic and retention rule, exact enumeration of the real
+  upload inventory, all four retention classes, one-day and fourteen-day bounds, and available-versus-expired delayed-RCA behavior;
+  the canonical counterfactual is graduated in the verification registry and executes through both presubmit tiers.'
+verification_plan:
+- step: 1
+  phase: pre-deploy
+  action: Run the canonical risk-based diagnostic and retention mutation matrix against temporary workflow/contract fixtures.
+  command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_actions_evidence.py::TestActionsEvidenceCounterfactuals -q
+  expected: Valid governed and ordinary fixtures pass; mutations for derived-inventory omissions, stale or unjustified selectors,
+    missing diagnostic code, critical-step identity, unreachable surface, broken composite delegation, S1 schema-link drift, confidentiality,
+    classification, retention-days, required classes, and unknown or out-of-bounds entries fail with stable diagnostics.
+  fix_if: Strengthen the contract parser or production validator; do not weaken a fixture, expand retention bounds, or impose conventions
+    on unselected ordinary jobs merely to obtain a pass.
+  hermetic: true
+  graduation: graduate
+  graduation_check_id: actions-evidence-governance
+- step: 2
+  phase: pre-deploy
+  action: Run the full focused validator suite, including delayed-RCA state transitions and exact real-upload enumeration.
+  command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_actions_evidence.py -q
+  expected: Pass/fail fixtures cover all four classes, one-day and fourteen-day valid examples, below/above-bound failures, ordinary
+    low-risk validity, every real upload, and available then expired/unrecoverable evidence without network or clock nondeterminism.
+  fix_if: Correct the validator, contract, or workflow classification. Do not delete negative tests or extend retention beyond a purpose
+    class maximum.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: The focused suite is standing coverage; step 1 graduates the canonical property matrix rather than duplicating
+    each boundary example in the registry.
+- step: 3
+  phase: pre-deploy
+  action: Run existing CI workflow and guard suites to prove the new contract does not weaken bounded CI-RCA, false-green, annotation,
+    reconcile routing, or workflow safety behavior.
+  command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_ci_workflow_guards.py tests/verify_ci_workflow/test_ci_rca_and_canary.py
+    tests/verify_ci_workflow/test_apply_and_terraform.py tests/test_check_workflow_agent_safety.py -q
+  expected: Existing workflow guards and mutations pass unchanged alongside the new evidence-governance validator.
+  fix_if: Repair additive integration with existing guards; do not replace or bypass existing annotations, summaries, typed evidence,
+    or false-green assertions.
+  hermetic: true
+  graduation: waive
+  graduation_waiver_reason: These are existing standing regression suites; graduation belongs to the new canonical property in step 1.
+- step: 4
+  phase: pre-deploy
+  action: Run focused lint and fast presubmit on the working tree before commit. After the implementation commit, rerun this literal
+    command so VP replay observes feat(actions-diagnostic-governance); both executions are blocking.
+  command: bin/venv-python -m ruff check scripts/checks/ci_guards/validate_actions_evidence.py tests/checks/ci_guards/test_validate_actions_evidence.py
+    scripts/checks/registry.py scripts/validate.py && bin/venv-python -m scripts.validate --pre
+  expected: Ruff and validate --pre exit zero; registry dispatch, plan replay, graduation completeness, workflow guards, contract checks,
+    and the exact graduated pytest node all pass on the committed tree.
+  fix_if: Fix production code, tests, contract, plan, or registry. Never run readiness validation only before the feat commit exists,
+    and do not report a nonzero validator as passing because constituent tests passed.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: Aggregate lint and presubmit are orchestration gates whose constituent properties are already registered.
+- step: 5
+  phase: pre-deploy
+  action: Run literal full validation on the working tree before commit as required by handoff policy, then rerun it after the implementation
+    commit and retain both exit statuses as blocking release evidence.
+  command: bin/venv-python -m scripts.validate
+  expected: Exit zero, including 100 percent changed-source per-file coverage for every changed Python source, full pytest, contract,
+    workflow, verification-registry, and pre-commit checks. A passing aggregate pytest threshold does not substitute for this result.
+  fix_if: Stop before push or PR. Add behavior-relevant tests for uncovered changed-source branches or correct other failures; do not
+    waive coverage, lower thresholds, or describe a red validator as unrelated.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: The full validator is the repository-wide post-merge gate and cannot be represented by one registry row.
+- step: 6
+  phase: post-deploy
+  action: Read-only inspect representative runs for every artifact-uploading workflow after CI succeeds. Query the artifacts endpoint
+    and calculate retention from created_at/expires_at against class bounds without downloading confidential evidence.
+  command: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[] | [.name,.created_at,.expires_at,.expired]
+    | @tsv'
+  expected: Representative runs cover ci.yml, main-canary.yml, and reconcile.yml when each has produced an artifact; every created_at/expires_at
+    interval falls within class minimum and maximum and expired agrees with time. Empty classes are reported as contract-only, not fabricated;
+    governed surfaces are corroborated by run/job metadata plus deterministic reachability tests.
+  fix_if: If GitHub behavior contradicts the contract, keep GAL-02/GAL-04 open and revise. If credentials or a representative run are
+    unavailable, record degraded live evidence without overriding deterministic and CI gates.
+  hermetic: false
+  graduation: waive
+  graduation_waiver_reason: GitHub run metadata is nondeterministic and credential-dependent; it is corroborating V2 evidence, not a
+    stable registry check.
+rollback: 'If the validator misclassifies ordinary workflows, omits an upload, allows a governed path without decisive evidence, or
+  forces retention that conflicts with operational purpose, revert the implementation commit as one unit. Restore workflow YAML and
+  remove the new contract, validator, registry dispatch, tests, and verification row while preserving Wave 1 bounded CI-RCA behavior.
+  Re-plan selectors or bounds from observed evidence rather than disabling failures. Validate the revert with existing workflow guards
+  and confirm no orphaned registry or dispatch entry remains. Missing or unknown classification, invalid retention, and missing governed
+  diagnostics fail closed; expired evidence returns a named unavailable state plus recovery guidance, never a false-green complete
+  state. Live inspection may degrade, but deterministic fixtures, authoritative validation, and PR CI are never waived.'
+context:
+- Decision 55 - fail loudly; deterministic degraded behavior cannot mask missing evidence.
+- Decision 72 - CI-RCA failures are durable plan sources, so delayed diagnostic availability is an operational property.
+- Decision 73 - scripts.validate is the authoritative two-tier CI gate; workflow-only enforcement is insufficient.
+- Decision 83 - public repository protection and security evidence must remain non-wedging and confidentiality-safe.
+- Decision 86 - field semantics belong in the owning machine-readable contract, not a companion prose architecture document.
+- Decision 101 - evidence metadata must not publish confidential identifiers, credentials, or internal attack surfaces.
+- Decision 126 - governed deploy/reconcile triggers and human gates are preserved; this plan performs no apply or deployment.
+- Decision 128 - decompose any changed Python file that would exceed its SLOC budget; do not raise the budget silently.
+- Decision 131 - tests mirror the owning scripts/checks/ci_guards package and do not cross-import other tests.
+- 'current_state: Wave 1 is merged at 63868b5 and supplies the bounded ci-rca-log-evidence/v1 retrieval envelope. Current artifact uploads
+    are selection-manifest and pytest-junit in ci.yml at fourteen days, pytest-junit in main-canary.yml at fourteen days, and reconcile-fresh-plan
+    in reconcile.yml at one day. No shared contract classifies these purposes or enforces bounds, and no general risk-selected diagnostic
+    contract exists.'
+- 'selected_inventory: deploy-ducklake-lambdas.yml jobs deploy-maintenance, maintenance-smoke, reconcile-gate, deploy-serving, smoke;
+  deploy-prod-lambdas.yml jobs deploy, smoke; terraform-apply-sandbox.yml jobs apply-sandbox, speculative-plan, advisory-status, gated-apply;
+  rec-autoclose.yml job autoclose; ci.yml jobs pr-validate, main-validate, terraform-validate, signal-green; main-canary.yml job canary;
+  reconcile.yml jobs resolve-target, apply-reconcile, gated-apply-reconcile. Recursively selected local composites are materialise-tfvars,
+  terraform-init-retry, fetch-saved-plan, deterministic-guard, subagent-plan-review, write-convergence-record, and build-ducklake-artifacts.
+  Contract exclusions are bounded to `ordinary_low_risk`, `platform_signal_only`, and `no_failure_evidence_role`, each requiring a nonempty
+  rationale and an existing workflow/job target; exclusions cannot hide a deploy-path or CI-RCA producer job.'
+- 'derivation_rules: Contract inventory is the machine-readable authority. Validator cross-checks exact top-level workflow `name` to
+  path uniqueness, exact selected job-key existence, ci-rca.yml `on.workflow_run.workflows` display-name membership, deploy-channel workflow
+  paths named by the contract and deploy-path anchors, and recursive local composite uses edges. It derives actual selected tuples and
+  asserts equality with contract inclusions plus bounded exclusions, so deleting or renaming a job/action, adding an unclassified job
+  to an owned workflow, changing a CI-RCA producer, or adding/removing a local composite edge makes the stale/missing selector fixtures meaningful.'
+- 'scope_boundary: This plan does not standardize all workflow names or steps, alter deployment or Terraform apply behavior, add a second
+    narrative policy document, lengthen retention beyond purpose maxima, or implement the GAL-03 Decision citation correction.'
+constraints:
+- Do not add cosmetic global workflow uniformity; enforcement applies only to contract-selected governed and agent-consumed jobs.
+- Do not self-direct Terraform apply, deploy production code, publish confidential metadata, or broaden artifact retention to satisfy validation.
+- Keep class semantics and enforcement selectors collocated in one machine-readable contract; do not create a prose companion.
+- Any changed Python source must reach the repository's 100 percent changed-file coverage gate without threshold waivers.
+execution_steps:
+- Create the contract with four retention classes, diagnostic-envelope classes, governed selectors, and the exact current upload inventory.
+- Implement the validator and register it in both authoritative validate tiers before relying on workflow declarations.
+- Add hermetic pass/fail fixtures and the graduated counterfactual, then minimally align only classified workflows.
+- Run literal steps 1 through 5 before commit and stop on any nonzero exit; after commit, rerun the authoritative validators so VP replay
+  observes the feat commit before any push or PR readiness claim.
+- Open the PR only after local gates pass; use PR CI and read-only post-deploy inspection as final evidence.
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked

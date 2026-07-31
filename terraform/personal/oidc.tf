@@ -353,6 +353,29 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-broker-*",
     ]
   }
+
+  statement {
+    # PLANNER-SIDE MIRROR of the apply role's SecretsManagerMetadataRead
+    # (terraform/bootstrap/github_ci_apply.tf). Without it the one-PR autonomy claim fails
+    # asymmetrically: a PR adding a new agent-platform-* secret would be write- and read-covered on
+    # the apply role but NOT on this plan-capable role, so the speculative plan (and the hourly
+    # drift plan) would AccessDeny on the new secret's DescribeSecret while the merge-time apply
+    # succeeded -- the per-secret Sids above each cover exactly one existing ARN and cover nothing
+    # new. The prefix closes that gap for every future agent-platform-* secret with no further
+    # grant edit (the rec-2702 resource-axis anti-recurrence).
+    # Value-free BY CONSTRUCTION and therefore NOT a widening of Decision 129 pt 2: within Secrets
+    # Manager only GetSecretValue returns secret material (AWS named the batch form
+    # BatchGetSecretValue, outside the Get* metadata pattern), so Describe*/List*/GetResourcePolicy
+    # cannot read a value. This role's value-capable reads stay in the enumerated per-secret Sids
+    # above -- deliberately NOT restated here. hashicorp/aws v5.100.0 grounding:
+    # aws_secretsmanager_secret refreshes with DescribeSecret + GetResourcePolicy only.
+    sid     = "SecretsManagerMetadataRead"
+    effect  = "Allow"
+    actions = ["secretsmanager:Describe*", "secretsmanager:List*", "secretsmanager:GetResourcePolicy"]
+    resources = [
+      "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-*",
+    ]
+  }
 }
 
 # ---------------------------------------------------------------------------

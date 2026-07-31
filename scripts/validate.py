@@ -61,6 +61,7 @@ from scripts.checks._scaffolding import (  # noqa: F401,E402
 )
 
 # --- Facade re-exports: every extracted check (getattr + `from scripts.validate import X`) ---
+from scripts.checks.ci_guards.validate_actions_evidence import validate_actions_evidence  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_ci_rca_taxonomy import validate_ci_rca_taxonomy  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_ci_rca_trigger import validate_ci_rca_trigger  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_ci_workflow_guards import validate_ci_workflow_guards  # noqa: F401,E402
@@ -142,6 +143,7 @@ from scripts.checks.iam_tf.validate_convergence_writer_isolation import (  # noq
     validate_convergence_writer_isolation,
 )
 from scripts.checks.iam_tf.validate_environment_taxonomy import validate_environment_taxonomy  # noqa: F401,E402
+from scripts.checks.iam_tf.validate_iam_policy_size import validate_iam_policy_size  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_iam_runner_policy import validate_iam_runner_policy  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_invoke_implies_resolve import (  # noqa: F401,E402
     validate_invoke_implies_resolve,
@@ -155,6 +157,7 @@ from scripts.checks.lambda_pkg.validate_lambda_manifest_coverage import (  # noq
     validate_lambda_manifest_coverage,
 )
 from scripts.checks.lambda_pkg.validate_lambda_manifests import validate_lambda_manifests  # noqa: F401,E402
+from scripts.checks.misc.coverage_baseline import validate_coverage_baseline_edits  # noqa: F401,E402
 from scripts.checks.misc.validate_ducklake_version_lockstep import (  # noqa: F401,E402
     validate_ducklake_version_lockstep,
 )
@@ -504,7 +507,7 @@ def main() -> None:
 
         def _scaffold_budget_assertion() -> None:
             elapsed = time.monotonic() - _t0
-            dominant_phase = max(phase_times, key=phase_times.get) if phase_times else None
+            dominant_phase = max(phase_times, key=lambda phase: phase_times[phase]) if phase_times else None
             if args.ignore_budget:
                 _file_budget_bypass_rec(elapsed, diff_manifest, args.ignore_budget_reason)
                 print(f"\nBudget assertion skipped (--ignore-budget). Elapsed: {elapsed / 60:.1f} min.")

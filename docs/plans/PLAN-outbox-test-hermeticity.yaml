@@ -1,0 +1,698 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "outbox-test-hermeticity"
+intent: >-
+  Close the test-hermeticity leak that lets the pytest suite write live records into the retired
+  logs/.ops-outbox/ops_recommendations/ directory, and give OpsWriter's outbox path a real injection
+  seam so the leak class cannot silently recur. Protects the warehouse-as-source-of-truth invariant
+  (a retired outbox must stay empty) and removes a recurring per-session triage tax on the
+  self-improvement loop.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-outbox-test-hermeticity.yaml
+phase: >-
+  Phase Platform -- operational data backbone hygiene (Decision 84 I-4 retired-outbox invariant).
+  No product-phase dependency. T2.26 is referenced as BACKGROUND ONLY (its met criterion c9 supplies
+  the retired-table set). closes_criteria is correctly empty: c2/c3/c8 are ops_session_log /
+  ops_compaction / telemetry scoped and untouched here. c7 ("Replacement closure verified: old paths
+  dead or designed-rollback-only, no unconditional fallbacks") IS in-territory -- the out-of-scope
+  finding in execution step 10(a), OpsWriter.drain() iterating TABLE_NAMES with no migrated-table
+  skip (scripts/ops_writer.py:683), sits squarely inside it -- but is DELIBERATELY DEFERRED to a
+  filed recommendation per the AGENTS.md out-of-scope rule, so this plan does not close c7 either.
+  No tier_item owns this work directly.
+scope:
+  - file: scripts/ops_writer.py
+    action: Modify
+    purpose: >-
+      Add module-level _OUTBOX_BASE constant and route both _write_to_outbox() and drain() through
+      it, replacing the hardcoded Path(__file__).parent.parent computation that has no test seam.
+      Must be NET-ZERO SLOC (file is at 569 of a 571 budget). LAMBDA-PACKAGED -- see
+      infrastructure_dependencies.
+  - file: scripts/sync/ops.py
+    action: Modify
+    purpose: >-
+      Promote _DUCKLAKE_MIGRATED_TABLES to a public DUCKLAKE_MIGRATED_TABLES so the two new
+      consumers do not reach across a private underscore from separate modules. Pure rename plus its
+      one internal use site (line 298); net-zero SLOC.
+  - file: tests/sync/ops/test_sync_cli.py
+    action: Modify
+    purpose: Update the one assertion (line 184) that references the constant by its old private name.
+  - file: tests/sync/ops/test_drain.py
+    action: Modify
+    purpose: >-
+      Update the docstring reference (line 157) to the constant's old private name. Docstring text
+      only -- no behavioural change. In scope because AGENTS.md forbids modifying files not listed here.
+  - file: tests/fixtures/outbox_guard.py
+    action: Create
+    purpose: >-
+      Pure, importable helper holding the snapshot/diff logic for the hermeticity guard, so the logic
+      is unit-testable without importing conftest. Consumes DUCKLAKE_MIGRATED_TABLES directly.
+  - file: tests/conftest.py
+    action: Modify
+    purpose: >-
+      Add the autouse hermeticity guard that fails any individual test which writes into the real
+      logs/.ops-outbox, and fails loudly on pre-existing retired-table files at session start.
+  - file: tests/ops_writer/test_outbox_emit.py
+    action: Modify
+    purpose: >-
+      Repair the three defective tests: the leaking .__func__ call, the two tautological assertions,
+      and the failure-swallow test whose Path patch stops being meaningful after the refactor.
+  - file: tests/test_outbox_hermeticity_guard.py
+    action: Create
+    purpose: Unit tests for the tests/fixtures/outbox_guard.py detection logic.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Carries the three graduated check rows (VP steps 2, 6, 11). The implement skill's bookkeeping
+      walk owns this write, but it is listed here so the edit is not an out-of-scope modification --
+      validate_graduation_completeness's implement-PR leg requires a new-in-diff row per graduate step.
+  - file: scripts/checks/ops_governance/validate_outbox_staleness.py
+    action: Modify
+    purpose: >-
+      PHASE 2 (separable). Hard-fail on any file in a retired-outbox dir regardless of age, keeping
+      the existing >24h warning-only behaviour for legacy staging dirs.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      PHASE 2 (separable). Register validate_outbox_staleness in pre_sequence() so the hardened
+      check blocks the PR rather than firing post-merge on main. One-line insertion only -- the
+      scripts/validate.py:177 facade re-export already exists.
+  - file: tests/checks/ops_governance/test_validate_outbox_staleness.py
+    action: Modify
+    purpose: PHASE 2 (separable). Cover the retired-vs-legacy split and the pre_sequence registration.
+bundled_recommendations:
+  - rec-2185
+  - rec-2697
+  - rec-2894
+infrastructure_dependencies:
+  - >-
+    scripts/ops_writer.py is Lambda-packaged. compute_affected_artifacts(['scripts/ops_writer.py'])
+    returns {'data-pipeline': [...], 'ops-compaction': [...]} and BOTH manifests are status: active.
+  - >-
+    .github/workflows/deploy-prod-lambdas.yml fires on push to main with 'scripts/ops_writer.py' in
+    its path filter, so merging this PR triggers a governed production Lambda code deploy plus its
+    post-deploy smoke gates. Per Decision 126 the agent must NOT run a break-glass
+    'build_lambda --deploy'; the CD channel is the sole routine path.
+acceptance_criteria:
+  - >-
+    Running the full pytest suite from a clean tree leaves logs/.ops-outbox empty (or absent) --
+    this is rec-2894's own acceptance command and currently FAILS with exactly one leaked file.
+  - >-
+    scripts/ops_writer.py exposes a single module-level _OUTBOX_BASE used by both _write_to_outbox()
+    and drain(); no remaining Path(__file__).parent.parent outbox computation exists in the module.
+  - >-
+    scripts/ops_writer.py SLOC is unchanged at exactly 569 against its existing 571 budget, with no
+    diff to config/sloc_budgets.yaml and no raise-approved marker added (Decision 128).
+  - >-
+    tests/ops_writer/test_outbox_emit.py no longer contains the self-writing "Fallback: write
+    directly" block or the hand-rolled fake_write_to_outbox duplicate of production logic; both
+    tests exercise the real OpsWriter._write_to_outbox against a patched _OUTBOX_BASE.
+  - >-
+    A test that writes into the real logs/.ops-outbox fails, and the failure message names both the
+    offending test id and the offending path, rather than leaking silently.
+  - >-
+    The retired-outbox table set is DUCKLAKE_MIGRATED_TABLES consumed verbatim from
+    scripts/sync/ops.py -- no subtraction, no locally-derived copy, one source of truth.
+  - >-
+    The governed Lambda CD channel (.github/workflows/deploy-prod-lambdas.yml) completes green for
+    the merge commit, and the prod deploy record's source_git_sha advances to that commit.
+  - >-
+    rec-2185, rec-2697 and rec-2894 all reach status closed after the merge, each with a resolution
+    worded as the landed fix (deterministic satisfaction), never as "duplicate".
+  - >-
+    PHASE 2 only -- validate_outbox_staleness hard-fails on a file in a retired-outbox dir at any
+    age, still only warns on a >24h legacy staging file, and is registered in both pre_sequence()
+    and full_sequence().
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the specific leaking test no longer writes to the real outbox (the empirically confirmed
+      root cause -- this exact command reproduces the defect on the pre-change tree).
+    command: >-
+      rm -rf logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans &&
+      bin/venv-python -m pytest tests/ops_writer/test_outbox_emit.py -q &&
+      test -z "$(find logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans -type f 2>/dev/null)"
+    expected: >-
+      pytest exits 0 (measured 14 passed in ~6s locally) and the find returns no files, so the step
+      exits 0. Only RETIRED dirs are deleted -- legacy staging dirs (telemetry, ops_session_log) may
+      hold legitimately-pending drain data and are never touched.
+      Marked hermetic: false for DEPENDENCY AVAILABILITY, not cost: tests/ops_writer/test_outbox_emit.py
+      line 15 imports boto3 at MODULE scope by design, so the fast tier's --collect-only probe defers
+      the file to the full tier. validate_vp_replay replays hermetic steps inside the venv-less
+      pr-validate job, which installs only requirements-fast.txt + requirements-dev.txt -- neither
+      contains boto3 -- so a hermetic marking would make pytest exit 2 at collection and fail the
+      authoritative --pre gate. The same invariant is covered CI-side by VP step 4 and permanently by
+      the conftest guard.
+    fix_if: >-
+      A .jsonl file appears under logs/.ops-outbox/ops_recommendations/. Means _write_to_outbox still
+      resolves the real repo root -- check that the test patches scripts.ops_writer._OUTBOX_BASE and
+      that _write_to_outbox reads the module global at call time rather than capturing it.
+      DIFFERENT SYMPTOM, DIFFERENT CAUSE: if pytest instead exits 2 with ModuleNotFoundError at
+      collection, that is the missing-boto3 fast-tier environment, NOT a correctness bug -- do not go
+      hunting for one. Re-run from a full-requirements venv.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The autouse conftest hermeticity guard added by this plan IS the permanent in-suite enforcement
+      of this exact invariant, running on every test rather than one file. A separate graduated
+      verifier row would duplicate it at higher cost and lower coverage.
+  - step: 2
+    phase: pre-deploy
+    action: Prove the guard's detection logic itself is correct via its unit tests.
+    command: bin/venv-python -m pytest tests/test_outbox_hermeticity_guard.py -q
+    expected: All tests pass, covering new-file detection, the retired-vs-legacy split, and the clean case.
+    fix_if: >-
+      A failure here means the guard would either miss real leaks or false-positive on legitimate
+      legacy staging files. Fix tests/fixtures/outbox_guard.py before wiring conftest.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: outbox_hermeticity_guard_detection
+
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove end-to-end that a leaking test actually fails under the guard AND that the failure names
+      the offending test and path, by planting a throwaway probe test that writes to the real outbox.
+    command: >-
+      printf 'from pathlib import Path\n\n\ndef test_probe_leak():\n    d = Path("logs/.ops-outbox/ops_recommendations")\n    d.mkdir(parents=True, exist_ok=True)\n    (d / "probe.jsonl").write_text("{}")\n'
+      > tests/test_zz_outbox_probe.py; bin/venv-python -m pytest tests/test_zz_outbox_probe.py -q > /tmp/probe.log 2>&1;
+      rc=$?; rm -f tests/test_zz_outbox_probe.py; rm -rf logs/.ops-outbox/ops_recommendations;
+      test "$rc" -ne 0 && grep -q "test_probe_leak" /tmp/probe.log && grep -q "ops_recommendations" /tmp/probe.log
+    expected: >-
+      pytest exits non-zero (the probe is failed by the guard) AND the captured output names both
+      test_probe_leak and the ops_recommendations path, so the step exits 0. The probe file and the
+      outbox are removed either way.
+    fix_if: >-
+      If rc is 0 the guard is not wired into the autouse path -- confirm the fixture in
+      tests/conftest.py is @pytest.fixture(autouse=True) and that its check runs in teardown (after
+      the yield), not only at setup. If rc is non-zero but a grep fails, the failure message is not
+      attributing the leak -- include the test id and the offending path in the message.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step plants and deletes a throwaway test file in tests/, which is inherently non-idempotent
+      and unsafe to run as a standing registry check on every validate invocation. Its invariant is
+      permanently covered by the conftest guard itself; this step exists only to prove the guard is
+      wired at implement time.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run rec-2894's own acceptance command -- the full suite from a clean tree, asserting the real
+      outbox stays empty. This is the authoritative proof for all three bundled recs.
+    command: >-
+      rm -rf logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans &&
+      bin/venv-python -m pytest tests/ -q &&
+      test -z "$(find logs/.ops-outbox/ops_recommendations logs/.ops-outbox/ops_decisions
+      logs/.ops-outbox/ops_priority_queue logs/.ops-outbox/ops_execution_plans -type f 2>/dev/null)"
+    expected: >-
+      All tests pass (baseline before this change is 7505 passed / 13 skipped in ~12m39s) and the
+      retired dirs are empty. Runtime must stay well inside the Decision 153 forced-run ceiling of
+      1500s. Legacy staging dirs are never deleted -- they may hold pending drain data.
+    fix_if: >-
+      If a test other than the known one fails the guard, that is a second leaker this plan has now
+      exposed -- fix it in scope if it is an outbox-path defect, otherwise file a rec (AGENTS.md
+      out-of-scope rule) rather than weakening the guard.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A full-suite run is the fast-tier gate's own job (VP step 8 / validate --pre); graduating a
+      registry check that re-runs all 7518 tests would duplicate the gate at ~13 minutes per call.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      CONSTRAINT REGRESSION GUARD (passes before the change too -- it asserts an invariant is
+      preserved, not that a feature landed). Prove the ops_writer.py edit is exactly net-zero SLOC and
+      did not consume the 2-line headroom or trigger a Decision 128 budget raise.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; ls = Path('scripts/ops_writer.py').read_text().splitlines();
+      s = len([l for l in ls if l.strip() and not l.strip().startswith('#')]);
+      assert s == 569, f'SLOC {s} != expected 569'; print('ops_writer SLOC', s)" &&
+      test -z "$(git diff origin/main -- config/sloc_budgets.yaml)"
+    expected: >-
+      Prints "ops_writer SLOC 569" (the counting formula is identical to
+      scripts/checks/sloc/sloc_limits.py: non-blank lines not starting with #) and
+      config/sloc_budgets.yaml carries no diff at all, so the step exits 0.
+    fix_if: >-
+      If SLOC rose, do NOT raise the budget. Recover the line by deleting drain()'s local
+      outbox_base assignment and referencing _OUTBOX_BASE at both of its use sites. Blank lines and
+      full-line comments are free under this formula, so explanatory comments cost nothing. If it
+      still does not fit, decompose per Decision 128 rather than adding a raise-approved marker.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_sloc_limits plus validate_sloc_budget_raises already enforce this invariant repo-wide
+      in the --pre tier; a graduated per-file check for ops_writer.py alone would be a narrower
+      duplicate of an existing standing gate.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      PHASE 2 only. Prove the hardened check hard-fails on a planted retired-table file at any age
+      and still passes on a clean tree.
+    command: bin/venv-python -m pytest tests/checks/ops_governance/test_validate_outbox_staleness.py -q
+    expected: >-
+      Tests pass, covering: a fresh file in a retired dir fails; a fresh file in a legacy staging dir
+      does not fail; a >24h legacy file warns without failing; a clean tree passes.
+    fix_if: >-
+      If a legacy staging case hard-fails, the retired set has been over-applied -- it must be
+      DUCKLAKE_MIGRATED_TABLES plus the *_pending suffix rule and nothing more. Do NOT resolve a
+      failure by narrowing the retired set to make a leak tolerable (Decision 149 / Decision 55).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: validate_outbox_staleness_retired_dirs
+    # Implement-time note: the registry check_spec must target a NEW test node id, not the whole
+    # file -- run_differential reverts to origin/main where this file already exists and its 3
+    # current tests pass, so a whole-file test_selector would be rejected as tautological.
+  - step: 7
+    phase: pre-deploy
+    action: PHASE 2 only. Prove the hardened check is registered in both presubmit tiers.
+    command: >-
+      bin/venv-python -c "from scripts.checks.registry import pre_sequence, full_sequence;
+      names_pre = {s.name for s in pre_sequence()}; names_full = {s.name for s in full_sequence()};
+      assert 'validate_outbox_staleness' in names_pre, 'missing from pre_sequence';
+      assert 'validate_outbox_staleness' in names_full, 'missing from full_sequence'; print('registered in both tiers')"
+    expected: Prints "registered in both tiers" and exits 0.
+    fix_if: >-
+      A missing pre_sequence entry means the hardened check only fires post-merge on main, which per
+      Decision 73 files a critical ci_rca rec and blocks the planning queue -- the inverse of the
+      intended placement. Add the _c(...) entry to pre_sequence().
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Execution step 8 already lands this exact registration assertion as a committed test case in
+      tests/checks/ops_governance/test_validate_outbox_staleness.py, which the standing suite runs
+      every time; a graduated registry row would re-assert the same membership fact.
+  - step: 8
+    phase: pre-deploy
+    action: Run the authoritative fast-tier presubmit gate over the whole change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0. Note per Decision 135 that touching the root tests/conftest.py deterministically forces
+      FULL-suite scope, so this run selects ~6930+ tests and takes ~13-20 minutes.
+    fix_if: >-
+      A budget warning on the forced full run is expected and passes per Decision 153; only a hard
+      failure above the 1500s ceiling is a real failure. Any check failure must be fixed forward,
+      never by adding --ignore-budget.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The fast-tier gate IS the standing enforcement surface; a registry row that re-invokes
+      scripts.validate --pre would be self-referential (the gate calling itself) and costs 13-20
+      minutes per invocation. Kernel-expressible in principle, un-graduatable in practice.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Confirm the governed Lambda CD channel deployed the ops_writer.py change to production and its
+      post-deploy smoke gates passed. Decision 126 -- observe the channel, never run a break-glass
+      build_lambda --deploy.
+    command: >-
+      git fetch origin main -q && bin/venv-python -c "import json, subprocess;
+      sha = subprocess.run(['git','rev-parse','origin/main'], capture_output=True, text=True).stdout.strip();
+      fns = ['agent-platform-ops-compaction', 'agent-platform-findings-processor', 'agent-platform-scheduled-agent-dispatcher'];
+      bad = [];
+      [bad.append((f, json.loads(subprocess.run(['aws','s3','cp',f's3://agent-platform-data-lake/deploy-records/prod/{f}.json','-','--region','eu-west-2','--profile','agent_platform'], capture_output=True, text=True).stdout).get('source_git_sha'))) for f in fns];
+      stale = [(f, s) for f, s in bad if s != sha];
+      assert not stale, f'deploy records not at merged sha {sha}: {stale}';
+      print('all deploy records at merged sha', sha)"
+    expected: >-
+      Prints "all deploy records at merged sha <sha>" for the merge commit, proving the deploy job
+      ran for this commit rather than reporting a stale or skipped no-op (the workflow's own
+      false-green guard, Decision 55). The leading git fetch is REQUIRED -- the squash-merge happens
+      server-side via merge_pull_request, so the local origin/main ref is stale without it and the
+      assertion would compare against the pre-merge SHA and fail spuriously.
+    fix_if: >-
+      A mismatch means the deploy did not run for this commit or was skipped. Check the
+      deploy-prod-lambdas run for the merge SHA; do NOT paper over it with a local
+      build_lambda --deploy, which is break-glass-only per Decision 126.
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Verify the closure obligation -- all three bundled recommendations actually reached closed
+      state via the Resolves: trailer and rec-autoclose.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync &&
+      bin/venv-python -c "import json;
+      rows = [json.loads(l) for l in open('logs/.recommendations-log.jsonl')];
+      by_id = {r['id']: r for r in rows};
+      bad = [i for i in ('rec-2185','rec-2697','rec-2894') if by_id.get(i, {}).get('status') != 'closed'];
+      assert not bad, f'not closed: {bad}'; print('all three recs closed')"
+    expected: Prints "all three recs closed" and exits 0.
+    fix_if: >-
+      If any rec is still open, rec-autoclose did not fire -- close it manually with the portal
+      fallback (ops_data_portal --update-rec <id> --status closed --resolution "..."), wording the
+      resolution as the landed fix, never as "duplicate" (Decision 103).
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Prove acceptance criterion 4 -- that the two tautological constructs are actually GONE. No
+      other step covers this: both write to tmp_path, so VP step 1 still passes if they survive.
+    command: >-
+      test "$(grep -c -e 'Fallback: write directly' -e 'fake_write_to_outbox' -e '__func__'
+      tests/ops_writer/test_outbox_emit.py)" -eq 0
+    expected: >-
+      grep -c returns 0 for all three markers (the self-writing fallback block, the hand-rolled
+      production-logic duplicate, and the instance-patch-bypassing .__func__ call), so the step
+      exits 0.
+    fix_if: >-
+      A non-zero count means a tautological construct survived the rewrite. Delete it -- do not
+      rename it to dodge the grep. The rewritten tests must call the real
+      OpsWriter._write_to_outbox against a patched _OUTBOX_BASE.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: outbox_emit_tautology_removed
+constraints:
+  - >-
+    scripts/ops_writer.py is at 569 SLOC against a 571 budget, and 571 is ALREADY a raise above the
+    500 default. Per Decision 128 the change must be exactly net-zero and must NOT add a
+    raise-approved marker to config/sloc_budgets.yaml. Blank lines and full-line comments are free
+    under the counting formula, so explanatory comments cost nothing.
+  - >-
+    The retired-outbox set is DUCKLAKE_MIGRATED_TABLES consumed VERBATIM from scripts/sync/ops.py
+    (ops_recommendations, ops_decisions, ops_priority_queue, ops_execution_plans) plus any *_pending
+    dir. Do NOT subtract ops_execution_plans: T2.26 c9 is met (met_by
+    t2-26-migrate-ops-execution-plans) and scripts/ops_writer.py:76-80 already documents it as
+    EXCLUDED because it transits the DuckLake closed boundary, with no Iceberg staging path
+    surviving. AGENTS.md's "ops_execution_plans = Athena, pending T2.26 disposition" line is stale
+    prose superseded by shipped work -- do not encode it into new code.
+  - >-
+    Both new consumers (tests/fixtures/outbox_guard.py and, in Phase 2,
+    scripts/checks/ops_governance/validate_outbox_staleness.py) import DUCKLAKE_MIGRATED_TABLES
+    directly from scripts.sync.ops. Neither owns a derived copy, and the check module must NEVER
+    import from tests/ -- production importing test code is an architectural inversion no current
+    check would catch, and tests/ is outside the Lambda bundle paths.
+  - >-
+    tests/conftest.py is 299 lines and unregistered in config/sloc_budgets.yaml; the guard must keep
+    it under 500 so no budget registration is needed (Decision 130).
+  - >-
+    The guard's outbox base must be an ABSOLUTE path computed once from the repo root. A relative
+    path silently watches the wrong tree under any test that monkeypatch.chdir()s, producing false
+    negatives.
+  - >-
+    The guard must short-circuit when logs/.ops-outbox does not exist (a single exists() syscall)
+    rather than performing an unconditional rglob over logs/, so the per-test cost across 7518 tests
+    stays negligible.
+  - >-
+    XDIST ATTRIBUTION LIMIT. Both presubmit tiers run pytest with -n auto
+    (scripts/checks/_scaffolding.py:52-54), so all workers share ONE repo working directory. A
+    snapshot-before / diff-in-teardown guard can therefore observe a file leaked by worker A while
+    tearing down a test on worker B, and two workers' cleanup can race. The guard must NOT
+    over-claim attribution: word the failure as "a test in this session leaked <path>; the reporting
+    test is <id> and may not be the writer under -n auto", or narrow the diff to files the worker can
+    actually attribute. Acceptance criterion 5's "names the test id" is satisfied by naming the
+    REPORTING test plus the path, not by guaranteeing the writer. VP step 3 runs serially and will
+    not surface this; VP step 8 and post-merge CI will.
+  - >-
+    Per tests/CLAUDE.md, shared test helpers live in tests/fixtures/ (exempt from the
+    cross-test-import guard because its names never start with test_). Do not import the guard logic
+    from one test_* module into another.
+  - >-
+    The guard belongs in the ROOT tests/conftest.py, not a sub-package conftest -- Decision 131 cl.3
+    places repo-wide guards there alongside the existing recursion and socket guards.
+  - >-
+    Per Decision 104, the rewritten tests must not introduce exact-count assertions against a
+    curated collection without a "# count-coupling-ok:" waiver.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Do not weaken or delete the guard to make a failing test pass, and do not narrow the retired set
+    to make a leak tolerable. A test that legitimately needs an outbox must point at tmp_path.
+  - >-
+    Decision 126: the agent must not run build_lambda --deploy. The governed CD channel
+    (.github/workflows/deploy-prod-lambdas.yml) is the sole routine deploy path for this change.
+context:
+  - >-
+    ROOT CAUSE, empirically confirmed this session (not as diagnosed in rec-2894). With
+    logs/.ops-outbox deleted, running ONLY
+    tests/ops_writer/test_outbox_emit.py::TestOpsWriterOutbox::test_write_to_outbox_directly
+    reproduces the exact artifact: logs/.ops-outbox/ops_recommendations/<uuid>.jsonl containing
+    {"id": "rec-002", "title": "test"}. A full-suite run (7505 passed, 13 skipped, 759s) produced
+    exactly ONE leaked file, so this test is the sole leaker across all 7518 tests.
+  - >-
+    rec-2894's stated attribution is WRONG and must not be trusted by the implementer. It asserts
+    "tests/ops_writer/test_outbox_emit.py itself DOES isolate correctly (uses tmp_path throughout),
+    so the culprit is a different test". The culprit is that very file.
+  - >-
+    MECHANISM. tests/ops_writer/test_outbox_emit.py:78-87 wraps the call in
+    patch("scripts.ops_writer.Path") whose side_effect returns real pathlib.Path objects, making the
+    patch a no-op, then calls writer._write_to_outbox.__func__(writer, table, entry) to deliberately
+    bypass instance-level patching. OpsWriter._write_to_outbox (scripts/ops_writer.py:277) then
+    computes Path(__file__).parent.parent / "logs" / ".ops-outbox" / table -- the real repo root.
+  - >-
+    WHY IT STAYED GREEN. Lines 89-93 ("Fallback: write directly to verify the logic shape") write the
+    assertion's target file by hand into tmp_path, so the assertion passes regardless of what the
+    production method did. The test provides ZERO coverage of the code it names. Its sibling
+    test_s3_failure_writes_to_outbox has the same defect in another shape -- it replaces
+    _write_to_outbox with a hand-rolled fake that re-implements production logic, then asserts on the
+    fake's output.
+  - >-
+    WHY NO GUARD CAUGHT IT. OpsWriter has two guards that make outbox writes impossible from a test --
+    write() rejects ops_recommendations at line 236 (Decision 81 cl.7 closed boundary) and
+    _is_test_env() no-ops everything under PYTEST_CURRENT_TEST (line 194/249) -- but _write_to_outbox
+    has NEITHER, and calling it directly bypasses both. The artifacts are gitignored
+    (.gitignore:140) so git and CI never see them, and validate_outbox_staleness is warning-only and
+    >24h-gated while CI runs on a fresh clone whose files are always minutes old.
+  - >-
+    DELIBERATE OMISSION, stated for the reviewer. This plan does NOT add the missing _is_test_env()
+    early-return to _write_to_outbox alongside its two siblings. Reasons: (a) the conftest guard is
+    strictly broader -- it catches leaks from any source, not just OpsWriter; (b) the production
+    guard would cost +2 SLOC, landing scripts/ops_writer.py at exactly 571 -- WITHIN its
+    already-raised budget, not over it, so this is not a gate violation -- but at zero headroom,
+    which per Decision 128 is the signal that this 746-line complexity-waiver-carrying file wants
+    DECOMPOSITION, not another net-zero-threaded edit.
+    Decomposition is out of scope here; execution step 10 files it as a recommendation.
+  - >-
+    THIRD FILING of one defect: rec-2185 (2026-06-11), rec-2697 (2026-07-14), rec-2894 (2026-07-30).
+    rec-2697 diagnosed it correctly -- named the file, the payload, and the fix -- and still did not
+    land. Three sessions have paid discovery cost.
+  - >-
+    IMPACT is worse than rec-2894's "preflight triage cost" framing. rec-2697 records the escalation:
+    once files pass 24h, OutboxHealthVerifier (scripts/verifiers/outbox_health.py) flips ADVISORY to
+    HARD_GATE and fails local FULL validate for reasons unrelated to any code change -- observed with
+    8 stale files during the RS-01 session.
+  - >-
+    Decision 70 angle: rec-002 is one of five hollow bootstrap records physically deleted 2026-05-09.
+    The leak re-materialises a purged record id inside an outbox Decision 84 I-4 retired -- the
+    resurrection shape AGENTS.md warns about, harmless today only because nothing drains that dir.
+  - >-
+    SEAM PRECEDENT: scripts/sync/ops.py:40 already uses a module-level _OUTBOX_DIR constant patched
+    by tests/sync/ops/test_drain.py. This plan applies the same pattern to ops_writer. Note
+    ops_writer currently computes the same path twice -- via Path(__file__) at line 280 and via ROOT
+    at line 670 -- so consolidating is also a duplication fix and is what makes net-zero SLOC possible.
+  - >-
+    GOTCHA: tests/ops_writer/test_outbox_emit.py:154-161 (test_write_to_outbox_failure_is_swallowed)
+    relies on patch("scripts.ops_writer.Path", side_effect=Exception). After the refactor
+    _write_to_outbox no longer calls the Path() constructor (_OUTBOX_BASE / table uses __truediv__),
+    so that test would silently stop exercising the failure path and become a false pass. Re-point it
+    at a genuinely unwritable _OUTBOX_BASE -- an existing FILE, so mkdir(parents=True) raises
+    NotADirectoryError for real with no mocking.
+  - >-
+    PHASE 2 LATENT-WEDGE PRECONDITION: OpsWriter.write() rejects only ops_recommendations, so an
+    ops_decisions S3 failure OUTSIDE pytest would still land a file in logs/.ops-outbox/ops_decisions/
+    and the hardened check would then hard-fail every subsequent --pre for that developer. In
+    practice scripts/ops_portal/decisions.py routes decisions through _ducklake_write so the OpsWriter
+    path should be unreachable -- ASSERT that with a grep for live OpsWriter.write("ops_decisions",
+    ...) callers before hardening. CI is unaffected (fresh clone, no outbox).
+  - >-
+    THREE OUTBOX-HEALTH SURFACES, deliberately not unified here. After this plan there are three
+    enforcement points with three thresholds: the new conftest guard (per-test, zero tolerance),
+    validate_outbox_staleness (>24h warn; Phase 2 makes it zero-tolerance for retired dirs), and
+    scripts/verifiers/outbox_health.py (>2h ADVISORY / >24h HARD_GATE). Only the first two are made
+    to consume DUCKLAKE_MIGRATED_TABLES; the verifier keeps its own thresholds and its covers list
+    still points at the pre-RS-01 path scripts/sync_ops.py. Unifying them is out of scope --
+    execution step 10 files it.
+  - >-
+    VP REPLAY BUDGET (Decision 148 / VF-01). validate_vp_replay runs in the --pre tier and replays
+    every pre-deploy AND hermetic:true step with PER_STEP_TIMEOUT_SECONDS=30,
+    MAX_AGGREGATE_SECONDS=120, MAX_REPLAYED_STEPS=20, treating TimeoutExpired as an unconditional
+    divergence. TWO independent reasons force hermetic:false. (i) COST/SAFETY -- step 4 is the 759s
+    full suite, step 8 is the 13-20min validate --pre (which the planning skill separately forbids
+    marking hermetic, for recursion), and step 3 mutates the working tree by planting a throwaway
+    test file. (ii) DEPENDENCY AVAILABILITY -- vp_replay executes hermetic steps inside the venv-less
+    pr-validate job, which installs ONLY requirements-fast.txt + requirements-dev.txt, and neither
+    contains boto3. Step 1 shells tests/ops_writer/test_outbox_emit.py, whose line 15 imports boto3 at
+    module scope BY DESIGN so the fast tier defers the file; replaying it there exits 2 at collection.
+    Step 1 is therefore hermetic:false too. A local timing check cannot catch this -- the dev .venv
+    installs full requirements.txt. The remaining hermetic steps (2, 5, 6, 7, 11) were checked to be
+    dependency-light: scripts/sync/ops.py is stdlib-only at module scope (boto3 is lazy-imported
+    inside drain()), so tests/fixtures/outbox_guard.py and the Phase 2 check import it safely under
+    requirements-fast.txt; steps 5/7/11 use only pathlib, git and grep. Timed at step 6 ~2s and
+    steps 2/5/7/11 ~1-3s each, far inside the 120s aggregate cap.
+  - >-
+    Decision-scout verdict FLAGS_FOUND (108 of 108 decisions triaged). CITE list, verbatim ids:
+    Decision 84 (I-4, governing clause), Decision 104, Decision 135, Decision 153, Decision 131,
+    Decision 132, Decision 55. RELATED: Decision 70, Decision 73, Decision 148, Decision 130,
+    Decision 81 cl.7. Added at critique round 1: Decision 126 / Decision 79 (Lambda CD channel),
+    T2.26 c9 (met).
+  - >-
+    Scout flag A resolved (Decision 103, WARN, human-approved): Decision 103 forbids closing on a
+    semantic verdict (duplicate/superseded) via a direct close, and the Resolves: trailer IS a direct
+    close. All three recs therefore close on DETERMINISTIC SATISFACTION -- one fix genuinely
+    satisfies all three acceptance commands and the merge is the proof. Each resolution must be
+    worded as the landed fix (e.g. "fixed by the _OUTBOX_BASE seam plus the conftest hermeticity
+    guard"), NEVER as "duplicate". NOTE for rec-2185 specifically: its stored acceptance command
+    ("pytest tests/test_sync_ops.py -q && test ! -d logs/.ops-outbox") is doubly stale -- that test
+    path moved to tests/sync/ops/ and "test ! -d" demands the directory be ABSENT, stricter than this
+    plan's "empty or absent". Do not re-run it verbatim; word the resolution to say the stale
+    acceptance was superseded by the landed guard.
+  - >-
+    Scout flag B resolved (Decision 149, WARN, human-approved): a plain session-start snapshot would
+    absorb any already-leaked file into an uncommitted, per-machine baseline -- silent tolerance of
+    undisposed divergence. Split instead: pre-existing files in RETIRED-table dirs fail loudly at
+    session start (never legitimate); pre-existing files in LEGACY staging dirs may be baselined
+    (they can be genuinely pending drain). The session-start failure message MUST name the offending
+    paths and give the exact rm remediation, or a developer with pre-fix leftovers (rec-2697 records
+    8 such files) cannot run any test at all.
+  - >-
+    Scout flag C (Decision 62, NOTE): validate_outbox_staleness lives in full_sequence() only, so a
+    hardened hard-fail would land post-merge on main and, per Decision 73, file a critical ci_rca rec
+    that blocks the planning queue. Phase 2 therefore also registers it in pre_sequence(); it is a
+    cheap hermetic filesystem walk that fits the fast-tier budget.
+  - >-
+    PHASE 2 (scope entries 8-10, VP steps 6-7) is SEPARABLE BY DESIGN and was the planning agent's
+    judgment call, not an explicit human instruction -- the human approved flags A and B but did not
+    rule on it. Phase 1 alone fully fixes the measured defect. Dependency direction is Phase 2 ->
+    Phase 1 only (the check consumes the same constant), never the reverse, so excision is a clean
+    delete of those scope entries, VP steps 6-7, EXECUTION STEPS 7-9, acceptance criterion 9 and the
+    rollback's second sentence. (Execution-step numbering note: the sync/ops.py rename is step 1, so
+    Phase 2 is steps 7-9 -- NOT 6-8. Deleting 6-8 would remove the Phase 1 deliverable
+    tests/test_outbox_hermeticity_guard.py and orphan a Phase 2 test edit.) NOTE: the retired-table
+    set lives in Phase 1's helper, so the verbatim-DUCKLAKE_MIGRATED_TABLES requirement applies even
+    if Phase 2 is dropped.
+  - >-
+    CI-RCA HARD BLOCK DEFERRAL (required rationale). One unresolved ci-rca rec is open: rec-2882,
+    "REGRESSION: github_ci_apply missing iam:ListInstanceProfilesForRole for IAM role destroy"
+    (terraform/bootstrap/github_ci_apply.tf, Critical, filed 2026-07-27). It is a Terraform/IAM
+    regression with zero file, subsystem, or causal overlap with this test-hermeticity work. The
+    human directed on 2026-07-30 that other agents are handling the open CI-RCA recommendations and
+    they may be deferred for this plan. Recorded here per the planning skill's HARD BLOCK escape.
+  - >-
+    Decision 135: modifying the ROOT tests/conftest.py deterministically sets full_suite_forced in
+    the selection manifest, forcing FULL-suite scope on this PR's --pre run. Expected, not a defect.
+    Per Decision 153 the 300s budget assertion warns-and-passes on a forced run and only hard-fails
+    above the 1500s ceiling; the measured full suite is 759s, leaving ample margin.
+  - >-
+    Main divergence at planning time: origin/main at 4f8c1ab. The only changed files since the branch
+    cut are docs/plans/PLAN-ci-rca-authority-anchor.yaml and
+    docs/plans/reports/OVERSEER-github-actions-log-management.yaml -- no overlap with this scope, so
+    the Step 11 commit-flow rebase is safe.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->PROCEED after 2 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Reproduce the defect FIRST so the fix is proven against a live failure -- run "rm -rf
+    logs/.ops-outbox && bin/venv-python -m pytest
+    tests/ops_writer/test_outbox_emit.py::TestOpsWriterOutbox::test_write_to_outbox_directly -q" and
+    confirm logs/.ops-outbox/ops_recommendations/<uuid>.jsonl appears, then delete it.
+  - >-
+    Confirm the SLOC starting point with "bin/venv-python -m scripts.validate --pre 2>&1 | grep
+    ops_writer" -- expect "569 SLOC below budget 571", i.e. 2 lines of headroom.
+  - >-
+    PHASE 2 precondition -- grep for live OpsWriter.write("ops_decisions", ...) callers and confirm
+    none survive outside the DuckLake portal path, so the hardened check cannot wedge a developer.
+execution_steps:
+  - >-
+    scripts/sync/ops.py -- rename _DUCKLAKE_MIGRATED_TABLES to public DUCKLAKE_MIGRATED_TABLES
+    (line 56) and update its single internal use site (line 298). Net-zero SLOC; the file is 458 SLOC
+    and unregistered in config/sloc_budgets.yaml, so it has ample headroom. Update the one external
+    reference in tests/sync/ops/test_sync_cli.py:184 and the docstring mention in
+    tests/sync/ops/test_drain.py:157.
+  - >-
+    scripts/ops_writer.py -- add a module-level constant _OUTBOX_BASE = ROOT / "logs" / ".ops-outbox"
+    beside ROOT (line 27). In _write_to_outbox (line ~280) replace the
+    Path(__file__).parent.parent-derived path with "outbox_dir = _OUTBOX_BASE / table", reading the
+    module global at call time so tests can patch it. In drain() (line ~670) DELETE the local
+    "outbox_base = ROOT / ..." assignment and reference _OUTBOX_BASE directly at both of its use
+    sites -- this deletion is what keeps the change net-zero SLOC. Path stays imported for ROOT, so
+    no F401 cascade.
+  - >-
+    tests/fixtures/outbox_guard.py -- create the pure helper: import DUCKLAKE_MIGRATED_TABLES from
+    scripts.sync.ops and use it VERBATIM as the retired set (plus a predicate for the *_pending
+    suffix); an ABSOLUTE outbox base computed once from the repo root; a snapshot(base) returning the
+    set of files that short-circuits to an empty set when the base does not exist; and a diff
+    function returning newly-added files. Do not derive, subtract from, or copy the table set.
+  - >-
+    tests/conftest.py -- add an autouse fixture using that helper. At session start, fail loudly if
+    any file already exists in a RETIRED dir, naming every offending path and the exact rm
+    remediation (Decision 149 -- do not baseline it away); files in legacy staging dirs may be
+    baselined. Per test, snapshot before and compare in teardown (after the yield); on a new file,
+    delete it so the tree is left clean and then fail the test naming BOTH the reporting test id and
+    the offending path. Under -n auto the reporting test may not be the writer -- word the message so
+    it does not over-claim (see the XDIST ATTRIBUTION LIMIT constraint). Keep the file under 500
+    lines (Decision 130).
+  - >-
+    tests/ops_writer/test_outbox_emit.py -- rewrite test_write_to_outbox_directly to patch
+    scripts.ops_writer._OUTBOX_BASE to tmp_path and call writer._write_to_outbox(table, entry)
+    normally (no .__func__, no Path patch), asserting the file landed under tmp_path with the right
+    payload; DELETE the "Fallback: write directly" block entirely. Rewrite
+    test_s3_failure_writes_to_outbox to drop fake_write_to_outbox and let the real method run against
+    the patched _OUTBOX_BASE. Re-point test_write_to_outbox_failure_is_swallowed at a genuinely
+    unwritable _OUTBOX_BASE (an existing file, so mkdir raises NotADirectoryError) instead of
+    patching Path.
+  - >-
+    tests/test_outbox_hermeticity_guard.py -- create unit tests for the helper: a new file in a
+    retired dir is detected; a new file in a legacy dir is detected; a pre-existing legacy file is NOT
+    reported as new; a pre-existing retired file trips the session-start check; a clean tree is clean;
+    the base is absolute and survives a chdir.
+  - >-
+    PHASE 2 (separable -- skip this step and the next two if Phase 2 is dropped).
+    scripts/checks/ops_governance/validate_outbox_staleness.py -- import DUCKLAKE_MIGRATED_TABLES
+    from scripts.sync.ops directly (NEVER from tests/). Any file in a retired dir or a *_pending dir
+    appends to failed regardless of mtime, with a message naming the path and citing Decision 84 I-4;
+    legacy dirs keep the existing >24h warning-only behaviour.
+  - >-
+    PHASE 2. scripts/checks/registry.py -- add _c("validate_outbox_staleness") to pre_sequence()
+    alongside its existing full_sequence() entry (line 184), matching the surrounding idiom. No
+    fourth edit is needed: the scripts/validate.py:177 facade re-export already exists.
+  - >-
+    PHASE 2. tests/checks/ops_governance/test_validate_outbox_staleness.py -- extend to cover the
+    retired-vs-legacy split (fresh retired file fails; fresh legacy file does not; >24h legacy file
+    warns without failing; clean tree passes) and assert registration in both tiers. The existing
+    file already uses the patch("scripts.checks._common.ROOT", tmp_path) idiom these cases need.
+  - >-
+    Out-of-scope findings to FILE, not fix inline (AGENTS.md out-of-scope rule) -- call
+    get_rec_write_guidance() then file via "bin/venv-python -m scripts.ops_data_portal". (a)
+    ops_writer.drain() iterates TABLE_NAMES, which still contains ops_decisions and
+    ops_priority_queue -- both in DUCKLAKE_MIGRATED_TABLES -- and unlike scripts/sync/ops.py:298 it
+    has NO migrated-table skip, so it would re-stage a retired-table outbox file to S3, exactly the
+    resurrection shape AGENTS.md warns about. (b) scripts/ops_writer.py is 746 lines with a
+    complexity waiver and 2 SLOC of headroom on an already-raised budget -- the Decision 128
+    decomposition signal. (c) AGENTS.md's "ops_execution_plans = Athena, pending T2.26 disposition"
+    line is stale prose superseded by T2.26 c9 (met) and needs a doc-currency correction. (d)
+    OpsWriter.emit()'s docstring (scripts/ops_writer.py:519) still justifies its unconditional
+    _write_to_outbox call as the "local-first guarantee per Decision 51" -- Decision 51 is
+    superseded by Decision 78. emit() is the other live producer into logs/.ops-outbox. (e) The
+    three outbox-health surfaces carry three different thresholds and only two know about
+    DUCKLAKE_MIGRATED_TABLES; scripts/verifiers/outbox_health.py's covers list also still names the
+    deleted path scripts/sync_ops.py.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
+    RCA (Decision 55). Steps 6-7 are Phase 2 only; steps 9-10 are post-deploy and run after the
+    squash-merge.
+  - >-
+    Squash-merge commit body must carry "Resolves: rec-2185, rec-2697, rec-2894" so rec-autoclose.yml
+    closes all three. Word each resolution as the landed fix (deterministic satisfaction), never as
+    "duplicate" -- Decision 103 forbids a direct close on a semantic verdict.
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  All source changes are additive or test-local and revertable with a single git revert of the
+  squash-merge commit. NOTE the deployed-artifact caveat: scripts/ops_writer.py ships in the
+  data-pipeline and ops-compaction Lambda bundles, so a revert does NOT by itself restore the running
+  functions -- it must land on main and let the governed CD channel
+  (.github/workflows/deploy-prod-lambdas.yml) run a second deploy to reach them. Do not shortcut that
+  with a break-glass build_lambda --deploy (Decision 126). If only Phase 2's hardened check proves
+  too aggressive, revert scripts/checks/ops_governance/validate_outbox_staleness.py and its
+  registry.py entry alone -- Phase 1's leak fix and hermeticity guard stand independently and touch
+  no Lambda-packaged behaviour beyond the seam refactor.

@@ -1,104 +1,248 @@
-"""Write-coverage submodule (Decision 128 decomposition + Decision 144 / T2.48 c5, DEP-01).
+"""Write-coverage submodule -- DISCOVERY-DRIVEN (design (a), PLAN-iam-write-surface-completion).
 
 The enumerated-model recurrence (rec-2703 / rec-2757) was a resource whose refresh-READ was covered
-but whose WRITE verb was missing from github_ci_apply's inline policy, so a real apply AccessDenied.
-The read-coverage gate (_read_coverage) closes the read half; this submodule closes the write half:
-for every resource TYPE the github_ci_apply pipeline is expected to WRITE (create / modify / destroy
-at apply time), assert the apply role's inline policy grants the required write verbs on a matching
-resource prefix. An apply-role-written type with no covering write grant FAILS LOUD, mirroring the
-read-coverage loud-fail (Decision 55: fail loud, never silently pass).
+but whose WRITE verb was missing from github_ci_apply's grant surface, so a real apply AccessDenied.
+The read-coverage gate (_read_coverage) closes the read half; this submodule closes the write half.
 
-rec-2831 anti-recurrence (T2.48 c1, PLAN-t248-passrole-liveproof): a SECOND, verb-pair recurrence
-class -- lambda:CreateFunction was write-covered (above) but AWS also REQUIRES iam:PassRole on the
-Lambda execution role for CreateFunction to succeed, and the enumerated model never paired the two.
-check_passrole_implies_coverage() closes this: if CreateFunction is granted, both the identity
-policy AND the boundary DataPlaneAllow ceiling must grant iam:PassRole scoped to
-role/agent-platform-*. The identity-side check uses the apply_statements the facade already passes;
-the boundary-side check is SELF-CONTAINED -- it re-reads + re-parses github_ci_apply.tf's boundary
-block itself (reusing the _read_coverage HCL primitives), because the orchestrator facade
-(validate_ci_refresh_read_coverage.py) passes only the identity apply_statements, never the
-boundary policy, and stays out of scope here.
+WHY THIS MODULE WAS REWRITTEN (the ROOT CAUSE this plan exists to fix): the previous version
+declared `APPLY_WRITTEN_TYPES = frozenset(WRITE_COVERAGE)` and then branched on
+`rtype in APPLY_WRITTEN_TYPES and rtype not in WRITE_COVERAGE` -- UNSATISFIABLE by construction, so
+the "an apply-role-written type with no write-coverage entry FAILS LOUD" claim in its docstring was
+false. Its only test coverage reached that branch by monkeypatching the frozenset, which is proof
+the production path was unreachable. Meanwhile WRITE_COVERAGE hand-listed 5 types against the 31
+distinct resource types actually present in terraform/personal.
+
+The write side is now discovery-driven, mirroring the read side:
+  1. Every DISCOVERED terraform/personal resource type must be either WRITE_COVERAGE-mapped or
+     WRITE_EXEMPT_TYPES-exempt (each exemption carrying its own one-line justification). A type that
+     is neither FAILS LOUD -- this is the branch that used to be dead code.
+  2. Every discovered WRITE_COVERAGE-mapped type's required write verbs must be granted on a
+     Resource containing its marker. A removed / narrowed write grant fails the PR (DEP-01
+     write-surface gap). Gating direction 2 on discovery is what makes the whole check
+     discovery-driven: a type that has left terraform/personal stops being asserted, exactly as the
+     read side behaves, and re-arms the moment a resource of that type reappears.
+
+HONEST SCOPE LIMIT (recorded so nobody over-claims): design (a) alone would have caught NONE of the
+three historical instances of the "headline verb granted, companion verb missing" class (rec-2831,
+rec-2842, rec-2882) -- aws_iam_role was already WRITE_COVERAGE-mapped in all three. (a) closes the
+"type never mapped at all" hole. The phase-keyed mandatory-declaration table in _write_companions
+closes the "type mapped but its companion verbs were never enumerated" hole that actually recurred,
+and _write_symmetry adds the two mechanical scope rules. Neither can enumerate a verb nobody knows
+the provider calls -- only CloudTrail can, which is the filed class-closing follow-on.
 
 Credential-free (pure text parsing) -- eligible for --pre and full tiers. Stays < 500 SLOC.
 """
 
 from __future__ import annotations
 
-import re
-
-from scripts.checks import _common
+# _parse_boundary_dataplane_statement / _parse_managed_policy_statements MOVED to _read_coverage so
+# they can be expressed on the shared, hoist-resolving policy locator (see their docstrings there).
+# Imported -- and thus still importable FROM this module -- so existing importers keep working.
 from scripts.checks.iam_tf._read_coverage import (
-    _BOOTSTRAP_TF_REL,
-    _SID_CAP_RE,
     _action_matches,
-    _extract_bracket_block,
-    _extract_capitalized_field,
-    _split_top_level_objects,
+    _parse_boundary_dataplane_statement,  # noqa: F401 -- re-exported for existing importers
+    _parse_managed_policy_statements,  # noqa: F401 -- re-exported for existing importers
 )
 
-# rec-2831 / Decision 143 worst-verb scoping: the identity PassRole grant must target exactly this
-# execution-role prefix, never role/* or a specific privileged role by name.
-_PASSROLE_ACTION = "iam:PassRole"
-_PASSROLE_RESOURCE_MARKER = "role/agent-platform-*"
+# ---------------------------------------------------------------------------
+# Resource markers. A marker is a substring the granting statement's Resource list must contain --
+# the broadened agent-platform-* / ducklake-* prefix family from the DEP-01 write-surface inversion.
+# ---------------------------------------------------------------------------
 
-# rec-2842 (DEP-02, T2.48 c2): the create-companion recurrence-killer. AWS's default_tags provider
-# block (terraform/personal/main.tf) forces a TagRole call on EVERY taggable resource's create, so
-# iam:CreateRole@role/agent-platform-* structurally REQUIRES these companion verbs at the SAME
-# prefix (UpdateRole folded in per Fable's predicted-next-gap consult, same risk class as Tag/Untag).
-_CREATE_ROLE_ACTION = "iam:CreateRole"
-_CREATE_ROLE_RESOURCE_MARKER = "role/agent-platform-*"
-_CREATE_COMPANION_ACTIONS = ("iam:TagRole", "iam:UntagRole", "iam:UpdateRole")
-
-# check_identity_iam_actions_subset_of_boundary (defense-in-depth, generalizes the PassRole-specific
-# boundary check above): scoped to iam: actions ONLY -- iam is the sole ACTION-ENUMERATED service in
-# the boundary's DataPlaneAllow ceiling; s3:*/lambda:*/logs:*/etc. are already service-wide wildcards
-# there, so a subset test over those services would be vacuous (plan-critique implementer guidance).
-_IAM_ACTION_PREFIX = "iam:"
-# Whole-file substring check (mirrors the plan's own VP step 2 rigor level -- a simple presence
-# check, not a statement-scoped parse): the PassedToService=lambda.amazonaws.com condition text
-# must be present somewhere in the bootstrap HCL, or the identity grant is an unconditioned
-# over-grant (any service, any pass).
-_PASSROLE_CONDITION_MARKERS = ("iam:PassedToService", "lambda.amazonaws.com")
-_BOUNDARY_RESOURCE_RE = re.compile(r'resource\s+"aws_iam_policy"\s+"github_ci_apply_boundary"\s*\{')
-_STATEMENT_ARRAY_RE = re.compile(r"Statement\s*=\s*\[")
+_FUNCTION_PREFIX = "function:agent-platform-*"
+_LAYER_PREFIX = "layer:agent-platform-*"
+_LOG_GROUP_PREFIX = "log-group:/aws/lambda/agent-platform-*"
+_ROLE_PREFIX = "role/agent-platform-*"
+# iam:RemoveRoleFromInstanceProfile authorizes on the INSTANCE-PROFILE resource type, never on the
+# role, so its grant carries this marker and NOT _ROLE_PREFIX. A role-scoped grant of that verb is
+# INERT -- present in the policy, structurally unable to authorize -- which every static check
+# passed for, because "the verb is present" was literally true; only the post-apply live simulate
+# saw it. See the IAMInstanceProfileDetach Sid in terraform/bootstrap/github_ci_apply.tf.
+_INSTANCE_PROFILE_PREFIX = "instance-profile/agent-platform-*"
+_RULE_PREFIX = "rule/agent-platform-*"
+_ALARM_PREFIX = "alarm:"
+_TOPIC_ARN = "agent-platform-alerts"
+_PARAMETER_PREFIX = "parameter/agent-platform/*"
+_SECRET_PREFIX = "secret:agent-platform-*"  # pragma: allowlist secret -- ARN shape, not a value
+_DSN_SECRET_ARN = "secret:ducklake-neon-catalog-dsn-*"  # pragma: allowlist secret -- ARN shape, not a value
+_OIDC_PROVIDER_ARN = "oidc-provider/token.actions.githubusercontent.com"
+_GLUE_DATABASE_ARN = "database/agent_platform"
+_COUNTERS_TABLE_ARN = "table/agent-platform-counters"
+_DATA_LAKE_BUCKET_ARN = "arn:aws:s3:::agent-platform-data-lake"
+# Athena workgroup create/update are granted on the pre-existing AthenaWorkgroup Sid, whose Resource
+# is the bare wildcard. The marker is therefore the QUOTED wildcard entry itself -- it matches
+# `Resource = "*"` / `Resource = ["*"]` and nothing else (an ARN ending in `-*` has no `"` before
+# its star). Narrowing that Sid is a filed follow-on rec, deliberately out of scope here.
+_ANY_RESOURCE = '"*"'
 
 # ---------------------------------------------------------------------------
-# WRITE-coverage map: managed resource type -> the write actions github_ci_apply's inline policy MUST
-# grant + a marker substring the granting statement's Resource list must contain (the broadened
-# agent-platform-* / ducklake-* prefix from the DEP-01 write-surface inversion). A required action is
-# covered when SOME apply statement grants it on a Resource containing the marker.
+# WRITE-coverage map: managed resource type -> the write actions github_ci_apply's grant surface
+# (inline identity policy UNION the attached customer-managed reads policy) MUST grant + the marker
+# its granting statement's Resource list must contain. A required action is covered when SOME apply
+# statement grants it on a Resource containing the marker.
+#
+# Scope note: an entry lists the verbs that MUST be granted for the pipeline to manage the type at
+# all; it is not an exhaustive list of every verb the provider may call. The per-phase companion
+# obligations (create / update / delete) live in _write_companions.LIFECYCLE_COMPANIONS, which is
+# MANDATORY-DECLARATION over exactly the key set of this table.
 # ---------------------------------------------------------------------------
 
 WRITE_COVERAGE: dict[str, dict] = {
     "aws_lambda_function": {
         "write_actions": ("lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"),
-        "resource_marker": "function:agent-platform-*",
+        "resource_marker": _FUNCTION_PREFIX,
     },
     "aws_cloudwatch_log_group": {
         "write_actions": ("logs:CreateLogGroup", "logs:PutRetentionPolicy"),
-        "resource_marker": "log-group:/aws/lambda/agent-platform-*",
+        "resource_marker": _LOG_GROUP_PREFIX,
     },
     "aws_cloudwatch_metric_alarm": {
         "write_actions": ("cloudwatch:PutMetricAlarm",),
-        "resource_marker": "alarm:",
+        "resource_marker": _ALARM_PREFIX,
     },
     "aws_cloudwatch_event_rule": {
         "write_actions": ("events:PutRule",),
-        "resource_marker": "rule/agent-platform-*",
+        "resource_marker": _RULE_PREFIX,
     },
     "aws_iam_role": {
         # Role CREATE routes to gated-apply (guard), but the apply role still needs the VERB to execute
         # the approved create; IAMRoleCreateBounded grants iam:CreateRole on role/agent-platform-* under
         # the boundary-propagation condition (DEP-02 / Decision 144).
         "write_actions": ("iam:CreateRole",),
-        "resource_marker": "role/agent-platform-*",
+        "resource_marker": _ROLE_PREFIX,
+    },
+    "aws_iam_role_policy": {
+        "write_actions": ("iam:PutRolePolicy", "iam:DeleteRolePolicy"),
+        "resource_marker": _ROLE_PREFIX,
+    },
+    "aws_iam_openid_connect_provider": {
+        # Provider CREATE/DELETE are denied BY DESIGN (destroying or replacing the provider breaks the
+        # pipeline executing the apply) -- see the by_design record in docs/contracts/iam-simulate-fixture.yaml.
+        # Only the in-place reconcile verbs are required.
+        "write_actions": (
+            "iam:UpdateOpenIDConnectProviderThumbprint",
+            "iam:TagOpenIDConnectProvider",
+            "iam:UntagOpenIDConnectProvider",
+        ),
+        "resource_marker": _OIDC_PROVIDER_ARN,
+    },
+    "aws_lambda_function_url": {
+        "write_actions": (
+            "lambda:CreateFunctionUrlConfig",
+            "lambda:UpdateFunctionUrlConfig",
+            "lambda:DeleteFunctionUrlConfig",
+        ),
+        "resource_marker": _FUNCTION_PREFIX,
+    },
+    "aws_lambda_permission": {
+        "write_actions": ("lambda:AddPermission", "lambda:RemovePermission"),
+        "resource_marker": _FUNCTION_PREFIX,
+    },
+    "aws_lambda_layer_version": {
+        "write_actions": ("lambda:PublishLayerVersion", "lambda:DeleteLayerVersion"),
+        "resource_marker": _LAYER_PREFIX,
+    },
+    "aws_cloudwatch_event_target": {
+        "write_actions": ("events:PutTargets", "events:RemoveTargets"),
+        "resource_marker": _RULE_PREFIX,
+    },
+    "aws_sns_topic": {
+        "write_actions": ("sns:CreateTopic", "sns:DeleteTopic", "sns:SetTopicAttributes"),
+        "resource_marker": _TOPIC_ARN,
+    },
+    "aws_sns_topic_subscription": {
+        # sns:Subscribe ONLY. sns:Unsubscribe and sns:SetSubscriptionAttributes have NO resource type
+        # in SNS's IAM model (live-simulate proof: a Resource ["*"] grant is `allowed` only against a
+        # `*` target and implicitDeny against the topic ARN or a subscription ARN), so they are
+        # unscopeable and are DENIED BY DESIGN rather than granted account-wide -- see the
+        # SNSTopicWrite comment and the by_design entries in docs/contracts/iam-simulate-fixture.yaml.
+        # Accepted consequence: destroying or replacing the subscription needs an admin apply.
+        "write_actions": ("sns:Subscribe",),
+        "resource_marker": _TOPIC_ARN,
+    },
+    "aws_ssm_parameter": {
+        "write_actions": ("ssm:PutParameter", "ssm:DeleteParameter"),
+        "resource_marker": _PARAMETER_PREFIX,
+    },
+    "aws_secretsmanager_secret": {
+        # SecretsManagerMetadataWrite -- none of these verbs can read or overwrite a VALUE
+        # (Decision 129 pt 2). secretsmanager:UpdateSecret is granted separately, ENUMERATED at five
+        # ARNs, and PutSecretValue nowhere new.
+        "write_actions": ("secretsmanager:CreateSecret", "secretsmanager:DeleteSecret"),
+        "resource_marker": _SECRET_PREFIX,
+    },
+    "aws_secretsmanager_secret_version": {
+        # The single terraform/personal secret VERSION is the DuckLake Neon DSN, whose value IS
+        # terraform-managed -- so PutSecretValue is required, and only on that one enumerated ARN.
+        "write_actions": ("secretsmanager:PutSecretValue",),
+        "resource_marker": _DSN_SECRET_ARN,
+    },
+    "aws_athena_workgroup": {
+        "write_actions": ("athena:CreateWorkGroup", "athena:UpdateWorkGroup"),
+        "resource_marker": _ANY_RESOURCE,
+    },
+    "aws_glue_catalog_database": {
+        "write_actions": ("glue:CreateDatabase", "glue:UpdateDatabase", "glue:DeleteDatabase"),
+        "resource_marker": _GLUE_DATABASE_ARN,
+    },
+    "aws_dynamodb_table": {
+        "write_actions": ("dynamodb:CreateTable", "dynamodb:UpdateTable", "dynamodb:DeleteTable"),
+        "resource_marker": _COUNTERS_TABLE_ARN,
+    },
+    "aws_s3_bucket": {
+        # s3:DeleteBucket is denied BY DESIGN: the data lake holds tfstate, the tfplan artifacts AND
+        # the convergence record, so a CD-executable bucket delete would let one approved apply
+        # destroy the platform's own integrity anchor. Bucket destruction stays admin-tier.
+        "write_actions": ("s3:CreateBucket",),
+        "resource_marker": _DATA_LAKE_BUCKET_ARN,
+    },
+    "aws_s3_bucket_versioning": {
+        "write_actions": ("s3:PutBucketVersioning",),
+        "resource_marker": _DATA_LAKE_BUCKET_ARN,
+    },
+    "aws_s3_bucket_server_side_encryption_configuration": {
+        "write_actions": ("s3:PutEncryptionConfiguration",),
+        "resource_marker": _DATA_LAKE_BUCKET_ARN,
+    },
+    "aws_s3_bucket_public_access_block": {
+        "write_actions": ("s3:PutBucketPublicAccessBlock",),
+        "resource_marker": _DATA_LAKE_BUCKET_ARN,
+    },
+    "aws_s3_bucket_policy": {
+        "write_actions": ("s3:PutBucketPolicy", "s3:DeleteBucketPolicy"),
+        "resource_marker": _DATA_LAKE_BUCKET_ARN,
+    },
+    "aws_s3_bucket_notification": {
+        "write_actions": ("s3:PutBucketNotification",),
+        "resource_marker": _DATA_LAKE_BUCKET_ARN,
+    },
+    "aws_s3_bucket_lifecycle_configuration": {
+        "write_actions": ("s3:PutLifecycleConfiguration",),
+        "resource_marker": _DATA_LAKE_BUCKET_ARN,
     },
 }
 
-# The resource TYPES the github_ci_apply pipeline writes at apply time. Every entry MUST have a
-# WRITE_COVERAGE mapping (asserted below) -- an apply-role-written type present in terraform/personal
-# with no write-coverage entry AccessDenies at a real apply (rec-2703/rec-2757 recurrence).
-APPLY_WRITTEN_TYPES: frozenset[str] = frozenset(WRITE_COVERAGE)
+# Discovered types that require NO write grant, each with its one-line justification. An exemption
+# is a deliberate, reviewable statement that the type is not AWS-IAM-write-gated -- never a way to
+# silence a real gap (that is what a WRITE_COVERAGE entry is for).
+WRITE_EXEMPT_TYPES: dict[str, str] = {
+    "neon_project": "third-party (Neon) provider resource -- authenticated by an API key, not AWS IAM",
+    "neon_role": "third-party (Neon) provider resource -- authenticated by an API key, not AWS IAM",
+    "neon_database": "third-party (Neon) provider resource -- authenticated by an API key, not AWS IAM",
+    "null_resource": "local-exec only -- provisions nothing in AWS, so there is no write API call to grant",
+}
+
+# `data "..." "..."` blocks are read-only by construction: a data source is refreshed, never
+# written, so it has a READ-coverage obligation (_read_coverage.CHECKED_TYPES) and no write one.
+_DATA_SOURCE_PREFIX = "data:"
+_DATA_SOURCE_JUSTIFICATION = "terraform data source -- read-only by construction; its obligation is read coverage, not write"
+
+
+def _write_exemption(rtype: str) -> str | None:
+    """Return the justification exempting `rtype` from write coverage, or None if it is not exempt."""
+    if rtype.startswith(_DATA_SOURCE_PREFIX):
+        return _DATA_SOURCE_JUSTIFICATION
+    return WRITE_EXEMPT_TYPES.get(rtype)
 
 
 def _write_grant_present(apply_statements: list[dict], spec: dict) -> bool:
@@ -115,236 +259,40 @@ def _write_grant_present(apply_statements: list[dict], spec: dict) -> bool:
     return True
 
 
-def _create_function_granted(apply_statements: list[dict]) -> bool:
-    """True if some apply statement grants lambda:CreateFunction (the PassRole trigger condition)."""
-    return any(_action_matches(("lambda:CreateFunction",), stmt["actions"]) for stmt in apply_statements)
-
-
-def _passrole_present(statements: list[dict]) -> bool:
-    """True if some statement grants iam:PassRole on a Resource matching the agent-platform-* prefix."""
-    return any(
-        _action_matches((_PASSROLE_ACTION,), stmt["actions"]) and _PASSROLE_RESOURCE_MARKER in stmt["resources_raw"]
-        for stmt in statements
-    )
-
-
-def _parse_boundary_dataplane_statement(bootstrap_text: str) -> dict | None:
-    """Self-contained re-read: locate github_ci_apply_boundary's DataPlaneAllow statement.
-
-    The orchestrator facade (validate_ci_refresh_read_coverage.py) passes this submodule only the
-    IDENTITY apply_statements -- it never reads or passes the boundary policy. Rather than widen the
-    facade's contract, this re-reads + re-parses github_ci_apply.tf's boundary block directly, reusing
-    the same _read_coverage HCL primitives the facade itself uses for the identity policy. Returns
-    None if the boundary resource or its DataPlaneAllow statement cannot be located (HCL shape drift).
-    """
-    resource_m = _BOUNDARY_RESOURCE_RE.search(bootstrap_text)
-    if not resource_m:
-        return None
-    # The boundary's `policy = jsonencode({ Version = ..., Statement = [...] })` is inline (no
-    # rec-2793 hoisted-local indirection -- that workaround exists only for the identity policy,
-    # whose lifecycle precondition needs to self-reference the rendered JSON). A forward search for
-    # the next `Statement = [` after the resource's opening brace is therefore unambiguous: nothing
-    # else in the boundary resource body (name/description/policy-open) can contain that text.
-    stmt_m = _STATEMENT_ARRAY_RE.search(bootstrap_text, resource_m.end())
-    if not stmt_m:
-        return None
-    array_text = _extract_bracket_block(bootstrap_text, stmt_m.end() - 1)
-    for obj_body in _split_top_level_objects(array_text):
-        sid_m = _SID_CAP_RE.search(obj_body)
-        if sid_m and sid_m.group(1) == "DataPlaneAllow":
-            actions, _ = _extract_capitalized_field(obj_body, "Action")
-            _, resources_raw = _extract_capitalized_field(obj_body, "Resource")
-            return {"sid": "DataPlaneAllow", "actions": actions, "resources_raw": resources_raw}
-    return None
-
-
-def check_passrole_implies_coverage(apply_statements: list[dict], failed: list[str], key: str) -> None:
-    """rec-2831 anti-recurrence (T2.48 c1): CreateFunction-implies-PassRole.
-
-    AWS requires iam:PassRole on a Lambda's execution role for lambda:CreateFunction to succeed. If
-    github_ci_apply grants CreateFunction, assert:
-      1. The identity policy (apply_statements, as passed by the facade) grants iam:PassRole scoped
-         to role/agent-platform-*.
-      2. The boundary DataPlaneAllow ceiling (re-read + parsed from github_ci_apply.tf directly --
-         see _parse_boundary_dataplane_statement) ALSO grants iam:PassRole -- a grant absent from the
-         boundary ceiling is silently denied by the identity/boundary intersection.
-      3. The PassedToService=lambda.amazonaws.com condition text is present in the bootstrap HCL
-         (Decision 143 worst-verb scoping) -- an unconditioned PassRole over-grants.
-
-    A CreateFunction grant with no covering PassRole (either layer, or no condition) FAILS LOUD --
-    this is the exact rec-2831 recurrence (a guard-PASS auto-apply that then AccessDenies at
-    CreateFunction) the check exists to prevent from ever silently recurring.
-    """
-    if not _create_function_granted(apply_statements):
-        return  # CreateFunction isn't granted -- PassRole isn't a requirement here.
-
-    if not _passrole_present(apply_statements):
-        failed.append(
-            f"{key} github_ci_apply grants lambda:CreateFunction but its identity policy has no "
-            f"iam:PassRole grant on a Resource matching {_PASSROLE_RESOURCE_MARKER!r} -- AWS requires "
-            "PassRole on the Lambda execution role for CreateFunction to succeed (rec-2831 recurrence)"
-        )
-
-    bootstrap_path = _common.ROOT / _BOOTSTRAP_TF_REL
-    try:
-        bootstrap_text = bootstrap_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"{key} cannot re-read {bootstrap_path} for the boundary PassRole check: {exc}")
-        return
-
-    boundary_stmt = _parse_boundary_dataplane_statement(bootstrap_text)
-    if boundary_stmt is None:
-        failed.append(
-            f"{key} could not locate the github_ci_apply_boundary DataPlaneAllow statement in "
-            f"{bootstrap_path.name} -- has the boundary HCL shape changed?"
-        )
-    elif not _action_matches((_PASSROLE_ACTION,), boundary_stmt["actions"]):
-        failed.append(
-            f"{key} github_ci_apply grants lambda:CreateFunction and iam:PassRole is present in the "
-            "identity policy, but the github_ci_apply_boundary DataPlaneAllow ceiling does not grant "
-            "iam:PassRole -- a grant absent from the boundary ceiling is silently denied by the "
-            "identity/boundary intersection (rec-2831 recurrence)"
-        )
-
-    if not all(marker in bootstrap_text for marker in _PASSROLE_CONDITION_MARKERS):
-        failed.append(
-            f"{key} github_ci_apply's iam:PassRole grant is missing the iam:PassedToService="
-            "lambda.amazonaws.com condition (Decision 143 worst-verb scoping) -- an unconditioned "
-            "PassRole over-grants (any service, any pass)"
-        )
-
-
-def _create_role_granted_on_prefix(apply_statements: list[dict]) -> bool:
-    """True if some apply statement grants iam:CreateRole on a Resource matching the agent-platform-* prefix."""
-    return any(
-        _action_matches((_CREATE_ROLE_ACTION,), stmt["actions"]) and _CREATE_ROLE_RESOURCE_MARKER in stmt["resources_raw"]
-        for stmt in apply_statements
-    )
-
-
-def check_create_companion_scope_coverage(apply_statements: list[dict], failed: list[str], key: str) -> None:
-    """rec-2842 anti-recurrence (DEP-02, T2.48 c2): CreateRole@prefix-implies-companions@SAME-prefix.
-
-    This is the RECURRENCE-KILLER for rec-2842 (run 30126122217): AWS's default_tags provider block
-    forces a TagRole call on EVERY taggable resource's create, so if github_ci_apply grants
-    iam:CreateRole on a Resource matching role/agent-platform-*, it structurally requires
-    iam:TagRole/iam:UntagRole/iam:UpdateRole to ALSO be granted on a Resource covering that SAME
-    prefix -- not merely present somewhere in the policy. rec-2842's actual bug was exactly this: the
-    Resource for iam:TagRole/iam:UntagRole was narrower (the two enumerated branch/pr roles) than
-    iam:CreateRole's role/agent-platform-* prefix, so the two verbs' action-presence looked fine but
-    their resource scopes diverged -- a RESOURCE-SCOPE mismatch, not an action-absence gap (that
-    sibling class is check_identity_iam_actions_subset_of_boundary below). A companion verb missing
-    or narrower than the CreateRole prefix FAILS LOUD.
-    """
-    if not _create_role_granted_on_prefix(apply_statements):
-        return  # CreateRole isn't prefix-granted -- the companion-scope requirement doesn't apply.
-
-    for action in _CREATE_COMPANION_ACTIONS:
-        covered = any(
-            _action_matches((action,), stmt["actions"]) and _CREATE_ROLE_RESOURCE_MARKER in stmt["resources_raw"]
-            for stmt in apply_statements
-        )
-        if not covered:
-            failed.append(
-                f"{key} github_ci_apply grants iam:CreateRole on a Resource matching "
-                f"{_CREATE_ROLE_RESOURCE_MARKER!r} but {action!r} is missing, or granted only on a "
-                "narrower Resource -- AWS's default_tags provider block forces a tag-on-create call "
-                "on every new role, so CreateRole@prefix structurally requires the companion "
-                "metadata verbs at the SAME prefix (rec-2842 recurrence)"
-            )
-
-
-def _identity_allow_iam_actions(apply_statements: list[dict]) -> set[str]:
-    """Every distinct iam: action GRANTED (Effect=Allow) somewhere in the identity policy.
-
-    Effect-aware: a statement with no parsed "effect" (older callers / synthetic fixtures that never
-    set the key) is treated as Allow, matching every pre-existing apply_statements fixture in this
-    test module (they omit Effect entirely, and none of them is a Deny statement).
-    """
-    actions: set[str] = set()
-    for stmt in apply_statements:
-        if stmt.get("effect") not in (None, "Allow"):
-            continue
-        for action in stmt["actions"]:
-            if action.startswith(_IAM_ACTION_PREFIX):
-                actions.add(action)
-    return actions
-
-
-def check_identity_iam_actions_subset_of_boundary(apply_statements: list[dict], failed: list[str], key: str) -> None:
-    """Defense-in-depth (DEP-02 plan): every identity-policy iam: Allow action must also be granted by
-    the boundary DataPlaneAllow ceiling, generalizing the rec-2831 PassRole-specific boundary check
-    (check_passrole_implies_coverage) to the whole iam: action family so the single enumerated IAM
-    list (Decision 144) can never split into silent drift between the two layers.
-
-    Scoped to iam: actions ONLY (plan-critique implementer guidance): iam is the sole
-    ACTION-ENUMERATED service in DataPlaneAllow -- s3:*/lambda:*/logs:*/etc. are already service-wide
-    wildcards there, so a subset test over those services would be vacuous. "The boundary covers
-    action a" is implemented with the boundary's action list as the PATTERNS
-    (_action_matches(tuple(boundary_actions), [a])), so a future iam:* in the ceiling is honored --
-    not literal string-equality membership.
-
-    Does NOT catch the rec-2842 recurrence itself (a RESOURCE-SCOPE mismatch: iam:TagRole IS present
-    in both layers in that bug, see check_create_companion_scope_coverage above) -- this check closes
-    the sibling class: an iam action present in the identity policy but entirely ABSENT from the
-    boundary ceiling (the rec-2831/PassRole class, generalized beyond PassRole so the single list can
-    never split into drift). Effect-aware: a Deny-only identity iam action is never flagged -- it
-    grants nothing, so it has no boundary-ceiling obligation.
-    """
-    identity_actions = _identity_allow_iam_actions(apply_statements)
-    if not identity_actions:
-        return
-
-    bootstrap_path = _common.ROOT / _BOOTSTRAP_TF_REL
-    try:
-        bootstrap_text = bootstrap_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"{key} cannot re-read {bootstrap_path} for the identity/boundary subset check: {exc}")
-        return
-
-    boundary_stmt = _parse_boundary_dataplane_statement(bootstrap_text)
-    if boundary_stmt is None:
-        failed.append(
-            f"{key} could not locate the github_ci_apply_boundary DataPlaneAllow statement in "
-            f"{bootstrap_path.name} -- has the boundary HCL shape changed?"
-        )
-        return
-
-    boundary_actions = tuple(boundary_stmt["actions"])
-    for action in sorted(identity_actions):
-        if not _action_matches(boundary_actions, [action]):
-            failed.append(
-                f"{key} identity policy grants {action!r} (Effect=Allow) but the "
-                "github_ci_apply_boundary DataPlaneAllow ceiling does not grant it (or a covering "
-                "pattern) -- a grant absent from the boundary ceiling is silently denied by the "
-                "identity/boundary intersection"
-            )
-
-
 def check_write_coverage(
     apply_statements: list[dict], resources: list[tuple[str, str, str]], failed: list[str], key: str
 ) -> int:
-    """Assert github_ci_apply's inline policy write-covers every apply-role-written managed type (c5).
+    """Assert the apply role write-covers every DISCOVERED write-managed type (design (a), c5).
 
-    Two loud-fail directions (mirroring read-coverage):
-      1. Every WRITE_COVERAGE type's required write verbs are present in the apply policy on the
-         broadened prefix. A removed / narrowed write grant fails the PR (DEP-01 write-surface gap).
-      2. A terraform/personal resource of an apply-role-written type with NO WRITE_COVERAGE entry
-         fails loud -- a new write-managed resource class must declare its write grant.
+    Two loud-fail directions, both driven by the terraform/personal resource sweep (never by a
+    hand-maintained "types we think we write" set -- that set was the dead branch this replaces):
 
-    Also runs three verb-pair/verb-family anti-recurrence checks, each closing a DIFFERENT drift class:
-      - check_passrole_implies_coverage() (rec-2831, T2.48 c1): CreateFunction-implies-PassRole.
-      - check_create_companion_scope_coverage() (rec-2842, T2.48 c2, DEP-02): CreateRole@prefix
-        implies its companion verbs (TagRole/UntagRole/UpdateRole) are granted on that SAME prefix --
-        a RESOURCE-SCOPE mismatch class (the exact rec-2842 recurrence).
-      - check_identity_iam_actions_subset_of_boundary() (DEP-02 plan, defense-in-depth): every
-        identity-policy Allow iam: action must also be granted by the boundary DataPlaneAllow
-        ceiling -- an action-absent-from-the-ceiling class, generalizing the PassRole-specific
-        boundary check above.
+      1. A discovered resource type that is neither WRITE_COVERAGE-mapped nor WRITE_EXEMPT_TYPES-
+         exempt fails loud. A new write-managed resource class must declare its write grant (or its
+         exemption, with a justification) at review time instead of AccessDenying at a real apply.
+      2. A discovered WRITE_COVERAGE-mapped type whose required write verbs are not granted on a
+         Resource containing its marker fails loud (DEP-01 write-surface gap, rec-2703/rec-2757).
+
+    The per-phase companion obligations (_write_companions) and the mechanical scope rules
+    (_write_symmetry) are orchestrated by the facade alongside this function, not from inside it.
 
     Returns the count of write-managed types asserted (for the PASS summary). Appends to `failed`.
     """
-    for rtype, spec in WRITE_COVERAGE.items():
+    discovered = {rtype for rtype, _, _ in resources}
+
+    for rtype in sorted(discovered):
+        if rtype in WRITE_COVERAGE or _write_exemption(rtype) is not None:
+            continue
+        example = next(f"{rname} in {fname}" for rt, rname, fname in resources if rt == rtype)
+        failed.append(
+            f"{key} discovered terraform/personal resource type {rtype!r} (resource {example}) is "
+            "neither WRITE_COVERAGE-mapped nor WRITE_EXEMPT_TYPES-exempt -- add a write-coverage "
+            "entry (or a justified exemption) to scripts/checks/iam_tf/_write_coverage.py"
+        )
+
+    asserted = sorted(discovered & set(WRITE_COVERAGE))
+    for rtype in asserted:
+        spec = WRITE_COVERAGE[rtype]
         if not _write_grant_present(apply_statements, spec):
             failed.append(
                 f"{key} apply-role write-managed type {rtype!r} has no covering write grant in "
@@ -352,15 +300,4 @@ def check_write_coverage(
                 f"{spec['resource_marker']!r}) -- DEP-01 write-surface gap (rec-2703/rec-2757)"
             )
 
-    for rtype, rname, fname in resources:
-        if rtype in APPLY_WRITTEN_TYPES and rtype not in WRITE_COVERAGE:
-            failed.append(
-                f"{key} apply-role-written type {rtype!r} (resource {rname} in {fname}) has no "
-                "WRITE_COVERAGE entry -- add one to scripts/checks/iam_tf/_write_coverage.py"
-            )
-
-    check_passrole_implies_coverage(apply_statements, failed, key)
-    check_create_companion_scope_coverage(apply_statements, failed, key)
-    check_identity_iam_actions_subset_of_boundary(apply_statements, failed, key)
-
-    return len(WRITE_COVERAGE)
+    return len(asserted)

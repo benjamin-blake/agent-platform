@@ -5131,7 +5131,8 @@ tier_items:
           terraform/github/environments.tf's gated_apply_reviewer_user_ids variable fails terraform
           validation when left empty, so the tf-gated-apply Environment cannot silently no-op its
           required-reviewer gate (DEP-04/rec-2307)
-        status: open
+        status: met
+        met_by: terraform-deploy-phase0-hardening
       - id: c2
         text: >-
           .github/workflows/deploy.yml is deleted, the workflow-count/fleet test is updated to the
@@ -5142,14 +5143,80 @@ tier_items:
           PlatformDev's DailyOps policy carries an explicit Deny on convergence/personal/*,
           tfplan/personal/* (write), and tfstate/personal/* (read+write); simulate-principal-policy
           shows explicitDeny for each, and portal + runtime smoke are unaffected (DEP-13)
-        status: open
+        status: met
+        met_by: terraform-deploy-phase0-hardening
       - id: c4
         text: terraform/CLAUDE.md documents that ExternalId-based state recovery is admin-tier-only
-        status: open
+        status: met
+        met_by: terraform-deploy-phase0-hardening
     related_decisions: [144, 113, 112, 83]
     effort: S
     strategic: false
     status: not_started
+    progress_note: >-
+      2026-07-31 audit-tail verification sweep: c1, c3, c4 verified against live evidence and
+      flipped to met; c2 deliberately LEFT OPEN (see below). Item status intentionally NOT flipped
+      to complete -- Status-Trusted-Never-Inferred, and 3-of-4 criteria met is not complete.
+      met_by names the plan that MET each criterion (terraform-deploy-phase0-hardening, whose
+      closes_criteria declares T2.44:c1..c4 1:1, landed as commit 936c245 / PR #668), per the
+      file's convention and the validate_platform_roadmap rule that met_by must resolve to a real
+      PLAN-{slug}.yaml or a 40-hex sha; this 2026-07-31 sweep is the VERIFICATION event, recorded
+      here in the progress_note rather than in met_by.
+      HOW EACH WAS VERIFIED. c1: the reject-empty validation exists but NOT at the location the
+      criterion's text names -- it lives in terraform/github/variables.tf:29-32 (the variable's own
+      declaration block), not environments.tf, with condition
+      `length(var.gated_apply_reviewer_user_ids) > 0` and an error_message naming the exact failure
+      mode ("an empty list silently disables the tf-gated-apply required-reviewer gate"); confirmed
+      wired to the gate at terraform/github/environments.tf:35 (`users =
+      var.gated_apply_reviewer_user_ids`), so the criterion's INTENT (the Environment cannot
+      silently no-op its reviewer gate) is satisfied and only its file pointer is stale.
+      c3: proven against LIVE AWS, not source. `aws iam get-role-policy --role-name PlatformDev
+      --policy-name DailyOps` shows both Deny Sids present in the deployed inline policy:
+      DenyStateAndConvergenceWrite and DenyStateRead. `aws iam simulate-principal-policy` against
+      the PlatformDev role ARN returned explicitDeny on all four surfaces -- s3:GetObject on
+      tfstate/personal/sandbox/terraform.tfstate, s3:PutObject on the same key, s3:PutObject on
+      tfplan/personal/plan.bin, and s3:PutObject on convergence/personal/sandbox.json -- each with
+      MatchedStatements resolving to the role_PlatformDev_DailyOps identity policy. The criterion's
+      "portal + runtime smoke are unaffected" clause is proven positively, not assumed: the
+      PlatformDev assume-role chain still resolves (`sts get-caller-identity` returns
+      assumed-role/PlatformDev) and a live ops-portal WRITE succeeded through it in this same
+      session (update_rec on rec-2920), so the Denies fence the escalation surface without wedging
+      the runtime identity. Source of truth for the statements is
+      terraform/personal/platform_roles.tf:210-229.
+      c4: terraform/CLAUDE.md:66 documents "ExternalId-based state recovery is admin-tier-only
+      (DEP-13 / T2.44 / Decision 144 pt.3)", naming PlatformAdmin as the only tier permitted to read
+      tfstate/personal/* and pointing at the DenyStateRead statement as the enforcement.
+      THIS CLOSES THE AUDIT'S DEP-13 FINDING. The escalation chain the finding named -- PlatformDev
+      reading either ExternalId out of tfstate's assume_role_policy trust documents and escalating
+      to PlatformAdmin -- is closed in LIVE AWS, not merely in source: the deny is deployed, it
+      simulates explicitDeny, and the admin-tier-only recovery procedure is documented. The gap
+      DEP-13 appeared to still have was the UNTICKED PROOF CRITERION, not the control. The control
+      landed in #668 (commit 936c245) on 2026-07-21; the roadmap was simply never updated to record
+      the proof.
+      c2 LEFT OPEN -- DEFECTIVE CRITERION WORDING, NOT MISSING WORK, ADJUDICATION NEEDED. Half one
+      is verified: .github/workflows/deploy.yml is absent (deleted in 936c245), the live fleet is 19
+      workflows, no live workflow/config/doc/test references it, and the orphan `deploy` entry was
+      removed from config/ci_rca_taxonomy.yaml (whose validate_ci_rca_taxonomy check enumerates the
+      live fleet and is the actual fleet-coupled registry). Half three is verified: the
+      workflow-fleet test suite is green -- 41 tests pass across
+      tests/test_check_workflow_agent_safety.py (including test_real_workflows_pass, the
+      files_in_scope-named fleet test, which globs the LIVE workflows dir),
+      tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py, tests/test_terraform_drift_acceptance.py,
+      and tests/test_ci_claude_p_retry.py. Half two -- "the workflow-count/fleet test is updated to
+      the new workflow count" -- CANNOT be verified and cannot be satisfied as literally worded: no
+      test anywhere in the repo asserts a workflow count, commit 936c245 touched ZERO test files,
+      and every fleet test is a dynamic glob that self-adjusts on deletion so no update was ever
+      required. The phrasing traces to the audit's speculative proposed_change line
+      (audits/terraform-deploy-redesign-b67955b.yaml:1034, "Delete .github/workflows/deploy.yml;
+      update the workflow-count test.") which assumed a count test that never existed. Note the
+      SAME audit finding's own `acceptance` field (line 1035) reads "File absent; fleet tests
+      green." -- i.e. the operative DEP-09 acceptance bar is fully met. Additionally, tests/CLAUDE.md
+      ("Test-count coupling") explicitly FORBIDS asserting an exact `len(X) == N` against a
+      production collection that grows by addition, so creating a workflow-count assertion to
+      satisfy this clause would violate repo policy. RECOMMENDED ADJUDICATION (operator, not
+      inferred here): re-word c2 to the audit's own acceptance -- "deploy.yml is deleted and the
+      workflow-fleet test suite is green" -- and tick it; then T2.44 has all four criteria met and
+      qualifies for complete. No implementation work is outstanding on this item.
 
   - id: T2.45
     tier: T2
@@ -5383,6 +5450,81 @@ tier_items:
       Scoped to the DEP-01/DEP-02 live-proof only -- NOT a whole-Decision-144-audit-complete claim;
       T2.44/T2.45 remain not_started, so item status stays in_progress (that determination is the
       overseer's G3 call, out of this plan's scope).
+      2026-07-30 (PLAN-iam-write-surface-completion): THIRD INSTANCE of one defect class --
+      headline verb granted, structurally-required companion verb missing or narrower (rec-2831
+      iam:PassRole for lambda:CreateFunction; rec-2842 iam:TagRole enumerated while iam:CreateRole
+      was at role/agent-platform-*; rec-2882 iam:ListInstanceProfilesForRole, which killed the live
+      gated DESTROY). ROOT CAUSE: the write-side exhaustiveness guard was DEAD CODE --
+      _write_coverage.py branched on `rtype in APPLY_WRITTEN_TYPES and rtype not in WRITE_COVERAGE`,
+      unsatisfiable by construction, with WRITE_COVERAGE hand-listing 5 of the 30 resource types in
+      terraform/personal, while the read side was discovery-driven (which is why read gaps closed
+      and write gaps recurred). This plan fixes the whole class in ONE human-gated bootstrap apply:
+      it deletes the dead branch for a discovery-driven write sweep, adds the mandatory-declaration
+      LIFECYCLE_COMPANIONS table (every WRITE_COVERAGE type must answer create/update/delete; an
+      empty answer needs a justification) plus Tag/Untag symmetry and read>=write scope parity, and
+      lands the grant changes. RELOCATION (the enabler): the inline identity policy measured
+      10,156 B of the 10,240 B AWS hard limit (84 B headroom, 33 statements) and the remediation
+      costs ~2,384 B, so the 11 read-only Sids MOVE to a new customer-managed policy
+      agent-platform-github-ci-apply-reads attached to the same role -- reads move, authority stays
+      (every write Sid and both Denies remain inline; post-change inline 8,580 B, reads 3,998 B,
+      boundary 1,548 B). That split, its load-bearing reversal ORDER (restore inline reads FIRST,
+      then detach -- a bare detach strips the refresh-read surface and fails every later CD plan
+      with AccessDenied before the guard runs, locking the CD path out of its own recovery), its
+      post-move protection model and its reversal conditions are recorded as DECISION 156, authored
+      by this plan. NAMED EXCEPTION RETAINED: the IAM read quartet stays ENUMERATED rather than
+      widened to role/agent-platform-* -- widening would relax _read_coverage.ENUMERATED_IAM_TYPES'
+      literal_only assertion, the live enforcement of Decision 129 pt 2 + pt 4(iii) with Decision
+      144 pt 5; the exception is recorded as the sole entry of _write_symmetry's
+      READ_SCOPE_PARITY_EXEMPT, collocated with the rule it exempts, and a follow-on rec revisits
+      the widening on its own merits. CLASS-CLOSURE HONESTY: this is the necessary precondition for
+      class closure, not class closure itself -- no static check can enumerate a verb nobody knows
+      the provider calls; the class-closing item is empirical (read-only CloudTrail for
+      PlatformAdmin, or an Athena-backed CloudTrail table), filed as a High follow-on rec. TEARDOWN
+      DECOUPLED (out of this plan, owned by the sibling plan, slug reconcile-stale-plan-coverage,
+      which fixes rec-2847's reconcile.yml recovery semantics FIRST and only then tears down
+      through the repaired CD path): the DEP-02 probe role agent-platform-probe-liveproof-role
+      remains LIVE and the sandbox convergence record remains RED at 99eb274, which CONTINUES to
+      block terraform/personal CD applies until the sibling completes -- an accepted, stated cost
+      of the split, not an oversight. Dependency stated in both directions: this plan is a HARD
+      PREDECESSOR of the sibling's teardown (the teardown cannot run until this plan's human-gated
+      bootstrap apply has landed, because it needs iam:ListInstanceProfilesForRole and
+      iam:RemoveRoleFromInstanceProfile live). rec-2847 is REFERENCED, never bundled here. No
+      criterion or item status flip in this note: c1-c5 remain met, c6 remains open (out of scope),
+      item stays in_progress.
+      2026-07-31 (PLAN-reconcile-stale-plan-coverage, teardown half): ROUTE A TAKEN -- fix rec-2847's
+      reconcile.yml recovery semantics FIRST, then tear down through the repaired CD path. The
+      break-glass admin route B was never invoked. The fix merged as e994264 (PR #809) and is
+      ratified as DECISION 158, which numbers apply-reconcile's complete terminal route set, the
+      pre-existing but never-numbered fresh-replan substitution on the STALE route, what Decision 77
+      PRESERVES (guard-to-apply ARTIFACT identity) versus the reviewer-vs-apply DIFF identity it
+      nowhere ratified, and the accepted, human-adjudicated permanent narrowing of the
+      tf-gated-apply Environment's reach. TEARDOWN OUTCOME -- reconcile.yml workflow_dispatch run
+      30589703121 (2026-07-30, all three jobs conclusion=success): the repaired route worked live.
+      `Resolve fresh-plan entry condition` succeeded; the previously STRUCTURALLY UNREACHABLE `Fresh
+      re-plan (STALE_PLAN_FRESH_REPLAN fallthrough)` step succeeded with FRESH_REASON=guard_routed;
+      the fresh plan.bin uploaded as RECONCILE_FRESH_PLAN_ARTIFACT and its digest verified on
+      download; `Fetch saved plan from S3 (gated)` skipped; and the gated apply applied the FRESH
+      plan verbatim. All three teardown effects confirmed: (1) the DEP-02 probe role
+      agent-platform-probe-liveproof-role is GONE from live AWS (iam:GetRole returns NoSuchEntity);
+      (2) the orphaned aws_iam_role.probe_dep02 entry is gone from the terraform/personal state (0
+      entries remain -- the gated destroy removed it, so the third teardown step was a check, not an
+      action), and terraform/personal now plans clean, that orphan having been the blocker; (3) the
+      sandbox convergence record is GREEN at commit 99eb2740c440, run_id 30589703121, unblocking
+      terraform/personal CD applies. This discharges the "accepted, stated cost" the 2026-07-30
+      entry above recorded as outstanding. FOLLOW-ON RECS: rec-2918 (High -- rec-2847's UNLANDED
+      part (b), the single-heal-verb demotion of terraform-apply-sandbox's acknowledge_red_commit to
+      a refuse-with-pointer at Reconcile, plus part (c)'s generalisation of recovery-workflow-topology
+      to every dispatch-reachable red-recovery flow; it is named in rec-2847's rewritten resolution
+      as the OWNER of part (b), which is what makes that closure partial-and-honest rather than a
+      blanket claim), rec-2919 (Medium -- make reconcile.yml ci-rca-watchable: job-granularity split
+      of the benign no-op refusal, red-record ANCHOR_SHA anchoring for the reconcile slug, and
+      registration in both watch-set sites; an upgrade, not a defect report, since Decision 154
+      point 6 already ratifies the current non-watch), rec-2920 (Medium -- the T2.47 status/criteria
+      coherence adjudication, filed rather than fixed inline per Status-Trusted-Never-Inferred). A
+      fourth planned rec (lambda-manifest over-inclusion of docs/ROADMAP-PLATFORM.yaml) was NOT
+      filed: open rec-2910, filed by the sibling plan on 2026-07-30, already owns it exactly.
+      NO status or criterion flip in this note either: c1-c5 remain met, c6 remains open, item stays
+      in_progress, and T2.47 is left untouched for rec-2920 to adjudicate.
 
   - id: T2.49
     tier: T2

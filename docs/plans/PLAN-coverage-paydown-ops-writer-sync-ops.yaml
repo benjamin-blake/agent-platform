@@ -1,0 +1,576 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "coverage-paydown-ops-writer-sync-ops"
+intent: >-
+  Pay scripts/ops_writer.py and scripts/sync/ops.py down to 100% line coverage and remove both
+  from the Decision 159 grandfather roster, and recover scripts/sync/recommendations.py's
+  already-written-but-uncounted coverage by registering it as a concern-split package. Takes the
+  roster from 12 entries to 10. Closes rec-2902.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-coverage-paydown-ops-writer-sync-ops.yaml
+phase: >-
+  Coverage-debt paydown slice 2, following slice 1 (PLAN-coverage-checker-self-enforcement,
+  merged f688181) and Decision 158/159. Soft-warn category: ad_hoc_rec; no tier_item named.
+  rec-2914 remains the roster-wide tracker across all remaining slices.
+scope:
+  - file: tests/ops_writer/test_drain.py
+    action: Create
+    purpose: >-
+      NEW module covering drain() -- 29 of ops_writer.py's 79 uncovered statements, and the
+      specific target of rec-2902. CRITICAL (Decision 84 I-4): cover the loop using ONLY tables
+      that legitimately drain. ops_session_log exercises the `table in _OPS_TABLE_NAMES` branch
+      (dt= partition key) and any telemetry_* table exercises the else branch (trade_date key),
+      so every statement is reachable without ever asserting that a DuckLake-migrated table
+      drains. No test here may assert put_object for ops_decisions or ops_priority_queue --
+      that would encode as blessed the exact resurrection behaviour the warehouse invariant
+      forbids. The missing production guard is rec-2929, deliberately NOT fixed here (see
+      constraints). Name is collision-free: tests/ops_writer/ has no test_drain.py today.
+  - file: tests/ops_writer/test_compact_paths.py
+    action: Create
+    purpose: >-
+      NEW module covering compact() -- 17 statements in compact() proper PLUS the 14 in
+      _parse_list, which is a CLOSURE DEFINED INSIDE compact() (scripts/ops_writer.py:415-429,
+      nested under `for col in _LIST_COLUMNS:` / `if col in df.columns:` and invoked at line 431
+      via df[col].apply(_parse_list)). It is NOT importable at module scope: its statements are
+      reachable only by driving compact() with a DataFrame carrying a dependencies/tags column.
+      31 statements total. A new module rather than growth of test_compact.py (329/500 SLOC) or
+      test_compact_edge_cases.py (228/500), per Decision 128/130 decompose-by-default.
+  - file: tests/ops_writer/test_client_helpers.py
+    action: Create
+    purpose: >-
+      NEW module covering the remaining 19 statements across the client/boundary helpers --
+      _get_boto3_session (6), _refresh_view (6), _bucket (4), write (3). NOTE _parse_list is
+      NOT here: it is a closure inside compact() and belongs to test_compact_paths.py.
+      Collision-free (existing module is test_client_bucket.py). These are the integration-
+      boundary statements Decision 48's SPIRIT flag names: assert the CONTRACT (correct client,
+      verb and arguments; the loud raise on failure per Decision 55), not mere line execution.
+  - file: tests/sync/ops/test_upsert_cache.py
+    action: Create
+    purpose: >-
+      NEW module covering upsert_cache_row (18) and warm_sync (10) -- 28 of sync/ops.py's 83
+      uncovered statements.
+  - file: tests/sync/ops/test_coercion_edges.py
+    action: Create
+    purpose: >-
+      NEW module covering the coercion helpers' uncovered branches -- _coerce_rows_list (8),
+      _coerce_ops_execution_plans_row (8), _coerce_ops_decisions_row (4), _coerce_athena_array
+      (4) = 24 statements. Collision-free (existing module is test_coercion.py).
+  - file: tests/sync/ops/test_cli_and_rejects.py
+    action: Create
+    purpose: >-
+      NEW module covering the remaining 31 statements -- _write_decisions_sync_reject (7),
+      check_sso (6), outbox_summary (3), main (3), drain (3), _write_sync_reject (2), plus the
+      residual scattered lines. Collision-free (existing module is test_sync_cli.py).
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      ONE line only (option D): add "scripts/sync/recommendations.py" to
+      _CONCERN_SPLIT_TEST_PACKAGES. Slice 1 made that membership independently sufficient, so
+      this alone repoints the mapping from the flat tests/test_sync_recommendations.py to the
+      directory tests/sync/recommendations/ (verified by simulated registration). NOTE: slice 1
+      took this file to 100% and REMOVED it from the roster, so it now carries the unbaselined
+      100% requirement -- touching it re-subjects it to its own gate. Adding a string to a
+      module-level frozenset literal is executed at import and adds no uncovered statement, but
+      VP step 8 verifies that rather than assuming it. This file is NOT Lambda-packaged
+      (compute_affected_artifacts -> {}), so it does not affect the V2 determination.
+  - file: tests/test_coverage_checker/test_coverage_checker_map.py
+    action: Modify
+    purpose: >-
+      Option D FLIPS a mapping this module pins, so it must change in the same PR or the suite
+      reddens. Verified empirically by simulating the one-line registration: 2 failed / 90
+      passed. Line 84 asserts map_source_to_test(scripts/sync/recommendations.py) ==
+      ROOT/"tests"/"test_sync_recommendations.py". Do NOT merely flip the expected value: the
+      test is named test_maps_still_grandfathered_sync_sibling_to_flat_home and its docstring
+      encodes a deliberate regression guard (that Wave 10's retirement of test_sync_ops.py did
+      not perturb the family-sibling prefix rule). Repoint it to
+      scripts/sync/ducklake_version.py -- verified a clean substitute: it maps to the flat
+      tests/test_sync_ducklake_version.py, is in NONE of _RETIRING_GRANDFATHER_HOMES,
+      _ALL_MIRROR_TARGET_HOMES or _CONCERN_SPLIT_TEST_PACKAGES, and its target file exists --
+      so the guard survives. Update its docstring too -- the existing wording cites "Wave 10's
+      retirement of test_sync_ops.py" as the thing being guarded against, which would otherwise
+      describe a different assertion than the one beneath it. Then ADD a new positive test
+      asserting scripts/sync/recommendations.py -> tests/sync/recommendations as the
+      concern-split case.
+  - file: tests/test_coverage_checker/test_coverage_checker_grandfather.py
+    action: Modify
+    purpose: >-
+      Same flip inside the whole-map oracle dict at line 51: change the
+      ROOT/"scripts"/"sync"/"recommendations.py" case from ROOT/"tests"/"test_sync_recommendations.py"
+      to ROOT/"tests"/"sync"/"recommendations". This is a value correction, not a guard
+      deletion -- the oracle's purpose is to pin the whole map, so the new value IS the point.
+  - file: tests/sync/recommendations/__init__.py
+    action: Create
+    purpose: Per-package __init__.py required by Decision 131 cl.4 for every mirror test dir.
+  - file: tests/sync/recommendations/test_sync_recommendations.py
+    action: Create
+    purpose: >-
+      Moved from tests/test_sync_recommendations.py (162 SLOC) via `git mv`, then ONE required
+      depth correction in a separate commit: line 12's
+      `Path(__file__).resolve().parent.parent` must become `.parent.parent.parent.parent`.
+      From tests/ two levels reaches the repo root; from tests/sync/recommendations/ it reaches
+      tests/sync, yielding <root>/tests/sync/scripts/sync/recommendations.py -- a path that does
+      not exist, so spec_from_file_location raises at import and all 15 tests in the module are
+      lost as a COLLECTION error (not a test failure). Verified: 4 levels reaches the root.
+  - file: tests/sync/recommendations/test_sync_recommendations_decisions.py
+    action: Create
+    purpose: >-
+      Moved verbatim from tests/test_sync_recommendations_decisions.py (91 SLOC) via `git mv`.
+      This is the module whose coverage the flat mapping was discarding -- it is the entire
+      source of the 20-statement recovery.
+  - file: tests/test_sync_recommendations.py
+    action: Delete
+    purpose: Superseded by the package member above (git mv source).
+  - file: tests/test_sync_recommendations_decisions.py
+    action: Delete
+    purpose: Superseded by the package member above (git mv source).
+  - file: config/coverage_baseline.yaml
+    action: Modify
+    purpose: >-
+      REMOVE the scripts/ops_writer.py (75.4) and scripts/sync/ops.py (73.6) entries once both
+      measure 100.0, and RAISE scripts/sync/recommendations.py from 61.0 to 78.0 (its measured
+      value once its second test module counts -- verified: 61.0% mapped-home-only vs 78.0%
+      with both modules, 46 -> 26 missing of 118). All three edits are unrestricted under
+      Decision 159 cl.3 (removals and raises need no marker). Roster goes 12 -> 10 entries.
+      sync/recommendations.py is deliberately RAISED, not removed: its residual 26 statements
+      stay owned by rec-2914 rather than being absorbed into this slice.
+bundled_recommendations:
+  - rec-2902
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/ops_writer.py measures 100.0% through the gate's own measurement path (was 75.77%,
+    79 of 326 statements missing) and has no entry in config/coverage_baseline.yaml.
+  - >-
+    scripts/sync/ops.py measures 100.0% through the same path (was 73.65%, 83 of 315 missing)
+    and has no entry in config/coverage_baseline.yaml.
+  - >-
+    Option D mapping: map_source_to_test(scripts/sync/recommendations.py) returns the DIRECTORY
+    tests/sync/recommendations, and the file measures 77.97% raw -- which is what the gate
+    compares, `round(measured, 1) >= threshold`, so 78.0 >= 78.0 passes (was 61.0% against the
+    flat mapped file). Its roster entry is raised to 78.0, not removed.
+  - >-
+    Decision 84 compliance: no test in tests/ops_writer/ asserts that a DuckLake-migrated table
+    (ops_decisions, ops_priority_queue) is drained or put_object'd. drain() reaches 100% via
+    ops_session_log and telemetry_* alone.
+  - >-
+    scripts/test_coverage_checker.py still measures 100.0% after its one-line edit (it left the
+    roster in slice 1, so it now carries the unbaselined 100% requirement).
+  - >-
+    Stale-reference sweep: no file outside docs/plans/** still references
+    tests/test_sync_recommendations.py or tests/test_sync_recommendations_decisions.py, and
+    neither old path exists on disk.
+  - >-
+    Every new test module is under 500 SLOC by the gate's own counting rule, no
+    config/sloc_budgets.yaml entry is added, and no per-package conftest.py is introduced in
+    tests/ops_writer/ or tests/sync/ops/ (Decision 153: a sub-conftest forces its subtree
+    uncapped with no fast-tier budget waiver).
+  - >-
+    Boundary-contract quality (review-verified, not mechanically checkable): every new test
+    exercising an S3/DuckLake boundary asserts the call contract -- client, verb and arguments
+    -- and the loud-raise path, rather than merely executing the line. Removing these roster
+    entries is a LINE-COVERAGE claim, not an integration-behaviour claim (Decision 48).
+  - >-
+    rec-2902 is closed; rec-2914 remains open as the roster tracker; rec-2929 (the drain()
+    never-drain guard) remains open and unaddressed by this plan.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Measure scripts/ops_writer.py through the gate's own path and assert 100%, with a
+      non-vacuity guard so a missing measurement fails loudly rather than reading as a pass.
+    command: >-
+      bin/venv-python -c "import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.');
+      s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
+      m=importlib.util.module_from_spec(s); s.loader.exec_module(m);
+      from scripts.checks.misc import coverage_baseline as cb;
+      p=(pathlib.Path.cwd()/'scripts/ops_writer.py').resolve();
+      pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test,
+      is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess);
+      v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement (dead gate): {pcts} {errs}';
+      assert v>=100.0, f'{v}% < 100%'; print(f'ops_writer {v:.2f}%')"
+    expected: Prints 100.00%.
+    fix_if: >-
+      Below 100 - list residual lines with `pytest tests/ops_writer --cov=scripts
+      --cov-report=term-missing` and extend the new modules. None measurement - the package
+      target is empty or unmapped.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ops-writer-at-100
+  - step: 2
+    phase: pre-deploy
+    action: Same measurement for scripts/sync/ops.py.
+    command: >-
+      bin/venv-python -c "import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.');
+      s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
+      m=importlib.util.module_from_spec(s); s.loader.exec_module(m);
+      from scripts.checks.misc import coverage_baseline as cb;
+      p=(pathlib.Path.cwd()/'scripts/sync/ops.py').resolve();
+      pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test,
+      is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess);
+      v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement (dead gate): {pcts} {errs}';
+      assert v>=100.0, f'{v}% < 100%'; print(f'sync/ops {v:.2f}%')"
+    expected: Prints 100.00%.
+    fix_if: Below 100 - same diagnosis against tests/sync/ops.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: sync-ops-at-100
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Option D - the mapping repoints to the package directory and the recovered coverage is
+      real (>= 78.0%, up from 61.0%).
+    command: >-
+      bin/venv-python -c "import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.');
+      s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
+      m=importlib.util.module_from_spec(s); s.loader.exec_module(m);
+      p=(pathlib.Path.cwd()/'scripts/sync/recommendations.py').resolve();
+      t=m.map_source_to_test(p); assert t is not None and t.is_dir() and t.name=='recommendations', t;
+      from scripts.checks.misc import coverage_baseline as cb;
+      pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test,
+      is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess);
+      v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement: {pcts} {errs}';
+      assert round(v,1)>=78.0, f'{v}% (rounded {round(v,1)}) < 78.0 -- recovery did not land'; print(f'sync/recommendations {v:.2f}% -> rounds to {round(v,1)} via {t}')"
+    expected: >-
+      Prints ~77.97% -> rounds to 78.0, and the tests/sync/recommendations directory path.
+      The assertion deliberately mirrors coverage_baseline.compare(), which is
+      `round(measured_pct, 1) >= threshold` -- the raw value is 92/118 = 77.966%, so a raw
+      `>= 78.0` comparison would FAIL a correct implementation while the gate itself passes.
+    fix_if: >-
+      Still maps to the flat file - the _CONCERN_SPLIT_TEST_PACKAGES line was not added.
+      Rounded value below 78.0 - the second test module did not move into the package. Do NOT
+      respond by writing extra tests: this slice deliberately caps sync/recommendations.py at
+      register+move+raise, and its residual 26 statements are rec-2914's.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: sync-recommendations-concern-split-recovery
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Decision 84 guard - prove drain() coverage was NOT bought by blessing migrated-table
+      draining. The new drain module must exist and must not name a migrated table.
+    command: >-
+      test -f tests/ops_writer/test_drain.py && ! grep -qE 'ops_decisions|ops_priority_queue'
+      tests/ops_writer/test_drain.py && echo 'drain tests use only legitimately-drainable tables'
+    expected: Exit 0, prints the confirmation.
+    fix_if: >-
+      grep hits - a test asserts behaviour on a DuckLake-migrated table. Rewrite it against
+      ops_session_log (covers the _OPS_TABLE_NAMES branch) or a telemetry_* table (covers the
+      else branch); both branches are reachable without migrated tables. The production guard
+      is rec-2929's job, not this plan's.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: drain-tests-avoid-migrated-tables
+  - step: 5
+    phase: pre-deploy
+    action: Roster reflects the paydown - two removals and one raise.
+    command: >-
+      bin/venv-python -c "import yaml;
+      e=yaml.safe_load(open('config/coverage_baseline.yaml'))['entries'];
+      assert 'scripts/ops_writer.py' not in e, 'ops_writer still rostered';
+      assert 'scripts/sync/ops.py' not in e, 'sync/ops still rostered';
+      r=e.get('scripts/sync/recommendations.py');
+      assert r is not None and r>=78.0, f'sync/recommendations not raised: {r}';
+      print(f'roster now {len(e)} entries; sync/recommendations raised to {r}')"
+    expected: Prints 10 entries and the raised value.
+    fix_if: >-
+      Entries still present - the measurement steps did not reach 100, so do not delete them.
+      sync/recommendations lowered or removed - it must be RAISED to its measured value; its
+      residual stays owned by rec-2914.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: roster-twelve-to-ten
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep (surface-retiring closure obligation - this plan has Delete rows).
+      Excludes registry.yaml, which may legitimately carry these literals inside a graduated
+      check_spec of this very step (the self-match trap slice 1 hit).
+    command: >-
+      test ! -f tests/test_sync_recommendations.py && test ! -f tests/test_sync_recommendations_decisions.py
+      && { grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md
+      --exclude=registry.yaml -e 'tests/test_sync_recommendations\.py'
+      -e 'tests/test_sync_recommendations_decisions\.py'
+      -e '"tests"[[:space:]]*/[[:space:]]*"test_sync_recommendations'
+      scripts/ config/ tests/ docs/contracts/ .github/ .claude/; test $? -eq 1; }
+      && echo 'no stale references to the moved modules'
+    expected: Exit 0, prints the confirmation.
+    fix_if: >-
+      grep finds a hit - repoint it. Check config/agent/verification_registry/registry.yaml
+      separately by hand for a node_id referencing either moved path, since it is excluded here.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: sync-recommendations-move-no-stale-refs
+  - step: 7
+    phase: pre-deploy
+    action: Run all three affected test packages.
+    command: bin/venv-python -m pytest tests/ops_writer tests/sync/ops tests/sync/recommendations -q
+    expected: Exit 0; every existing test still passes from its location and all new tests pass.
+    fix_if: >-
+      Collection error in tests/sync/recommendations - FIRST SUSPECT is the _MODULE_PATH depth
+      in test_sync_recommendations.py (line 12): the move added two directory levels, so
+      `.parent.parent` must become `.parent.parent.parent.parent`. Only after ruling that out,
+      check the package __init__.py and whether any tests.fixtures import still resolves.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: paydown-packages-suite
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      The one-line edit to scripts/test_coverage_checker.py did not cost it the 100% it reached
+      in slice 1 (it is off the roster, so it carries the unbaselined 100% requirement).
+    command: >-
+      bin/venv-python -c "import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.');
+      s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
+      m=importlib.util.module_from_spec(s); s.loader.exec_module(m);
+      from scripts.checks.misc import coverage_baseline as cb;
+      p=(pathlib.Path.cwd()/'scripts/test_coverage_checker.py').resolve();
+      pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test,
+      is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess);
+      v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement: {pcts} {errs}';
+      assert v>=100.0, f'checker regressed to {v}%'; print(f'checker still {v:.2f}%')"
+    expected: Prints 100.00%.
+    fix_if: >-
+      Below 100 - the added line introduced an uncovered statement; it must be a plain string
+      inside the existing frozenset literal, not a conditional or a computed value.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Not differentially admissible - scripts/test_coverage_checker.py already measures 100% on
+      origin/main (slice 1 put it there), so this assertion passes identically before and after
+      the change and cannot demonstrate FAIL-on-revert. It is retained as a genuine regression
+      guard on a file this plan touches while it carries an unbaselined 100% requirement, which
+      is exactly the condition under which a silent drop would redden main.
+  - step: 9
+    phase: pre-deploy
+    action: SLOC ceiling on every new and moved module, and no new sloc_budgets entry.
+    command: >-
+      bin/venv-python -c "from pathlib import Path;
+      fs=[f for d in ('tests/ops_writer','tests/sync/ops','tests/sync/recommendations')
+      for f in sorted(Path(d).glob('*.py'))];
+      bad=[(f.as_posix(),n) for f in fs for n in [len([l for l in
+      f.read_text(encoding='utf-8').splitlines() if l.strip() and not l.strip().startswith('#')])] if n>500];
+      assert not bad, bad;
+      b=Path('config/sloc_budgets.yaml').read_text();
+      assert not any(x in b for x in ('tests/ops_writer','tests/sync/ops','tests/sync/recommendations')), 'budget entry added';
+      print(f'{len(fs)} modules all under 500 SLOC')"
+    expected: Exit 0, prints the module count.
+    fix_if: >-
+      A module is over - split it further inside its package. Do NOT register a budget raise
+      (Decision 128 decompose-by-default).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Passes on origin/main too - the existing modules are all already under 500 and the new
+      ones simply do not exist there, so the assertion holds vacuously on revert and cannot
+      demonstrate FAIL-on-revert. Retained as a ceiling guard for this PR; the durable
+      enforcement surface is validate_sloc_limits (whole-repo, full tier).
+  - step: 10
+    phase: pre-deploy
+    action: Fast-tier presubmit.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0. validate_no_cross_test_imports and validate_placement both pass with the new
+      tests/sync/recommendations package.
+    fix_if: >-
+      Cross-test-import failure - a new or moved module imports another test module; route
+      shared helpers through tests/fixtures/ (the Decision 131 cl.2-exempt channel), never a
+      per-package conftest.py (Decision 153 budget risk).
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Full-tier presubmit - the only tier validate_test_coverage runs in, and the run that
+      proves the three touched source files satisfy the gate together.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0. The test-coverage section lists the changed source files with 0 below baseline.
+      A report of "No source file changes to check." is a FAILURE of this step, not a pass.
+    fix_if: Coverage errors - a changed file measures below its (now absent or raised) baseline.
+    hermetic: false
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: Closure obligation - rec-2902 auto-closed via the Resolves trailer.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json;
+      rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()];
+      st={r['id']:r['status'] for r in rows if r['id'] in ('rec-2902','rec-2914','rec-2929')};
+      assert st.get('rec-2902')=='closed', st;
+      assert st.get('rec-2914')=='open' and st.get('rec-2929')=='open', f'tracker/guard wrongly closed: {st}';
+      print(st)"
+    expected: rec-2902 closed; rec-2914 and rec-2929 still open.
+    fix_if: >-
+      rec-2902 still open - rec-autoclose.yml did not fire; fall back to
+      "bin/venv-python -m scripts.ops_data_portal --update-rec rec-2902 --status closed
+      --resolution <text>" per Decision 70.
+constraints:
+  - >-
+    HARD, and the single highest-risk constraint in this plan: DO NOT modify
+    scripts/ops_writer.py. It is packaged into TWO ACTIVE Lambda artifacts (data-pipeline,
+    ops-compaction), so Decision 79's manifest-graph rule would flip this plan from V2 to V3 and
+    demand per-Lambda build + deploy + smoke-test steps. Verified: test paths return {} from
+    compute_affected_artifacts, the source path does not. If a test seam, a pragma, or any other
+    source edit seems necessary, STOP and re-plan as V3 rather than editing it.
+  - >-
+    Decision 84 I-4: no test may assert that a DuckLake-migrated table (ops_decisions,
+    ops_priority_queue) is drained. drain() reaches 100% via ops_session_log for the
+    _OPS_TABLE_NAMES branch and telemetry_* for the else branch. The production function's
+    missing never-drain guard is rec-2929 and is deliberately out of scope here -- fixing it
+    means editing ops_writer.py, which is the V3 trigger above.
+  - >-
+    Decision 48 SPIRIT: these are integration-boundary statements (_get_boto3_session, _bucket,
+    drain, warm_sync, check_sso), and Decision 48 exists because a pipeline once shipped with
+    100% mocked coverage and 7 live bugs. Assert the call contract -- client, verb, arguments --
+    and the loud-raise path (Decision 55), not mere line execution. A mock that swallows a raise
+    converts a loud failure into a covered line, which is worse than the uncovered line. At the
+    S3 boundary prefer botocore.Stubber over a bare MagicMock: it validates the request shape
+    against the real botocore service model, which turns "asserted the call contract" from a
+    reviewer judgement into a machine-checked one.
+  - >-
+    Decision 153: do NOT add a conftest.py to tests/ops_writer/ or tests/sync/ops/. A
+    sub-conftest sets conftest_subtree_forced, which force-selects its whole subtree into the
+    --pre affected set WITHOUT the full_suite_forced budget waiver (that fires only for the root
+    tests/conftest.py), so it can hard-fail the 300s fast-tier budget. Shared setup goes in
+    tests/fixtures/ -- which is also the Decision 131 cl.2 cross-test-import-exempt channel and
+    already hosts tests/fixtures/ops_writer_helpers.py (make_writer).
+  - >-
+    Decision 88 / rec-2484: never construct a live AWS client. The root tests/conftest.py already
+    guards boto3/botocore create_client and applies --disable-socket; mock via
+    unittest.mock.patch, moto, or a botocore Stubber. Follow the established idiom in
+    tests/ops_writer/test_compact.py (patch _AWR_AVAILABLE / _BOTO3_AVAILABLE, patch.object the
+    writer's _get_boto3_session, patch scripts.ops_writer.wr).
+  - >-
+    New tests must not leak into logs/.ops-outbox/. The collection-time guard from
+    PLAN-outbox-test-hermeticity aborts the WHOLE pytest run when files appear under a retired
+    outbox dir, so a leaking test breaks every other suite, not just its own.
+  - >-
+    Move the two sync/recommendations test modules with `git mv`. The ONLY permitted content
+    edit is a required depth correction, made as a SEPARATE commit after the move:
+    tests/test_sync_recommendations.py line 12 reads
+    `Path(__file__).resolve().parent.parent / "scripts" / "sync" / "recommendations.py"`, which
+    resolves to the repo root from tests/ but to tests/sync from the new package -- yielding a
+    non-existent path and a spec_from_file_location ImportError that takes all 15 of that
+    module's tests out as a COLLECTION error. It must become `.parent.parent.parent.parent`
+    (verified: 4 levels reaches the root from tests/sync/recommendations/). The sibling module
+    needs no edit -- it uses the absolute `from scripts.sync.recommendations import ...`.
+  - >-
+    scripts/test_coverage_checker.py gets exactly ONE new line (the
+    _CONCERN_SPLIT_TEST_PACKAGES entry). It left the roster in slice 1 and therefore carries the
+    unbaselined 100% requirement -- any edit that adds an uncovered statement reddens the gate.
+  - >-
+    No rescue agents or workaround loops (Decision 55). If a statement proves genuinely
+    unreachable, raise that file's baseline to the achieved value and record the residual
+    against rec-2914 rather than weakening a VP step.
+context:
+  - >-
+    Measured scope (current main, via the gate's own measurement path): scripts/ops_writer.py
+    75.77%, 79 of 326 statements missing -- drain() 29 (the largest single gap),
+    compact() proper 17, _parse_list() 14 (a closure inside compact(), reachable only through
+    it), _get_boto3_session() 6, _refresh_view() 6, _bucket() 4, write() 3 = 79 exactly. scripts/sync/ops.py
+    73.65%, 83 of 315 missing -- upsert_cache_row() 18, warm_sync() 10, _coerce_rows_list() 8,
+    _coerce_ops_execution_plans_row() 8, _write_decisions_sync_reject() 7, check_sso() 6,
+    _coerce_ops_decisions_row() 4, _coerce_athena_array() 4, outbox_summary() 3, main() 3,
+    drain() 3, _write_sync_reject() 2. Total 162 statements of genuine test-writing -- unlike
+    slice 1 there is NO mapping artifact to recover on these two files (whole-suite ceiling vs
+    mapped-home differs by only 1 and 22 statements respectively, and the 22 for sync/ops is
+    absorbed by taking it to 100 anyway).
+  - >-
+    Option D quantified: scripts/sync/recommendations.py measures 61.0% against its flat mapped
+    home (tests/test_sync_recommendations.py) and 78.0% when its sibling
+    test_sync_recommendations_decisions.py is also counted -- 46 vs 26 missing of 118, so
+    exactly 20 statements are already-written-but-uncounted. Slice 1's decoupling is what makes
+    the one-line registration effective; verified by simulated registration that it repoints to
+    tests/sync/recommendations. Capped deliberately at register+move+raise per the decision-scout
+    gate: chasing the remaining 26 statements would widen this slice for no closure benefit, and
+    that residual is rec-2914's.
+  - >-
+    Verification-tier determination: compute_affected_artifacts over the full scope returns {}.
+    scripts/ops_writer.py DOES map to two active Lambda artifacts, but this plan never modifies
+    it -- only tests/ and config. The manifest graph matches a changed path against a manifest's
+    handlers/includes/assets/config, and no manifest declares any tests/ path. Hence V2, subject
+    to the do-not-touch constraint above.
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 159,
+    Decision 48, Decision 79, Decision 131, Decision 128, Decision 130, Decision 132, Decision
+    148, Decision 135, Decision 55. Flags resolved in-plan: Decision 84 NOTE (drain() covers a
+    retired path) -> constrained to legitimately-drainable tables, production guard split out as
+    rec-2929; Decision 153 NOTE (sub-conftest budget hole) -> constraint forbidding per-package
+    conftest.py; Decision 48 SPIRIT WARN (100% mocked coverage on integration boundaries buys
+    what Decision 48 says it does not) -> contract-assertion constraint plus an acceptance
+    criterion stating the claim's limits plainly. Decision 88 and rec-2484 govern the mocking
+    channel. Decision 124's ops_portal carve-out is unchanged and out of scope.
+  - "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=<verdict> after <N> round(s)"
+  - >-
+    ci-rca deferral rationale (Related-Work check): rec-2923 (Critical, "Sandbox subagent plan
+    review starved twice; apply blocked", .github/actions/subagent-plan-review/action.yml) is
+    unresolved at planning time. This plan shares no file, Decision, or failure category with it.
+    Per operator direction 2026-07-31, that rec is being worked separately and has been split
+    across two in-flight plans the operator named as
+    PLAN-ci-rca-evidence-scope-declaration.yaml and PLAN-ci-rca-abstention-and-citation.yaml.
+    Treat those as descriptive, NOT as resolvable pointers: neither exists under that name, and
+    the nearest on-disk neighbours are PLAN-ci-rca-abstention-and-gate-escape.yaml and
+    PLAN-ci-rca-evidence-dispute.yaml. The deferral does not rest on them -- it rests on the
+    independently-verified fact that rec-2923 targets .github/actions/subagent-plan-review/action.yml
+    and shares no file, Decision, or failure category with this plan.
+  - >-
+    rec-2914 is deliberately NOT bundled. Its scope is the whole roster; after this slice that is
+    still 10 entries and roughly 430 statements, so bundling it would create an unsatisfiable
+    closure obligation. It stays open as the tracker across all remaining slices, and it is the
+    named owner of sync/recommendations.py's raised-but-not-removed residual.
+  - >-
+    rec-2929 was filed during this planning session for the drain() never-drain guard. It is
+    High priority, targets scripts/ops_writer.py, and needs its own V3 plan because fixing it
+    requires editing a Lambda-packaged file. This plan explicitly does not address it and VP
+    step 12 asserts it is still open afterwards, so the split is visible rather than assumed.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - compute_affected_artifacts over the final scope returns {} (V2 guard) -- re-run if scope changes
+  - Confirmed scripts/ops_writer.py is NOT in the edit set
+execution_steps:
+  - >-
+    tests/ops_writer/test_drain.py - cover drain()'s 29 statements using ops_session_log (the
+    _OPS_TABLE_NAMES branch) and a telemetry_* table (the else branch) only. Assert the
+    put_object call contract and the exception path, not just line execution.
+  - >-
+    tests/ops_writer/test_compact_paths.py - cover compact()'s 31 statements.
+  - >-
+    tests/ops_writer/test_client_helpers.py - cover _get_boto3_session, _refresh_view, _bucket
+    and write (19 statements), asserting client/verb/argument contracts. _parse_list is NOT
+    here -- it is a closure inside compact() and belongs to test_compact_paths.py.
+  - >-
+    tests/sync/ops/test_upsert_cache.py, test_coercion_edges.py and test_cli_and_rejects.py -
+    cover sync/ops.py's 83 statements across the three concern groups named in scope.
+  - >-
+    Re-measure between passes with `pytest <package> --cov=<parent dir> --cov-report=term-missing`
+    and target the reported missing lines directly rather than guessing.
+  - >-
+    Option D: add the one _CONCERN_SPLIT_TEST_PACKAGES line to scripts/test_coverage_checker.py,
+    create tests/sync/recommendations/__init__.py, then `git mv` both test modules in with no
+    content edits. Run VP steps 3 and 6 immediately to confirm the mapping and that no stale
+    reference survives.
+  - >-
+    config/coverage_baseline.yaml - remove the ops_writer.py and sync/ops.py entries once VP
+    steps 1 and 2 report 100.0, and raise sync/recommendations.py to its measured value (>= 78.0).
+    Do not touch any other entry.
+  - >-
+    Execute the full Verification Plan - run each pre-deploy step, loop until pass; on
+    unrecoverable failure stop and RCA (Decision 55). Post-deploy step 12 runs after the
+    squash-merge.
+  - >-
+    'Report: measured before/after coverage per file, which statements proved hardest, the final
+    roster size, whether any file took the raise-instead-of-remove fallback, and confirmation
+    that scripts/ops_writer.py was never edited.'
+rollback: >-
+  Single-PR revert restores the prior state: both roster entries return, sync/recommendations
+  reverts to its flat mapping at 61.0, and the new test modules disappear. Safe because that is
+  today's status quo. Note the roster entries must return if the tests are reverted -- reverting
+  the tests while leaving the entries deleted would leave two files unbaselined and subject to a
+  100% requirement they no longer meet, reddening main on the next touch.

@@ -1,0 +1,789 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "autoapply-ratchet-review"
+intent: >-
+  Close T2.48 c6 by making the Decision-92-pt5 widen-on-track-record ratchet a MEASURED act:
+  emit a per-apply, per-change-class auto-apply event journal from the two guard-bearing apply
+  jobs, and run a scheduled review over it that files one deduped recommendation naming which
+  widened change-class has earned a further widening, which must re-narrow, and which is
+  declared-but-unmeasured -- so the authority budget cannot stall silently at v2.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-autoapply-ratchet-review.yaml
+phase: >-
+  Platform T2.48 (Phase-2 allow-list inversion) follow-on mode -- c1..c5 are met; this plan
+  scopes ONLY the single remaining open criterion c6 (the recurring Decision-92 ratchet review).
+  Does not touch the inversion itself, authority_budget.json's VALUES, or the guard's verdict.
+scope:
+  - file: scripts/ci/apply_event.py
+    action: Create
+    purpose: >-
+      Pure, credential-free change-class classifier + event-record builder for one apply attempt,
+      plus a `classes` / `emit` CLI the composite action calls. classify_change_classes(plan,
+      budget) is CO-DERIVED with the guard: it imports scripts.terraform_apply_guard's
+      evaluate_plan / _classify_iam_change / _load_budget rather than restating the rules, so the
+      recorded class vocabulary can never drift from the verdict the guard actually returned (the
+      same single-traversal rationale terraform_apply_guard.build_digest already documents).
+      Bounded vocabulary: one `in_budget_iam:<rtype>:<action>` class per in-budget IAM change
+      (today at most 4, from authority_budget.json's 2 types x 2 actions), the five gated classes
+      the guard's own BLOCK reasons define (gated_iam_out_of_budget, gated_trust_diff,
+      gated_destroy_or_replace, gated_neon_mutation, gated_resource_policy), and `non_iam` for an
+      ordinary auto-applying change. On an internal classification exception it returns the
+      explicit sentinel class `classification_error` rather than [] -- a swallowed error must
+      surface in the ledger as a finding, never as silence.
+  - file: tests/test_apply_event.py
+    action: Create
+    purpose: >-
+      Unit tests for the classifier and event builder. Follows the flat convention its sibling
+      scripts/ci/plan_digest.py uses (tests/test_plan_digest.py); map_source_to_test returns None
+      for scripts/ci/*, so no mirror-package home is implied. Must include the guard-co-derivation
+      property test (VP step 2) and the classification_error sentinel path.
+  - file: .github/actions/record-apply-event/action.yml
+    action: Create
+    purpose: >-
+      Single-copy composite action (DEP-08 discipline -- the same reason write-convergence-record
+      exists once) that classifies the plan.json the guard inspected and PUTs one immutable event
+      object to s3://agent-platform-data-lake/apply-events/personal/<UTC-date>/<run_id>-<job>.json.
+      Runs `if: always()` AFTER write-convergence-record at both call sites so it can never mask or
+      delay the integrity anchor. Records routed episodes too (routed=true, apply_outcome=routed),
+      because the routed frequency of a gated class is the input to "is this class worth widening".
+      TWO-BRANCH FAILURE CONTRACT, and the first branch is load-bearing (Decision 154 alignment):
+      (i) plan.json ABSENT -- a pre-apply failure, where no plan was ever produced and therefore no
+      apply attempt exists to classify -- prints a distinct greppable marker
+      (APPLY_EVENT_SKIPPED_NO_PLAN) and exits 0. It MUST NOT fail the job: Decision 154 exists
+      precisely so a pre-apply failure does not escalate, and a fail-loud missing-file check here
+      would re-escalate it through the back door. (ii) a PUT that fails AFTER a real classification
+      fails loud (Decision 55) -- a silently-dropped event is the vacuity failure this criterion
+      exists to prevent. Branch (ii) adds no NEW failure mode to either job, because
+      write-convergence-record's own fail-loud S3 write with read-back verify already runs
+      immediately before it: any S3 condition that could fail this PUT has already failed the
+      anchor write. The sensor's `unmeasured` finding is the second, independent backstop.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      One new step in the apply-sandbox job only, immediately after the existing
+      write-convergence-record step (~line 351), calling ./.github/actions/record-apply-event with
+      working-directory ${{ env.WORKDIR }}. No change to the guard step, the routed branch, the
+      apply gating, the convergence write, or any job condition. The gated-apply job is
+      deliberately NOT instrumented (see Context -- it re-runs no guard and produces no plan.json).
+  - file: .github/workflows/reconcile.yml
+    action: Modify
+    purpose: >-
+      The symmetric single step in the apply-reconcile job, after its write-convergence-record step
+      (~line 559), so a Reconcile-path apply is journaled identically. gated-apply-reconcile is not
+      instrumented, for the same reason as gated-apply. Two job-specific facts the implementer must
+      honour: (a) consume `steps.resolved.outputs.apply_outcome` / `.routed` -- the RESOLVED triple
+      that already collapses this job's saved-plan and fresh-replan legs -- which is SAFE from a
+      step placed after write-convergence-record because `resolved` is defined before it (contrast
+      Decision 154's inline pre-apply-failure rule, which forbids routing THAT computation through
+      the aggregator); (b) plan.json in WORKDIR is whatever the terminal route produced -- a
+      Decision 158 fresh re-plan overwrites it -- which is correct, because the classifier must
+      describe the plan that was actually applied.
+  - file: scripts/convergence_health/ratchet_review.py
+    action: Create
+    purpose: >-
+      The scheduled review. declared_classes() derives the widened-class roster by READING
+      terraform/bootstrap/authority_budget.json (in_budget_resource_types x in_budget_actions) --
+      never a literal list in this module, so the roster cannot be empty while the budget exists
+      and automatically tracks any future widening. read_apply_events() lists+reads the journal
+      prefix; build_ledger() aggregates per class {auto_applied, incidents, routed,
+      last_auto_apply_at}; ratchet_findings() emits widen_candidate (auto_applied >= threshold AND
+      incidents == 0), narrow_candidate (incidents > 0, which also suppresses widen for that
+      class), unmeasured (a declared class with zero auto-applies for longer than the unmeasured
+      window -- this is what makes the review structurally unable to be silent), and
+      classification_error. detect_ratchet_review() files/updates/closes exactly ONE deduped
+      source="authority_ratchet_review" rec via the ops portal, mirroring
+      detect_prod_code_drift's file/update/close shape. Alarm-not-gate: never amends the budget,
+      never applies, never writes the convergence record or the journal.
+  - file: scripts/convergence_health/__init__.py
+    action: Modify
+    purpose: >-
+      Facade re-export of the new public surface (declared_classes, read_apply_events,
+      build_ledger, ratchet_findings, detect_ratchet_review, find_open_ratchet_review_rec,
+      RATCHET_INCIDENT_FREE_THRESHOLD, RATCHET_UNMEASURED_DAYS, APPLY_EVENTS_PREFIX) plus the
+      main_ratchet_review entry point, matching the existing code_drift/escalate rows.
+  - file: scripts/convergence_health/__main__.py
+    action: Modify
+    purpose: >-
+      Add main_ratchet_review(profile) and a `--ratchet-review` branch in the __main__ dispatch,
+      exactly mirroring the existing --ducklake-drift / --prod-drift shape (try/except, print the
+      result dict, return 1 on exception).
+  - file: tests/convergence_health/test_ratchet_review.py
+    action: Create
+    purpose: >-
+      Tests for the review, including the four anti-vacuity oracles (VP steps 3-6): roster is
+      derived from the budget file, ledger is derived from the event set, an empty journal with a
+      non-empty roster still yields findings, and an incident narrows. All external dependencies
+      (S3 client, portal caller, open_recs, clock) injected, per the package's existing convention.
+  - file: tests/convergence_health/test___main__.py
+    action: Modify
+    purpose: Cover the new --ratchet-review dispatch branch and main_ratchet_review's error path.
+  - file: .github/workflows/convergence-health.yml
+    action: Modify
+    purpose: >-
+      One new step on the existing hourly cron and the existing github_ci_branch identity,
+      mirroring the two code-drift steps verbatim in shape:
+      `.venv/bin/python -m scripts.convergence_health --ratchet-review`. Update the workflow's
+      header comment block to name the third sensor. No new schedule, workflow, identity, IAM
+      grant, permission, or required check.
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Record the apply-event journal in the apply-chain description. environment-taxonomy.md is
+      the declared SOLE SoT for the apply model / guard classification (AGENTS.md, Decision 92
+      pt5), so a new non-gating write inside that chain must be described there or it is drift by
+      construction. Bounded to a short subsection: the prefix, the object grain (one immutable
+      object per apply attempt), the class vocabulary's derivation from the guard, the explicit
+      statement that the journal is EVIDENCE and never a gate or a precondition, and the pointer
+      to the ratchet-review sensor. Does NOT restate any guard-classification rule.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Implement-time bookkeeping only: flip T2.48 c6 open -> met with met_by
+      autoapply-ratchet-review on a verified VP pass, and append a progress_note recording the
+      threshold value, the journal location, and the gated-job instrumentation gap. Item status
+      stays in_progress or is disposed by the overseer -- /implement never infers item completion
+      (Status-Trusted-Never-Inferred, T2.20).
+bundled_recommendations: []
+closes_criteria:
+  - "T2.48:c6"
+infrastructure_dependencies:
+  - >-
+    NONE requiring a terraform change -- verified this session, and this is the load-bearing
+    feasibility fact of the whole plan. WRITE: terraform/bootstrap/github_ci_apply.tf's
+    DataLakeObjectIO Sid already grants github_ci_apply s3:GetObject/PutObject/DeleteObject on
+    arn:aws:s3:::agent-platform-data-lake/* (whole bucket), so the apply identity can write the
+    new apply-events/personal/ prefix with no grant. READ: terraform/personal/oidc.tf's
+    github_ci_branch S3ReadWrite grants the same verbs bucket-wide and S3List grants
+    s3:ListBucket on the bucket, so the convergence-health sensor identity can list and read the
+    prefix with no grant. The only Deny on either identity is
+    github_ci_branch's DenyConvergenceRecordWrite, scoped to convergence/personal/* -- which the
+    new prefix deliberately sits OUTSIDE, so the sensor keeps its read-only posture toward the
+    integrity anchor and the anchor's single-writer claim is untouched.
+  - >-
+    No terraform plan/apply, no bootstrap edit, no IAM change, no new schedule, no new workflow,
+    no new AWS resource, and no change to any required status check. If implementation discovers
+    an IAM change IS needed, STOP and re-plan -- that would move this into the gated-apply /
+    bootstrap tier and invalidate the effort sizing.
+acceptance_criteria:
+  - >-
+    Every apply attempt reaching the apply-sandbox or apply-reconcile job writes exactly one
+    immutable JSON object under s3://agent-platform-data-lake/apply-events/personal/ carrying
+    run_id, job, commit_sha, timestamp, routed, apply_outcome and a change_classes array derived
+    from the same plan.json the deterministic guard inspected.
+  - >-
+    The recorded change_classes can never disagree with the guard's verdict: for any plan,
+    classify_change_classes returns at least one gated_* class if and only if
+    terraform_apply_guard.evaluate_plan returns at least one finding.
+  - >-
+    The widened-change-class roster the review reports on is READ from
+    terraform/bootstrap/authority_budget.json, not literal in ratchet_review.py -- adding a
+    resource type or action to the budget file grows the roster with no code edit.
+  - >-
+    The review's ledger is derived from the event set: adding one auto-apply event for class X
+    increments exactly X's auto_applied count and changes no other cell.
+  - >-
+    The review is structurally unable to be silent. Given a non-empty declared roster and an EMPTY
+    journal, ratchet_findings returns at least one `unmeasured` finding and detect_ratchet_review
+    files a rec -- the day-one state ("v2 was widened and nothing has been measured") is reported
+    as an actionable finding, not as no output.
+  - >-
+    A class with >= RATCHET_INCIDENT_FREE_THRESHOLD incident-free auto-applies is reported as a
+    widen_candidate; a class with any incident is reported as a narrow_candidate AND is suppressed
+    from widen_candidate regardless of its count.
+  - >-
+    Exactly one open source="authority_ratchet_review" rec exists at a time -- a second sensor tick
+    updates it rather than filing a duplicate, and closes it when no finding remains.
+  - >-
+    The sensor is alarm-not-gate: it never amends authority_budget.json, never runs terraform,
+    never writes or reads-then-writes the convergence record, and is not added to any required
+    status check.
+  - >-
+    Live proof against real data: after a real apply run, an event object exists for that run_id
+    and the review's ledger event total equals the number of objects actually present under the
+    journal prefix (an empty or hardcoded ledger fails this).
+  - >-
+    validate.py --pre exits 0 and the new modules meet the repo's per-file coverage gate.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Classifier derivation proof -- a plan JSON carrying (a) an in-budget aws_iam_role_policy
+      UPDATE on a boundary-carrying agent-platform-* role, (b) a destroy, and (c) a trust
+      (assume_role_policy) diff yields exactly the expected class set, and a plan with only an
+      ordinary non-IAM create yields exactly ["non_iam"].
+    command: >-
+      bin/venv-python -m pytest tests/test_apply_event.py -k "class_vocabulary or non_iam_only"
+      -q
+    expected: >-
+      Both tests pass; the mixed plan's classes include in_budget_iam:aws_iam_role_policy:update,
+      gated_destroy_or_replace and gated_trust_diff, and the ordinary plan's classes == ["non_iam"].
+    fix_if: >-
+      A gated class is missing -- classify_change_classes is re-deriving the rules instead of
+      delegating to terraform_apply_guard.evaluate_plan; delegate. An in_budget class is missing --
+      the budget was not loaded via _load_budget, so every IAM change classified out-of-budget.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: apply-event-class-vocabulary
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Guard co-derivation property -- across the fixture matrix, classify_change_classes emits a
+      gated_* class if and only if evaluate_plan returns a finding. This is the anti-drift oracle:
+      it makes a future edit that changes one without the other fail.
+    command: >-
+      bin/venv-python -m pytest tests/test_apply_event.py -k "co_derivation" -q
+    expected: >-
+      Passes for every fixture; the biconditional holds on both legs (a gated class with no
+      finding, and a finding with no gated class, both fail the test).
+    fix_if: >-
+      One leg fails -- the classifier is branching on its own copy of a rule. Route the gated half
+      of the vocabulary entirely through evaluate_plan's finding `reason` values.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: apply-event-guard-co-derivation
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Roster-is-derived proof -- declared_classes() reads authority_budget.json. Point it at a
+      temp budget carrying one EXTRA in_budget_resource_type and assert the roster grows by
+      exactly the new type's action cross-product. A hardcoded roster cannot pass.
+    command: >-
+      bin/venv-python -m pytest tests/convergence_health/test_ratchet_review.py -k
+      "roster_derived_from_budget" -q
+    expected: >-
+      Passes; roster size grows from 4 to 6 when a third in_budget_resource_type is added to the
+      temp budget, and the new classes carry that type's name.
+    fix_if: >-
+      Roster unchanged -- declared_classes() holds a literal tuple. Replace it with a read of
+      terraform/bootstrap/authority_budget.json (path injectable for the test).
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ratchet-roster-derived-from-budget
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Ledger-is-derived proof (the hardcoded-output killer) -- build a ledger from N events, then
+      from the same N plus ONE extra successful auto-apply of class X, and assert exactly X's
+      auto_applied incremented by 1 with every other cell byte-identical.
+    command: >-
+      bin/venv-python -m pytest tests/convergence_health/test_ratchet_review.py -k
+      "ledger_derived_from_events" -q
+    expected: Passes; the two ledgers differ in exactly one cell.
+    fix_if: >-
+      Ledgers identical -- build_ledger is returning a constant or ignoring its input. Any other
+      cell changed -- the aggregation is keying on the wrong field (likely the whole
+      change_classes list rather than each class).
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ratchet-ledger-derived-from-events
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Non-silence proof -- the criterion's core anti-vacuity requirement. With an EMPTY event list
+      and the real declared roster, ratchet_findings returns >= 1 `unmeasured` finding, and
+      detect_ratchet_review (injected portal caller, no open rec) takes action == "file", not
+      "skipped". A review that emits nothing when it has nothing to read is exactly the defect
+      class this step exists to reject.
+    command: >-
+      bin/venv-python -m pytest tests/convergence_health/test_ratchet_review.py -k
+      "empty_journal_is_not_silence" -q
+    expected: >-
+      Passes; findings is non-empty, every finding has kind == "unmeasured", and the injected
+      portal caller recorded exactly one "file" call whose source == "authority_ratchet_review".
+    fix_if: >-
+      findings == [] -- the unmeasured branch is gated behind "events exist", which makes it
+      unreachable in exactly the state it was written for. Compute unmeasured from the DECLARED
+      roster (which is never empty), not from the observed event set.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ratchet-empty-journal-not-silent
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Incident narrows and suppresses -- a class with threshold+5 successful auto-applies AND one
+      failed apply is reported as narrow_candidate and NOT as widen_candidate.
+    command: >-
+      bin/venv-python -m pytest tests/convergence_health/test_ratchet_review.py -k
+      "incident_narrows_and_suppresses_widen" -q
+    expected: >-
+      Passes; the class appears once, with kind == "narrow_candidate", and no widen_candidate
+      finding names it.
+    fix_if: >-
+      Both findings present -- the widen predicate checks only the count. Add the
+      `incidents == 0` conjunct, which is Decision 92 pt5's "narrows on incident" half.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ratchet-incident-suppresses-widen
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Dedup lifecycle -- a second tick with an existing open authority_ratchet_review rec updates
+      it (never files a second), and a tick with no findings closes it.
+    command: >-
+      bin/venv-python -m pytest tests/convergence_health/test_ratchet_review.py -k
+      "dedup or closes_when_clear" -q
+    expected: Passes; actions are "update" then "close", and no second "file" is ever recorded.
+    fix_if: >-
+      A duplicate is filed -- find_open_ratchet_review_rec is matching on title rather than on
+      source + status, the shape detect_prod_code_drift already uses.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ratchet-rec-dedup-lifecycle
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Wiring proof -- both guard-bearing apply jobs call the record-apply-event action exactly
+      once, the action is placed AFTER write-convergence-record in each (so it can never mask the
+      anchor), and convergence-health.yml carries the --ratchet-review step.
+    command: >-
+      bin/venv-python -c "import pathlib,sys;
+      a=pathlib.Path('.github/workflows/terraform-apply-sandbox.yml').read_text();
+      b=pathlib.Path('.github/workflows/reconcile.yml').read_text();
+      c=pathlib.Path('.github/workflows/convergence-health.yml').read_text();
+      m='uses: ./.github/actions/record-apply-event'; w='uses: ./.github/actions/write-convergence-record';
+      assert a.count(m)==1 and b.count(m)==1, (a.count(m), b.count(m));
+      aw=[i for i in range(len(a)) if a.startswith(w,i)]; bw=[i for i in range(len(b)) if b.startswith(w,i)];
+      assert len(aw)==2 and len(bw)==2, (len(aw), len(bw));
+      assert aw[0]<a.index(m)<aw[1], 'emit step must sit inside apply-sandbox, after its anchor write';
+      assert bw[0]<b.index(m)<bw[1], 'emit step must sit inside apply-reconcile, after its anchor write';
+      assert c.count('--ratchet-review')==1, c.count('--ratchet-review');
+      print('wiring ok: 1 emit call site per guard-bearing job, each after that job anchor write; 1 review step')"
+    expected: >-
+      Prints the wiring-ok line and exits 0 -- proving both that the emit step follows its own
+      job's anchor write and that it did not land in the gated job (which is the second
+      write-convergence-record occurrence in each file).
+    fix_if: >-
+      Count != 1 -- the step was duplicated into the gated-apply jobs (out of scope, they produce
+      no plan.json) or omitted. First ordering assert fails -- move the step below the
+      write-convergence-record step so a journal failure can never pre-empt the integrity anchor.
+      Second bound fails -- the step landed in the gated job; move it up into the guard-bearing
+      job. Anchor count != 2 -- a workflow was restructured; re-derive the job boundaries before
+      relaxing this assert.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: apply-event-workflow-wiring
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Blast-radius proof -- the guard's own behaviour is untouched by this plan. The existing
+      terraform_apply_guard suite still passes unchanged, so the new import direction
+      (apply_event -> terraform_apply_guard, never the reverse) introduced no regression in the
+      verdict path.
+    command: bin/venv-python -m pytest tests/test_terraform_apply_guard.py -q
+    expected: The full pre-existing suite passes with no modifications to it.
+    fix_if: >-
+      Any failure -- apply_event.py mutated shared guard state or re-bound a private helper.
+      Import the guard read-only; never monkeypatch or reassign its module-level names.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential-rejected as tautological by construction. This asserts an EXISTING suite is
+      still green, so it passes identically on origin/main -- reverting this plan's change cannot
+      make it fail, which is exactly what the fail-on-revert differential admission requires. It
+      is retained as a blast-radius regression guard, not as a differential gate; the admissible
+      guard-coupling half of this plan is step 2's biconditional.
+  - step: 10
+    phase: pre-deploy
+    action: Full new-module test + per-file coverage, then the authoritative fast presubmit tier.
+    command: >-
+      bin/venv-python -m pytest tests/test_apply_event.py tests/convergence_health -q &&
+      bin/venv-python -m scripts.validate --pre
+    expected: All tests pass and validate --pre exits 0 (coverage gate included).
+    fix_if: >-
+      Coverage short on ratchet_review.py -- do NOT reach a branch by patching the module's own
+      constants (rec-2925); if a branch is unreachable by any real input, delete it. SLOC gate on
+      any convergence_health file -- decompose, never raise (Decision 128).
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Live emit proof against REAL data. Record the current object count under the journal prefix,
+      then have an operator run terraform-apply-sandbox via workflow_dispatch with no
+      acknowledge_red_commit input (a routine manual apply; refused if the record is red -- clear
+      that first). Assert exactly one NEW object appeared, that its run_id equals the dispatched
+      run, and that it carries a well-formed change_classes array. This is the step that fails if
+      the emit path is textually present but structurally unable to fire.
+    command: >-
+      PRE_COUNT=$(bin/venv-python -c "import boto3;
+      s=boto3.Session(profile_name='agent_platform').client('s3');
+      print(sum(len(pg.get('Contents',[])) for pg in
+      s.get_paginator('list_objects_v2').paginate(Bucket='agent-platform-data-lake',
+      Prefix='apply-events/personal/')))") && echo "pre-dispatch objects: $PRE_COUNT" &&
+      RUN_ID=$(gh workflow run terraform-apply-sandbox.yml --repo benjamin-blake/agent-platform &&
+      sleep 20 && gh run list --repo benjamin-blake/agent-platform --workflow
+      terraform-apply-sandbox.yml --limit 1 --json databaseId --jq '.[0].databaseId') &&
+      gh run watch "$RUN_ID" --repo benjamin-blake/agent-platform --exit-status &&
+      PRE_COUNT="$PRE_COUNT" RUN_ID="$RUN_ID" bin/venv-python -c "import boto3,json,os;
+      s=boto3.Session(profile_name='agent_platform').client('s3');
+      k=[o['Key'] for pg in s.get_paginator('list_objects_v2').paginate(
+      Bucket='agent-platform-data-lake', Prefix='apply-events/personal/') for o in pg.get('Contents',[])];
+      pre=int(os.environ['PRE_COUNT']); run=os.environ['RUN_ID'];
+      assert len(k)==pre+1, f'expected exactly one new event, got {len(k)-pre} (emit path never fired?)';
+      e=json.loads(s.get_object(Bucket='agent-platform-data-lake', Key=sorted(k)[-1])['Body'].read());
+      req={'run_id','job','commit_sha','timestamp','routed','apply_outcome','change_classes'};
+      assert req <= set(e), sorted(req - set(e));
+      assert str(e['run_id'])==run, (e['run_id'], run);
+      assert isinstance(e['change_classes'], list), e['change_classes'];
+      print('OK new event:', sorted(k)[-1], e['run_id'], e['apply_outcome'], e['change_classes'])"
+    expected: >-
+      Exits 0 having asserted the object count rose by EXACTLY 1, that the new event's run_id
+      equals the dispatched run id, and that every required key is present with change_classes a
+      list (possibly empty -- a converged no-op apply legitimately has no change classes; the
+      class CONTENT is proven by step 1 and by the first natural terraform/personal merge).
+    fix_if: >-
+      Count unchanged -- the record-apply-event step did not run. Check it is `if: always()` and
+      is not inside a branch skipped when the guard passes. Missing key -- build_event's schema
+      and the action's jq/JSON assembly disagree; make the action emit the module's own JSON
+      rather than assembling it in bash.
+    hermetic: false
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Live review proof -- run convergence-health by workflow_dispatch with diagnose enabled and
+      assert the printed ratchet ledger's total event count EQUALS the number of objects
+      independently counted under the journal prefix, and that the ledger names the real declared
+      classes. An empty, stale or hardcoded ledger fails this comparison.
+    command: >-
+      gh workflow run convergence-health.yml --repo benjamin-blake/agent-platform -f diagnose=true
+      && sleep 20 && CH_RUN=$(gh run list --repo benjamin-blake/agent-platform --workflow
+      convergence-health.yml --limit 1 --json databaseId --jq '.[0].databaseId') &&
+      gh run watch "$CH_RUN" --repo benjamin-blake/agent-platform --exit-status &&
+      gh run view "$CH_RUN" --repo benjamin-blake/agent-platform --log >
+      /tmp/ch-ratchet.log && CH_LOG=/tmp/ch-ratchet.log bin/venv-python -c "import boto3,json,os,re;
+      s=boto3.Session(profile_name='agent_platform').client('s3');
+      n=sum(len(pg.get('Contents',[])) for pg in s.get_paginator('list_objects_v2').paginate(
+      Bucket='agent-platform-data-lake', Prefix='apply-events/personal/'));
+      txt=open(os.environ['CH_LOG'], encoding='utf-8', errors='replace').read();
+      m=re.search(r'ratchet_review result: (\{.*\})', txt);
+      assert m, 'no ratchet_review result line -- the sensor step did not run';
+      r=json.loads(m.group(1).replace(chr(39), chr(34)));
+      assert r['total_events']==n, f\"ledger read {r['total_events']} events, S3 holds {n}\";
+      import pathlib; b=json.loads(pathlib.Path('terraform/bootstrap/authority_budget.json').read_text());
+      exp=len(b['in_budget_resource_types'])*len(b['in_budget_actions']);
+      assert len(r['ledger'])==exp, (len(r['ledger']), exp);
+      print('OK ledger derived from real data:', n, 'events across', exp, 'declared classes')"
+    expected: >-
+      Exits 0 having asserted the dispatched run's `ratchet_review result:` line reports
+      total_events EQUAL to an independently counted S3 object total, and that the ledger carries
+      exactly one row per declared class computed from authority_budget.json's own cross-product.
+      An empty, stale or hardcoded ledger fails one of the two equalities.
+    fix_if: >-
+      total_events == 0 with n > 0 -- read_apply_events is using the wrong prefix or a delimiter
+      that hides the date sub-prefix. Ledger keys are a literal list -- declared_classes is not
+      reading the budget file (step 3 should have caught this; re-check the deployed path).
+    hermetic: false
+  - step: 13
+    phase: post-deploy
+    action: >-
+      Alarm-not-gate proof -- the sensor changed nothing it must not change. Assert the
+      convergence record's version and content are unchanged across the step-12 run, and that
+      terraform/bootstrap/authority_budget.json is byte-identical to origin/main.
+    command: >-
+      PRE_VID=$(bin/venv-python -c "import boto3;
+      print(boto3.Session(profile_name='agent_platform').client('s3').head_object(
+      Bucket='agent-platform-data-lake', Key='convergence/personal/sandbox.json')['VersionId'])")
+      && echo "pre-run convergence VersionId: $PRE_VID" && gh workflow run convergence-health.yml
+      --repo benjamin-blake/agent-platform -f diagnose=true && sleep 20 && CH=$(gh run list
+      --repo benjamin-blake/agent-platform --workflow convergence-health.yml --limit 1 --json
+      databaseId --jq '.[0].databaseId') && gh run watch "$CH" --repo
+      benjamin-blake/agent-platform --exit-status && PRE_VID="$PRE_VID" bin/venv-python -c
+      "import boto3,subprocess,os;
+      v=boto3.Session(profile_name='agent_platform').client('s3').head_object(
+      Bucket='agent-platform-data-lake', Key='convergence/personal/sandbox.json')['VersionId'];
+      assert v==os.environ['PRE_VID'], f\"convergence record was WRITTEN by the sensor: {os.environ['PRE_VID']} -> {v}\";
+      d=subprocess.run(['git','diff','origin/main','--',
+      'terraform/bootstrap/authority_budget.json'], capture_output=True, text=True).stdout;
+      assert d=='', 'authority_budget.json was modified -- the sensor must never amend the budget';
+      print('OK alarm-not-gate: convergence VersionId unchanged and budget byte-identical')"
+    expected: >-
+      Exits 0 having asserted the convergence record's VersionId is byte-identical across a full
+      sensor run (proving the sensor never wrote the anchor) and that the authority budget diff
+      against origin/main is empty.
+    fix_if: >-
+      VersionId changed -- the review is writing the convergence record; remove that write, it
+      belongs to the {apply, drift} writer set only (Decision 92 pt2). Budget diff non-empty --
+      the sensor amended the budget; budget amendments are bootstrap-tier and human-gated
+      (Decision 92 pt5).
+    hermetic: false
+constraints:
+  - >-
+    No new numbered Decision. docs/DECISIONS.md is at 499,960 of its 500,000-byte ceiling
+    (40 bytes of headroom; 112 of 120 live headers) -- measured this session. Per Decision 150's
+    significance bar this work does not qualify anyway: it is a MECHANISM realizing the
+    already-ratified Decision 92 pt5 / Decision 144, and its operational parameters (the
+    threshold, the unmeasured window, the journal prefix) route to this plan, the roadmap item and
+    docs/contracts/environment-taxonomy.md, not to a Decision body. If implementation believes a
+    Decision is required, STOP and re-plan -- authoring one would breach the ceiling and fail
+    validate_decisions_size in both tiers.
+  - >-
+    No terraform, no IAM, no bootstrap edit, no apply. Agents never self-direct a terraform apply
+    (Decision 126); the two identities already carry every grant this plan needs (see
+    infrastructure_dependencies). Any discovered IAM need invalidates the plan.
+  - >-
+    The guard's verdict, exit codes, routing and fail-closed behaviour are OUT OF SCOPE and must
+    not change. apply_event.py imports the guard read-only; the guard never imports apply_event.
+  - >-
+    Alarm-not-gate (Decision 62 / CD.12 pattern, as the two existing code-drift sensors already
+    are): the review files a rec and stops. It never amends authority_budget.json, never runs or
+    dispatches terraform, never writes the convergence record, and is never added to
+    main-protection's required checks (Decision 83 non-wedging).
+  - >-
+    The journal is APPEND-ONLY and immutable at the object grain -- one object per apply attempt,
+    keyed by run_id, never overwritten, never deleted by this code. It is evidence, never a gate:
+    nothing in the apply chain may read it as a precondition.
+  - >-
+    A read cache is never a write source (AGENTS.md warehouse-as-SoT). The review reads S3 and the
+    live reader only; its sole write is via file_rec / update_rec on the ops portal. No OpsWriter,
+    no staging outbox, no direct edit of logs/*.jsonl.
+  - >-
+    No rescue agents or workaround loops (Decision 55). On an unrecoverable V3 failure, stop and
+    RCA rather than patching around it.
+  - >-
+    Decompose by default, never raise a SLOC budget (Decision 128). If ratchet_review.py or
+    apply_event.py approaches 500 SLOC, split it -- do not register a budget.
+  - >-
+    Do not reach a branch by patching the module-under-test's own constants (rec-2925). Every
+    injected seam in the new modules is a real parameter (s3_client, portal_caller, open_recs,
+    budget_path, now), not a monkeypatched module global.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 92,
+    Decision 144, Decision 84, Decision 150, Decision 145, Decision 134, Decision 62, Decision 55,
+    Decision 126, Decision 128, Decision 132, Decision 148, Decision 100. Triaged 112 of 112."
+  - >-
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)". The scout's three
+    CONTRADICT flags were all NOTE severity and are resolved in-plan, not deferred: Decision 84
+    (warehouse boundary -- see the scoping note below), Decision 145/134 (the DECISIONS.md ceiling
+    -- see the no-new-Decision constraint), and Decision 100 (managed-service-native -- see the
+    rejected S3-object-versioning and CloudWatch-metrics alternatives). One SPIRIT NOTE
+    (Decision 62, silent-cron) was adopted as a design requirement rather than accepted as a risk.
+    Plan-critique round 1 raised four findings, all applied before this line was written: the
+    Decision-154 pre-apply-failure branch in the emit action (a fail-loud missing-plan.json check
+    would have re-escalated the exact failure class Decision 154 de-escalated); three post-deploy
+    VP steps that printed instead of asserting; VP step 8's job-boundary bound; and the
+    CloudWatch-metrics frame-challenge alternative.
+  - >-
+    GATE-EXECUTION DEVIATION, disclosed: this plan was authored by a SUBAGENT with no Agent/Task
+    tool, so neither gate could be dispatched into a fresh context window as the planning skill
+    prescribes. Both were run INLINE via the Skill tool in the authoring context. Decision-scout
+    additionally ran over a capped operative-clause PROJECTION of docs/DECISIONS.md (all 112 live
+    headers, each entry's Status + Intent marker + Decision clause block truncated at 1,500 chars
+    + every amendment banner; ~164 KB vs the 500 KB whole-file read), supplemented by targeted
+    full-text greps for this plan's concepts. All 112 entries were triaged; the residual risk is a
+    contradiction buried in a truncated Rationale section. Re-running both gates from a fresh
+    context before implementation is CHEAP and RECOMMENDED.
+  - >-
+    TELEMETRY SUBSTRATE FINDING (the reason this plan builds measurement rather than only
+    scheduling a review). No per-change-class auto-apply telemetry exists anywhere queryable
+    today. Verified: (a) the convergence record
+    s3://agent-platform-data-lake/convergence/personal/sandbox.json is a SINGLE mutable object
+    holding current status only -- read live this session: {"status":"green",
+    "commit_sha":"0726593...", "run_id":"30620166416", "timestamp":"2026-07-31T09:33:26Z",
+    "plan_sha":null} -- no history, no journal, and no change-class dimension; (b) the guard
+    computes the classification in memory and prints it only to the job log, which expires
+    (docs/contracts/github-actions-evidence.yaml governed_deployment = 7-30 days); (c) the
+    ducklake_reader's NAMED_READS registry serves only ops_recommendations, ops_decisions and
+    ops_priority_queue -- there is no apply-events table and no verb that could read one; (d)
+    AGENTS.md's telemetry_* path is dead pending Decision 84 Phase 4 / T2.36, and preflight
+    reports `telemetry-store: not migrated (Phase 4)` with no queries issued. So a review designed
+    against "existing auto-apply telemetry" would have had nothing to read -- it would have been
+    scheduled and permanently silent, which is precisely the defect class this plan's VP steps 5,
+    11 and 12 are built to reject.
+  - >-
+    REJECTED ALTERNATIVE (recorded because Decision 100 requires showing the managed-service-native
+    primitive was considered): the data-lake bucket IS versioned, so the convergence record's S3
+    object-version history is technically a per-apply journal already. Rejected on evidence: (i)
+    PlatformDev has no s3:ListBucketVersions -- confirmed live this session with an explicit
+    AccessDenied -- and neither identity's policy grants it, so reading it would need the IAM
+    change this plan otherwise avoids entirely; (ii) the record carries no change-class field, so
+    the versions answer "when did we apply" but never "which class"; (iii) noncurrent-version
+    retention is a bucket lifecycle concern outside this plan's control, so the history is not a
+    durable substrate. A purpose-built append-only journal at its own prefix is the correct shape.
+  - >-
+    FRAME CHALLENGE (Decision 75, plan-critique Phase 2b) -- the second rejected alternative, and
+    the one a native-primitive reviewer will reach for first. Q1/Q3 asked whether a
+    platform-native primitive could absorb the journal instead of an S3 object: the obvious
+    candidate is CloudWatch custom metrics with a change-class DIMENSION, which is purpose-built
+    for counting incident-free events per dimension and retains 15 months natively. REJECTED on
+    three grounds, the first decisive: (i) `cloudwatch:PutMetricData` is NOT granted to
+    github_ci_apply -- its identity policy carries only PutMetricAlarm/DeleteAlarms/TagResource/
+    UntagResource scoped to agent-platform-*/ducklake-* alarm ARNs plus Describe*/List* reads
+    (terraform/bootstrap/github_ci_apply.tf), so this design costs a bootstrap IAM change and a
+    human-gated apply, which is exactly the cost the S3 route avoids; (ii) reading it back needs
+    cloudwatch:GetMetricData on the sensor identity, a second grant; (iii) a metric datapoint
+    cannot carry run_id / commit_sha / plan context, so the rec the review files would name a
+    count with no evidence trail -- the opposite of actionable. Q2 (decomposition boundary): emit
+    and review are deliberately separate units with separate triggers, matching the two existing
+    code-drift sensors. Q4/Q5 (inherited assumptions / newer tooling): the ratchet criteria come
+    from Decision 92 pt5 as WIDENED by Decision 144 (2026-07-22, nine days old), so nothing here
+    rests on a stale premise; the newest relevant capability is the composite-action consolidation
+    landed by T2.46, and this plan uses it rather than duplicating steps across call sites.
+  - >-
+    WAREHOUSE-BOUNDARY SCOPING (decision-scout NOTE on Decision 84, resolved here rather than
+    deferred). Decision 84 I-1 makes DuckLake the sole OPS-STORE backend -- it scopes to the ops_*
+    entity tables, not to CD control-plane evidence. Decision 92 pt2 already ratifies a durable S3
+    object as the apply chain's integrity anchor, and the deploy-records/ JSON channel is the same
+    class. This journal is deliberately that class: pipeline evidence written by the pipeline
+    identity, append-only and immutable, never an ops_* entity and never read by any ops read
+    path. The review's OUTPUT -- the recommendation -- does go through the warehouse, via the ops
+    portal, exactly as the two existing sensors' output does. Building it as a real ops_ table
+    instead would require a ducklake_writer verb, a Class A contract, a field_semantics
+    regeneration and a Fable escalation for a NEW table -- an L-effort programme, not this
+    criterion. FORWARD PATH, filed as a follow-on rec rather than a Decision: revisit migrating
+    the journal into the warehouse when telemetry re-lands on DuckLake (Decision 84 Phase 4 /
+    T2.36), at which point the append-only event grain here maps directly onto Decision 96/97's
+    telemetry standard (event-time partitioned, insert-once, no SCD2 envelope, ULID identity).
+  - >-
+    DATA-MODEL ASSESSMENT (no table is created, but the grain is stated because the journal is a
+    warehouse-write-path candidate). Grain: ONE OBJECT PER APPLY ATTEMPT at a guard-bearing job
+    (key run_id + job). Write mode: append_only -- insert-once, never mutated, no current
+    projection, no SCD2 envelope (Decision 96 cl.3). Identity: run_id + job, both minted by
+    GitHub Actions at the boundary, never client-side. Partitioning: the UTC date sub-prefix is
+    the event-time partition (Decision 96 cl.1 shape; CD.9's partition-every-table rule is
+    honoured in spirit at the object grain). No merge key, because nothing merges. Reject-CRUD:
+    satisfied -- there is no update path, no delete path and no one-row-per-entity mutation. Fable
+    escalation NOT triggered: no new table, no new identity scheme, no merge_key.
+  - >-
+    ANTI-VACUITY DESIGN, and why it is load-bearing here. The orchestrating session found NINE
+    instances in this repo of one defect class: a control textually present, passing its own
+    tests, and structurally unable to fire in the case it was written for (see rec-2926, which
+    generalises the fail-on-revert differential admission oracle in
+    scripts/verification_graduation.py, and rec-2925, which bans reaching a branch by patching the
+    module's own constants). A periodic review is an unusually easy place to reproduce it. Three
+    structural defences are built in rather than tested for after the fact: (1) the declared-class
+    roster is READ from authority_budget.json, so it can never be empty while the budget exists;
+    (2) `unmeasured` is a first-class finding, so an empty journal produces a rec instead of
+    silence -- silence is not a reachable output of this review; (3) a classification failure
+    emits the explicit `classification_error` class rather than an empty list, so a swallowed
+    error surfaces in the ledger. VP steps 3, 4 and 5 are the derivation oracles: each is
+    constructed to FAIL if the surfacing were empty or hardcoded, and each is graduate-eligible so
+    the fail-on-revert differential actually runs against it.
+  - >-
+    DISCLOSED SCOPE LIMITATION (stated rather than hidden): the gated-apply and
+    gated-apply-reconcile jobs are NOT instrumented. They apply a previously reviewed plan.bin and
+    produce no plan.json for the classifier, so instrumenting them would mean either re-running
+    the guard there (a change to the human-gated path, out of scope and higher blast radius) or
+    threading classes across a job boundary. The ratchet's own arithmetic does not need them: it
+    widens on incident-free AUTO-applies, which only the guard-bearing jobs perform, and the
+    routed events those jobs already emit carry the class of every gated change. A gated apply's
+    outcome remains recoverable from the convergence record plus Actions history. Record this in
+    the T2.48 progress_note so the gap is legible to the next session.
+  - >-
+    THRESHOLD PARAMETERS are a judgement call, not a ratified constant. Decision 92 pt5 says the
+    budget widens "after N incident-free auto-applies" without fixing N. Seed
+    RATCHET_INCIDENT_FREE_THRESHOLD = 10 and RATCHET_UNMEASURED_DAYS = 30, each with an inline
+    comment naming this plan and the rationale, and surface both in the rec's context so a human
+    re-tunes them from evidence rather than from the code. Per Decision 150 an operational
+    parameter routes to a rec/tier_item note, never to a numbered Decision.
+  - >-
+    T2.48 STATE at planning time: c1, c2 (live-proven, run-ids 30118451922 and 30263325448), c3,
+    c4 and c5 are met; c6 is the only open criterion, and the item's own intent names it as "the
+    home the plan-critique gate assigned the recurring Decision-92 ratchet-review (Finding 2) -- a
+    scheduled measured act, not a Decision-body clause (Decision 86)". This plan does not touch
+    the inversion, the boundary, the budget values or the guard.
+  - >-
+    FRESHNESS GATE (per-touched-item, run this session on T2.48). Silent-completion: NOT complete
+    -- rg for ratchet_review / autoapply-ratchet / apply-events across the tree returns zero
+    implementation hits (the only match is the originating audit line
+    audits/terraform-deploy-redesign-b67955b.yaml:619), and .claude/skills/orient/SKILL.md mentions
+    "ratchet" ZERO times, so the "surfaced each /orient" half is absent too. Stale references: the
+    item's files_in_scope all exist; this plan touches none of them, so no re-grounding is owed.
+    Supersession: no sibling tier_item covers a ratchet review. Gating decisions: Decision 144 and
+    Decision 92 are both ratified, so nothing gates completion.
+  - >-
+    PREFLIGHT at planning time: venv=True, creds=ok, branch=claude/plan-autoapply-ratchet-review,
+    main 0 behind / 0 ahead (branch cut from origin/main this session -- no Main Divergence
+    Assessment owed), ci_rca_unresolved=0 (no hard block), open_recs=873,
+    non_automatable=744 (informational, individual review suspended per Decision 73),
+    ci_rca_likely_resolved=1, 10 fast-tier budget breaches in 7 days (dominant phase
+    validate_verification_registry) surfaced as context only.
+  - >-
+    Decision 62 SPIRIT NOTE from the scout, adopted rather than deferred: Decision 62's own
+    amendment records that "The silent-cron failure mode 62 worried about is mitigated by a
+    persistent-unavailability alarm (Decision 74)". A scheduled review that emits nothing is that
+    exact failure mode. The `unmeasured` finding IS this plan's persistent-unavailability alarm --
+    it fires precisely when the sensor is running but seeing nothing.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (or the decision-scout gate re-run from a fresh context -- see Context)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Re-confirm the two IAM facts before writing any code -- github_ci_apply's DataLakeObjectIO Sid
+    and github_ci_branch's S3ReadWrite + S3List statements. If either has narrowed, STOP: the plan
+    becomes a terraform/bootstrap change and must be re-planned.
+  - >-
+    Re-check docs/DECISIONS.md headroom (`wc -c`) before assuming no Decision is needed; it was
+    40 bytes at planning time.
+execution_steps:
+  - >-
+    Create scripts/ci/apply_event.py -- classify_change_classes(plan, budget) delegating the gated
+    half entirely to terraform_apply_guard.evaluate_plan's finding reasons and the in-budget half
+    to _classify_iam_change/_load_budget; build_event(run_id, job, commit_sha, routed,
+    apply_outcome, change_classes, now) returning the event dict; a `classes` and an `emit` CLI
+    mode printing JSON to stdout. Return ["classification_error"] on an internal exception, never
+    [].
+  - >-
+    Create tests/test_apply_event.py with the class-vocabulary fixtures, the co-derivation
+    biconditional property test, the non_iam-only case, and the classification_error path.
+  - >-
+    Create .github/actions/record-apply-event/action.yml -- inputs working-directory, job-name,
+    routed, apply-outcome, convergence-bucket (default agent-platform-data-lake),
+    events-prefix (default apply-events/personal); resolves the guard path via
+    ${{ github.workspace }} per composite-action path discipline; runs the emit CLI, PUTs the
+    JSON to <prefix>/<UTC-date>/<run_id>-<job>.json under set -euo pipefail, and prints the key.
+  - >-
+    Wire one record-apply-event step into terraform-apply-sandbox.yml's apply-sandbox job and one
+    into reconcile.yml's apply-reconcile job, both `if: always()` and both placed AFTER the
+    existing write-convergence-record step. Change nothing else in either workflow.
+  - >-
+    Create scripts/convergence_health/ratchet_review.py -- declared_classes(budget_path),
+    read_apply_events(s3_client, prefix, since_days), build_ledger(events, declared, now),
+    ratchet_findings(ledger, threshold, unmeasured_days), find_open_ratchet_review_rec(open_recs),
+    _build_ratchet_rec_fields(findings, ledger), detect_ratchet_review(...) with the
+    file/update/close branches mirroring detect_prod_code_drift. All external dependencies
+    injected.
+  - >-
+    Export the new surface from scripts/convergence_health/__init__.py and add
+    main_ratchet_review + the --ratchet-review dispatch branch to
+    scripts/convergence_health/__main__.py, mirroring the --prod-drift shape exactly.
+  - >-
+    Create tests/convergence_health/test_ratchet_review.py covering the four anti-vacuity oracles,
+    the incident-suppression rule and the dedup lifecycle; extend
+    tests/convergence_health/test___main__.py for the new dispatch branch.
+  - >-
+    Add the --ratchet-review step to .github/workflows/convergence-health.yml after the prod-drift
+    step, and extend that workflow's header comment to name the third sensor.
+  - >-
+    Add the bounded apply-event-journal subsection to docs/contracts/environment-taxonomy.md
+    (prefix, grain, class-vocabulary derivation, evidence-not-a-gate statement, sensor pointer).
+    Restate no guard-classification rule.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop
+    and RCA (Decision 55). Steps 11-13 need an operator-dispatched real run; if the operator is
+    unavailable, report the plan as post-deploy-pending rather than claiming c6 met.
+  - >-
+    Roadmap bookkeeping ONLY on a verified VP pass -- flip T2.48 c6 to met with met_by
+    autoapply-ratchet-review and append the progress_note (threshold values, journal prefix, the
+    gated-job instrumentation gap). Never infer item completion.
+  - >-
+    File the follow-on rec for the warehouse-migration path (journal -> DuckLake when telemetry
+    re-lands, Decision 84 Phase 4 / T2.36) via get_rec_write_guidance() then file_rec. Do not
+    author a Decision for it.
+  - 'Report: what was implemented, verification results (including the live run-ids for steps 11-13)'
+work_areas: []
+rollback: >-
+  Fully reversible with no infrastructure state to unwind, because nothing is provisioned. Revert
+  the PR: the two apply workflows lose their record-apply-event step (the apply chain is otherwise
+  byte-identical, since the step is additive, always-run and sits after the anchor), and
+  convergence-health.yml loses its third step (the two existing sensors are untouched). Already
+  written event objects are inert -- nothing reads them once ratchet_review.py is gone; delete the
+  apply-events/personal/ prefix at leisure or leave it. Any open authority_ratchet_review rec is
+  closed via the portal with a resolution naming the revert. The convergence record, the
+  authority budget, the guard and every IAM policy are untouched by both the change and the
+  revert, so there is no ordering hazard of the Decision 156 kind.
