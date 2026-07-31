@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from scripts.aws_profile import resolve_aws_profile
 
 ROOT = Path(__file__).resolve().parent.parent
+_OUTBOX_BASE = ROOT / "logs" / ".ops-outbox"
 
 try:
     import boto3 as _boto3
@@ -277,7 +278,7 @@ class OpsWriter:
     def _write_to_outbox(self, table: str, entry: dict) -> None:
         """Write a failed S3 entry to the local outbox for later drain."""
         try:
-            outbox_dir = Path(__file__).parent.parent / "logs" / ".ops-outbox" / table
+            outbox_dir = _OUTBOX_BASE / table
             outbox_dir.mkdir(parents=True, exist_ok=True)
             outbox_file = outbox_dir / f"{uuid.uuid4()}.jsonl"
             outbox_file.write_text(
@@ -667,8 +668,7 @@ class OpsWriter:
             Dict mapping table name to number of records drained.
         """
         results: dict[str, int] = {t: 0 for t in TABLE_NAMES}
-        outbox_base = ROOT / "logs" / ".ops-outbox"
-        if not outbox_base.exists():
+        if not _OUTBOX_BASE.exists():
             return results
 
         client = self._get_client()
@@ -681,7 +681,7 @@ class OpsWriter:
             return results
 
         for table in TABLE_NAMES:
-            table_dir = outbox_base / table
+            table_dir = _OUTBOX_BASE / table
             if not table_dir.exists():
                 continue
 
