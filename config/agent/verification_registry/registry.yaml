@@ -21,7 +21,7 @@ entries:
     graduated_at: "2026-07-28"
     graduated_by: codex
     check_spec:
-      node_id: tests/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module
+      node_id: tests/test_coverage_checker/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module
   - check_id: full-validation-result-evidence
     primitive_slot: test_selector
     guard_target: scripts/checks/validation_result.py
@@ -2519,3 +2519,80 @@ entries:
       pattern: 'Fallback: write directly|fake_write_to_outbox|__func__'
       operator: eq
       count: 0
+  - check_id: checker-maps-to-concern-split-package
+    primitive_slot: test_selector
+    guard_target: scripts/test_coverage_checker.py
+    guard_symbol: map_source_to_test
+    plan_slug: coverage-checker-self-enforcement
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_coverage_checker/test_edge_paths.py::TestMapSourceToTestDirectConcernSplit::test_checker_itself_resolves_via_direct_membership
+  - check_id: checker-not-self-excluded
+    primitive_slot: test_selector
+    guard_target: scripts/test_coverage_checker.py
+    guard_symbol: get_changed_source_files
+    plan_slug: coverage-checker-self-enforcement
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_coverage_checker/test_edge_paths.py::TestGetChangedSourceFilesSelfInclusion::test_checker_included_ops_writer_included_tests_dir_excluded
+  - check_id: coverage-checker-package-suite
+    primitive_slot: command_exit_zero
+    guard_target: tests/test_coverage_checker/
+    plan_slug: coverage-checker-self-enforcement
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -m
+      - pytest
+      - tests/test_coverage_checker
+      - -q
+  - check_id: coverage-checker-at-100
+    primitive_slot: command_exit_zero
+    guard_target: scripts/test_coverage_checker.py
+    guard_symbol: check_per_file_coverage
+    plan_slug: coverage-checker-self-enforcement
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.');
+        s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py');
+        m=importlib.util.module_from_spec(s); s.loader.exec_module(m);
+        from scripts.checks.misc import coverage_baseline as cb;
+        p=(pathlib.Path.cwd()/'scripts/test_coverage_checker.py').resolve();
+        pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(),
+        map_source_to_test=m.map_source_to_test, is_empty_dir=m._is_empty_directory_target,
+        subprocess_module=subprocess);
+        v=pcts.get(str(p));
+        assert isinstance(v,float), f'no measurement produced (dead gate): {pcts} {errs}';
+        assert v>=100.0, f'{v}% < 100%'; print(f'checker at {v:.2f}%')
+  - check_id: checker-off-coverage-roster
+    primitive_slot: grep_count
+    guard_target: config/coverage_baseline.yaml
+    plan_slug: coverage-checker-self-enforcement
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      path: config/coverage_baseline.yaml
+      pattern: 'scripts/test_coverage_checker\.py:'
+      operator: eq
+      count: 0
+  - check_id: coverage-checker-move-no-stale-refs
+    primitive_slot: command_exit_zero
+    guard_target: config/agent/verification_registry/registry.yaml
+    plan_slug: coverage-checker-self-enforcement
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        test ! -f tests/test_test_coverage_checker.py && test ! -f tests/test_coverage_checker_checks.py && test ! -f tests/test_coverage_checker_grandfather.py && test ! -f tests/test_coverage_checker_map.py && { grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md --exclude=registry.yaml -e 'tests/test_test_coverage_checker\.py' -e 'tests/test_coverage_checker_checks\.py' -e 'tests/test_coverage_checker_grandfather\.py' -e 'tests/test_coverage_checker_map\.py' scripts/ config/ tests/ docs/contracts/ .github/; test $? -eq 1; } && grep -q 'tests/test_coverage_checker/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module' config/agent/verification_registry/registry.yaml && echo 'no stale references; registry row repointed'

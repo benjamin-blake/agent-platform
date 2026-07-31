@@ -206,6 +206,9 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = set()
 # concern into multiple test_*.py modules under one directory. Entries are dormant until
 # their _RETIRING_GRANDFATHER_HOMES line is deleted; each wave finalises its own membership
 # (this seed is the known monolith roster at foundation time, not a closed list).
+# Membership here is independently sufficient to route a source to its test package
+# directory -- it no longer depends on the source's grandfathered home having retired (see
+# map_source_to_test's direct membership check, which fires before the final `return home`).
 _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
     {
         "scripts/ops_writer.py",
@@ -229,6 +232,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/session/postflight.py",
         "scripts/ci_rca/evidence.py",
         "scripts/checks/deps/affected_tests.py",
+        "scripts/test_coverage_checker.py",
     }
 )
 
@@ -310,23 +314,40 @@ def map_source_to_test(source_path: Path) -> Path | None:
     scripts/validate.py resolves to (not the generic per-file mirror target) -- see
     _ORCHESTRATION_SCAFFOLDING_FILES.
 
-    Returns None for paths not under src/ or scripts/, or with no grandfathered home.
+    3. DIRECT CONCERN-SPLIT (independent of retirement): a source path listed in
+       _CONCERN_SPLIT_TEST_PACKAGES resolves to its test PACKAGE DIRECTORY even if its
+       grandfathered home's basename is still in _RETIRING_GRANDFATHER_HOMES (i.e. has not
+       retired) or has no grandfathered home under _ALL_MIRROR_TARGET_HOMES at all. This
+       decouples "is this source a declared concern-split monolith?" from "has this source's
+       grandfathered home retired?" -- previously the only entry point into
+       _CONCERN_SPLIT_TEST_PACKAGES was inside _mirror_source_to_test, reachable solely via
+       the MIRROR branch above, so registering a file whose grandfathered home was not itself
+       in _ALL_MIRROR_TARGET_HOMES was inert (the membership check was never consulted).
+
+    Returns None for paths not under src/ or scripts/, or with no grandfathered home (unless
+    the path is itself a declared concern-split entry, which is checked independently of
+    having a grandfathered home).
     """
     home = _grandfathered_source_to_test(source_path)
-    if home is None:
-        return None
-    if home.name in _RETIRING_GRANDFATHER_HOMES:
-        return home
-    if home.name in _ALL_MIRROR_TARGET_HOMES:
-        try:
-            rel_name = source_path.resolve().relative_to(ROOT).name
-        except ValueError:
-            rel_name = source_path.name
-        if home.name == "test_validate.py" and rel_name in _ORCHESTRATION_SCAFFOLDING_FILES:
-            return ROOT / "tests" / "validate"
-        # smoke_actions.py shares ducklake_writer's concern-split handler package (Edit C, rec-2709 Wave 8).
-        if home.name == "test_ducklake_writer_handler.py" and rel_name == "smoke_actions.py":
-            return ROOT / "tests" / "lambdas" / "ducklake_writer" / "handler"
+    if home is not None:
+        if home.name in _RETIRING_GRANDFATHER_HOMES:
+            return home
+        if home.name in _ALL_MIRROR_TARGET_HOMES:
+            try:
+                rel_name = source_path.resolve().relative_to(ROOT).name
+            except ValueError:
+                rel_name = source_path.name
+            if home.name == "test_validate.py" and rel_name in _ORCHESTRATION_SCAFFOLDING_FILES:
+                return ROOT / "tests" / "validate"
+            # smoke_actions.py shares ducklake_writer's concern-split handler package (Edit C, rec-2709 Wave 8).
+            if home.name == "test_ducklake_writer_handler.py" and rel_name == "smoke_actions.py":
+                return ROOT / "tests" / "lambdas" / "ducklake_writer" / "handler"
+            return _mirror_source_to_test(source_path)
+    try:
+        rel_str = source_path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        rel_str = None
+    if rel_str is not None and rel_str in _CONCERN_SPLIT_TEST_PACKAGES:
         return _mirror_source_to_test(source_path)
     return home
 
@@ -491,9 +512,6 @@ def get_changed_source_files(files: list[str] | None = None) -> list[Path]:
         if not p.suffix == ".py":
             continue
         if p.name in excluded_names:
-            continue
-        # Exclude test files
-        if p.name.startswith("test_") or p.name == "conftest.py":
             continue
         try:
             rel = p.resolve().relative_to(ROOT)
