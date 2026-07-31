@@ -436,14 +436,14 @@ constraints:
   abcdefgh") and importing a private symbol from the presubmit-checks package would register a check
   into the global registry as an import side effect.
 - >-
-  SEQUENCING: three shared files, not one. GAL-03 (PLAN-ci-rca-authority-anchor, approved, agent
-  waiting) shares config/agent/verification_registry/registry.yaml only - land it first and rebase
-  behind it. The sibling PLAN-ci-rca-abstention-and-citation shares THREE files: (i)
-  scripts/ops_portal/ci_rca_schema.py, its line 38 regex versus this plan's new model fields after
-  line 127 - non-adjacent, trivial; (ii) config/agent/verification_registry/registry.yaml, additive
-  rows; and (iii) docs/contracts/ci-rca-lifecycle.yaml, where BOTH plans extend a 206-line contract -
-  this is the real conflict surface and must be merged by hand, not resolved mechanically. Rebase
-  behind the sibling if it lands first.
+  SEQUENCING: BOTH prerequisites have now MERGED, so the previously-anticipated conflicts are
+  resolved rather than pending. GAL-03 landed as #821 (d79cb58) and the sibling
+  PLAN-ci-rca-abstention-and-citation landed as #823 (d39d467). This plan is cut from main at or after
+  2e60bdd. All line references below were re-verified against the post-sibling tree and still resolve:
+  ci_rca_schema.py:38 now reads `(py|yaml|yml|tf|md|sh)` from the sibling's widening without shifting
+  line numbers, escape_class is still at 127 and the warn_mode_reject precedent still at 105-110, and
+  the registry anchors at 1988 and 2054 survived the sibling's 106 added rows. The sibling also added
+  38 lines to docs/contracts/ci-rca-lifecycle.yaml - extend that file, do not assume its prior shape.
 - >-
   SLOC, decompose-by-default (Decision 128): scripts/ops_portal/ci_rca_runtime.py is 353 SLOC (~147
   headroom) and tests/ops_data_portal/test_ci_rca_runtime.py is 403 (~97), neither registered, and
@@ -461,9 +461,10 @@ context:
   pending re-dispatch against this split revision; fable-advice-consult=1 round"
 - >-
   Split: the abstention-surface widening, the probe-health gauge reconciliation, the yml citation-regex
-  fix and rec-2923's why_chain correction moved to PLAN-ci-rca-abstention-and-citation, which shares
-  no GAL-03 dependency, no schema version bump and no new envelope field, and shares only the three
-  files named in the SEQUENCING constraint. That plan lands first and independently.
+  fix and rec-2923's why_chain correction moved to PLAN-ci-rca-abstention-and-citation, which needed no
+  GAL-03 dependency, no schema version bump and no new envelope field. It has since MERGED as #823, so
+  rec-2923's narrative is already corrected in the warehouse and the citation pattern already accepts
+  yml. One lesson from its implementation is carried forward below.
 - >-
   bundled_recommendations is deliberately EMPTY despite rec-2923 motivating this work. A `Resolves:`
   trailer would fire rec-autoclose.yml and stamp fixed_by_sha to a commit that does not fix the
@@ -502,6 +503,16 @@ context:
   machine-checkable anchor, which is decidable. It is the intervention that would actually have blocked
   rec-2923's fabrication, since no quote exists that survives byte-match against the bundle-hashed body.
   Deferred because it changes the schema, the agent instructions and every historical rec, at n=1.
+- >-
+  LESSON FROM THE SIBLING'S IMPLEMENTATION (#823), which this plan must not repeat: two of its new test
+  classes were first placed in tests/session/preflight/test_ci_rca_signals.py and test_ci_rca_gauges.py,
+  both of which carry a module-level `pytest.importorskip("boto3")` for unrelated tests. pr-validate's
+  fast tier installs only requirements-fast + requirements-dev, so boto3 is absent, the whole module
+  skips, and the interactive VP-replay gate reads that as a hard failure (exit 4, no collectors) rather
+  than a benign skip - CI job 91219816511 failed on exactly this. Before placing any new graduated test
+  class in an existing module, grep that module for `importorskip`; if present, put the class in a
+  guard-free file. This plan's own at-risk placements are tests/ops_data_portal/test_ci_rca_runtime.py
+  and tests/ci_rca/evidence/test_main_emit.py - check both.
   TRIGGER: build it as check-6 if warn-mode telemetry shows mis-narration recurring after this lands.
   It is also the eventual consumer of unobserved_steps_authoritative (AC12).
 - >-
