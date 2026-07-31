@@ -13,8 +13,19 @@ category_tags deterministic pattern-matching (the recall-gap fix from the Fable 
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
-from scripts.decisions_index import _LIVE_PATH, _build_triage_excerpt, _derive_category_tags, build_index
+import pytest
+
+from scripts.decisions_index import (
+    _EXPORT_PATH,
+    _LIVE_PATH,
+    _build_triage_excerpt,
+    _derive_category_tags,
+    build_index,
+    check_index_freshness,
+    main,
+)
 from scripts.decisions_md import decision_header_numbers, parse_decisions_md
 
 
@@ -398,7 +409,87 @@ class TestCommittedIndexSizePin:
     in the governing Decision cannot silently drift upward without review."""
 
     def test_committed_index_under_110000_byte_pin(self) -> None:
-        from scripts.decisions_index import _EXPORT_PATH
-
         size = len(_EXPORT_PATH.read_bytes())
         assert size <= 110_000, f"committed index is {size} bytes, over the 110,000-byte pin"
+
+
+class TestCheckIndexFreshnessDirect:
+    """Direct coverage of check_index_freshness() in THIS mapped test file (the coverage checker
+    maps scripts/decisions_index.py -> tests/test_decisions_index.py specifically; the equivalent
+    branch coverage in tests/checks/decisions/test_validate_decisions_index_freshness.py exercises
+    the registered wrapper, a different module, and does not count toward this file's mapping)."""
+
+    def test_fails_when_export_is_absent(self, tmp_path) -> None:
+        missing = tmp_path / "nonexistent.json"
+        with patch("scripts.decisions_index._EXPORT_PATH", missing):
+            failed: list[str] = []
+            check_index_freshness(failed)
+        assert len(failed) == 1
+        assert "missing" in failed[0].lower()
+
+    def test_fails_when_export_is_unreadable_json(self, tmp_path) -> None:
+        export_path = tmp_path / "decisions-index.json"
+        export_path.write_text("not valid json {{{", encoding="utf-8")
+        with patch("scripts.decisions_index._EXPORT_PATH", export_path):
+            failed: list[str] = []
+            check_index_freshness(failed)
+        assert len(failed) == 1
+        assert "cannot read" in failed[0].lower()
+
+    def test_fails_when_export_is_stale(self, tmp_path) -> None:
+        export_path = tmp_path / "decisions-index.json"
+        export_path.write_text(json.dumps({"decisions": [], "metadata": {}}), encoding="utf-8")
+        with patch("scripts.decisions_index._EXPORT_PATH", export_path):
+            failed: list[str] = []
+            check_index_freshness(failed)
+        assert len(failed) == 1
+        assert "stale" in failed[0].lower()
+
+    def test_passes_when_export_is_fresh(self, tmp_path) -> None:
+        export_path = tmp_path / "decisions-index.json"
+        export_path.write_text(json.dumps(build_index(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with patch("scripts.decisions_index._EXPORT_PATH", export_path):
+            failed: list[str] = []
+            check_index_freshness(failed)
+        assert not failed
+
+
+class TestMainCLI:
+    """Direct coverage of main()'s argparse dispatch branches (--write / --check / --print /
+    no-args), same file-mapping rationale as TestCheckIndexFreshnessDirect above."""
+
+    def test_write_regenerates_the_export(self, tmp_path, monkeypatch) -> None:
+        export_path = tmp_path / "decisions-index.json"
+        monkeypatch.setattr("scripts.decisions_index._EXPORT_PATH", export_path)
+        monkeypatch.setattr("sys.argv", ["decisions_index", "--write"])
+        main()
+        assert export_path.exists()
+        assert json.loads(export_path.read_text(encoding="utf-8")) == build_index()
+
+    def test_check_exits_zero_when_fresh(self, tmp_path, monkeypatch) -> None:
+        export_path = tmp_path / "decisions-index.json"
+        export_path.write_text(json.dumps(build_index(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        monkeypatch.setattr("scripts.decisions_index._EXPORT_PATH", export_path)
+        monkeypatch.setattr("sys.argv", ["decisions_index", "--check"])
+        main()  # does not raise SystemExit when fresh
+
+    def test_check_exits_one_when_stale(self, tmp_path, monkeypatch) -> None:
+        export_path = tmp_path / "decisions-index.json"
+        export_path.write_text(json.dumps({"decisions": [], "metadata": {}}), encoding="utf-8")
+        monkeypatch.setattr("scripts.decisions_index._EXPORT_PATH", export_path)
+        monkeypatch.setattr("sys.argv", ["decisions_index", "--check"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_print_dumps_json_to_stdout(self, monkeypatch, capsys) -> None:
+        monkeypatch.setattr("sys.argv", ["decisions_index", "--print"])
+        main()
+        out = capsys.readouterr().out
+        assert json.loads(out) == build_index()
+
+    def test_no_args_prints_help_and_exits_one(self, monkeypatch) -> None:
+        monkeypatch.setattr("sys.argv", ["decisions_index"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
