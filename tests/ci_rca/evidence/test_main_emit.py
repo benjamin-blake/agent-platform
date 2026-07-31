@@ -33,6 +33,15 @@ class TestEmitDir:
                     }
                 ],
                 "retrieval_path": "primary",
+                "scope": [
+                    {
+                        "job_id": 7,
+                        "steps": [
+                            {"step_index": 1, "conclusion": "success", "log_retrieved": False},
+                            {"step_index": 2, "conclusion": "failure", "log_retrieved": True},
+                        ],
+                    }
+                ],
                 "fallback_selection": {"queried_job_ids": [7], "unqueried_job_ids": [], "unqueried_reason": None},
                 "body": body,
                 "limits": limits,
@@ -134,6 +143,74 @@ class TestEmitDir:
         assert Path(local_path).exists()
         parsed = json.loads(Path(local_path).read_bytes())
         assert "sha256" in parsed
+
+
+class TestEmitDirScopeDeclaration:
+    """VP step 5 (AC16): the emitted bundle's retrieval_evidence carries the scope block --
+    a NEW class deliberately, not TestEmitDir (VF-06's origin/main revert leg would find
+    TestEmitDir already green and reject the graduated row as tautological)."""
+
+    def test_emitted_bundle_retrieval_evidence_carries_scope(self, log_file, taxonomy_file, tmp_path, capsys):
+        body = log_file.read_text(encoding="utf-8")
+        _, limits = bound_text(body, len(body.encode("utf-8")) + 1, len(body.splitlines()) + 1)
+        envelope_path = tmp_path / "retrieval.json"
+        scope = [
+            {
+                "job_id": 7,
+                "steps": [
+                    {"step_index": 1, "conclusion": "success", "log_retrieved": False},
+                    {"step_index": 2, "conclusion": "failure", "log_retrieved": True},
+                ],
+            }
+        ]
+        publish_envelope(
+            envelope_path,
+            {
+                "schema": SCHEMA,
+                "identity": {"repository": "owner/repo", "run_id": 42},
+                "failed_jobs": [
+                    {
+                        "job_id": 7,
+                        "conclusion": "failure",
+                        "failed_steps": [{"step_index": 2, "conclusion": "failure"}],
+                    }
+                ],
+                "retrieval_path": "primary",
+                "scope": scope,
+                "fallback_selection": {"queried_job_ids": [7], "unqueried_job_ids": [], "unqueried_reason": None},
+                "body": body,
+                "limits": limits,
+                "recovery": {"url": "https://github.com/owner/repo/actions/runs/42", "state": "available"},
+            },
+        )
+        emit_dir = tmp_path / "emit_scope"
+        with (
+            patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)),
+            patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}),
+            patch("scripts.ci_rca.evidence._upload_to_s3"),
+            patch("scripts.ci_rca.evidence._resolve_bucket", return_value="test-bucket"),
+        ):
+            main(
+                [
+                    "--log-file",
+                    str(log_file),
+                    "--retrieval-envelope",
+                    str(envelope_path),
+                    "--workflow-name",
+                    "CI",
+                    "--workflow-run-id",
+                    "42",
+                    "--taxonomy-path",
+                    str(taxonomy_file),
+                    "--emit-dir",
+                    str(emit_dir),
+                ]
+            )
+        local_path = next(
+            line.split("=", 1)[1] for line in capsys.readouterr().out.splitlines() if line.startswith("BUNDLE_LOCAL=")
+        )
+        retrieval = json.loads(Path(local_path).read_text(encoding="utf-8"))["retrieval_evidence"]
+        assert retrieval["scope"] == scope
 
 
 class TestMain:

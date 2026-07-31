@@ -248,3 +248,100 @@ def test_module_entrypoint(monkeypatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         runpy.run_module("scripts.ci_rca.fetch_logs", run_name="__main__")
     assert exc_info.value.code == 1
+
+
+class TestScopeStepTableTotality:
+    """AC1/AC3/AC5/AC17: producer-side step-table totality, both-path log_retrieved derivation,
+    multi-job pair keying, and no step names in the envelope."""
+
+    def test_scope_lists_every_executed_step_including_late_non_failed_steps(self, tmp_path: Path) -> None:
+        """run 30615075007 shape: step 15 fails, steps 16 (skipped) and 17 (success) still ran
+        after it -- both must appear in scope with log_retrieved=false (AC1)."""
+        conclusions = ["success"] * 14 + ["failure", "skipped", "success"]
+        steps = [{"name": f"step-{i}", "conclusion": c} for i, c in enumerate(conclusions, 1)]
+        jobs = json.dumps({"jobs": [{"databaseId": 999, "conclusion": "failure", "steps": steps}]})
+        runner = Runner([_cp(stdout=jobs), _cp(stdout="log body\n")])
+        out = tmp_path / "evidence.json"
+        result = fetch_run_log("30615075007", "owner/repo", out, runner=runner)
+        envelope = read_envelope(out)
+        assert result.fetched
+        job_scope = next(entry for entry in envelope["scope"] if entry["job_id"] == 999)
+        assert [step["step_index"] for step in job_scope["steps"]] == list(range(1, 18))
+        by_index = {step["step_index"]: step for step in job_scope["steps"]}
+        assert by_index[15] == {"step_index": 15, "conclusion": "failure", "log_retrieved": True}
+        assert by_index[16] == {"step_index": 16, "conclusion": "skipped", "log_retrieved": False}
+        assert by_index[17] == {"step_index": 17, "conclusion": "success", "log_retrieved": False}
+
+    def test_fallback_path_log_retrieved_true_for_queried_false_for_unqueried(self, tmp_path: Path) -> None:
+        jobs = json.dumps(
+            {
+                "jobs": [
+                    {
+                        "databaseId": 2,
+                        "conclusion": "failure",
+                        "steps": [{"name": "a", "conclusion": "success"}, {"name": "b", "conclusion": "failure"}],
+                    },
+                    {"databaseId": 9, "conclusion": "failure", "steps": [{"name": "c", "conclusion": "failure"}]},
+                ]
+            }
+        )
+        runner = Runner([_cp(stdout=jobs), _cp(code=1), _cp(stdout="x")])
+        out = tmp_path / "evidence.json"
+        result = fetch_run_log("1", "owner/repo", out, attempts=1, runner=runner, max_bytes=1)
+        envelope = read_envelope(out)
+        assert result.fetched
+        assert envelope["retrieval_path"] == "fallback"
+        by_job = {entry["job_id"]: entry for entry in envelope["scope"]}
+        assert all(step["log_retrieved"] is True for step in by_job[2]["steps"])
+        assert all(step["log_retrieved"] is False for step in by_job[9]["steps"])
+
+    def test_two_job_scope_keeps_shared_step_index_distinct_per_job(self, tmp_path: Path) -> None:
+        """Job A step 3 is unretrieved and job B step 3 is retrieved -- pair keying must not
+        collide the two just because they share a positional step_index."""
+        steps_a = [{"name": "a1", "conclusion": "success"}] * 2 + [{"name": "a3", "conclusion": "success"}]
+        steps_b = [{"name": "b1", "conclusion": "success"}] * 2 + [{"name": "b3", "conclusion": "failure"}]
+        jobs = json.dumps(
+            {
+                "jobs": [
+                    {"databaseId": 2, "conclusion": "failure", "steps": steps_a},
+                    {"databaseId": 9, "conclusion": "failure", "steps": steps_b},
+                ]
+            }
+        )
+        runner = Runner([_cp(stdout=jobs), _cp(stdout="log body\n")])
+        out = tmp_path / "evidence.json"
+        result = fetch_run_log("1", "owner/repo", out, runner=runner)
+        envelope = read_envelope(out)
+        assert result.fetched
+        by_job = {entry["job_id"]: entry for entry in envelope["scope"]}
+        step3_a = next(step for step in by_job[2]["steps"] if step["step_index"] == 3)
+        step3_b = next(step for step in by_job[9]["steps"] if step["step_index"] == 3)
+        assert step3_a["log_retrieved"] is False
+        assert step3_b["log_retrieved"] is True
+
+    def test_succeeded_sibling_job_is_excluded_from_scope(self, tmp_path: Path) -> None:
+        """A job that succeeded (never selected by _failed_jobs) must not appear in scope at
+        all, even though it is present in the raw `gh run view --json jobs` payload."""
+        jobs = json.dumps(
+            {
+                "jobs": [
+                    {"databaseId": 5, "conclusion": "failure", "steps": [{"name": "x", "conclusion": "failure"}]},
+                    {"databaseId": 6, "conclusion": "success", "steps": [{"name": "y", "conclusion": "success"}]},
+                ]
+            }
+        )
+        runner = Runner([_cp(stdout=jobs), _cp(stdout="log body\n")])
+        out = tmp_path / "evidence.json"
+        result = fetch_run_log("1", "owner/repo", out, runner=runner)
+        envelope = read_envelope(out)
+        assert result.fetched
+        assert [entry["job_id"] for entry in envelope["scope"]] == [5]
+
+    def test_hostile_step_name_never_appears_in_envelope(self, tmp_path: Path) -> None:
+        steps = [{"name": "untrusted token=deadbeef12345678", "conclusion": "failure"}]
+        jobs = json.dumps({"jobs": [{"databaseId": 5, "conclusion": "failure", "steps": steps}]})
+        runner = Runner([_cp(stdout=jobs), _cp(stdout="log body\n")])
+        out = tmp_path / "evidence.json"
+        result = fetch_run_log("1", "owner/repo", out, runner=runner)
+        assert result.fetched
+        assert "untrusted" not in out.read_text(encoding="utf-8")

@@ -172,3 +172,27 @@ class TestCiRcaGuidanceSchemaLockstep:
         assert "unknown" in detection_gap_doc
         assert "mirror" in detection_gap_doc.lower()
         assert "null" in detection_gap_doc.lower()
+
+
+class TestCiRcaUnobservedStepsGuidance:
+    """PLAN-ci-rca-evidence-scope-declaration (Decision 66 / Precision Context Injection):
+    the ci_rca schema_fields authority documents the new unobserved_steps echo field and its
+    {job_id, step_index} pair shape, but never unobserved_steps_authoritative -- that field is
+    Tier-B portal-derived and the agent must never author it."""
+
+    def test_schema_fields_documents_unobserved_steps_pair_shape(self) -> None:
+        from scripts.executor.rec_write_guidance import get_rec_write_guidance
+
+        guidance = get_rec_write_guidance(source="ci_rca")
+        schema_fields = guidance["context_v2_json"]["schema_fields"]
+        assert "unobserved_steps" in schema_fields
+        doc = schema_fields["unobserved_steps"]
+        assert "job_id" in doc
+        assert "step_index" in doc
+        assert "retrieval_evidence.scope" in doc
+
+    def test_schema_fields_omits_authoritative_field(self) -> None:
+        from scripts.executor.rec_write_guidance import get_rec_write_guidance
+
+        guidance = get_rec_write_guidance(source="ci_rca")
+        assert "unobserved_steps_authoritative" not in guidance["context_v2_json"]["schema_fields"]

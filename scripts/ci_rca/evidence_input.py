@@ -18,5 +18,14 @@ def load_retrieval_input(envelope_path: Path, log_path: Path, run_id: int) -> di
         raise ValueError("log file does not match the validated retrieval envelope")
     return {
         key: envelope[key]
-        for key in ("schema", "identity", "failed_jobs", "retrieval_path", "fallback_selection", "limits", "recovery")
+        for key in (
+            "schema",
+            "identity",
+            "failed_jobs",
+            "retrieval_path",
+            "scope",
+            "fallback_selection",
+            "limits",
+            "recovery",
+        )
     }

@@ -97,11 +97,16 @@ def _run_log(command: list[str], max_bytes: int, max_lines: int) -> LogResult:
     )
 
 
-def _failed_jobs(payload: str) -> list[dict[str, Any]]:
+def _decode_jobs_payload(payload: str) -> list[dict[str, Any]]:
     decoded = json.loads(payload)
     jobs = decoded.get("jobs") if isinstance(decoded, dict) else None
     if not isinstance(jobs, list):
         raise ValueError("GitHub response has no jobs array")
+    return jobs
+
+
+def _failed_jobs(payload: str) -> list[dict[str, Any]]:
+    jobs = _decode_jobs_payload(payload)
     selected: list[dict[str, Any]] = []
     for job in jobs:
         if not isinstance(job, dict) or job.get("conclusion") not in {"failure", "timed_out", "cancelled"}:
@@ -120,6 +125,42 @@ def _failed_jobs(payload: str) -> list[dict[str, Any]]:
     if not selected:
         raise ValueError("run metadata contains no failed jobs")
     return selected
+
+
+def _step_scope(
+    payload: str,
+    job_ids: set[int],
+    queried_job_ids: set[int],
+    retrieval_path: str,
+) -> list[dict[str, Any]]:
+    """Build the per-job evidence-scope table: EVERY executed step of each failed job, with
+    log_retrieved derived STRUCTURALLY (AC3) -- never by searching `body`.
+
+    On retrieval_path="primary", `--log-failed` returns only failed steps' logs, so
+    log_retrieved is true exactly for steps whose conclusion is in the failed-step domain
+    (failure/timed_out/cancelled). On "fallback", `gh run view --job <id> --log` returns a
+    queried job's WHOLE log, so log_retrieved is true for every step of a queried job and
+    false for every step of an unqueried job. No step names are emitted (AC17).
+    """
+    jobs = _decode_jobs_payload(payload)
+    scope: list[dict[str, Any]] = []
+    for job in jobs:
+        job_id = job.get("databaseId") if isinstance(job, dict) else None
+        if job_id not in job_ids:
+            continue
+        job_retrieved = job_id in queried_job_ids
+        steps = job.get("steps", [])
+        entries: list[dict[str, Any]] = []
+        for index, step in enumerate(steps, 1):
+            conclusion = step.get("conclusion") if isinstance(step, dict) else None
+            if retrieval_path == "primary":
+                retrieved = conclusion in {"failure", "timed_out", "cancelled"}
+            else:
+                retrieved = job_retrieved
+            entries.append({"step_index": index, "conclusion": conclusion, "log_retrieved": retrieved})
+        scope.append({"job_id": job_id, "steps": entries})
+    scope.sort(key=lambda item: item["job_id"])
+    return scope
 
 
 def _diagnose(*stderrs: str) -> str:
@@ -222,11 +263,18 @@ def fetch_run_log(
                             omitted_lines=None,
                         )
                     if body:
+                        scope = _step_scope(
+                            metadata.stdout,
+                            {job["job_id"] for job in jobs},
+                            set(queried_job_ids),
+                            retrieval_path,
+                        )
                         envelope = {
                             "schema": SCHEMA,
                             "identity": {"repository": repo, "run_id": int(run_id)},
                             "failed_jobs": jobs,
                             "retrieval_path": retrieval_path,
+                            "scope": scope,
                             "fallback_selection": {
                                 "queried_job_ids": queried_job_ids,
                                 "unqueried_job_ids": [job["job_id"] for job in jobs if job["job_id"] not in queried_job_ids],

@@ -169,6 +169,15 @@ def get_rec_write_guidance(
                     "mandatory human review in session_preflight. Set 'high' when bundle values are concrete and "
                     "agent values match; 'low' when significant ambiguity remains."
                 ),
+                "unobserved_steps": (
+                    "optional list[{job_id: int, step_index: int}] pairs -- NEVER a flat index space "
+                    "(a step_index is unique only within its job). Your comprehension echo: derive it from "
+                    "the evidence bundle's retrieval_evidence.scope entries where log_retrieved is false. "
+                    "Set to [] when every scope entry has log_retrieved=true. The portal cross-checks this "
+                    "echo against a code-computed authoritative set and tags a disagreement; do not narrate "
+                    "about a step you listed here as if you had read its log. "
+                    "unobserved_steps_authoritative is a SEPARATE, portal-derived field -- never author it."
+                ),
             },
         }
     elif source == "ci_rca_evidence_dispute":

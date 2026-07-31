@@ -103,6 +103,104 @@ escape_attribution:
       failed post-merge -- an escape --pre's channels could not explain; flagged for manual
       review, never silently assumed benign.
 
+# PLAN-ci-rca-evidence-scope-declaration: completes GAL-01's bounded retrieval envelope on the
+# SCOPE axis (which steps were shown to the agent) rather than the VOLUME axis (how much of a
+# shown step's log survived truncation) -- the two are orthogonal and both live in
+# retrieval_evidence, never conflated.
+evidence_scope:
+  scope_field: >-
+    retrieval_evidence.scope (scripts/ci_rca/log_evidence.py SCHEMA ci-rca-log-evidence/v2) is a
+    list keyed BY JOB, one entry per FAILED job: {job_id, steps: [{step_index, conclusion,
+    log_retrieved}, ...]}. It is a second per-job structure parallel to
+    failed_jobs[].failed_steps, kept separate rather than nested inside failed_jobs because
+    failed_jobs' shape is pinned by _validate_jobs and downstream consumers -- widening it would
+    move the blast radius well past this contract. `scope` lists EVERY step the job executed, not
+    just the failed ones; the validator can only enforce a superset of failed_steps (it cannot see
+    producer-side totality), so totality is a producer-side test obligation
+    (tests/test_ci_rca_fetch_logs.py::TestScopeStepTableTotality), not a validator guarantee.
+  conclusion_domain: >-
+    A scope step's conclusion admits {failure, timed_out, cancelled, success, skipped, null} --
+    strictly wider than failed_steps' closed {failure, timed_out, cancelled}. null covers a
+    not-started step, routine in a cancelled job (_failed_jobs explicitly selects cancelled jobs).
+    Copying failed_steps' narrower enum into the scope validator would reject every real
+    envelope: publish_envelope's ValueError propagates out of fetch_run_log to
+    fetch_logs.main(), which converts it to rc=1 -- the whole CI-RCA job fails and NO rec is filed.
+  log_retrieved_derivation: >-
+    Derived STRUCTURALLY in scripts/ci_rca/fetch_logs.py, never by searching `body`.
+    retrieval_path="primary" (gh run view --log-failed, which returns only failed steps' logs):
+    true exactly for steps whose conclusion is in {failure, timed_out, cancelled}.
+    retrieval_path="fallback" (gh run view --job <id> --log, which returns a queried job's WHOLE
+    log): true for every step of a job in fallback_selection.queried_job_ids, false for every step
+    of a job in unqueried_job_ids.
+  volume_orthogonality: >-
+    log_retrieved means "this step's log was within the retrieval request's scope", not "every
+    line of it is present in body". No validation rule couples log_retrieved to
+    limits.complete/truncation_reason -- a truncated body can never reject a valid envelope, and a
+    step marked log_retrieved=true can still have had its log volume-truncated; `limits` remains
+    the sole reporter of that separate axis.
+  stamp_versus_echo: >-
+    Two distinct CiRcaContext keys, never one. unobserved_steps_authoritative is portal-derived:
+    stamped in code at scripts/ops_portal/ci_rca_runtime.py (beside fingerprint/failure_category/
+    affected_nodeids/escape_class) from the VERIFIED evidence bundle's retrieval_evidence.scope,
+    computed as every {job_id, step_index} pair with log_retrieved=false. unobserved_steps is
+    agent-authored: the agent's own comprehension echo, derived (per the ci-rca.md Step 4
+    template) from the same bundle field, ideally identical to the stamp but authored
+    independently. A shared key would let the code stamp overwrite the agent's echo before the
+    cross-check compares them, making the check vacuous -- this applies ci-rca-lifecycle's
+    in-code principle (constraints, below) BY ANALOGY: an evidence-scope fact is not literally one
+    of "the fingerprint and every dedup/regression/inactivity/escape decision", so the rule did not
+    previously bind it; this contract extends that enumeration to cover it. The echo itself stays
+    agent-authored and that is correct -- its semantics are "what the agent believed it did not
+    observe", a claim about the agent that only the agent can author.
+  cross_check_5: >-
+    scripts/ops_portal/ci_rca_runtime.py's _run_ci_rca_cross_check compares unobserved_steps
+    against unobserved_steps_authoritative as SETS of {job_id, step_index} pairs (order- and
+    duplicate-insensitive). Absent, subset, superset, wrong-set, and a flat-index (non-pair) echo
+    all stamp cross_check_check_5 onto warn_mode_reject in warn mode and raise in strict mode; an
+    exact-pair-set match stamps nothing. A bundle carrying no scope block (pre-dating this plan)
+    degrades silently -- no stamp is written and check-5 does not run.
+  honesty_bounds: >-
+    Three bounds, stated rather than implied. (i) PROSE: check-5 enforces DISCLOSURE, not honesty
+    -- an agent that echoes correctly and then still narrates about those steps as if observed is
+    compliant with check-5. (ii) VOLUME: the set enumerates scope-axis blind spots only; a step
+    marked log_retrieved=true whose log was cut by `limits` truncation is a real blind spot this
+    field will never contain -- `limits` remains the sole reporter of that axis (see
+    volume_orthogonality above). (iii) MODE: CI_RCA_STRICT_MODE defaults to warn, so check-5 tags
+    rather than blocks on landing -- this is instrumentation that becomes enforcement if and when
+    strict mode is enabled, not a preventive gate today.
+  bypass_chain: >-
+    check-5's non-effective paths, named rather than left implicit. UNREACHABLE:
+    _run_ci_rca_cross_check runs only when source=='ci_rca' and context_v2_json is not None and
+    not migration_mode (ops_data_portal.py); within it, returns early when evidence_bundle_ref is
+    absent (including the rca_confidence='undetermined' branch, which returns with no stamp even
+    in strict mode) and when the bundle file is not found locally -- the bundle-absent route is
+    what the agent instructions explicitly endorse for graceful degradation, and its accepted
+    mitigation is that it already forces mandatory human review via rca_confidence='undetermined'.
+    REACHED-BUT-DISCARDED, the structurally larger case: the cross-check runs, then on an
+    open-fingerprint match the write-time dedup backstop calls bump_ci_rca_occurrence and returns
+    the existing rec id WITHOUT inserting -- the freshly computed stamp and any
+    cross_check_check_5 tag are thrown away. That is the dominant path for a RECURRING failure --
+    precisely the class this machinery exists for. Accepted consequence: check-5 is effective on
+    first occurrence only; recurrences are covered by the occurrence bump and the existing chain
+    lifecycle (status_aware_chain above), not by this check.
+  gh_json_degradation: >-
+    scripts/ci_rca/fetch_logs.py builds the step table by positional index
+    (enumerate(steps, 1)), deliberately NOT the GitHub payload's own step `number`, because the
+    existing failed_steps entries already use the positional convention and the two must agree.
+    If `steps` is absent for a job in the `gh run view --json jobs` payload, that job's scope
+    entry has an empty steps list, contributes nothing to unobserved_steps_authoritative, and
+    check-5 silently no-ops for that job -- a fixture cannot exercise this GitHub-payload-shape
+    edge, so it is recorded here as a known, accepted degradation rather than tested.
+  consumer_statement: >-
+    AC12: check-5 consumes the COMPUTED authoritative set at cross-check time, not the persisted
+    unobserved_steps_authoritative field -- if the field were never written, check-5 would behave
+    identically. Until a typed-epistemic-anchoring follow-on lands (named, not scheduled: see
+    docs/plans/PLAN-ci-rca-evidence-scope-declaration.yaml context), the persisted field is a
+    durable record for human and successor review and nothing else reads it programmatically. The
+    stamp is also FIRST-OCCURRENCE-SCOPED: bump_ci_rca_occurrence round-trips the prior context
+    unchanged, so a rec with occurrence_count > 1 retains occurrence-1's stamp while last_seen
+    advances -- a later recurrence's own unobserved-step set is never recomputed onto the rec.
+
 projection_fields:
   regression_of:
     type: "Optional[str]"
@@ -122,10 +220,18 @@ projection_fields:
     type: "Optional[str]"
     enum: [no-edge, capped, unknown-data-edge]
     home: context_v2_json (CiRcaContext)
+  unobserved_steps:
+    type: "Optional[list[{job_id: int, step_index: int}]]"
+    home: context_v2_json (CiRcaContext)
+    authored_by: agent (comprehension echo; see evidence_scope.stamp_versus_echo)
+  unobserved_steps_authoritative:
+    type: "Optional[list[{job_id: int, step_index: int}]]"
+    home: context_v2_json (CiRcaContext)
+    authored_by: portal (stamped in code from the verified evidence bundle; see evidence_scope.stamp_versus_echo)
 
 constraints:
   - "Decision 84/103/63: these fields are a context_v2_json projection only -- ops_recommendations' Class A schema is untouched."
-  - "Decision 55: the fingerprint and every dedup/regression/inactivity/escape decision is computed IN CODE, never by the LLM RCA agent."
+  - "Decision 55: the fingerprint, every dedup/regression/inactivity/escape decision, and (by analogy, see evidence_scope.stamp_versus_echo) the unobserved_steps_authoritative evidence-scope fact are computed IN CODE, never by the LLM RCA agent."
   - "All new CiRcaContext fields are Optional[...]=None -- no schema_version ceiling raise (backward-compatible additions)."
   - "The inactivity sweep reads via DuckLake reader named verbs only; never re-stages from logs/.recommendations-log.jsonl."
   - "All rec writes (fix-link stamp, regression filing, inactivity close) transit the ops portal (file_rec/update_rec) -- Decision 84 single-portal invariant."

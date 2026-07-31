@@ -181,6 +181,21 @@ def test_additional_contract_shape_failures(tmp_path: Path) -> None:
     rejected(lambda c: c.update(artifact_uploads="bad"), "must be a list")
 
 
+def test_s1_linkage_schema_is_v2_and_rejects_stale_v1(tmp_path: Path) -> None:
+    """PLAN-ci-rca-evidence-scope-declaration: the real contract's s1_linkage.schema pins
+    ci-rca-log-evidence/v2, and the guard behaviourally rejects a contract still declaring the
+    superseded v1 string (a grep for the literal cannot show this -- only the guard can)."""
+    contract = _yaml(ROOT / subject.CONTRACT_PATH)
+    assert contract["s1_linkage"]["schema"] == "ci-rca-log-evidence/v2"
+
+    root = _fixture(tmp_path)
+    path, stale = _contract(root)
+    stale["s1_linkage"]["schema"] = "ci-rca-log-evidence/v1"
+    _write(path, stale)
+    with pytest.raises(ValueError, match="S1 linkage schema must be ci-rca-log-evidence/v2"):
+        subject.validate_contract(root)
+
+
 def test_duplicate_workflow_display_name_is_rejected(tmp_path: Path) -> None:
     root = _fixture(tmp_path)
     workflow = root / ".github/workflows/main-canary.yml"

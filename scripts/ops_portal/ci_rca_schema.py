@@ -53,6 +53,16 @@ class _EvidenceBundleRef(BaseModel):
         return self
 
 
+class _UnobservedStep(BaseModel):
+    """A {job_id, step_index} pair identifying one scope entry the run's evidence did not
+    retrieve a log for. RUN-scoped, never bundle-scoped (evidence.py assigns the same
+    retrieval_evidence object to every bundle of a multi-failure run) -- see
+    docs/contracts/ci-rca-lifecycle.yaml for the stamp-versus-echo split."""
+
+    job_id: int = Field(ge=1)
+    step_index: int = Field(ge=1)
+
+
 class _WhyChainTerminusOverride(BaseModel):
     """CIRCA-08: typed why_chain_terminus_override -- a bare truthy dict must not bypass the
     terminus systemic-keyword/citation floor for free; the override itself must justify why."""
@@ -125,6 +135,16 @@ class CiRcaContext(BaseModel):
     affected_nodeids: Optional[list[str]] = None
     flaky: Optional[bool] = None
     escape_class: Optional[str] = Field(default=None, pattern=r"^(no-edge|capped|unknown-data-edge)$")
+    # ci-rca-evidence-scope-declaration: distinct keys are what make check-5 safe -- a shared
+    # key would let the code-computed stamp overwrite the agent's echo before the cross-check
+    # compares them. unobserved_steps is agent-authored (a comprehension probe: "what the
+    # agent believed it did not observe"); unobserved_steps_authoritative is portal-derived,
+    # stamped in code from the verified evidence bundle (never agent-authored), mirroring the
+    # fingerprint/failure_category/affected_nodeids/escape_class pattern above. Both Optional
+    # so a bundle-absent rec still validates and back_validate_ci_rca does not reclassify every
+    # historical rec.
+    unobserved_steps: Optional[list[_UnobservedStep]] = None
+    unobserved_steps_authoritative: Optional[list[_UnobservedStep]] = None
 
     @field_validator("why_chain")
     @classmethod
