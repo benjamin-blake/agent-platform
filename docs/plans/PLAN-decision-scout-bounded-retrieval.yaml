@@ -6,8 +6,9 @@ slug: "decision-scout-bounded-retrieval"
 intent: >-
   Unwedge the decision-authoring path by removing the reason its ceiling exists: repoint the
   decision-scout gate from a whole-file read of docs/DECISIONS.md onto the already-built committed
-  index plus targeted full-text fetch, then re-derive the live-byte ceiling against that new
-  consumer model. Joins two surfaces that already exist rather than building a third.
+  index plus targeted reads of only the shortlisted entries, then RETIRE the live-byte ceiling --
+  the response Decision 145's own reversal conditions name -- leaving the combined ceiling as the
+  binding backstop. No ceiling constant is raised.
 plan_type: IMPLEMENTATION
 verification_tier: V2
 plan_path: docs/plans/PLAN-decision-scout-bounded-retrieval.yaml
@@ -22,48 +23,50 @@ scope:
     purpose: >-
       Add a `live: bool` field to each projected row, derived from source-file provenance via
       decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md]). The shared parser is NOT
-      modified -- decision_header_numbers already accepts an explicit paths list, so provenance
-      is derivable in the generator without changing parse_decisions_md's row shape (which feeds
-      the ops_decisions ETL allowlist).
+      modified -- decision_header_numbers already accepts an explicit paths list, so provenance is
+      derivable in the generator without changing parse_decisions_md's row shape (which feeds the
+      ops_decisions ETL allowlist).
   - file: docs/decisions-index.json
     action: Modify
     purpose: Regenerated committed projection carrying the new `live` field.
   - file: .claude/skills/decision-scout/SKILL.md
     action: Modify
     purpose: >-
-      Replace Phase 1 step 1's whole-file read with index triage + targeted full-text fetch via
-      the decision_by_id NAMED_READS verb, with a visible file-read fallback. Shorten the
-      now-partly-resolved Lambda-migration-contract and why-a-subagent sections to pay for the
-      new protocol text so the edit nets non-positive bytes.
+      Replace Phase 1 step 1's whole-file read with index triage plus targeted reads of only the
+      shortlisted entries from the source files. Perform Decision 152's mandated SPIRIT revisit so
+      the edit nets NEGATIVE bytes; re-ground the Decision 105 mis-cite.
   - file: config/prose_budgets.yaml
     action: Modify
     purpose: >-
-      Ratchet the decision-scout SKILL.md budget DOWN to its new (smaller) size if the rewrite
-      nets negative. No raise is taken -- Decision 152's reversal clause requires the SPIRIT axis
-      become "leaner and query-driven rather than prose-budget-funded".
+      Ratchet the decision-scout SKILL.md budget DOWN to its new smaller size, performing the
+      revisit Decision 152's reversal clause mandates ("leaner and query-driven rather than
+      prose-budget-funded"). No raise is taken; the dec-152 raise marker is reduced or removed to
+      match the new value.
   - file: scripts/checks/decisions/validate_decisions_size.py
     action: Modify
     purpose: >-
-      Re-derive _DECISIONS_LIVE_MAX_BYTES against the post-repoint consumer model and update the
-      module docstring / FAIL-message Decision citation. _DECISIONS_LIVE_MAX_H2 (120) and
-      _DECISIONS_COMBINED_MAX_BYTES (700_000) are deliberately UNCHANGED.
+      RETIRE _DECISIONS_LIVE_MAX_BYTES and its FAIL branch. _DECISIONS_LIVE_MAX_H2 (120) and
+      _DECISIONS_COMBINED_MAX_BYTES (700_000) are UNCHANGED and remain enforced -- the combined
+      ceiling continues to bound the live file (live <= 700_000 minus archive bytes, ~588_930
+      today). Update the docstring, which currently grounds the retired ceiling in the whole-file
+      read this plan removes.
   - file: docs/contracts/decision-entry.yaml
     action: Modify
     purpose: >-
-      Keep size_governance.live_max_bytes in sync with the validator constant (the validator is
-      the SoT; this file documents it for authors) and note the new retrieval model.
+      Remove size_governance.live_max_bytes to match the validator (the validator is the SoT) and
+      document the bounded-retrieval model plus the combined ceiling as the live-file backstop.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
-      Author the governing Decision entry recording the re-derivation, the Decision 145 / 134
-      clause 2 amendments, the Decision 152 reversal-trigger discharge, and the
+      Author the governing Decision entry recording the retirement, the Decision 145 / 134 clause 2
+      amendments, the Decision 152 revisit, the Decision 151 backstop consequence, and the
       interim-not-T1.5-cutover framing.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
-      Flip T0.8 status not_started -> complete with completed_at + evidence note (built and
-      merged: scripts/agent_sdk/mcp_server.py, registered in .mcp.json). Resolve rec-2774 by
-      naming T1.5 c1 as owner of the decisions-query verb.
+      Flip T0.8 status not_started -> complete with completed_at + evidence note (built and merged:
+      scripts/agent_sdk/mcp_server.py, registered in .mcp.json). Resolve rec-2774 by naming T1.5 c1
+      as owner of the decisions-query verb.
   - file: .claude/skills/planning/SKILL.md
     action: Modify
     purpose: >-
@@ -76,15 +79,15 @@ scope:
   - file: tests/checks/decisions/test_validate_decisions_size.py
     action: Modify
     purpose: >-
-      Assert the re-derived live ceiling, and pin the header + combined ceilings as unchanged so a
-      future silent drift on those two fails.
+      Drop the retired live-ceiling assertions; pin 120 and 700_000 as unchanged so a future silent
+      drift on the two surviving ceilings fails; assert a live file over the OLD 500_000 value now
+      passes while a combined breach still fails.
   - file: tests/test_decision_scout_retrieval.py
     action: Create
     purpose: >-
       Curated retrieval probes: for each (approach keyword-set -> expected decision number) pair,
-      assert the committed index carries discriminating signal for the expected entry. A
-      mechanical proxy for triage recall, not a substitute for the live-dispatch comparison
-      recorded in execution_steps.
+      assert the committed index carries discriminating signal for the expected entry. A mechanical
+      proxy for triage recall, not a substitute for the live-dispatch comparison in execution_steps.
 
 bundled_recommendations:
   - rec-2783
@@ -95,29 +98,32 @@ infrastructure_dependencies: []
 
 acceptance_criteria:
   - >-
-    docs/decisions-index.json carries a boolean `live` field on every entry; the count of
-    live:true rows equals the live-file `## Decision` header count, and live:false equals the
-    archive header count.
+    docs/decisions-index.json carries a boolean `live` field on every entry; the count of live:true
+    rows equals the live-file `## Decision` header count, and live:false equals the archive header
+    count.
   - >-
     scripts.decisions_index regenerates byte-identically on consecutive runs and
     validate_decisions_index_freshness passes.
   - >-
     .claude/skills/decision-scout/SKILL.md no longer instructs a whole-file read of
-    docs/DECISIONS.md, and its byte size is <= 11379 (no config/prose_budgets.yaml raise).
+    docs/DECISIONS.md, and its byte size is STRICTLY LESS than 11379 with
+    config/prose_budgets.yaml ratcheted down to match (Decision 152's mandated revisit; no raise).
   - >-
     No file under .claude/ instructs reading the entire docs/DECISIONS.md (stale-reference sweep;
     closes rec-2479).
   - >-
-    validate_decisions_size passes with the re-derived live-byte ceiling; _DECISIONS_LIVE_MAX_H2
-    is still 120 and _DECISIONS_COMBINED_MAX_BYTES is still 700000.
+    _DECISIONS_LIVE_MAX_BYTES no longer exists in
+    scripts/checks/decisions/validate_decisions_size.py; _DECISIONS_LIVE_MAX_H2 is still 120 and
+    _DECISIONS_COMBINED_MAX_BYTES is still 700000, and the combined guard still FAILs on a
+    synthetic breach.
   - >-
-    A new `## Decision NNN:` entry exists recording the re-derivation, the Decision 145 and
-    Decision 134 clause 2 amendments, the Decision 152 reversal-trigger discharge, and that this
-    arrangement is interim and NOT the T1.5 portal cutover; ops_data_portal
-    --backfill-decisions-md completes green with the new entry present in ops_decisions.
+    A new `## Decision NNN:` entry exists recording the ceiling retirement, the Decision 145 and
+    Decision 134 clause 2 amendments, the Decision 152 revisit, the Decision 151 backstop
+    consequence, and that this arrangement is interim and NOT the T1.5 portal cutover;
+    ops_data_portal --backfill-decisions-md completes green with the new entry in ops_decisions.
   - >-
-    docs/ROADMAP-PLATFORM.yaml T0.8 reads status: complete with a completed_at date and an
-    evidence note; T1.5 exit criterion c1 names the decisions-query verb owner (closes rec-2774).
+    docs/ROADMAP-PLATFORM.yaml T0.8 reads status: complete with a completed_at date and an evidence
+    note; T1.5 exit criterion c1 names the decisions-query verb owner (closes rec-2774).
   - The curated retrieval probes pass, and bin/venv-python -m scripts.validate --pre exits 0.
 
 verification_plan:
@@ -136,8 +142,8 @@ verification_plan:
       equals the DECISIONS_ARCHIVE.md header count.
     fix_if: >-
       Counts diverge -- the generator is deriving provenance from something other than
-      decision_header_numbers(paths=[live]), or first-occurrence dedup is masking a duplicate
-      number across the two files.
+      decision_header_numbers(paths=[live]), or first-occurrence dedup is masking a duplicate number
+      across the two files.
     hermetic: true
     graduation: graduate
     graduation_check_id: "decisions-index-live-count-matches-file"
@@ -147,29 +153,30 @@ verification_plan:
     command: bin/venv-python -m scripts.decisions_index --check
     expected: Exit 0, no drift reported.
     fix_if: >-
-      Drift reported -- a volatile field (timestamp/content_hash) leaked into the projection, or
-      the committed JSON was not regenerated after the generator change.
+      Drift reported -- a volatile field (timestamp/content_hash) leaked into the projection, or the
+      committed JSON was not regenerated after the generator change.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Duplicates validate_decisions_index_freshness, which is already registered in both the
-      --pre and full tiers; graduating it would register a second check on one surface.
+      Duplicates validate_decisions_index_freshness, already registered in both the --pre and full
+      tiers; graduating it would register a second check on one surface.
   - step: 3
     phase: pre-deploy
     action: >-
-      Assert the scout skill no longer mandates a whole-file read and stayed within its prose
-      budget (Decision 152's leaner-not-budget-funded clause).
+      Assert the scout skill dropped the whole-file read, names the index, and SHRANK (Decision
+      152's mandated revisit -- leaner, not budget-funded).
     command: >-
       bash -c '! rg -q "entire[^\n]{0,8}docs/DECISIONS\.md" .claude/skills/decision-scout/SKILL.md
       && rg -q "decisions-index.json" .claude/skills/decision-scout/SKILL.md
-      && test $(wc -c < .claude/skills/decision-scout/SKILL.md) -le 11379'
+      && test $(wc -c < .claude/skills/decision-scout/SKILL.md) -lt 11379'
     expected: >-
       Exit 0 -- the whole-file-read instruction is gone, the index is named as the triage source,
-      and the file is at or under its existing 11379-byte budget.
+      and the file is STRICTLY smaller than its previous 11379-byte budget.
     fix_if: >-
       Non-zero exit -- either the old instruction survives, the new protocol does not name the
-      index, or the rewrite grew the file and needs compensating trims (shorten the
-      Lambda-migration-contract and why-a-subagent sections) rather than a budget raise.
+      index, or the rewrite did not net negative. Fund the new protocol text by trimming the
+      Lambda-migration-contract and why-a-subagent sections, which this plan partly resolves. Never
+      take a prose-budget raise here.
     hermetic: true
     graduation: graduate
     graduation_check_id: "decision-scout-no-whole-file-read"
@@ -192,39 +199,42 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Assert the size guard passes on the re-derived live ceiling AND that the header and combined
-      ceilings were not silently moved alongside it.
+      Assert the live-byte ceiling is retired, the two surviving ceilings are untouched, and the
+      combined guard still fires on a synthetic breach.
     command: >-
-      bin/venv-python -c "from scripts.checks.decisions.validate_decisions_size import
-      _DECISIONS_LIVE_MAX_H2, _DECISIONS_COMBINED_MAX_BYTES, _DECISIONS_LIVE_MAX_BYTES as B;
-      assert _DECISIONS_LIVE_MAX_H2 == 120, _DECISIONS_LIVE_MAX_H2;
-      assert _DECISIONS_COMBINED_MAX_BYTES == 700000, _DECISIONS_COMBINED_MAX_BYTES;
-      f=[]; import scripts.checks.decisions.validate_decisions_size as m; m.validate_decisions_size(f);
-      assert not f, f; print('live ceiling', B, 'header/combined unchanged')"
+      bin/venv-python -c "import scripts.checks.decisions.validate_decisions_size as m;
+      assert not hasattr(m,'_DECISIONS_LIVE_MAX_BYTES'), 'live ceiling not retired';
+      assert m._DECISIONS_LIVE_MAX_H2 == 120, m._DECISIONS_LIVE_MAX_H2;
+      assert m._DECISIONS_COMBINED_MAX_BYTES == 700000, m._DECISIONS_COMBINED_MAX_BYTES;
+      f=[]; m.validate_decisions_size(f); assert not f, f;
+      big=m._decisions_size_issues('x'*400000, 'y'*400000);
+      assert any('combined' in i for i in big), big;
+      print('retired; 120/700000 intact; combined guard fires')"
     expected: >-
-      Exit 0 -- guard green, header ceiling still 120, combined still 700000, and the re-derived
-      live ceiling printed.
+      Exit 0 -- the live-byte constant is gone, header and combined constants are unchanged, the
+      real corpus passes, and a synthetic 800KB corpus still trips the combined FAIL.
     fix_if: >-
-      Assertion fires -- the change moved more than the one constant it was scoped to, or the
-      live file is still over the re-derived ceiling and the derivation needs revisiting.
+      Assertion fires -- either the constant survives (retire it and its FAIL branch), a surviving
+      ceiling was silently moved, or _decisions_size_issues' signature changed such that the
+      synthetic breach no longer reaches the combined branch.
     hermetic: true
     graduation: graduate
-    graduation_check_id: "decisions-size-ceilings-header-combined-unchanged"
+    graduation_check_id: "decisions-live-ceiling-retired-others-intact"
   - step: 6
     phase: pre-deploy
     action: Curated retrieval probes -- the index carries discriminating signal for known targets.
     command: bin/venv-python -m pytest tests/test_decision_scout_retrieval.py -q
     expected: All probes pass.
     fix_if: >-
-      A probe fails -- the index projection lacks signal for that decision. Do NOT weaken the
-      probe; either enrich the projection (e.g. carry the typed Intent field) or record the miss
-      as a known retrieval gap in the governing Decision.
+      A probe fails -- the index projection lacks signal for that decision. Do NOT weaken the probe;
+      either enrich the projection (e.g. carry the typed Intent field) or record the miss as a known
+      retrieval gap in the governing Decision.
     hermetic: true
     graduation: graduate
     graduation_check_id: "decision-scout-retrieval-probes"
   - step: 7
     phase: pre-deploy
-    action: Assert the T0.8 roadmap closeout and the T1.5 c1 verb-owner resolution landed.
+    action: Assert the T0.8 roadmap closeout landed.
     command: >-
       bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
       seen={};
@@ -240,8 +250,8 @@ verification_plan:
   - step: 8
     phase: pre-deploy
     action: >-
-      ETL the new Decision entry to ops_decisions and confirm the fidelity tripwire and orphan
-      guard stay green.
+      ETL the new Decision entry to ops_decisions and confirm the fidelity tripwire and orphan guard
+      stay green.
     command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
     expected: >-
       Exits 0; the new decision number appears in ops_decisions; no fidelity-tripwire RuntimeError
@@ -249,8 +259,8 @@ verification_plan:
     fix_if: >-
       Fidelity tripwire fires -- the new entry parses to an empty governing section; fix the entry
       grammar per docs/contracts/decision-entry.yaml rather than allowlisting it. If the reader is
-      credential-unavailable, re-run after refreshing the agent_platform chain (Decision 55 --
-      never skip silently).
+      credential-unavailable, re-run after refreshing the agent_platform chain (Decision 55 -- never
+      skip silently).
     hermetic: false
     graduation: not-applicable
   - step: 9
@@ -262,41 +272,48 @@ verification_plan:
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      This step IS the presubmit suite; graduating it into the verification registry would make
-      the registry invoke itself. The skill also forbids marking a validate --pre step hermetic
+      This step IS the presubmit suite; graduating it into the verification registry would make the
+      registry invoke itself. The skill also forbids marking a validate --pre step hermetic
       (recursion).
 
 constraints:
   - >-
-    Do NOT add a liveness column to ops_decisions. A warehouse-side column requires an
-    admin-gated reconcile_columns invocation against ducklake_maintenance, which
+    ZERO-EGRESS RETRIEVAL (Decision 88 invariant (ii), "never an ad-hoc re-fetch of data in hand").
+    The shortlist body fetch reads the SOURCE FILES by targeted section, not the warehouse. An
+    earlier draft routed it through the decision_by_id verb; that would have metered Neon egress
+    per /plan for bodies already on disk. The verb remains available and is T1.5's business -- it
+    is deliberately NOT the routine path here, so this plan needs no credentials, no egress, and no
+    MCP dependency, and the scout gate cannot fail because a reader blipped.
+  - >-
+    Do NOT add a liveness column to ops_decisions. A warehouse-side column requires an admin-gated
+    reconcile_columns invocation against ducklake_maintenance, which
     docs/contracts/deploy-paths.yaml states is never autonomous and never reachable from
-    PlatformDev or CI, and which took ops_decisions hard-down for read and write on 2026-07-24.
-    Provenance is derived in the local generator.
+    PlatformDev or CI (Decision 143 privileged-verb tiering), and which took ops_decisions
+    hard-down for read and write on 2026-07-24. Provenance is derived in the local generator.
   - >-
     docs/DECISIONS.md remains the authoritative authoring surface and the sole ETL source for
     ops_decisions (Decision 84). This plan changes how the corpus is READ, never where it is
     written.
   - >-
-    No prose-budget raise for .claude/skills/decision-scout/SKILL.md. Decision 152's reversal
-    clause requires the SPIRIT axis become leaner and query-driven "rather than
-    prose-budget-funded"; the removed whole-file-read text pays for the new protocol.
+    No prose-budget raise for .claude/skills/decision-scout/SKILL.md -- the budget must ratchet
+    DOWN. Decision 152's reversal clause mandates the SPIRIT axis become leaner and query-driven
+    "rather than prose-budget-funded"; the freed whole-file-read text funds the new protocol.
   - >-
     The decision-scout output contract is UNCHANGED -- same buckets (CITE / CONTRADICT / RELATED /
     IRRELEVANT), same SPIRIT lane, same severity taxonomy, same quality gates, same
     "Decisions triaged: N of M" echo, same Verdict line. Callers must not need updating.
   - >-
-    Triage must remain credential-free. The committed index is in-tree; only the full-text fetch
-    of shortlisted entries uses the reader, and it falls back to a targeted file read when the
-    reader is unavailable. A degraded fetch is stated VISIBLY in the report -- never a silent
-    partial triage (Decision 55).
+    Triage and fetch must both remain credential-free and hermetic. The committed index and the
+    source files are all in-tree. A degraded or truncated triage is stated VISIBLY in the report --
+    never silent (Decision 55).
   - >-
     Filter the dec-010 orphan row (raw_block null, allowlisted in
-    config/agent/data_quality/decisions/orphan_baseline.yaml, physical removal tracked by
-    rec-2814) from any warehouse-sourced read.
+    config/agent/data_quality/decisions/orphan_baseline.yaml, physical removal tracked by rec-2814)
+    from any warehouse-sourced read the skill retains.
   - >-
-    The header ceiling (120) is RETAINED as a composition guard, not retired. Decision 150's
-    significance bar is complementary to the size guards, not a substitute for them.
+    The header ceiling (120) and combined ceiling (700_000) are RETAINED. Decision 150's
+    significance bar is complementary to the size guards, not a substitute for them, and the
+    combined ceiling is what continues to bound the live file once the live-byte ceiling retires.
   - No rescue agents or workaround loops (Decision 55).
 
 context:
@@ -304,63 +321,99 @@ context:
     ACUTE STATE at authoring time -- docs/DECISIONS.md is 499,960 / 500,000 bytes (40 bytes) and
     112 / 120 live headers; live+archive combined is 611,030 / 700,000. The next entry fails
     validate_decisions_size in the --pre tier, so this plan's own governing Decision cannot merge
-    without the step-5 re-derivation landing in the same PR.
+    unless the step-5 retirement lands in the same PR.
+  - >-
+    WHY RETIRE RATHER THAN RAISE -- Decision 145's reversal conditions are all retire-or-lower
+    ("Retire or lower this ceiling when... the decision-scout moves to a warehouse/portal read"),
+    and 145 warns a second stopgap raise "is itself a signal that the structural fix is overdue".
+    Lowering is arithmetically impossible (the file already exceeds any lower value), so retirement
+    is the sanctioned response. Nothing goes unguarded: the combined ceiling continues to bound the
+    live file at 700,000 minus archive bytes, i.e. ~588,930 today (88,970 bytes of headroom), and
+    the 120-header composition guard is untouched. NO ceiling constant is raised by this plan.
   - >-
     WHY NOT AN OUTFLOW WAVE -- measured, not assumed. Only 3,658 bytes of live entries are marked
     superseded. A citation-scan of all 112 live entries produced 12 archive-shaped candidates
     (29,053 B), but ten of the twelve carry armed reversal conditions or live "necessary, not
     sufficient" scoping (Decision 107 alone has four swap-back triggers), so a stub must preserve
-    them -- realistic reclaim is ~15.7 KB, roughly three entries of runway against ~294 KB/month
-    of inflow. Archival is additionally combined-ceiling-neutral and compaction is header-neutral.
+    them -- realistic reclaim is ~15.7 KB, roughly three entries of runway against ~294 KB/month of
+    inflow. Archival is additionally combined-ceiling-neutral and compaction is header-neutral.
+    This measurement is what makes declining Decision 146's named relief valves an operator-disposed
+    judgement rather than a bypass.
   - >-
-    WHY NOT THE WAREHOUSE READ ALONE -- ops_decisions stores a byte-exact raw_block per entry, so
-    all 112 live bodies total 499,361 bytes versus the file's 499,855. Migrating the read to the
-    warehouse yields ~zero context saving on its own; the saving comes only from bounding triage.
+    WHY NOT THE WAREHOUSE READ -- ops_decisions stores a byte-exact raw_block per entry, so all 112
+    live bodies total 499,361 bytes versus the file's 499,855. Migrating the read to the warehouse
+    yields ~zero context saving on its own; the saving comes only from bounding triage. The local
+    synced cache already holds raw_block for 139/140 rows, so a per-/plan verb fan-out would also
+    breach Decision 88 invariant (ii).
   - >-
     WHY THIS IS SMALL -- both halves already exist. docs/decisions-index.json is committed
     (38,033 B, 139 entries, ~7.6% of the live file), deterministic, and freshness-guarded in both
-    tiers. decision_by_id and decisions_max_updated are already registered NAMED_READS verbs
-    (src/common/ducklake_scd2_schema.py:404-416) projected as MCP tools by
-    scripts/agent_sdk/mcp_server.py. Content parity is verified -- 139/139 byte-exact raw_block
-    with matching content_hash, spot-checked against the live reader.
+    tiers. The only genuinely missing element is one boolean distinguishing live from archived
+    entries, which no existing field supplies (status fails: 13 archive entries are not
+    "Superseded" and 2 live entries are; superseded_by is populated for only 3/112 live rows).
   - >-
     T1.5 RELATIONSHIP -- this is an INTERIM retrieval arrangement, explicitly not the portal
     cutover. Decision 134 clause 5 designates the end state as portal-read; T1.5 c1 still owns
     DECISIONS.md retirement, and the decision-scout skill's stable-interface contract means the
     later swap remains a Phase-1-step-1 change. T1.5's depends_on set (T0.7b, T1.1, T0.8) is
-    effectively satisfied and CD.18 is ratified as dec-123; CD.17 names ops_decisions graduation
-    as the sanctioned atomic-IMPLEMENTATION decomposition rather than a blocker.
+    effectively satisfied and CD.18 is ratified as dec-123; CD.17 names ops_decisions graduation as
+    the sanctioned atomic-IMPLEMENTATION decomposition rather than a blocker.
   - >-
     TIER ITEM FRESHNESS GATE -- T0.8 is marked status: not_started at
     docs/ROADMAP-PLATFORM.yaml:2120 but is built and merged (scripts/agent_sdk/mcp_server.py,
-    registered in .mcp.json). Silent-completion closeout is staged as scope, per the gate's
-    output discipline.
+    registered in .mcp.json). Silent-completion closeout is staged as scope, per the gate's output
+    discipline.
   - >-
-    KNOWN LIMITATION -- step 6's probes are a MECHANICAL PROXY for triage recall (signal presence
-    in the projection), not a like-for-like measurement against the whole-file baseline. The
-    live-dispatch comparison is an execution step and its evidence goes in the PR description.
-    This is the honest residual on the decision-scout gate's Decision 114 spirit flag: replacing
-    one coherent load with index-plus-targeted-fetch trades recall risk for cost, and the trade
-    is measured only by proxy here.
+    DECISION 105 MIS-CITE TO RE-GROUND -- the scout skill currently attributes live-file-only header
+    counting to Decision 105, but 105's referential target is headers in BOTH files. Keep the
+    live-only M semantics (correct for the scout) and re-ground the citation; annotate per the
+    mis-cite precedent of Decisions 84/87/103.
+  - >-
+    DECISION 151 CONSEQUENCE -- 151 clause 3(v) leaves its Intent-accretion cap convention-only,
+    "backstopped by the existing 500,000-byte live-file ceiling and ordinary PR review". Retiring
+    that ceiling weakens the named backstop; the governing Decision must record whether the combined
+    ceiling plus PR review now suffices, or name an owner for a replacement.
+  - >-
+    DECISION 114 ANALOGY, ADDRESSED -- 114 rejected splitting the roadmap into N files because it
+    "trades one coherent load for N files an agent must reassemble". The trade differs here: the
+    SOURCE file stays single and coherent; only the READ is bounded, the shortlist is small and
+    re-derivable, and the index is generated from the same shared parser rather than hand-maintained.
+    The governing Decision must state this rather than leave the analogy unaddressed.
+  - >-
+    KNOWN LIMITATION -- step 6's probes are a MECHANICAL PROXY for triage recall (signal presence in
+    the projection), not a like-for-like measurement against the whole-file baseline. The
+    live-dispatch comparison is an execution step and its evidence goes in the PR description. This
+    is the honest residual on the decision-scout gate's Decision 114 spirit flag: bounding the read
+    trades recall risk for cost, and the trade is measured only by proxy here.
   - >-
     DEFERRED -- a per-entry authoring size norm (recent entries run 8-14 KB; July 2026 alone added
     56 entries / 294 KB) is the only lever that bends the growth RATE rather than the capacity.
     Deliberately out of scope per operator direction; file as a follow-on recommendation.
   - >-
-    UNVERIFIED -- whether PLAN-dcg-ceiling-relief-sweep and PLAN-dcg-compaction-lifecycle were
-    fully executed could not be confirmed (shallow clone, no status key on plan files). Re-check
-    at implement time before assuming the compaction cohort is untouched.
+    UNVERIFIED -- whether PLAN-dcg-ceiling-relief-sweep and PLAN-dcg-compaction-lifecycle were fully
+    executed could not be confirmed (shallow clone, no status key on plan files). Re-check at
+    implement time before assuming the compaction cohort is untouched.
   - >-
     NUMBERING RACE -- the governing Decision is drafted as number 160 (current max is 159 across
     both files). Re-check the max header at implement time; a concurrent PR may have claimed it.
     validate_candidate_decision_ratification catches a mismatch.
-  - "Decision-scout verdict + CITE list (verbatim decision ids): PENDING -- gate re-dispatched against the final approach; verdict and CITE list to be recorded before the critique gate."
-  - "gates: decision-scout=PENDING; plan-critique=PENDING after 0 round(s)"
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (112 of 112 triaged).
+    CITE: Decision 134, Decision 84, Decision 149, Decision 143, Decision 150, Decision 128,
+    Decision 146, Decision 55. CONTRADICT: Decision 145 [WARN] retire-vs-raise -- resolved by
+    retiring rather than raising; Decision 152 [WARN] mandated SPIRIT revisit -- resolved by
+    ratcheting the prose budget DOWN; Decision 88 [WARN] egress re-fetch -- resolved by reading the
+    source files instead of the verb; Decision 105 [NOTE] mis-cite -- re-grounded; Decision 151
+    [NOTE] backstop -- recorded. SPIRIT: Decision 146 [NOTE] relief-valve bypass -- answered by the
+    15.7 KB measurement; Decision 114 [NOTE] coherent-load analogy -- answered in context.
+    RELATED: Decision 147, Decision 159, Decision 155, Decision 131, Decision 86, Decision 110,
+    Decision 127."
+  - "gates: decision-scout=FLAGS_FOUND (all flags resolved in-plan); plan-critique=PENDING after 0 round(s)"
 
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - Decisions read via the bounded path (index triage + targeted fetch), not a whole-file read
+  - Decisions read via the bounded path (index triage + targeted reads), not a whole-file read
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
   - Re-checked the current max '## Decision NNN:' header before claiming a number
@@ -382,58 +435,60 @@ execution_steps:
     exercises the implicit-contradiction case rather than only keyword matches.
   - >-
     .claude/skills/decision-scout/SKILL.md -- rewrite Phase 1 step 1: triage the committed index,
-    derive M from live:true rows (preserving the Decision 105 live-file-count semantics), fetch
-    full bodies for shortlisted entries via decision_by_id, fall back to targeted file reads with
-    a VISIBLE degradation note, and filter dec-010. Leave the output contract untouched. Pay for
-    the new text by trimming the Lambda-migration-contract and why-a-subagent sections; confirm
-    the file is <= 11379 bytes.
+    derive M from live:true rows, then read ONLY the shortlisted entries as targeted sections of
+    docs/DECISIONS.md / docs/DECISIONS_ARCHIVE.md (zero egress, no credentials -- see the Decision
+    88 constraint). Re-ground the Decision 105 citation. Leave the output contract untouched. Fund
+    the new text by trimming the Lambda-migration-contract and why-a-subagent sections; the file
+    must end STRICTLY smaller than 11379 bytes.
   - >-
-    .claude/skills/planning/SKILL.md -- replace the plan-template pre_implementation_checklist
-    entry "DECISIONS.md read" with the bounded-read phrasing (rec-2479). Net non-positive bytes.
+    config/prose_budgets.yaml -- ratchet the decision-scout entry DOWN to the new measured size and
+    reduce or remove the dec-152 raise marker accordingly. This is Decision 152's mandated revisit,
+    not incidental bookkeeping.
   - >-
-    scripts/checks/decisions/validate_decisions_size.py -- re-derive _DECISIONS_LIVE_MAX_BYTES
-    against the post-repoint consumer model, sized for a LOWER-TIER model's comprehension of what
-    is actually read (the ~38 KB index plus a bounded shortlist), not for Opus -- the
-    model-portability property Decision 128 names. Choose a value that keeps
-    _DECISIONS_COMBINED_MAX_BYTES the binding backstop so both guards stay meaningful. Update the
-    docstring, the inline provenance comment, and the FAIL-message Decision citation. Leave
-    _DECISIONS_LIVE_MAX_H2 and _DECISIONS_COMBINED_MAX_BYTES untouched. Mirror the documented
-    value into docs/contracts/decision-entry.yaml's size_governance block.
+    .claude/skills/planning/SKILL.md -- replace the plan-template pre_implementation_checklist entry
+    "DECISIONS.md read" with the bounded-read phrasing (rec-2479). Net non-positive bytes.
   - >-
-    tests/checks/decisions/test_validate_decisions_size.py -- assert the re-derived live ceiling
-    and pin 120 / 700000 so a future silent drift on those two fails.
+    scripts/checks/decisions/validate_decisions_size.py -- delete _DECISIONS_LIVE_MAX_BYTES, its
+    FAIL branch, and its parameter in _decisions_size_issues. Rewrite the module docstring, which
+    currently grounds the ceiling in the whole-file read this plan removes, to state that the
+    combined ceiling is now the live-file backstop. Leave _DECISIONS_LIVE_MAX_H2 and
+    _DECISIONS_COMBINED_MAX_BYTES untouched. Mirror the change into
+    docs/contracts/decision-entry.yaml's size_governance block.
   - >-
-    docs/ROADMAP-PLATFORM.yaml -- flip T0.8 to complete with completed_at and an evidence note;
-    name the decisions-query verb owner on T1.5 exit criterion c1 (rec-2774).
+    tests/checks/decisions/test_validate_decisions_size.py -- drop the retired assertions, pin
+    120 / 700000, and add a case proving a live file above the old 500000 value passes while a
+    combined breach still FAILs.
   - >-
-    docs/DECISIONS.md -- author the governing Decision. It must state: the re-derivation and its
-    method; that it amends Decision 145 (whose reversal condition #2 -- the scout leaving the
-    whole-file read -- this plan fires) and Decision 134 clause 2 (the ceiling value), per the
-    forward-direction amend-in-the-amending-Decision convention; that it DISCHARGES Decision 152's
-    reversal trigger by re-scoping the SPIRIT lane to the index/shortlist rather than leaving the
-    condition armed; that the header ceiling is retained because Decision 150's significance bar
-    is complementary to the size guards, not a substitute; and that this arrangement is INTERIM
-    and does not constitute the T1.5 portal cutover (Decision 134 clause 5). Include reversal
-    conditions.
+    docs/ROADMAP-PLATFORM.yaml -- flip T0.8 to complete with completed_at and an evidence note; name
+    the decisions-query verb owner on T1.5 exit criterion c1 (rec-2774).
   - >-
-    Run a LIVE decision-scout dispatch against a probe brief with a known-correct CITE set,
-    compare against the pre-change whole-file baseline, and record the comparison in the PR
-    description. This is the honest measurement the mechanical probes only approximate.
+    docs/DECISIONS.md -- author the governing Decision. It must state: the live-byte ceiling
+    retirement and why retire rather than raise (Decision 145's conditions are retire-or-lower;
+    lowering is arithmetically impossible); that it amends Decision 145 and Decision 134 clause 2
+    per the forward-direction amend-in-the-amending-Decision convention; that it performs Decision
+    152's mandated revisit (budget ratcheted down, not discharged by assertion); that the header and
+    combined ceilings are retained because Decision 150's significance bar is complementary to the
+    size guards; the Decision 151 backstop consequence; the Decision 114 coherent-load adjudication;
+    and that this arrangement is INTERIM and does not constitute the T1.5 portal cutover (Decision
+    134 clause 5). Include reversal conditions.
+  - >-
+    Run a LIVE decision-scout dispatch against a probe brief with a known-correct CITE set, compare
+    against the pre-change whole-file baseline, and record the comparison in the PR description.
+    This is the honest measurement the mechanical probes only approximate.
   - >-
     File the deferred per-entry authoring size norm as a follow-on recommendation via
     scripts.ops_data_portal file_rec (call get_rec_write_guidance() first).
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
     RCA (Decision 55).
-  - >-
-    Include "Resolves: rec-2783, rec-2774, rec-2479" in the squash-merge commit body.
+  - 'Include the trailer "Resolves: rec-2783, rec-2774, rec-2479" in the squash-merge commit body.'
   - 'Report: what was implemented, verification results, and the live-dispatch recall comparison.'
 
 work_areas: []
 
 rollback: >-
   Every change is a file edit on a branch; revert the merge commit to restore the whole-file-read
-  protocol and the prior ceiling. The ops_decisions backfill is content-hash-gated and
-  append-preserving (SCD2), so a revert of docs/DECISIONS.md simply produces a new version on the
-  next backfill -- no warehouse rollback is needed and no row is destroyed. No infrastructure, no
-  Lambda deploy, no schema change, so there is nothing to un-deploy.
+  protocol and the live-byte ceiling. The ops_decisions backfill is content-hash-gated and
+  append-preserving (SCD2), so reverting docs/DECISIONS.md simply produces a new version on the next
+  backfill -- no warehouse rollback is needed and no row is destroyed. No infrastructure, no Lambda
+  deploy, no schema change, no credentialed write, so there is nothing to un-deploy.
