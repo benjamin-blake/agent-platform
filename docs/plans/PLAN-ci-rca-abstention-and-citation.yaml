@@ -27,10 +27,14 @@ scope:
   purpose: >-
     _derive_ci_rca_undetermined_open filters the abstention surface on `rca_confidence ==
     "undetermined"` at line 61 - the single predicate. The enum is high|medium|low|undetermined, so a
-    `low` rec reaches no review surface. Widen to {low, undetermined}. FIVE sites in total: the
-    predicate (61), two docstrings (45, 96), the printed section title (104), and the overflow label at
-    118 ("showing 5 of N open undetermined recs"), which test_print_ci_rca_undetermined_recs_overflow
-    asserts on. Preserve the substrings "CI-RCA Abstention Review" and "Decision 73 L5".
+    `low` rec reaches no review surface. Widen to {low, undetermined}. SEVEN sites: the
+    predicate (61), two docstrings (45, 96), the printed section title (104), the overflow label at 118
+    ("showing 5 of N open undetermined recs") which test_print_ci_rca_undetermined_recs_overflow
+    asserts on, and two printed strings that are now FALSE - line 109 ("Evidence bundle abstained on
+    these recs"), untrue of a self-rated-low rec and the same defect this plan fixes in probe_health,
+    and line 110 ("Advisory only: open ci_rca recs already hard-block /plan via Decision 73 L5"), the
+    exact falsehood AC6 rebuts. Preserve the substrings "CI-RCA Abstention Review" and "Decision 73
+    L5" - test_ci_rca_signals.py:423 asserts the latter.
 - file: scripts/ci_rca/probe_health.py
   action: Modify
   purpose: >-
@@ -51,11 +55,12 @@ scope:
 - file: scripts/ops_portal/ci_rca_lifecycle.py
   action: Modify
   purpose: >-
-    Add a `correct_rec_context(rec_id, updates, profile=None)` helper beside stamp_fixed_by_sha (line
-    215), which already implements the identical _fetch_rec_from_reader -> mutate -> update_rec shape.
-    It must refuse to write unless the READ blob carries a fingerprint, apply the caller's field
-    updates to the parsed context, assert _validate_ci_rca_context_v2 returns [] on the merged result,
-    and write the WHOLE blob back. This is the tested home for the rec-2923 correction; an inline
+    Add a `correct_rec_context(rec_id, context_updates, row_updates=None, profile=None)` helper beside
+    stamp_fixed_by_sha (line 215), which already implements the identical _fetch_rec_from_reader ->
+    mutate -> update_rec shape. It must refuse to write unless the READ blob carries a fingerprint,
+    apply context_updates to the parsed context, assert _validate_ci_rca_context_v2 returns [] on the
+    merged result, and write the WHOLE blob back in one update_rec call alongside any row_updates
+    (needed for `title`, which lives on the row, not in the blob, and is content-gated). This is the tested home for the rec-2923 correction; an inline
     heredoc in a VP step would be an untested production mutation, and a one-shot under scripts/ would
     face the 100 percent changed-file coverage gate for code that runs once.
 - file: docs/contracts/ci-rca-lifecycle.yaml
@@ -84,7 +89,16 @@ scope:
     rec's context and title describe the widened set rather than claiming probe abstention.
 - file: tests/session/preflight/test_ci_rca_gauges.py
   action: Modify
-  purpose: Add TestAbstentionLabelAccuracy - the emitted key and printed label name the widened set.
+  purpose: >-
+    Add TestAbstentionLabelAccuracy, AND migrate the 8 existing assertions that hardcode
+    `undetermined_count` (lines 32, 41, 49, 65, 80, 86-89, 148) - this is a rename migration across the
+    file, not one class appended.
+- file: tests/test_session_preflight_decomposition.py
+  action: Modify
+  purpose: >-
+    Lines 419-450 hardcode {"window_days": 14, "undetermined_count": 999, ...}, feed it to the real
+    print_ci_rca_abstention_gauge and assert the report equals it. The dict-key rename KeyErrors here.
+    Found only because the round-2 critique swept callers beyond the scope table.
 - file: tests/test_ci_rca_lifecycle.py
   action: Modify
   purpose: >-
@@ -92,7 +106,7 @@ scope:
     refuses when the merged context fails validation, and preserves sibling keys.
 - file: config/agent/verification_registry/registry.yaml
   action: Modify
-  purpose: Graduate the five counterfactuals named in the VP as standing regression guards.
+  purpose: Graduate the six counterfactuals named in the VP as standing regression guards.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -108,18 +122,24 @@ acceptance_criteria:
   admission gate.
 - >-
   AC3 - A rec with rca_confidence=`low` is returned by the abstention derivation and printed;
-  `undetermined` still is; `high`, `medium` and an absent value are not. All five sites move together -
-  predicate (61), docstrings (45, 96), section title (104), overflow label (118) - and the title still
-  contains "CI-RCA Abstention Review" and "Decision 73 L5".
+  `undetermined` still is; `high`, `medium` and an absent value are not. All SEVEN sites move together -
+  predicate (61), docstrings (45, 96), section title (104), overflow label (118) and the two false
+  printed strings at 109 and 110 - and the section still contains "CI-RCA Abstention Review" and
+  "Decision 73 L5".
 - >-
   AC4 - The gauge in probe_health.py counts the same set as the surface, AND its emitted prose moves
   with it: _build_context and _build_rec_fields no longer assert the probe "abstained" on recs it
   classified, and no longer point remediation at scripts/ci_rca/evidence.py for a
   self-rated-low-confidence population.
 - >-
-  AC5 - scripts/preflight/ci_rca_gauges.py's dict key and printed label name the widened set. After
-  the change no emitted string in the abstention path says "undetermined" while counting {low,
-  undetermined}.
+  AC5 - scripts/preflight/ci_rca_gauges.py's dict key and printed label name the widened set, as do
+  all printed strings in ci_rca_signals.py and probe_health.py's filed-rec prose. DELIBERATELY OUT OF
+  SCOPE and recorded rather than silently missed: scripts/session/preflight.py:387-388 emits the report
+  keys `ci_rca_undetermined_recs` and `ci_rca_undetermined_total`, which will count the widened set
+  under a name that no longer fits. Renaming them is blocked by a standing graduated registry row,
+  `ci-rca-undetermined-total-key-present` (registry.yaml:392-403, grep_count on
+  scripts/session/preflight.py, operator gte, count 1), so it needs that row retired first - a separate
+  change. The contract records the mismatch.
 - >-
   AC6 - The benefit is stated accurately as a counterweight to a premature-closure prompt, NOT as a
   gating change and NOT as mere extra visibility. print_ci_rca_recs splits open ci_rca recs into
@@ -130,24 +150,30 @@ acceptance_criteria:
   stated cause is factually wrong is being offered for closure; the abstention entry is what
   contradicts that offer.
 - >-
-  AC7 - Blast radius is quantified on BOTH surfaces. Surface: exactly one open ci_rca rec exists today
-  (rec-2923, at `low`), so it gains one entry. Gauge: the trailing-14-day rate moves from 0/19 = 0.00
-  to 4/19 = 0.21 against the 0.3 auto-file threshold and a min_sample of 5 - no auto-file today, with
-  roughly two `low` recs of margin. Steady state, the last 20 ci_rca recs split 11 high / 4 medium / 5
-  low with the field set on all 20.
+  AC7 - Blast radius is bounded, stated as an invariant plus a dated observation rather than as fixed
+  numbers, because the gauge window slides. INVARIANT: the widened rate must remain below the 0.3
+  auto-file threshold at implement time, and the implementer re-measures before landing. OBSERVED
+  2026-07-31: trailing-14-day 3/18 = 0.17 against threshold 0.3 with min_sample 5, roughly two `low`
+  recs of margin; exactly one open ci_rca rec (rec-2923, `low`), so the surface gains one entry; the
+  last 20 ci_rca recs split 11 high / 4 medium / 5 low with the field set on all 20.
 - >-
-  AC8 - rec-2923's correction covers EVERY field in context_v2_json that carries the false narrative,
-  not just why_chain: `proximate_cause` (asserts the retry returned STARVED), `why_chain`,
-  `detection_gap.gap_explanation` (asserts starvation was the intended fail-closed exit),
-  `corrective_action` and `preventive_action` (both point at the dead `case *)` at action.yml:86-89).
-  Correcting why_chain alone would leave a Critical rec whose why_chain contradicts its own
-  proximate_cause two keys away - a new factual inconsistency introduced by a plan whose premise is
-  correcting factual wrongness.
+  AC8 - rec-2923's correction covers EVERY field carrying the false narrative, in both the
+  context_v2_json blob and the row itself. In the blob: `proximate_cause` (asserts the retry returned
+  STARVED), `why_chain`, `detection_gap.gap_explanation` (asserts starvation was the intended
+  fail-closed exit), `corrective_action` and `preventive_action` (both point at the dead `case *)` at
+  action.yml:86-89). On the row: `title`, currently "Sandbox subagent plan review starved twice; apply
+  blocked" - both halves false, since the retry never ran and the record DID latch red. The title is
+  the ONLY string print_ci_rca_recs emits on the SOFT surface, so leaving it would correct five fields
+  a human never sees there while the false one stays on screen next to a close command. Correcting any
+  subset would leave a Critical rec contradicting itself.
 - >-
-  AC9 - The top-level `context` COLUMN is deliberately left uncorrected and the reason is recorded: it
-  is in _UPDATE_CONTENT_VALIDATED_FIELDS (ops_data_portal.py:422) and would trip the Decision 66
-  write-time content gate, which is a separate concern from the context_v2_json narrative fields. The
-  contract records that the column still carries the superseded summary.
+  AC9 - The top-level `context` COLUMN is deliberately left uncorrected, with an honest reason rather
+  than a predicted one: it is in _UPDATE_CONTENT_VALIDATED_FIELDS (ops_data_portal.py:422), so a
+  rewrite must satisfy the Decision 66 write-time content validators loaded from ops.yaml. Whether a
+  well-formed replacement would pass is not established here, and this plan does not claim it would
+  fail - it defers the column as a separate concern. `title` is in the same frozenset but IS corrected
+  (AC8), because it is the string the SOFT surface actually prints. The contract records that the
+  column still carries the superseded summary and points at the corrected fields.
 - >-
   AC10 - The correction preserves the rest of the blob. update_rec does `merged = {**existing,
   **updates}` - a record-level shallow merge - so a partial context_v2_json would replace the whole
@@ -177,7 +203,10 @@ verification_plan:
     If the yml case still fails, the alternation was extended in the wrong group. If a previously-
     accepted extension now fails, the pattern was rewritten rather than widened - this is
     loosening-only. Do NOT replace this with a grep for the absence of a negative fixture; that is
-    tautological and Decision 132's VF-06 differential would reject the resulting registry row.
+    tautological and Decision 132's VF-06 differential would reject the resulting registry row. Note
+    the pre-fix half necessarily asserts against a hardcoded copy of the old regex (production holds
+    only one pattern), so the load-bearing assertion is the post-fix half against the live module
+    constant - write it that way rather than comparing two literals.
   hermetic: true
   graduation: graduate
   graduation_check_id: ci-rca-citation-accepts-yml
@@ -263,6 +292,18 @@ verification_plan:
             "under the harness invocation it runs in "
             "(.github/actions/subagent-plan-review/review.sh:30).",
         ],
+        "detection_gap": {
+            "earliest_viable_gate": "presubmit",
+            "actual_gate_that_caught_it": "unknown",
+            "gap_explanation": (
+                "No pre-merge tier could observe this: the composite action runs only at apply time "
+                "against a live plan. But the escape was not 'starvation is the intended fail-closed "
+                "exit' as originally filed -- the fail-closed branch never executed. The gap is that "
+                "the step's contract was unit-tested while the harness invocation that voided it was "
+                "not (.github/actions/subagent-plan-review/action.yml:38)."
+            ),
+            "escape_mode": "undetermined",
+        },
         "corrective_action": (
             "None required at the reviewer: PR #812 fixed the inherited-errexit defect via review.sh. "
             "Verify the next terraform-apply-sandbox run reaches a PROCEED or an explicit starved "
@@ -274,12 +315,19 @@ verification_plan:
             "its contract must be driven under that exact invocation in test. The STARVED branch this "
             "rec originally cited (action.yml:86-89) was itself dead code and never executed."
         ),
+    }, row_updates={
+        "title": "Sandbox subagent review starved; inherited errexit voided the retry and latched a false red",
     })
-    ctx = json.loads(_fetch_rec_from_reader("rec-2923")["context_v2_json"])
+    row = _fetch_rec_from_reader("rec-2923")
+    ctx = json.loads(row["context_v2_json"])
+    assert row["status"] == "open", "rec-2923 must remain open (AC11)"
     assert ctx.get("fingerprint"), "fingerprint did not survive"
     assert ctx.get("evidence_bundle_ref"), "evidence_bundle_ref did not survive"
     assert "never executed" in " ".join(ctx["why_chain"])
+    assert "before the retry or the case block ran" in ctx["proximate_cause"]
     assert "STARVED, so the composite" not in ctx["proximate_cause"]
+    assert "intended fail-closed exit" not in ctx["detection_gap"]["gap_explanation"]
+    assert "starved twice" not in row["title"], "the SOFT surface still prints the false title"
     print("OK", ctx["fingerprint"][:12])
     PY
   expected: >-
@@ -326,9 +374,10 @@ constraints:
   Decision 132's VF-06 gate (verification_graduation.run_differential) rejects any row whose check
   passes identically on both, so a "grep finds no counterexample" row is inadmissible by construction.
 - >-
-  Widen predicate AND prose together. Five sites in ci_rca_signals.py (61, 45, 96, 104, 118), three in
-  probe_health.py (109, 147-159, 162-179), two in ci_rca_gauges.py (25, 66). Moving a predicate without
-  its labels relocates the defect instead of fixing it.
+  Widen predicate AND prose together. Seven sites in ci_rca_signals.py (61, 45, 96, 104, 109, 110,
+  118), probe_health.py's predicate (109) plus _build_context (147-159), _build_rec_fields (162-179),
+  the docstring at 90 and the undetermined_count parameter name at 183/196, and two in ci_rca_gauges.py
+  (25, 66). Moving a predicate without its labels relocates the defect instead of fixing it.
 - >-
   Do NOT change the /plan gate. print_ci_rca_recs' SOFT/HARD split is untouched; this plan changes an
   advisory surface only.
@@ -412,9 +461,15 @@ context:
   or manufactures a spurious Critical REGRESSION. A reasoned 12k exception, discharged by step 6
   correcting the rec in place while it stays open.
 - >-
-  SLOC headroom is comfortable: ci_rca_schema.py 272 SLOC, ci_rca_signals.py 293, probe_health.py 211,
-  ci_rca_lifecycle.py 311, all unregistered against the 500 default. If any crossed, decompose
+  SLOC headroom is comfortable on all five source files, none registered against the 500 default:
+  ci_rca_gauges.py 364 (the closest to the ceiling, and a two-site edit), ci_rca_lifecycle.py 247,
+  ci_rca_signals.py 292, ci_rca_schema.py 240, probe_health.py 202. If any crossed, decompose
   (Decision 128) rather than raise.
+- >-
+  Interaction with rec-2928 (open, repo-wide .yml -> .yaml convergence): complementary, not
+  contradictory - historical recs would still carry .yml citations, so the regex widening is needed
+  either way. But if rec-2928 lands, this correction's own action.yml:38 and action.yml:86-89
+  references dangle. Whoever executes rec-2928 should sweep rec text, not just files.
 pre_implementation_checklist:
 - Branch confirmed not on main
 - docs/PROJECT_CONTEXT.md read

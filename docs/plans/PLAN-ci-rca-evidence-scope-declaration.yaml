@@ -93,10 +93,11 @@ scope:
 - file: tests/ci_rca/evidence/test_main_emit.py
   action: Modify
   purpose: >-
-    Its TestEmitDir fixture (lines 23-41) hand-builds a scope-less envelope through publish_envelope
-    and will raise under AC6 once _validate_scope lands. Give the fixture a scope block, and extend
-    its existing retrieval_evidence assertion (lines 68-70) to cover scope, which is what verifies AC16
-    end-to-end.
+    Two edits. (i) Its TestEmitDir fixture (lines 23-41) hand-builds a scope-less envelope through
+    publish_envelope and will raise under AC6 once _validate_scope lands - give the fixture a scope
+    block. (ii) Add a NEW class TestEmitDirScopeDeclaration asserting the emitted bundle's
+    retrieval_evidence carries scope; that class, not TestEmitDir, is what VP5 graduates, because
+    VF-06's origin/main revert leg would find TestEmitDir already green and reject the row.
 - file: tests/checks/ci_guards/test_validate_actions_evidence.py
   action: Modify
   purpose: Cover the v2 linkage assertion and rejection of a stale v1 contract.
@@ -119,7 +120,7 @@ scope:
     need decomposing rather than growing.
 - file: config/agent/verification_registry/registry.yaml
   action: Modify
-  purpose: Graduate the seven counterfactuals named in the VP as standing regression guards.
+  purpose: Graduate the eight counterfactuals named in the VP as standing regression guards.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -134,8 +135,8 @@ acceptance_criteria:
   failed_steps' closed {failure, timed_out, cancelled}: it admits success and skipped, and admits a
   null/absent conclusion for a not-started step, which is routine in a cancelled job and _failed_jobs
   explicitly selects cancelled jobs. Copying _validate_jobs' narrow enum would reject every real
-  envelope, and since publish_envelope's ValueError escapes uncaught to fetch_logs.main() that fails
-  the whole CI-RCA job and files NO rec at all.
+  envelope, and since publish_envelope's ValueError propagates out of fetch_run_log to
+  fetch_logs.main() - which converts it to rc=1 - the whole CI-RCA job fails and NO rec is filed.
 - >-
   AC3 - `log_retrieved` is derived STRUCTURALLY, never by searching `body`: on retrieval_path="primary"
   true exactly for steps in failed_steps; on "fallback" true for every step of a job in
@@ -293,11 +294,14 @@ verification_plan:
     from step 4 deliberately: a test_selector registry row carries exactly one node_id
     (verification_checks.py:219,226), so a two-target pytest command cannot be one graduated row and
     would be rejected by VF-06's HEAD leg.
-  command: bin/venv-python -m pytest tests/ci_rca/evidence/test_main_emit.py::TestEmitDir
+  command: bin/venv-python -m pytest tests/ci_rca/evidence/test_main_emit.py::TestEmitDirScopeDeclaration
   expected: The emitted bundle's retrieval_evidence contains the scope block.
   fix_if: >-
-    If TestEmitDir raises on envelope construction, its fixture still hand-builds a scope-less envelope
-    through publish_envelope.
+    Must be a NEW class, not the pre-existing TestEmitDir. VF-06's revert leg checks out a full
+    origin/main worktree and runs MAIN's copy of the named class, so a row pointing at TestEmitDir -
+    which exists and passes on main - is rejected as "revert did not produce FAIL (tautological)" and
+    reds validate --pre. TestEmitDir's own fixture still needs a scope block to survive AC6, but that
+    is an ungraduated fixture repair, not the graduated assertion.
   hermetic: true
   graduation: graduate
   graduation_check_id: ci-rca-scope-reaches-emitted-bundle
@@ -373,6 +377,23 @@ verification_plan:
     than a stable repository property, so it cannot be a standing registry check.
 - step: 10
   phase: pre-deploy
+  action: >-
+    Prove the Decision 66 obligation is discharged - the agent's field-semantics authority documents
+    the new echo field.
+  command: bin/venv-python -m pytest tests/test_rec_write_guidance.py::TestCiRcaUnobservedStepsGuidance
+  expected: >-
+    `--guidance --source ci_rca`'s schema_fields block documents unobserved_steps and its
+    {job_id, step_index} pair shape. unobserved_steps_authoritative is deliberately absent - it is
+    Tier-B portal-derived and the agent must never author it.
+  fix_if: >-
+    Must be a NEW class, for the VF-06 reason given in step 5. If the guidance block omits the field,
+    an agent trusting Step 3's authority over the Step 4 template omits the echo and check-5 tags
+    every rec.
+  hermetic: true
+  graduation: graduate
+  graduation_check_id: ci-rca-guidance-documents-unobserved-steps
+- step: 11
+  phase: pre-deploy
   action: Run focused lint and the fast presubmit before commit, then rerun after the feat commit exists.
   command: >-
     bin/venv-python -m ruff check scripts/ci_rca/ scripts/ops_portal/
@@ -382,7 +403,7 @@ verification_plan:
   hermetic: false
   graduation: waive
   graduation_waiver_reason: Aggregate lint plus presubmit is an orchestration gate, not one registry node.
-- step: 11
+- step: 12
   phase: pre-deploy
   action: Run literal full validation before commit and again after the feat commit.
   command: bin/venv-python -m scripts.validate
@@ -402,8 +423,8 @@ constraints:
 - >-
   Do NOT derive log_retrieved by searching `body`, and do NOT copy _validate_jobs' closed
   {failure, timed_out, cancelled} enum into _validate_scope. Both reject valid envelopes, and
-  publish_envelope's ValueError escapes uncaught to fetch_logs.main() - the CI-RCA job fails and NO rec
-  is filed, converting a diagnosable failure into a silent one.
+  publish_envelope's ValueError propagates out of fetch_run_log to fetch_logs.main(), which converts it
+  to rc=1 - the CI-RCA job fails and NO rec is filed, turning a diagnosable failure into a silent one.
 - >-
   Do NOT put the stamp and the echo on the same key, and do NOT leave either undeclared on
   CiRcaContext. A shared key makes check-5 vacuous; an undeclared field is dropped on round-trip
@@ -483,6 +504,13 @@ context:
   Deferred because it changes the schema, the agent instructions and every historical rec, at n=1.
   TRIGGER: build it as check-6 if warn-mode telemetry shows mis-narration recurring after this lands.
   It is also the eventual consumer of unobserved_steps_authoritative (AC12).
+- >-
+  rec-2923's NAMED CLOSER, recorded here rather than left to an unnamed future: neither this plan nor
+  the sibling closes it. The closer is the STARVED-surface plan, intended slug
+  `ci-rca-starved-surface`, carrying transcript archival to the private ci-rca-evidence prefix, the
+  Decision 155 STARVED-rate marker, rec-2664, and the composite-action errexit guard generalising PR
+  #812. It closes rec-2923 via a `Resolves: rec-2923` trailer, falling back to
+  ci-rca-lifecycle.yaml's closure_dependency.manual_route if rec-autoclose cannot stamp fixed_by_sha.
 - >-
   Honest statement of reach: this plan closes the information gap, stamps the derived fact, and forces
   the agent to read the manifest. It does NOT prevent a compliant agent from narrating about a disclosed
@@ -578,13 +606,13 @@ execution_steps:
   Add the tests named in the Scope table, including the run-30615075007 replay fixture, a two-failed-job
   fixture, success/skipped/null-conclusion cases, the truncated-body case, and the hostile step name.
 - >-
-  config/agent/verification_registry/registry.yaml - add seven rows. Six are primitive_slot
+  config/agent/verification_registry/registry.yaml - add eight rows. Seven are primitive_slot
   test_selector with a class-level node_id, matching the ci-rca-bounded-retrieval-envelope shape at
   line 2054, with guard_target/guard_symbol set to the module each guards - note
   ci-rca-scope-bundle-propagation and ci-rca-scope-reaches-emitted-bundle are SEPARATE rows because a
   test_selector check_spec holds exactly one node_id (verification_checks.py:219,226). The seventh,
   ci-rca-log-evidence-schema-v2-total, is primitive_slot command_exit_zero with check_spec.command a
-  [bash, -c, ...] list carrying VP step 7's literal command INCLUDING -I and --exclude-dir, matching
+  [bash, -c, ...] list carrying VP step 8's literal command INCLUDING -I and --exclude-dir, matching
   provider-mirror-stale-claim-sweep at line 1988. Each row must assert the SAME thing as its VP step.
 - Execute Verification Plan - run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
 - 'Report: what was implemented, verification results'
