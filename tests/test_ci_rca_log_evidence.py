@@ -8,12 +8,14 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci_rca.fingerprint import error_signature_from_log_tail
 from scripts.ci_rca.log_evidence import (
     SCHEMA,
     bound_text,
     extract_body,
     main,
     publish_envelope,
+    read_envelope,
     recovery_url,
     validate_envelope,
 )
@@ -26,6 +28,15 @@ def _envelope(body: str = "one\ntwo\n") -> dict:
         "identity": {"repository": "owner/repo", "run_id": 42},
         "failed_jobs": [{"job_id": 7, "conclusion": "failure", "failed_steps": [{"step_index": 2, "conclusion": "failure"}]}],
         "retrieval_path": "primary",
+        "scope": [
+            {
+                "job_id": 7,
+                "steps": [
+                    {"step_index": 1, "conclusion": "success", "log_retrieved": False},
+                    {"step_index": 2, "conclusion": "failure", "log_retrieved": True},
+                ],
+            }
+        ],
         "fallback_selection": {"queried_job_ids": [7], "unqueried_job_ids": [], "unqueried_reason": None},
         "body": bounded,
         "limits": limits,
@@ -120,6 +131,8 @@ def test_unqueried_fallback_jobs_require_unknown_incomplete_counts() -> None:
         "unqueried_job_ids": [7],
         "unqueried_reason": "aggregate_limit",
     }
+    for step in envelope["scope"][0]["steps"]:
+        step["log_retrieved"] = False
     with pytest.raises(ValueError, match="unknown incomplete"):
         validate_envelope(envelope)
 
@@ -197,3 +210,105 @@ def test_module_entrypoint(monkeypatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         runpy.run_module("scripts.ci_rca.log_evidence", run_name="__main__")
     assert exc_info.value.code == 0
+
+
+class TestFingerprintInputPinned:
+    """VP step 1 (AC11): error_signature_from_log_tail over the post-change envelope's body
+    equals a FROZEN GOLDEN SIGNATURE captured from origin/main BEFORE any source edit in this
+    plan -- not a same-tree recomputation (which would be tautological) -- so Decision 142's
+    non-pytest fingerprint keyspace provably does not fork. This module never touches `body`;
+    a differing signature means scope data leaked into it (a source-edit constraint violation)."""
+
+    _GOLDEN_BODY = (
+        "Run pytest tests/\n"
+        "FAILED tests/test_foo.py::test_bar - AssertionError: expected 1 got 2\n"
+        "Error: process completed with exit code 1\n"
+    )
+    _GOLDEN_SIGNATURE = "pytest::process completed with exit code 1"
+
+    def test_post_change_envelope_body_signature_matches_frozen_golden(self, tmp_path: Path) -> None:
+        bounded, limits = bound_text(self._GOLDEN_BODY, 1024, 100)
+        envelope = {
+            "schema": SCHEMA,
+            "identity": {"repository": "owner/repo", "run_id": 42},
+            "failed_jobs": [
+                {"job_id": 7, "conclusion": "failure", "failed_steps": [{"step_index": 1, "conclusion": "failure"}]}
+            ],
+            "retrieval_path": "primary",
+            "scope": [{"job_id": 7, "steps": [{"step_index": 1, "conclusion": "failure", "log_retrieved": True}]}],
+            "fallback_selection": {"queried_job_ids": [7], "unqueried_job_ids": [], "unqueried_reason": None},
+            "body": bounded,
+            "limits": limits,
+            "recovery": {"url": "https://github.com/owner/repo/actions/runs/42", "state": "available"},
+        }
+        source = tmp_path / "evidence.json"
+        publish_envelope(source, envelope)
+        published = read_envelope(source)
+        assert published["body"] == self._GOLDEN_BODY
+        assert error_signature_from_log_tail(published["body"], "pytest") == self._GOLDEN_SIGNATURE
+
+
+class TestScopeDeclarationCounterfactuals:
+    """VP step 2 (AC1/AC2/AC6): the scope block is enforced and accepts the full conclusion
+    domain, including success/skipped steps, a null-conclusion not-started step, and a
+    truncated body -- volume truncation is orthogonal to scope validation."""
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda value: value.update(scope=None),
+            lambda value: value["scope"][0]["steps"].pop(),  # narrower than failed_steps
+            lambda value: value["scope"][0]["steps"].append(
+                {"step_index": 1, "conclusion": "success", "log_retrieved": False}
+            ),  # duplicate index
+            lambda value: value["scope"][0]["steps"][1].update(conclusion="success"),  # disagrees with failed_steps
+            lambda value: value["scope"][0]["steps"][1].update(log_retrieved=False),  # contradicts retrieval_path
+            lambda value: value["scope"][0].update(job_id="7"),  # job_id not an int
+            lambda value: value["scope"].append(deepcopy(value["scope"][0])),  # duplicate job entry
+            lambda value: value["scope"][0].update(steps="oops"),  # steps is not a list
+            lambda value: value["scope"][0]["steps"].append("oops"),  # malformed step entry
+            lambda value: value.update(scope=[]),  # scope job set does not match failed jobs
+        ],
+    )
+    def test_rejects_scope_counterfactuals(self, mutate) -> None:
+        envelope = _envelope()
+        mutate(envelope)
+        with pytest.raises(ValueError):
+            validate_envelope(envelope)
+
+    def test_well_formed_envelope_validates(self) -> None:
+        envelope = _envelope()
+        assert validate_envelope(envelope) is envelope
+
+    def test_success_and_skipped_steps_validate(self) -> None:
+        envelope = _envelope()
+        envelope["scope"][0]["steps"].append({"step_index": 3, "conclusion": "skipped", "log_retrieved": False})
+        assert validate_envelope(envelope) is envelope
+
+    def test_null_conclusion_step_in_cancelled_job_validates(self) -> None:
+        envelope = _envelope()
+        envelope["failed_jobs"] = [
+            {"job_id": 7, "conclusion": "cancelled", "failed_steps": [{"step_index": 2, "conclusion": "cancelled"}]}
+        ]
+        envelope["scope"] = [
+            {
+                "job_id": 7,
+                "steps": [
+                    {"step_index": 1, "conclusion": None, "log_retrieved": False},
+                    {"step_index": 2, "conclusion": "cancelled", "log_retrieved": True},
+                ],
+            }
+        ]
+        assert validate_envelope(envelope) is envelope
+
+    def test_truncated_body_envelope_validates(self) -> None:
+        envelope = _envelope()
+        envelope["limits"].update(
+            complete=False,
+            truncation_reason="byte_limit",
+            observed_bytes=envelope["limits"]["included_bytes"] + 5,
+            observed_lines=envelope["limits"]["included_lines"],
+            omitted_bytes=5,
+            omitted_lines=0,
+        )
+        assert validate_envelope(envelope) is envelope

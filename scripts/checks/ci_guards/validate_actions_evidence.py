@@ -70,8 +70,8 @@ def evidence_availability(class_policy: dict[str, Any], created_at: datetime, ob
 
 def _validate_s1(root: Path, contract: dict[str, Any]) -> None:
     linkage = contract.get("s1_linkage", {})
-    if linkage.get("schema") != "ci-rca-log-evidence/v1":
-        raise ValueError("S1 linkage schema must be ci-rca-log-evidence/v1")
+    if linkage.get("schema") != "ci-rca-log-evidence/v2":
+        raise ValueError("S1 linkage schema must be ci-rca-log-evidence/v2")
     expected = {"producer": "publish_envelope", "extractor": "extract_body", "consumer": "load_retrieval_input"}
     for role, symbol in expected.items():
         relative = linkage.get(role)

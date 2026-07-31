@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ def _write_input(tmp_path: Path, *, run_id: int = 42, state: str = "available") 
             "identity": {"repository": "owner/repo", "run_id": run_id},
             "failed_jobs": [{"job_id": 1, "conclusion": "failure", "failed_steps": []}],
             "retrieval_path": "primary",
+            "scope": [{"job_id": 1, "steps": []}],
             "fallback_selection": {"queried_job_ids": [1], "unqueried_job_ids": [], "unqueried_reason": None},
             "body": "failure\n",
             "limits": limits,
@@ -53,3 +55,37 @@ def test_load_retrieval_input_rejects_mismatched_run_id(tmp_path: Path) -> None:
     envelope, body = _write_input(tmp_path)
     with pytest.raises(ValueError, match="run identity"):
         load_retrieval_input(envelope, body, 43)
+
+
+class TestScopePropagation:
+    """VP step 4 (AC16): load_retrieval_input carries `scope` into retrieval_evidence, and a v1
+    envelope (pre-dating this plan's schema bump) is rejected."""
+
+    def test_scope_reaches_retrieval_evidence(self, tmp_path: Path) -> None:
+        envelope, body = _write_input(tmp_path)
+        result = load_retrieval_input(envelope, body, 42)
+        assert result["scope"] == [{"job_id": 1, "steps": []}]
+
+    def test_v1_envelope_is_rejected(self, tmp_path: Path) -> None:
+        body_path = tmp_path / "body.log"
+        body_path.write_text("failure\n", encoding="utf-8")
+        _, limits = bound_text("failure\n", 100, 10)
+        envelope_path = tmp_path / "v1_envelope.json"
+        envelope_path.write_text(
+            json.dumps(
+                {
+                    "schema": "ci-rca-log-evidence/v1",
+                    "identity": {"repository": "owner/repo", "run_id": 42},
+                    "failed_jobs": [{"job_id": 1, "conclusion": "failure", "failed_steps": []}],
+                    "retrieval_path": "primary",
+                    "scope": [{"job_id": 1, "steps": []}],
+                    "fallback_selection": {"queried_job_ids": [1], "unqueried_job_ids": [], "unqueried_reason": None},
+                    "body": "failure\n",
+                    "limits": limits,
+                    "recovery": {"url": "https://github.com/owner/repo/actions/runs/42", "state": "available"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="invalid retrieval evidence schema"):
+            load_retrieval_input(envelope_path, body_path, 42)

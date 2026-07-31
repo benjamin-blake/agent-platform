@@ -96,6 +96,35 @@ def find_open_ci_rca_rec_by_fingerprint(fingerprint: str, profile: Optional[str]
     return None
 
 
+def _unobserved_pairs_from_scope(scope: list) -> list[dict[str, int]]:
+    """Derive the authoritative {job_id, step_index} pairs the run's evidence did NOT retrieve
+    a log for, from a verified bundle's retrieval_evidence.scope (AC7). Sorted for determinism."""
+    pairs: list[dict[str, int]] = []
+    for job_entry in scope:
+        if not isinstance(job_entry, dict) or not isinstance(job_entry.get("job_id"), int):
+            continue
+        job_id = job_entry["job_id"]
+        for step in job_entry.get("steps", []):
+            if isinstance(step, dict) and step.get("log_retrieved") is False and isinstance(step.get("step_index"), int):
+                pairs.append({"job_id": job_id, "step_index": step["step_index"]})
+    pairs.sort(key=lambda p: (p["job_id"], p["step_index"]))
+    return pairs
+
+
+def _pair_set(value: Any) -> Optional[set[tuple[int, int]]]:
+    """Parse a {job_id, step_index}-pair list into a comparable set. Returns None (never
+    raises) for anything not shaped that way -- including a flat-index echo -- so a malformed
+    agent echo compares as a mismatch rather than crashing the cross-check spine."""
+    if not isinstance(value, list):
+        return None
+    pairs: set[tuple[int, int]] = set()
+    for item in value:
+        if not (isinstance(item, dict) and isinstance(item.get("job_id"), int) and isinstance(item.get("step_index"), int)):
+            return None
+        pairs.add((item["job_id"], item["step_index"]))
+    return pairs
+
+
 def _run_ci_rca_cross_check(
     context_v2_json: dict,
     s3_client_factory: Optional[Callable[[], Any]] = None,
@@ -187,6 +216,15 @@ def _run_ci_rca_cross_check(
         context_v2_json["affected_nodeids"] = bundle["affected_nodeids"]
     if bundle.get("escape_class"):
         context_v2_json["escape_class"] = bundle["escape_class"]
+    # ci-rca-evidence-scope-declaration (AC7): stamp the authoritative unobserved-step set from
+    # the verified bundle's retrieval_evidence.scope. A bundle with no scope block (pre-dating
+    # this plan) degrades silently -- authoritative_pairs stays None and check-5 below is skipped.
+    retrieval_evidence = bundle.get("retrieval_evidence")
+    scope = retrieval_evidence.get("scope") if isinstance(retrieval_evidence, dict) else None
+    authoritative_pairs: Optional[list[dict[str, int]]] = None
+    if isinstance(scope, list):
+        authoritative_pairs = _unobserved_pairs_from_scope(scope)
+        context_v2_json["unobserved_steps_authoritative"] = authoritative_pairs
 
     detection_gap = context_v2_json.get("detection_gap") or {}
     agent_evg = detection_gap.get("earliest_viable_gate")
@@ -241,6 +279,21 @@ def _run_ci_rca_cross_check(
                 "contains an author-discipline attribution (e.g. 'did not run', 'author skipped'). "
                 "When vacuous_pass=true the gate failure was a TEST COLLECTION DEFECT, not author discipline. "
                 "Set escape_mode='check_ran_vacuously' or file a source=ci_rca_evidence_dispute rec."
+            )
+
+    # Check 5: unobserved_steps echo vs. the code-computed unobserved_steps_authoritative
+    # stamp. Compared as SETS of {job_id, step_index} pairs -- order-insensitive, and a
+    # malformed (e.g. flat-index) echo compares as a mismatch rather than crashing. Only runs
+    # when the bundle carried a scope block; a scope-absent bundle degrades silently (AC13(iii)).
+    if authoritative_pairs is not None:
+        authoritative_set = {(p["job_id"], p["step_index"]) for p in authoritative_pairs}
+        echo_set = _pair_set(context_v2_json.get("unobserved_steps"))
+        if echo_set != authoritative_set:
+            issues.append(
+                f"[CI_RCA_CROSS_CHECK check-5] unobserved_steps echo {context_v2_json.get('unobserved_steps')!r} "
+                f"disagrees with the code-computed unobserved_steps_authoritative {authoritative_pairs!r}. "
+                "Echo the bundle's retrieval_evidence.scope entries where log_retrieved is false as a list "
+                "of {job_id, step_index} pairs."
             )
 
     if not issues:

@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-SCHEMA = "ci-rca-log-evidence/v1"
+SCHEMA = "ci-rca-log-evidence/v2"
+
+# AC2: the legal conclusion domain for a `scope` step entry is strictly wider than
+# failed_steps' closed {failure, timed_out, cancelled} -- it admits success and skipped
+# (routine outcomes for a step that ran) and a null conclusion for a not-started step,
+# which is routine in a cancelled job. Copying _validate_jobs' narrower enum here would
+# reject every real envelope.
+_SCOPE_CONCLUSIONS = {"failure", "timed_out", "cancelled", "success", "skipped", None}
 DEFAULT_MAX_BYTES = 256 * 1024
 DEFAULT_MAX_LINES = 4000
 _IDENTIFIER = re.compile(r"^[1-9][0-9]*$")
@@ -149,6 +156,69 @@ def _validate_selection(selection: Any, job_ids: list[int], limits: dict[str, An
         raise ValueError("unqueried fallback jobs require unknown incomplete evidence metadata")
 
 
+def _validate_scope(
+    scope: Any,
+    failed_jobs: list[dict[str, Any]],
+    retrieval_path: Any,
+    fallback_selection: dict[str, Any],
+) -> None:
+    """AC1/AC6: `scope` declares, per failed job, EVERY executed step as
+    {step_index, conclusion, log_retrieved} -- a second per-job structure parallel to
+    failed_jobs[].failed_steps. Rejects an absent scope, a per-job step set that is not a
+    superset of that job's failed_steps, unsorted/duplicate indexes, conclusions disagreeing
+    with failed_steps, or log_retrieved flags contradicting retrieval_path/fallback_selection.
+    """
+    if not isinstance(scope, list):
+        raise ValueError("missing evidence scope")
+    by_job: dict[int, list[dict[str, Any]]] = {}
+    for entry in scope:
+        if not isinstance(entry, dict) or type(entry.get("job_id")) is not int:
+            raise ValueError("invalid evidence scope job entry")
+        job_id = entry["job_id"]
+        if job_id in by_job:
+            raise ValueError("duplicate evidence scope job entry")
+        steps = entry.get("steps")
+        if not isinstance(steps, list):
+            raise ValueError("invalid evidence scope step table")
+        indexes: list[int] = []
+        parsed: list[dict[str, Any]] = []
+        for step in steps:
+            if (
+                not isinstance(step, dict)
+                or type(step.get("step_index")) is not int
+                or step["step_index"] < 1
+                or step.get("conclusion") not in _SCOPE_CONCLUSIONS
+                or type(step.get("log_retrieved")) is not bool
+            ):
+                raise ValueError("invalid evidence scope step entry")
+            indexes.append(step["step_index"])
+            parsed.append(step)
+        if indexes != sorted(set(indexes)):
+            raise ValueError("evidence scope steps are not sorted and unique")
+        by_job[job_id] = parsed
+
+    expected_job_ids = sorted(job["job_id"] for job in failed_jobs)
+    if sorted(by_job) != expected_job_ids:
+        raise ValueError("evidence scope job set does not match failed jobs")
+
+    queried = set(fallback_selection.get("queried_job_ids", []))
+    for job in failed_jobs:
+        job_id = job["job_id"]
+        by_index = {step["step_index"]: step for step in by_job[job_id]}
+        for failed_step in job.get("failed_steps", []):
+            scope_step = by_index.get(failed_step["step_index"])
+            if scope_step is None or scope_step["conclusion"] != failed_step["conclusion"]:
+                raise ValueError("evidence scope is not a superset of failed steps")
+        job_retrieved = job_id in queried
+        for step in by_job[job_id]:
+            if retrieval_path == "primary":
+                expected = step["conclusion"] in {"failure", "timed_out", "cancelled"}
+            else:
+                expected = job_retrieved
+            if step["log_retrieved"] != expected:
+                raise ValueError("log_retrieved contradicts retrieval_path and fallback_selection")
+
+
 def validate_envelope(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise ValueError("invalid retrieval evidence schema")
@@ -170,6 +240,7 @@ def validate_envelope(value: Any) -> dict[str, Any]:
     _validate_limits(body, limits)
     job_ids = _validate_jobs(value.get("failed_jobs"))
     _validate_selection(value.get("fallback_selection"), job_ids, limits)
+    _validate_scope(value.get("scope"), value.get("failed_jobs"), value.get("retrieval_path"), value.get("fallback_selection"))
     return value
 
 
