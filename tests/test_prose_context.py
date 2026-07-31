@@ -285,8 +285,17 @@ class TestRoadmapEditT15:
         assert "decisions-query" in c1
         assert "ducklake_reader" in c1
         assert "Decision 91" in c1
-        assert ".claude/skills/decision-scout/SKILL.md:18-20" in c1
         assert "T5.4" in c1
+
+    def test_c1_cites_the_scout_skill_by_section_name_not_line_number(self) -> None:
+        """PLAN-decision-scout-bounded-retrieval: a line-number citation into a rewritten skill
+        file is fragile -- replaced with a stable section-name citation (AC4: no LIVE surface
+        cites decision-scout/SKILL.md by line number)."""
+        t15 = _find_item(_load_raw_roadmap(), "T1.5")
+        c1 = t15["exit_criteria"][0]
+        assert ".claude/skills/decision-scout/SKILL.md" in c1
+        assert "SKILL.md:18-20" not in c1
+        assert "Lambda / portal migration contract" in c1
 
     def test_other_criteria_remain_unconverted_bare_strings(self) -> None:
         """T1.5's edit is scoped to c1 ONLY (Decision-scout WARN scoping) -- every criterion,
