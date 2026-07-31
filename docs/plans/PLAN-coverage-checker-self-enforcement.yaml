@@ -22,7 +22,10 @@ scope:
       BASENAME starts with "test_" (intended to skip tests/test_*.py), which incidentally
       excludes this production module itself -- verified live: passing both this file and
       scripts/ops_writer.py returns only ops_writer. Re-express the exclusion as "the path is
-      under tests/" rather than a basename prefix. (2) Decouple concern-split registration
+      under tests/" rather than a basename prefix -- or simply DELETE it: the existing
+      `parts[0] in ("src","scripts")` filter (line ~503) already excludes every tests/ path
+      independently, and this is the only src/scripts-rooted file whose basename starts with
+      "test_" (verified), so no other file newly enters the gate either way. (2) Decouple concern-split registration
       from the mirror roster in map_source_to_test: add a direct _CONCERN_SPLIT_TEST_PACKAGES
       membership check immediately before the final `return home`, returning
       _mirror_source_to_test(source_path). Today that set is consulted ONLY inside
@@ -109,6 +112,13 @@ scope:
       wave retires a home ... then creates the mirror test file(s)/package"); after this change
       a source can resolve to a package directory having never been on the 24-home roster.
       Leaving it stale creates the second-surface drift AGENTS.md's Agent-First section forbids.
+  - file: tests/fixtures/coverage_checker_module.py
+    action: Modify
+    purpose: >-
+      Docstring-only correction (N2): it says "The three tests/test_coverage_checker_*.py
+      files" -- after this plan there are five, inside a package. This is the shared
+      module-under-test loader every moved module imports, so a stale description here
+      mis-describes the whole package's entry point. No behaviour change.
   - file: config/coverage_baseline.yaml
     action: Modify
     purpose: >-
@@ -331,10 +341,10 @@ verification_plan:
     command: >-
       test ! -f tests/test_test_coverage_checker.py && test ! -f tests/test_coverage_checker_checks.py
       && test ! -f tests/test_coverage_checker_grandfather.py && test ! -f tests/test_coverage_checker_map.py
-      && ! grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md
+      && { grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md
       -e 'tests/test_test_coverage_checker\.py' -e 'tests/test_coverage_checker_checks\.py'
       -e 'tests/test_coverage_checker_grandfather\.py' -e 'tests/test_coverage_checker_map\.py'
-      scripts/ config/ tests/ docs/contracts/ .github/
+      scripts/ config/ tests/ docs/contracts/ .github/; test $? -eq 1; }
       && grep -q 'tests/test_coverage_checker/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module'
       config/agent/verification_registry/registry.yaml
       && echo 'no stale references; registry row repointed'
@@ -390,12 +400,16 @@ verification_plan:
       --resolution <text>" per Decision 70.
 constraints:
   - >-
-    DO NOT add a numbered Decision entry. docs/DECISIONS.md is 499,960 bytes against the
-    500,000-byte Decision 145 ceiling -- 40 bytes of headroom, less than a single header line
-    -- so any new entry fails validate_decisions_size and reddens the PR. The Decision 131
-    mechanism amendment is therefore recorded in this plan's Context (see below) rather than
-    in the decision log. Re-measure the ceiling at implement time; if headroom has been
-    created, a concise entry MAY be added, but it is not required by this plan.
+    DO NOT add a numbered Decision entry -- and the reason is ROUTING, not headroom.
+    docs/contracts/decision-entry.yaml's significance.routing.field_semantics row states that
+    the meaning or constraints of a data field or config key go to "a governance/semantics
+    note in the OWNING contract, collocated with the field it describes. Never a numbered
+    Decision." The _CONCERN_SPLIT_TEST_PACKAGES semantics change is exactly that, so it lands
+    in map_source_to_test's docstring/comment and tests/CLAUDE.md -- both in scope. This
+    remains true regardless of headroom, so do NOT add an entry later even if space appears.
+    Corroborating only: docs/DECISIONS.md is 499,960 bytes against the 500,000-byte Decision
+    145 ceiling (40 bytes, less than one header line), so an entry would also redden
+    validate_decisions_size.
   - >-
     _ALL_MIRROR_TARGET_HOMES must not be mutated. Decision 131 cl.1 declares it the fixed
     24-basename rec-2709 roster, "membership only, never mutated", and
@@ -414,8 +428,15 @@ constraints:
     No Lambda-packaged file is in scope - compute_affected_artifacts over the scope returns {}
     (verified at planning time), which is what keeps this V2 under Decision 79.
   - >-
-    HARD: tests/test_coverage_checker/test_main_cli.py MUST mock check_per_file_coverage (or
-    subprocess.Popen) on EVERY path that drives main() with --check-coverage. After this plan
+    HARD: ANY test in tests/test_coverage_checker/ that drives main() or
+    check_per_file_coverage against the real repo ROOT MUST mock check_per_file_coverage (or
+    subprocess.Popen) -- this covers test_main_cli.py's --check-coverage paths AND
+    test_edge_paths.py's helper-patched cases, which sit in the same blast radius. Preferred
+    machine-enforced form: a tests/test_coverage_checker/conftest.py autouse fixture that
+    patches checker.subprocess.Popen to raise by default, with a per-test opt-out marker for
+    the one existing sandboxed real-subprocess test
+    (test_dotted_cov_form_flags_undertested_module, which patches ROOT to tmp_path and is not
+    a recursion source). After this plan
     the checker self-maps to tests/test_coverage_checker/ -- the very directory those tests
     live in -- so an unmocked coverage run spawns pytest over the directory containing itself,
     with no depth guard anywhere on that call path (see the recursion-hazard Context entry).
@@ -474,7 +495,7 @@ context:
     main()-driving tests inside that same directory, so an unmocked --check-coverage path
     would re-enter tests/test_coverage_checker/ without bound (~8s per level). The mocking
     constraint above is the mitigation; do not relax it.
-  - "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=PROCEED after N round(s)"
+  - "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=PROCEED after 2 round(s)"
   - >-
     ci-rca deferral rationale (Related-Work check): rec-2923 (Critical, "Sandbox subagent plan
     review starved twice; apply blocked", .github/actions/subagent-plan-review/action.yml) is
@@ -519,6 +540,16 @@ execution_steps:
     same commit as the move so the repo is never in a state where a graduated check points at
     a deleted path.
   - >-
+    In a SEPARATE commit after the move (the verbatim-move rule forbids move-plus-edit),
+    correct two docstrings that this plan falsifies. tests/test_coverage_checker/
+    test_coverage_checker_map.py's module docstring claims
+    "scripts/test_coverage_checker.py is excluded from its own coverage scan by name" -- the
+    rec-2916 fix makes that FALSE (its second clause, that the file is not one of the 24
+    roster entries, stays true and must be kept). tests/fixtures/coverage_checker_module.py
+    says "The three tests/test_coverage_checker_*.py files" -- now five, inside a package.
+    VP step 8's sweep is path-literal and CANNOT catch semantic staleness like this, so it is
+    an explicit step rather than a sweep finding.
+  - >-
     Update tests/CLAUDE.md's mirror-convention section so concern-split resolution is stated
     as independently sufficient (membership in _CONCERN_SPLIT_TEST_PACKAGES resolves a source
     to its test package directory, whether or not its grandfathered home has retired), keeping
@@ -539,7 +570,7 @@ execution_steps:
     residual against rec-2914 via the ops portal (get_rec_write_guidance() before update_rec).
   - >-
     Execute the full Verification Plan - run each pre-deploy step, loop until pass; on
-    unrecoverable failure stop and RCA (Decision 55). Post-deploy step 10 runs after the
+    unrecoverable failure stop and RCA (Decision 55). Post-deploy step 11 runs after the
     squash-merge.
   - >-
     'Report: what was implemented, the measured before/after coverage, which of the 54
