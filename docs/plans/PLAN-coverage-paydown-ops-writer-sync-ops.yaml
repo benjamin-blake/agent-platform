@@ -89,8 +89,11 @@ scope:
       scripts/sync/ducklake_version.py -- verified a clean substitute: it maps to the flat
       tests/test_sync_ducklake_version.py, is in NONE of _RETIRING_GRANDFATHER_HOMES,
       _ALL_MIRROR_TARGET_HOMES or _CONCERN_SPLIT_TEST_PACKAGES, and its target file exists --
-      so the guard survives. Then ADD a new positive test asserting
-      scripts/sync/recommendations.py -> tests/sync/recommendations as the concern-split case.
+      so the guard survives. Update its docstring too -- the existing wording cites "Wave 10's
+      retirement of test_sync_ops.py" as the thing being guarded against, which would otherwise
+      describe a different assertion than the one beneath it. Then ADD a new positive test
+      asserting scripts/sync/recommendations.py -> tests/sync/recommendations as the
+      concern-split case.
   - file: tests/test_coverage_checker/test_coverage_checker_grandfather.py
     action: Modify
     purpose: >-
@@ -145,8 +148,9 @@ acceptance_criteria:
     and has no entry in config/coverage_baseline.yaml.
   - >-
     Option D mapping: map_source_to_test(scripts/sync/recommendations.py) returns the DIRECTORY
-    tests/sync/recommendations, and the file measures >= 78.0% through the gate's own path
-    (was 61.0% against the flat mapped file) with its roster entry raised to 78.0, not removed.
+    tests/sync/recommendations, and the file measures 77.97% raw -- which is what the gate
+    compares, `round(measured, 1) >= threshold`, so 78.0 >= 78.0 passes (was 61.0% against the
+    flat mapped file). Its roster entry is raised to 78.0, not removed.
   - >-
     Decision 84 compliance: no test in tests/ops_writer/ asserts that a DuckLake-migrated table
     (ops_decisions, ops_priority_queue) is drained or put_object'd. drain() reaches 100% via
@@ -228,11 +232,17 @@ verification_plan:
       pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test,
       is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess);
       v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement: {pcts} {errs}';
-      assert v>=78.0, f'{v}% < 78.0% -- recovery did not land'; print(f'sync/recommendations {v:.2f}% via {t}')"
-    expected: Prints >= 78.00% and the tests/sync/recommendations directory path.
+      assert round(v,1)>=78.0, f'{v}% (rounded {round(v,1)}) < 78.0 -- recovery did not land'; print(f'sync/recommendations {v:.2f}% -> rounds to {round(v,1)} via {t}')"
+    expected: >-
+      Prints ~77.97% -> rounds to 78.0, and the tests/sync/recommendations directory path.
+      The assertion deliberately mirrors coverage_baseline.compare(), which is
+      `round(measured_pct, 1) >= threshold` -- the raw value is 92/118 = 77.966%, so a raw
+      `>= 78.0` comparison would FAIL a correct implementation while the gate itself passes.
     fix_if: >-
       Still maps to the flat file - the _CONCERN_SPLIT_TEST_PACKAGES line was not added.
-      Below 78 - the second test module did not move into the package.
+      Rounded value below 78.0 - the second test module did not move into the package. Do NOT
+      respond by writing extra tests: this slice deliberately caps sync/recommendations.py at
+      register+move+raise, and its residual 26 statements are rec-2914's.
     hermetic: false
     graduation: graduate
     graduation_check_id: sync-recommendations-concern-split-recovery
@@ -499,9 +509,13 @@ context:
     review starved twice; apply blocked", .github/actions/subagent-plan-review/action.yml) is
     unresolved at planning time. This plan shares no file, Decision, or failure category with it.
     Per operator direction 2026-07-31, that rec is being worked separately and has been split
-    across two in-flight plans -- PLAN-ci-rca-evidence-scope-declaration.yaml and
-    PLAN-ci-rca-abstention-and-citation.yaml -- neither of which was on disk at this plan's
-    authoring time. Deferred on that basis.
+    across two in-flight plans the operator named as
+    PLAN-ci-rca-evidence-scope-declaration.yaml and PLAN-ci-rca-abstention-and-citation.yaml.
+    Treat those as descriptive, NOT as resolvable pointers: neither exists under that name, and
+    the nearest on-disk neighbours are PLAN-ci-rca-abstention-and-gate-escape.yaml and
+    PLAN-ci-rca-evidence-dispute.yaml. The deferral does not rest on them -- it rests on the
+    independently-verified fact that rec-2923 targets .github/actions/subagent-plan-review/action.yml
+    and shares no file, Decision, or failure category with this plan.
   - >-
     rec-2914 is deliberately NOT bundled. Its scope is the whole roster; after this slice that is
     still 10 entries and roughly 430 statements, so bundling it would create an unsatisfiable
@@ -528,8 +542,9 @@ execution_steps:
   - >-
     tests/ops_writer/test_compact_paths.py - cover compact()'s 31 statements.
   - >-
-    tests/ops_writer/test_client_helpers.py - cover _parse_list, _get_boto3_session, _bucket,
-    write and _refresh_view (19 statements), asserting client/verb/argument contracts.
+    tests/ops_writer/test_client_helpers.py - cover _get_boto3_session, _refresh_view, _bucket
+    and write (19 statements), asserting client/verb/argument contracts. _parse_list is NOT
+    here -- it is a closure inside compact() and belongs to test_compact_paths.py.
   - >-
     tests/sync/ops/test_upsert_cache.py, test_coercion_edges.py and test_cli_and_rejects.py -
     cover sync/ops.py's 83 statements across the three concern groups named in scope.
