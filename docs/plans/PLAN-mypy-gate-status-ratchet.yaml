@@ -1,0 +1,941 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "mypy-gate-status-ratchet"
+intent: >-
+  Close audit finding VTS-15 by giving mypy an owned gate status: Decision 161 records the
+  human's choice of an error-count DOWNWARD-RATCHET, and the enforcement lands with it -- a
+  governed per-file baseline plus a registered check that fails on an unmarked increase and
+  always allows decreases. Converts "type hints required" (AGENTS.md) from an unenforced
+  style mandate into a mechanical, monotonically-improving gate.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-mypy-gate-status-ratchet.yaml
+phase: >-
+  Audit remediation of VTS-15 (audits/validate-test-suite-4df4d48.yaml, severity medium,
+  confidence CONFIRMED, effort S, roadmap_crossref.classification novel with item_ids: []).
+  Soft-warn category: user_explicit_out_of_scope -- no tier_item exists for mypy/typing gate
+  status (grep of docs/ROADMAP-PLATFORM.yaml for mypy/typing/type-hint returns zero hits), so
+  the Tier Item Freshness Gate does not fire. VTS-15's acceptance clause is "A Decision names
+  mypy's gate status; if (ii)/(iii), the corresponding check lands with it" -- this plan
+  discharges both halves in one PR.
+scope:
+  - file: pyproject.toml
+    action: Modify
+    purpose: >-
+      Add a MINIMAL [tool.mypy] block -- python_version = "3.12" and
+      disable_error_code = ["import-untyped"]. No [tool.mypy] configuration exists anywhere in
+      the repo today (verified: pyproject.toml carries only tool.pytest.ini_options, tool.ruff,
+      tool.ruff.lint, tool.coverage.run, tool.coverage.report; no mypy.ini / setup.cfg /
+      .mypy.ini exists). MEASURED THIS SESSION, both options tried against the same tree:
+      `disable_error_code = ["import-untyped"]` and `ignore_missing_imports = true` produce the
+      IDENTICAL reduction -- `mypy scripts/ src/` falls 262 errors/147 files -> 127 errors/57
+      files, and `mypy src/` falls 143/59 -> 82/28. Choose disable_error_code because it is
+      SURGICAL: it silences only the missing-third-party-stub category (yaml, pandas, psycopg2,
+      networkx, boto3, botocore) and leaves [import-not-found] LIVE, so a typo'd or deleted
+      INTERNAL import still fails the ratchet. `ignore_missing_imports = true` would suppress
+      both categories and silently swallow that real-defect class -- a strictly worse trade for
+      identical noise reduction. Zero [import-not-found] errors exist today (verified), so this
+      leaves no hidden debt. Residual error-code mix after silencing (measured): 28 assignment,
+      26 union-attr, 23 arg-type, 21 attr-defined, 6 var-annotated, 6 call-arg, 4 misc, 4 index,
+      3 no-redef, 1 each type-var/str-unpack/return -- genuine type-logic debt, which is exactly
+      what the ratchet must track.
+  - file: config/mypy_baseline.yaml
+    action: Create
+    purpose: >-
+      The governed baseline: a PER-FILE error-count registry, `entries: {repo-relative path:
+      int}`, seeded AFTER the pyproject block lands (ordering is load-bearing -- seeding first
+      would bake ~135 stub-noise errors into the roster). Seeds to 57 entries summing to 127
+      (44 scripts/ files, 13 src/ files); the dirtiest single entry is
+      scripts/execute_recommendation.py at 28. PER-FILE rather than a single repo-wide total
+      because a bare total lets "fixed 5 in file A, added 5 in file B" pass silently, gives no
+      blame locality, and -- decisively -- has nowhere to hang the per-entry approval marker
+      that the SLOC/coverage precedents put on the changed line. A file with NO entry carries an
+      implicit baseline of 0 (any error fails), exactly mirroring how an unregistered file
+      carries the implicit 500 in config/sloc_budgets.yaml and the implicit 100.0 in
+      config/coverage_baseline.yaml. Header comment states the seeding invocation, the marker
+      grammar, and that this is a one-time grandfather of pre-existing debt, not a precedent.
+  - file: scripts/checks/typing/__init__.py
+    action: Create
+    purpose: >-
+      New check domain package. scripts/checks/ already carries 16 domain subpackages
+      (ci_guards, contracts, decisions, deps, executor, hygiene, iam_tf, lambda_pkg, misc,
+      ops_governance, product, prompts, prose, roadmap, sloc, verification); `typing` is the
+      correct new home rather than dumping into misc/. No file-router.yaml entry is required --
+      scripts_root_allowlist governs depth-1 scripts/ files only, and subpackage homes under
+      scripts/checks/ are explicitly unconstrained by that key.
+  - file: scripts/checks/typing/mypy_baseline.py
+    action: Create
+    purpose: >-
+      Hosts BOTH checks plus the baseline's own load/compare/seed semantics in ONE module --
+      the AGENTS.md collocation rule ("collocate semantic definitions with their enforcement
+      counterparts in a single file"), and the exact shape of the closest in-repo sibling
+      scripts/checks/misc/coverage_baseline.py (which hosts load_baseline + compare +
+      measure_and_check + validate_coverage_baseline_edits together). Contents -- (a)
+      `load_baseline()` / `_parse_entry_lines()` raw-text line parser (raw text, NOT
+      yaml.safe_load, because the approval marker lives in an inline comment that safe_load
+      drops -- same rationale as validate_sloc_budget_raises); (b) `_run_mypy()` +
+      `_parse_error_counts()` turning mypy stdout into {path: count}, counting only ": error:"
+      lines and never ": note:" lines. `_run_mypy()` invokes mypy as
+      `[sys.executable, "-m", "mypy", "scripts/", "src/"]` -- NOT a bare "mypy" executable -- so a
+      missing mypy surfaces as a normal non-zero run with no terminator (the guard below fires)
+      rather than an unhandled FileNotFoundError, and so the interpreter matches the one running
+      the check (AGENTS.md: use sys.executable, never the string "python"). Parsed keys are
+      RESTRICTED to paths under `scripts/` or `src/` and normalised with
+      `.replace("\\", "/")` before matching baseline keys (the sibling
+      coverage_baseline.measure_and_check does exactly this; harmless on Linux-only CI, correct
+      if the check is ever run from Windows). The prefix restriction matters because mypy follows
+      imports: all 57 dirty files sit under scripts//src/ today (44 + 13, verified), but a future
+      import edge could surface a tests/ path, which -- being unregistered -- would red the
+      ratchet at implicit-zero for a file the governed scope deliberately excludes. PROOF-OF-EXECUTION GUARD, mandatory and
+      load-bearing (Decision 55 fail-loud): `_run_mypy()` MUST require a recognizable terminator
+      line in mypy's stdout -- either "Found N errors in M files" or "Success: no issues found"
+      -- and when NEITHER is present it appends a DISTINCT, loudly-worded failure to `failed`
+      and never returns a silently-empty mapping. Without this the check is a false-green
+      machine: if mypy is absent, crashes, is misinvoked, or its output format shifts in a future
+      release, `_parse_error_counts` returns {}, every registered file measures 0, every
+      comparison passes, and the gate reports GREEN while enforcing nothing. That state is
+      strictly WORSE than today's unowned advisory, because Decision 161 would then assert an
+      enforcement that does not exist -- it manufactures false confidence, which is the exact
+      condition VTS-15 indicts, now wearing a check name. The two terminators must be
+      DISTINGUISHED, never conflated: "Success: no issues found" is a legitimate all-clean run
+      (a real result, in which every entry should ratchet to zero), whereas an absent terminator
+      is a failed run and must fail loudly; (c) `@registry.register("validate_mypy_ratchet")` --
+      FULL TIER ONLY -- fails any file whose measured count EXCEEDS its baseline entry (or
+      exceeds 0 when unregistered), prints a non-blocking ratchet-down advisory when measured is
+      BELOW its entry, mirroring validate_sloc_limits' advisory arm; (d)
+      `@registry.register("validate_mypy_baseline_edits")` -- BOTH TIERS -- the cheap tamper
+      guard: reads config/mypy_baseline.yaml at origin/main via an injectable base_reader,
+      fails any RAISED entry or NEW registration lacking an inline `# baseline-raised: dec-NNN
+      <reason>` marker naming a real `## Decision NNN:` header in docs/DECISIONS.md, and SKIPs
+      (non-failing) when origin/main or the base file is unreachable -- byte-for-byte the
+      contract of validate_sloc_budget_raises._default_base_reader and
+      coverage_baseline._default_base_reader, so the seeding PR itself (no base file) SKIPs
+      instead of self-failing. BOTH registrations pass `owner="platform"` EXPLICITLY -- it is the
+      default, so omitting it is not a CI red, but all 88 currently-registered checks state it
+      and silent reliance on a default is the kind of drift this repo's conventions exist to
+      prevent; (e) an `if __name__ == "__main__"` block exposing TWO DISTINCT
+      MODES. `--seed` performs the ONE-TIME initial roster creation: it writes an entry for every
+      file measuring >=1 error, and REFUSES to run (non-zero exit plus an explanatory message)
+      when config/mypy_baseline.yaml already exists, so it can never be repurposed to launder new
+      debt into the roster. `--update` is the steady-state downward-only ratchet: lowers entries
+      whose file improved, drops files now clean or deleted, NEVER raises an entry, and NEVER
+      seeds a newly-dirty unregistered file. BOTH modes share the proof-of-execution terminator
+      guard from (b) and must exit non-zero rather than write a roster derived from a run that
+      did not complete -- a crashed mypy under `--update` would otherwise drop every entry. That
+      failure is loud downstream today (the ratchet then reds all 57 on implicit-zero, so it is
+      not a false-green), but the guard belongs on the write path too: a writer should not
+      persist a measurement it cannot vouch for. The two-mode split is REQUIRED, not cosmetic -- a
+      single `--update` mode cannot perform the initial seed, because at seed time all 57 dirty
+      files are unregistered, the never-seed rule would therefore write an EMPTY roster, and
+      validate_mypy_ratchet would then fail all 57 files on the implicit-zero rule. This mirrors
+      the SLOC precedent deliberately rather than accidentally: `_update_sloc_budgets` never
+      auto-seeds (Decision 128 / B2) and the coverage roster was seeded out-of-band; here the
+      one-time seed is an explicit, self-disabling mode instead of an undocumented manual step.
+      Marker token
+      is `baseline-raised`, deliberately DISTINCT from sloc's `raise-approved` and coverage's
+      `baseline-lowered` -- three registries with three direction-correct tokens means a marker
+      copy-pasted from one registry cannot silently authorize an edit in another. Estimated
+      ~230 SLOC, well under 500.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Three-place ritual, place 2 (scripts/CLAUDE.md). In `pre_sequence()`, insert
+      `_c("validate_mypy_baseline_edits")` adjacent to the existing
+      `_c("validate_coverage_baseline_edits")` / `_c("validate_sloc_budget_raises")` tamper-guard
+      cluster. In `full_sequence()`, REPLACE the scaffold step `_s("mypy_full")` with
+      `_c("validate_mypy_ratchet")` at the same ordinal, and add
+      `_c("validate_mypy_baseline_edits")`. Currently 238 SLOC; net change is roughly zero.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Three-place ritual, place 3, PLUS the SLOC reclaim this plan depends on. HARD CONSTRAINT
+      MEASURED THIS SESSION - scripts/validate.py is at 499 SLOC and is NOT registered in
+      config/sloc_budgets.yaml (verified: `grep -c "scripts/validate.py"
+      config/sloc_budgets.yaml` returns 0), so the unregistered hard limit of 500 applies and
+      the file has exactly ONE line of headroom. Decision 128 forbids answering that with a
+      budget raise. The plan therefore reclaims first - DELETE `_scaffold_mypy_full` (its `def`,
+      `print`, `result =`, `if`, and inner `print` = 5 SLOC) and its `"mypy_full":
+      _scaffold_mypy_full` entry in the `scaffold_fns` dict (1 SLOC) = -6 SLOC - then ADD
+      exactly ONE facade re-export line, `from scripts.checks.typing.mypy_baseline import
+      validate_mypy_baseline_edits, validate_mypy_ratchet  # noqa: F401,E402` (118 characters,
+      inside the 127 line-length limit, so both names land on ONE line) = +1 SLOC. Ruff has `I`
+      (isort) selected, so the line must land in SORTED position -- after the
+      scripts.checks.sloc.* imports and before the scripts.checks.verification.* imports (between
+      the current lines 231 and 232) -- with the two names in the order
+      `validate_mypy_baseline_edits, validate_mypy_ratchet`, which is already isort-correct. Net 499 - 6 +
+      1 = 494 SLOC, restoring 6 lines of headroom rather than consuming the last one. The
+      deletion is not incidental cleanup - `_scaffold_mypy_full` IS the informational `mypy
+      src/` run that VTS-15 indicts, and validate_mypy_ratchet is its enforcing replacement, so
+      the code being removed is precisely the code being superseded. CONSEQUENCE, stated
+      explicitly - this plan adds NO `--update-mypy-baseline` argparse flag to validate.py
+      (an add_argument stanza plus its dispatch branch plus the `not any((...))` guard edit is
+      ~9 SLOC, which would push the file to 503 and breach). The re-seed utility instead lives
+      as a `__main__` entry point on the check module itself, invoked as `bin/venv-python -m
+      scripts.checks.typing.mypy_baseline --seed` / `... --update`; seven check modules already carry
+      `__name__ == "__main__"` blocks (validate_convergence_writer_isolation,
+      validate_iam_policy_size, validate_authority_budget, validate_ci_refresh_read_coverage,
+      validate_boundary_attached, validate_ghas_probe, validate_reconcile_pending_gate), so this
+      is established repo shape, not an improvisation. The `--pre` diff-aware
+      `_scaffold_mypy_diff` is UNTOUCHED and stays informational.
+  - file: tests/checks/typing/__init__.py
+    action: Create
+    purpose: >-
+      Required per-package __init__.py for every mirror test directory (Decision 131 clause 4,
+      prepend import mode). Verified live this session -
+      `map_source_to_test(Path("scripts/checks/typing/mypy_baseline.py"))` resolves to
+      `tests/checks/typing/test_mypy_baseline.py`, so the mirror convention (not the retiring
+      colocate-in-tests/test_validate.py grandfather) governs this new file.
+  - file: tests/checks/typing/test_mypy_baseline.py
+    action: Create
+    purpose: >-
+      The behavior oracle. Every test must FAIL without the corresponding production change
+      (AGENTS.md). Required cases, grouped - PARSER - a well-formed `path: N  # comment` line
+      parses to (N, marker); a comment-only line, a blank line, and the `entries:` key line are
+      skipped; a malformed line is ignored rather than raising. MYPY OUTPUT PARSER - a
+      fixture of real mypy-shaped stdout yields the right {path: count}; `: note:` lines are NOT
+      counted; a "Found N errors in M files" summary line is not miscounted as an error; parsed
+      path keys are backslash-normalised. PROOF-OF-EXECUTION (the guard that keeps the gate from
+      going silently inert -- both cases REQUIRED) - (i) stdout with NEITHER terminator, standing
+      in for mypy absent / crashed / misinvoked / output-format drift, appends a distinct loud
+      failure to `failed` and never yields a silently-empty mapping that would vacuously pass
+      every comparison; (ii) stdout of exactly "Success: no issues found" is recognised as a
+      LEGITIMATE all-clean run and is NOT conflated with case (i) -- it must pass, not fail.
+      RATCHET (validate_mypy_ratchet, injected measurement so no test invokes mypy) - measured
+      == baseline PASSES; measured > baseline appends to `failed`; measured < baseline PASSES
+      and prints a ratchet-down advisory; an UNREGISTERED file with >=1 error FAILS (proves the
+      implicit-zero rule); an unregistered file with 0 errors passes; a baseline entry for a
+      file that no longer has errors does not fail. TAMPER GUARD
+      (validate_mypy_baseline_edits, injected base_reader exactly as
+      tests/checks/sloc/test_validate_sloc_budget_raises.py and
+      tests/checks/misc/test_coverage_baseline.py do) - an unmarked RAISE fails; the same raise
+      carrying `# baseline-raised: dec-161 <reason>` passes; a marker citing a Decision number
+      with no `## Decision N:` header fails; a NEW unmarked entry fails; a DECREASE always
+      passes unmarked; a REMOVED entry always passes unmarked; base_reader returning None SKIPs
+      without failing; an absent current file returns early without failing. SEED MODE -
+      `--seed` writes an entry for every file with >=1 error when no baseline file exists, and
+      REFUSES (non-zero exit, no write) when the baseline file already exists. UPDATE MODE -
+      `--update` lowers an improved entry, drops a now-clean file, refuses to raise an entry, and
+      refuses to seed a newly-dirty unregistered file; run against an EMPTY/absent roster it
+      writes nothing, which is the precise behaviour that makes the separate `--seed` mode
+      necessary. The new module carries NO config/coverage_baseline.yaml
+      entry, so the Decision 159 / Decision 48 100%-per-file coverage standard applies to it in
+      full - these cases must reach 100%, not merely pass.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Remove `"mypy_full"` from the `FROZEN_FULL_SCAFFOLDS` tuple (the scaffold-anchor order
+      invariant) and from the explanatory comment at line 63 that enumerates the full-tier
+      scaffolds. Add `"validate_mypy_ratchet"` and `"validate_mypy_baseline_edits"` to the
+      per-tier REQUIRED_*_CHECKS membership floors in the SAME commit (scripts/CLAUDE.md /
+      Decision 104 growth-safe floor rule). These edits are themselves the reachability proof -
+      dispatch is `globals()[name](failed)`, so if the scripts/validate.py facade re-export line
+      is ever dropped, the floor tests KeyError rather than silently passing. Use membership
+      assertions only; never a hardcoded exact count (validate_test_count_coupling).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author `## Decision 161: <title> (Decided)`. RE-CHECK the max header at authoring time -
+      measured 160 this session, and a concurrent PR may have claimed 161 (the numbering-race
+      note in the planning skill; the referential guard catches a mismatch, so shifting to the
+      next free number at execution time is safe). Entry carries the three required markers
+      from docs/contracts/decision-entry.yaml (Status, Date, Decision) plus Warehouse ID,
+      Problem, Rationale, Reversal conditions, Related. This is FORWARD governance mirroring
+      Decisions 151/152/144/126 - the Decision 105 CD-ratification lane (R1-R3) is NOT engaged
+      and no candidate_decision flips state. It clears the Decision 150 significance bar - a
+      durable CI-enforcement architectural commitment with reversal-relevant consequences, the
+      `numbered_decision` routing row, not `operational_fact` or `field_semantics`. SIZE
+      DISCIPLINE, measured this session - docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md are
+      629,909 bytes combined against the 700,000 ceiling (70,091 bytes headroom) and 113 of 120
+      live `## Decision` headers (7 headers headroom), enforced by
+      scripts/checks/decisions/validate_decisions_size.py, whose own relief-valve text names "a
+      leaner per-entry authoring size norm" as a live concern. Target roughly 2,500-3,000 bytes,
+      BELOW the 3,676-byte closest sibling Decision 159 - state the choice, the mechanism, the
+      tier rationale, and the reversal conditions, and route mechanism detail to the check
+      module docstring and the baseline file header rather than restating it in the log.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/DECISIONS.md contains a `## Decision 161:` (or the next free number) entry that names
+    mypy's gate status as an error-count downward-ratchet, carries the Status/Date/Decision
+    required markers, and passes validate_decision_entry_conformance,
+    validate_decisions_size, and validate_reversal_stanzas. BINDING AUTHORING REQUIREMENT: the
+    H2 TITLE ITSELF must contain the literal token "mypy" (case-insensitive), and exactly one
+    live title may contain it. This is not stylistic -- VP step 8 locates this plan's entry BY
+    TITLE (deliberately, so a concurrent higher-numbered Decision cannot satisfy it) and step 8
+    is hermetic, so it replays inside --pre, the authoritative pre-merge gate. A reasonable-looking
+    title that omits the token, e.g. "Type-check gate status -- error-count downward ratchet",
+    makes step 8 exit 1 and REDS the PR.
+  - >-
+    pyproject.toml carries a [tool.mypy] block containing `disable_error_code` with
+    "import-untyped" and NOT containing `ignore_missing_imports`, so [import-not-found] still
+    surfaces.
+  - >-
+    config/mypy_baseline.yaml exists with per-file `entries`, seeded after the pyproject block,
+    totalling the measured post-silencing count (57 entries summing to 127 at planning time;
+    re-measure at implement time and use the measured value).
+  - >-
+    validate_mypy_ratchet is registered, appears in registry.full_sequence(), is ABSENT from
+    registry.pre_sequence(), and FAILS when any file's measured mypy error count exceeds its
+    baseline entry (or exceeds zero when the file is unregistered).
+  - >-
+    validate_mypy_ratchet PASSES, with a printed ratchet-down advisory and no entry in `failed`,
+    when a file's measured count is BELOW its baseline entry -- decreases are always allowed.
+  - >-
+    validate_mypy_ratchet FAILS LOUDLY, with a distinct message, when mypy did not run to
+    completion -- stdout carrying NEITHER "Found N errors in M files" nor "Success: no issues
+    found" (mypy absent, crashed, misinvoked, or output-format drift) must never be treated as
+    "zero errors everywhere". A genuinely clean run ("Success: no issues found") is recognised as
+    a real result and is NOT conflated with a failed run.
+  - >-
+    validate_mypy_baseline_edits is registered, appears in BOTH registry.pre_sequence() and
+    registry.full_sequence(), fails an unmarked raise or new registration, passes a raise
+    carrying `# baseline-raised: dec-NNN <reason>` that names a real Decision header, passes all
+    decreases and removals unmarked, and SKIPs when origin/main is unreachable.
+  - >-
+    Both check names resolve via `globals()` in scripts.validate (the single facade re-export
+    line is present), and tests/test_checks_registry.py's per-tier membership floors include
+    both.
+  - >-
+    The `mypy_full` scaffold is fully retired: `_scaffold_mypy_full` and its `scaffold_fns`
+    entry are deleted from scripts/validate.py, `_s("mypy_full")` is gone from
+    registry.full_sequence(), `"mypy_full"` is gone from FROZEN_FULL_SCAFFOLDS, and no
+    `mypy_full` token remains anywhere under scripts/ or tests/.
+  - >-
+    scripts/validate.py measures at most 500 SLOC by validate_sloc_limits' own counting rule
+    (non-blank, non-comment-leading lines), with NO new entry added to config/sloc_budgets.yaml
+    and no `# raise-approved` marker introduced.
+  - >-
+    The module's `__main__` exposes two distinct modes: `--seed` creates the initial roster and
+    REFUSES to run when config/mypy_baseline.yaml already exists; `--update` is downward-only and
+    never seeds a newly-dirty unregistered file. Running `--update` against an absent roster
+    writes nothing (which is why `--seed` must exist).
+  - >-
+    tests/checks/typing/test_mypy_baseline.py exercises scripts/checks/typing/mypy_baseline.py
+    to 100% line coverage (the module is new and unbaselined, so the Decision 159 / Decision 48
+    100% standard applies), and every added test fails without its production change.
+  - >-
+    `bin/venv-python -m scripts.validate --pre` exits 0 and the full tier
+    (`bin/venv-python -m scripts.validate`) exits 0, per handoff_policy.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Confirm the [tool.mypy] block is SURGICAL -- disable_error_code carries "import-untyped"
+      and ignore_missing_imports is absent, so a typo'd internal import still fails the ratchet.
+    command: >-
+      bin/venv-python -c "import tomllib,sys;c=tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('mypy');
+      print('block',c);
+      sys.exit(0 if c and 'import-untyped' in (c.get('disable_error_code') or []) and 'ignore_missing_imports' not in c else 1)"
+    expected: >-
+      Prints the parsed block showing disable_error_code containing 'import-untyped' and no
+      ignore_missing_imports key; exits 0.
+    fix_if: >-
+      Exit 1 with ignore_missing_imports present means the blunt option was used -- it also
+      silences [import-not-found], hiding typo'd/deleted internal imports for identical noise
+      reduction. Replace it with disable_error_code = ["import-untyped"] and re-seed the
+      baseline. Exit 1 with no block at all means pyproject.toml was not edited.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but graduating it pins a standing registry check
+      to one specific spelling of a two-key config block whose legitimate future evolution
+      (adding strict flags, adding per-module overrides during burn-down) would red the gate for
+      an improvement. The durable guard against the failure this step probes is
+      validate_mypy_ratchet itself: if ignore_missing_imports were reintroduced, error counts
+      would fall below every baseline entry and the ratchet's advisory arm would surface it.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Confirm config/mypy_baseline.yaml is well-formed, that every registered path still exists
+      on disk (no stale entries), that no entry is non-positive, and report the seeded totals.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,sys;e=yaml.safe_load(open('config/mypy_baseline.yaml'))['entries'] or {};
+      missing=[p for p in e if not pathlib.Path(p).exists()];bad=[p for p,v in e.items() if int(v)<1];
+      print('entries',len(e),'total',sum(int(v) for v in e.values()),'missing',missing,'nonpositive',bad);
+      sys.exit(0 if len(e) >= 1 and not missing and not bad else 1)"
+    expected: >-
+      Prints entries/total (57 and 127 at planning-time measurement; use the value re-measured
+      at implement time), with missing [] and nonpositive []; exits 0. The minimum-length clause
+      is deliberate: without it an EMPTY roster yields missing [] and nonpositive [] and would
+      pass at "entries 0 total 0" -- silently green on precisely the seeded-with---update failure
+      this step's own fix_if anticipates. (No backtick literals in this field on purpose: every
+      backticked token in a hermetic step's expected becomes a required substring of the replayed
+      command's OUTPUT, and a snippet of the command's own source code is not output.)
+    fix_if: >-
+      A non-empty `missing` list means the baseline was seeded from a stale tree, or a file was
+      renamed/decomposed after seeding. `--update` DROPS entries whose file no longer exists but
+      NEVER seeds the new paths, so a rename needs `--update` to clear the stale entry PLUS a
+      hand-added, marked `# baseline-raised: dec-161 moved from <old-path>` entry for each new
+      path carrying the same pre-existing debt (see Decision 161's structural-move clause). If
+      instead the whole roster is empty or absent, the seed was run with `--update` rather than
+      `--seed` -- delete the file and re-run `--seed`. A non-empty `nonpositive` list means a
+      zero-valued entry was written; a
+      zero-error file must be ABSENT from the registry (the implicit-zero rule), not registered
+      at 0. A totals mismatch against a fresh `mypy scripts/ src/` run means the baseline was
+      seeded BEFORE the pyproject block landed -- re-seed.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The path-existence half is kernel-expressible, but the totals half is this session's
+      transient measurement -- a standing check pinned to 57/127 would red on the first
+      legitimate ratchet-down, which is the exact behavior the whole mechanism exists to
+      encourage. Stale-entry detection is better folded into the ratchet's own updater than
+      duplicated as a separate registry row.
+  - step: 3
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Confirm the three-place ritual is complete AND that the SLOC reclaim held: both checks
+      dispatch via globals() in scripts.validate, tier membership is exactly as designed
+      (baseline_edits in both tiers, ratchet in full only), mypy_full is gone from the full
+      sequence, and scripts/validate.py is at most 500 SLOC.
+    command: |
+      bin/venv-python -c "
+      import sys, pathlib, importlib
+      v = importlib.import_module('scripts.validate')
+      from scripts.checks import registry
+      pre = [s.name for s in registry.pre_sequence()]
+      full = [s.name for s in registry.full_sequence()]
+      sloc = len([l for l in pathlib.Path('scripts/validate.py').read_text(encoding='utf-8').splitlines() if l.strip() and not l.strip().startswith('#')])
+      c = {
+        'dispatch_ratchet': hasattr(v, 'validate_mypy_ratchet'),
+        'dispatch_edits': hasattr(v, 'validate_mypy_baseline_edits'),
+        'edits_in_pre': 'validate_mypy_baseline_edits' in pre,
+        'edits_in_full': 'validate_mypy_baseline_edits' in full,
+        'ratchet_in_full': 'validate_mypy_ratchet' in full,
+        'ratchet_not_in_pre': 'validate_mypy_ratchet' not in pre,
+        'mypy_full_gone': 'mypy_full' not in full,
+        'sloc_ok': sloc <= 500,
+      }
+      print('SLOC_WITHIN_LIMIT' if sloc <= 500 else 'SLOC_BREACH', 'measured', sloc, c)
+      sys.exit(0 if all(c.values()) else 1)
+      "
+    expected: >-
+      Prints `SLOC_WITHIN_LIMIT` followed by the measured count (494 at planning time) and every
+      flag True; exits 0. The asserted literal is the STABLE TOKEN, deliberately not the number:
+      validate_vp_replay._extract_literals treats every backtick-delimited literal in this field
+      as a required substring of the replayed command's output, and these steps replay for the
+      first time on the implement PR inside --pre (the authoritative pre-merge gate). Since
+      validate_sloc_limits passes anything <= 500, a concurrent PR may legitimately move
+      validate.py before this lands, making the post-reclaim count 495 rather than 494 -- a
+      hardcoded number would red the replay on a value that is not actually wrong.
+    fix_if: >-
+      dispatch_* False means the single facade re-export line is missing from scripts/validate.py
+      -- `globals()[name](failed)` will KeyError at dispatch. ratchet_not_in_pre False means the
+      57-second mypy run leaked into the 5-minute fast-tier budget; remove it from
+      pre_sequence(). sloc_ok False means the reclaim did not land -- delete `_scaffold_mypy_full`
+      and its scaffold_fns entry rather than registering a budget or adding a raise marker
+      (Decision 128 forbids the raise).
+    graduation: waive
+    graduation_waiver_reason: >-
+      A composite of eight assertions spanning three different standing guards -- reachability is
+      already owned by tests/test_checks_registry.py's floor tests, the SLOC ceiling by
+      validate_sloc_limits, and tier membership by the same floor tests. A registry row here
+      would be a third copy of guarantees two live gates already enforce, and would red whenever
+      a future decomposition legitimately moves validate.py's line count.
+  - step: 4
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Stale-reference sweep for the scaffold-to-check cutover (closure obligation): confirm the
+      retired `mypy_full` token survives nowhere under scripts/ or tests/, including comments.
+    command: >-
+      if grep -rqI --exclude-dir=__pycache__ "mypy_full" scripts/ tests/; then
+      echo "STALE mypy_full references remain:";
+      grep -rnI --exclude-dir=__pycache__ "mypy_full" scripts/ tests/; exit 1;
+      else echo "CLEAN: no mypy_full references"; fi
+    expected: "Prints `CLEAN: no mypy_full references`; exits 0."
+    fix_if: >-
+      FIRST, before treating any hit as real, note that `-I --exclude-dir=__pycache__` is
+      load-bearing and must not be dropped. Verified on the current tree: a bare
+      `grep -rl "mypy_full" scripts/ tests/` returns SIX paths -- the three real source sites
+      plus scripts/__pycache__/validate.cpython-312.pyc,
+      scripts/checks/__pycache__/registry.cpython-312.pyc, and
+      tests/__pycache__/test_checks_registry.cpython-312-pytest-9.1.1.pyc. `_scaffold_mypy_full`
+      is a co_name and "mypy_full" a dict-key constant, so PRE-EDIT bytecode keeps matching after
+      the source deletion until the caches are regenerated. The implementer runs this locally
+      against a warm __pycache__ (handoff_policy requires full validation before commit), so a
+      bare grep fires a false positive with near-certainty. A .pyc hit is stale bytecode, NOT a
+      surviving reference -- never "fix" it by editing or deleting a .pyc. THEN, for a genuine
+      source hit: at planning time exactly five source lines across three files carry the token
+      -- scripts/checks/registry.py's
+      `_s("mypy_full")`, scripts/validate.py's `_scaffold_mypy_full` def and its scaffold_fns
+      key, tests/test_checks_registry.py's FROZEN_FULL_SCAFFOLDS entry, and the explanatory
+      comment near line 63 of that same test file. Delete each; the comment counts.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Expressible as grep_count == 0, but the assertion is inherently one-shot: it is meaningful
+      only across the cutover commit. Once merged, `mypy_full` can never reappear except by
+      someone deliberately reintroducing the scaffold, at which point step 3's
+      `mypy_full_gone` flag and the FROZEN_FULL_SCAFFOLDS anchor test both fire. A standing
+      registry row asserting the absence of a deleted identifier is durable dead weight.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      TEETH TEST for the ratchet -- prove it fails on a real, newly-introduced type error and
+      passes on the clean tree. Runs the check against the clean tree, appends a genuinely
+      ill-typed function to an unregistered (implicit-zero) file, re-runs, then restores.
+    command: |
+      bin/venv-python -c "
+      import pathlib, sys
+      from scripts.checks.typing.mypy_baseline import validate_mypy_ratchet as v
+      p = pathlib.Path('scripts/checks/typing/__init__.py')
+      orig = p.read_text(encoding='utf-8')
+      f = []; v(f); clean = len(f)
+      try:
+          p.write_text(orig + '\n\ndef _vp_probe(x: int) -> str:\n    return x\n', encoding='utf-8')
+          f = []; v(f); dirty = len(f)
+      finally:
+          p.write_text(orig, encoding='utf-8')
+      restored_ok = p.read_text(encoding='utf-8') == orig
+      f = []; v(f); rest = len(f)
+      print('CLEAN_FAILED=%d DIRTY_FAILED=%d RESTORED_FAILED=%d RESTORE_BYTES_MATCH=%s' % (clean, dirty, rest, restored_ok))
+      sys.exit(0 if clean == 0 and dirty == 1 and rest == 0 and restored_ok else 1)
+      "
+    expected: >-
+      Exactly `CLEAN_FAILED=0 DIRTY_FAILED=1 RESTORED_FAILED=0 RESTORE_BYTES_MATCH=True`, and the
+      step exits 0. The injected return-type mismatch is an error in a file with no baseline
+      entry, so the implicit-zero rule trips. The step SELF-ASSERTS all four conditions in one
+      exit code, so an inert ratchet (dirty 0) and a failed restore both exit non-zero -- which
+      matters because hermetic is false here, so nothing replays this step. Save/restore is done
+      IN-PROCESS -- read the original text, mutate, restore in a finally block, then byte-compare
+      -- deliberately using neither a temp file nor git. A git-based restore is unusable: this
+      file is CREATED by this PR and is still UNTRACKED when the VP runs (handoff_policy requires
+      full validation before the commit, and no execution step stages anything), so a git restore
+      errors with "did not match any file(s) known to git", leaves the probe permanently appended
+      to a new production source file, and -- if the exit code came only from the dirty leg --
+      would report success while doing it. A temp-file path is avoided because a
+      session-scoped scratchpad directory does not exist in the later implementing session. The
+      byte-compare is not redundant with RESTORED_FAILED: a botched restore that appends
+      something type-clean leaves RESTORED_FAILED at 0 and is caught only by the comparison.
+    fix_if: >-
+      CLEAN_FAILED nonzero means the baseline is out of step with the tree -- almost always
+      because it was seeded before the pyproject block; delete it and re-run `--seed`.
+      DIRTY_FAILED=0 is the serious failure: the ratchet is structurally inert. Check that
+      unregistered files are compared against an implicit 0 rather than skipped, that the stdout
+      parser is matching ": error:" lines, and that the proof-of-execution terminator guard is
+      present -- a parser that silently returns an empty mapping makes every comparison vacuous
+      and is exactly the false-green mode acceptance criterion 6 exists to forbid.
+      RESTORE_BYTES_MATCH=False or RESTORED_FAILED nonzero means the file was NOT put back:
+      recover the original content from the PR diff or re-create the file, and do NOT reach for
+      `git checkout` -- the file is untracked at this point, which is why that command was
+      removed from this step. If the command raises before printing, the finally block has still
+      restored the file; fix the underlying error and re-run.
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      TEETH TEST for the tamper guard plus the full unit oracle -- run the new test module,
+      which exercises unmarked-raise-fails, marked-raise-passes, bogus-Decision-citation-fails,
+      decrease-and-removal-always-pass, and unreachable-base-SKIPs via an injected base_reader.
+    command: bin/venv-python -m pytest tests/checks/typing/test_mypy_baseline.py -q
+    expected: All tests pass; exits 0.
+    fix_if: >-
+      A failing marked-raise-passes case usually means the inline-comment marker regex is being
+      applied to yaml.safe_load output (which discards comments) instead of the raw file text --
+      parse raw lines, as validate_sloc_budget_raises does. A failing unreachable-base case means
+      the base_reader None branch fails instead of SKIPping, which would self-red the seeding PR
+      (config/mypy_baseline.yaml does not exist at origin/main yet).
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as test_selector, but the full tier's standing `unit_tests` scaffold
+      already collects and runs tests/checks/typing/ as part of the whole suite, so a registry
+      row would execute the identical selector a second time in the same tier for no added
+      signal.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Confirm the new module reaches 100% line coverage. It is new and carries no
+      config/coverage_baseline.yaml entry, so the Decision 159 / Decision 48 100%-per-file
+      standard applies to it in full.
+    command: >-
+      bin/venv-python -m pytest tests/checks/typing/ --cov=scripts/checks/typing
+      --cov-report=term-missing -q
+    expected: >-
+      scripts/checks/typing/mypy_baseline.py reports 100% with an empty Missing column.
+    fix_if: >-
+      Uncovered lines are typically the `__main__` updater branch and the early-return guards
+      (absent baseline file, unreachable base_reader). Add direct unit tests for the updater
+      function and both early returns rather than adding a coverage_baseline entry -- a new file
+      taking a grandfather entry on the day it lands would be exactly the debt the Decision 159
+      roster is being paid down to remove.
+    graduation: waive
+    graduation_waiver_reason: >-
+      metric_under_threshold-expressible, but per-file coverage is already the standing
+      validate_test_coverage gate's whole job (Decision 159). A registry row measuring one file's
+      coverage would be a second, narrower gate on a surface an existing full-tier gate already
+      covers, and would drift from it the moment the coverage machinery changes.
+  - step: 8
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Confirm the Decision entry landed, is conformant, and did not breach the size ceilings:
+      the header exists, the three required markers from docs/contracts/decision-entry.yaml are
+      present, live headers stay at or under 120, and combined live+archive bytes stay at or
+      under 700,000.
+    command: |
+      bin/venv-python -c "
+      import re, pathlib, sys
+      live = pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8')
+      arc = pathlib.Path('docs/DECISIONS_ARCHIVE.md').read_bytes()
+      heads = [(int(m.group(1)), m.group(2)) for m in re.finditer(r'^## Decision (\d+): (.+)$', live, re.M)]
+      mine = [n for n, title in heads if 'mypy' in title.lower()]
+      one = len(mine) == 1
+      target = mine[0] if one else -1
+      body = re.search(r'^## Decision %d:.*?(?=^## Decision |\Z)' % target, live, re.M | re.S).group(0) if one else ''
+      markers = all(('**%s:**' % m) in body for m in ('Status', 'Date', 'Decision'))
+      combined = len(live.encode('utf-8')) + len(arc)
+      ok = one and markers and len(heads) <= 120 and combined <= 700000
+      print('DECISION_CONFORMANT' if ok else 'DECISION_NONCONFORMANT', 'number', target, 'markers', markers, 'headers', len(heads), 'combined', combined, 'entry_bytes', len(body))
+      sys.exit(0 if ok else 1)
+      "
+    expected: >-
+      Prints `DECISION_CONFORMANT` followed by the authored decision number (161 at planning
+      time), markers True, headers 114 (of 120), combined under 700,000, and an entry_bytes value
+      in the 2,500-3,000 range; exits 0. The entry is located by TITLE ("mypy", verified unique
+      -- no existing Decision title in either file contains it) rather than by a max-of-headers
+      lookup, because max() would validate whichever number is numerically highest: if a concurrent PR
+      lands 162 first, a max()-based check would silently pass on 162's markers while this plan's
+      own entry went unvalidated. Locating by title also catches the entry being authored twice.
+      The asserted literal is the stable token, not the number, for the replay reason given in
+      step 3.
+    fix_if: >-
+      FIRST branch, the likely one: output of the shape "DECISION_NONCONFORMANT number -1 markers
+      False ... entry_bytes 0" means NO live `## Decision N:` TITLE contains "mypy" -- or two do.
+      RETITLE THE ENTRY so exactly one live title carries the token; do NOT change the check, and
+      do NOT fall back to a highest-number lookup (that is the defect this locator replaced). A
+      number of -1 with entry_bytes 0 always means "entry not located", never "entry malformed".
+      Otherwise, with a real number printed: markers False means a required marker from
+      docs/contracts/decision-entry.yaml is missing or
+      misspelled -- it must be the exact bold colon-terminated `**Status:**` / `**Date:**` /
+      `**Decision:**` form. headers > 120 or combined > 700,000 means a ceiling was breached;
+      the relief valve is compaction of superseded bodies or a leaner entry, never a raise.
+      entry_bytes well above 3,000 means mechanism detail belongs in the check module docstring
+      and the baseline file header instead.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Every assertion here is already owned by a standing full-and-fast-tier check --
+      validate_decision_entry_conformance for the required markers and
+      validate_decisions_size for both ceilings. This step exists to catch the mistake inside
+      this session's edit loop, before those gates run; graduating it would mint a third
+      independent copy of two already-enforced invariants.
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Run the DECISIONS.md ETL to project the new Decision into ops_decisions and refresh the
+      local read cache, then confirm dec-161 is present in the cache.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md &&
+      grep -c "dec-161" logs/.decisions-index.jsonl
+    expected: >-
+      Backfill reports the new/changed row and exits 0; the grep count is at least 1. (Use the
+      actual decision id if the number shifted at authoring time.)
+    fix_if: >-
+      A credential failure means the agent_platform assume-role chain is unavailable -- confirm
+      with `aws sts get-caller-identity --profile agent_platform`; the write must FAIL LOUDLY and
+      be re-run after connectivity is restored (Decision 84 I-4, no offline outbox). A zero grep
+      count after a successful backfill means the entry's header or markers did not parse -- fix
+      the entry per step 8 and re-run. Never hand-edit logs/.decisions-index.jsonl; it is a read
+      cache and never a write source.
+    graduation: not-applicable
+constraints:
+  - >-
+    Decision 128 (SLOC decompose-by-default): scripts/validate.py is at 499/500 SLOC and
+    UNREGISTERED. Do NOT add a config/sloc_budgets.yaml entry for it, do NOT add a
+    `# raise-approved` marker, and do NOT run `--update-sloc-budgets` to seed it. The reclaim
+    (delete `_scaffold_mypy_full`, add exactly one facade line) is the required answer. Every
+    file in scope stays under 500.
+  - >-
+    scripts/CLAUDE.md three-place ritual is mandatory and must land in ONE commit: the
+    `@registry.register` module under scripts/checks/typing/, the name inserted in the ordered
+    tier sequence(s) in scripts/checks/registry.py, and the `from
+    scripts.checks.typing.mypy_baseline import ...  # noqa: F401,E402` re-export in
+    scripts/validate.py's facade block. Dispatch is `globals()[name](failed)` -- omitting the
+    re-export makes the check KeyError and reddens tests/test_checks_registry.py.
+  - >-
+    Tier placement is fixed by two measured facts and must not be "improved" by moving the
+    ratchet into --pre. (a) Cold `mypy scripts/ src/` takes 57s and .mypy_cache is gitignored,
+    so CI is ALWAYS cold; the fast tier carries a hard 5-minute budget assertion (Decision
+    73/135/153) and the preflight already reports 10 fast-tier budget breaches in the last 7
+    days. (b) Decisively: `pr-validate` installs requirements-fast.txt WITHOUT `-c
+    requirements.lock` (`mypy>=1.5.0`, unpinned), so the fast tier's mypy version floats and
+    error counts would drift spuriously, while `main-validate` installs `-c requirements.lock`
+    (mypy==2.3.0). A count-comparing ratchet is only sound under the pinned interpreter.
+    (c) The full-tier COST of this placement is net +27s, not +57s: `_s("mypy_full")` (`mypy
+    src/`, ~30s) is REMOVED in the same commit, so the tier trades a 30s informational run for a
+    57s enforcing one, against main-validate's 60-minute timeout. Tier-definition authority is
+    Decision 60 (two-tier presubmit + edit-loop), refined by 73/135/153. NOTE when citing the
+    budget: the ENFORCED `budget_assertion` scaffold appears ONLY in registry.pre_sequence()
+    (verified -- it has no occurrence in full_sequence()), so Decision 60's nominal presubmit
+    budget is enforced fast-tier-only. That does not weaken the argument -- it is precisely why
+    the fast tier is the scarce resource and the full tier is where a 57s check belongs.
+  - >-
+    Ratchet scope is `scripts/ src/`, which SUPERSEDES the retired `mypy src/` scaffold.
+    Justification: `mypy src/` already reports errors in scripts/ via follow-imports (verified --
+    `scripts/ops_data_portal.py:415` appears in its output), so "src-only" was never a real
+    boundary. `scripts/ src/` is the honest closure of hand-authored production Python (362
+    files) and matches SLOC governance's whole-repo scope (Decision 130). tests/ is deliberately
+    EXCLUDED -- fixtures, mocks, and monkeypatching carry different typing norms and would
+    balloon the roster without governing production type safety.
+  - >-
+    Ordering is load-bearing: the [tool.mypy] block lands BEFORE config/mypy_baseline.yaml is
+    seeded. Seeding first would bake roughly 135 missing-stub errors into the roster and the
+    ratchet would then track stub availability rather than type-logic debt.
+  - >-
+    Every behavior-changing edit needs an automated test that FAILS without the change (AGENTS.md).
+    Running an existing suite is not a substitute.
+  - >-
+    bundled_recommendations is [] by explicit human constraint for this whole workstream. File NO
+    new recommendations anywhere -- not for the typing debt burn-down, not for the pre-merge
+    blocking upgrade path, not for rec-2923.
+  - >-
+    Do NOT promote validate_test_coverage to --pre and do not touch the coverage gate -- out of
+    scope. Do NOT touch rec-2923 or the ci-rca / subagent-plan-review subsystem.
+  - >-
+    VP commands are POSIX/coreutils only (grep/test/find/sed/printf/cp). NEVER `rg` -- the CI
+    runner replays hermetic pre-deploy VP steps via /bin/sh on ubuntu-latest, which has no
+    ripgrep (a prior slice burned on exit 127).
+  - >-
+    Every mypy-invoking or pytest-invoking VP step is `hermetic: false` BY DESIGN.
+    validate_vp_replay runs in the --pre sequence, so marking a 57-second mypy step hermetic
+    would load the same 5-minute fast-tier budget the tier placement above exists to protect.
+  - >-
+    Do not `Edit` or `Write` logs/.decisions-index.jsonl or logs/.recommendations-log.jsonl
+    (Single Portal Invariant). docs/DECISIONS.md is the markdown ETL SOURCE, not a read cache,
+    so editing it and running `--backfill-decisions-md` is the sanctioned ratification path
+    (Decisions 84/92/146).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Origin: audit finding VTS-15 (audits/validate-test-suite-4df4d48.yaml) -- "mypy is advisory
+    in both tiers with 143 standing errors, and no decision owns the advisory status", severity
+    medium, confidence CONFIRMED, roadmap_crossref.classification novel with item_ids: []. Its
+    acceptance clause is "A Decision names mypy's gate status; if (ii)/(iii), the corresponding
+    check lands with it". The human has chosen option (iii), the count-ratchet, with explicit
+    governance sign-off; options (i) advisory-forever and (ii) changed-files blocking were both
+    rejected -- (ii) specifically for dirty-file inheritance, where a PR touching a still-dirty
+    file would be blocked until that file is cleaned, ballooning unrelated scope. The per-file
+    baseline design defeats that failure mode directly: a PR may touch a file with 28
+    grandfathered errors and passes as long as it adds none.
+  - >-
+    Measured ground truth, re-verified this session (mypy 2.3.0, matching requirements.lock).
+    BEFORE any config: `mypy src/` = 143 errors/59 files; `mypy scripts/ src/` = 262 errors/147
+    files (362 source files checked). AFTER `disable_error_code = ["import-untyped"]`: `mypy
+    src/` = 82/28; `mypy scripts/ src/` = 127/57 (44 scripts files, 13 src files); identical
+    result from `ignore_missing_imports = true`, which is why the surgical option is free.
+    Timing: cold 57s for scripts+src, 30s for src only, 1s warm. Two consecutive runs produced
+    byte-identical per-file counts (deterministic). Zero [import-not-found] errors exist today.
+    Dirtiest file: scripts/execute_recommendation.py at 28.
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): PENDING -- this plan is authored
+    by a planning subagent under the Design-B trampoline, which hands back a GATE_REQUEST for
+    the decision-scout gate rather than dispatching it inline (the fresh-context requirement
+    cannot be satisfied from the authoring context). The implementing session must not proceed
+    past a gate that has not returned a Verdict line. Decisions this plan already expects to
+    cite: Decision 128 (SLOC raise gate + decompose-by-default, the marker mechanism this
+    mirrors), Decision 159 (config/coverage_baseline.yaml + validate_coverage_baseline_edits,
+    the closest structural sibling), Decision 130 (whole-repo SLOC scope), Decision 102/43 (SLOC
+    ratchet lineage), Decision 73/135/153 (two-tier presubmit + fast-tier budget), Decision 150
+    (significance bar), Decision 134/145/146 (DECISIONS.md size governance and archival),
+    Decision 84 (warehouse SoT + portal), Decision 86 (rationale routes to Decisions), Decision
+    148 (hermetic VP authoring), Decision 104 (registry membership floors), Decision 131 (mirror
+    test placement), Decision 55 (fail loud, no workaround loops). ADDED PER THE DECISION-SCOUT
+    GATE -- Decision 60 (the original two-tier presubmit/edit-loop tier definition the entire
+    tier-placement argument rests on; Decision 153's own Related treats it as that authority),
+    Decision 132 (created the VerificationStep.graduation obligation these nine pre-deploy
+    dispositions discharge but never named), and Decision 160 (dated 2026-07-31; retires the
+    DECISIONS.md live-byte-only ceiling). Decision 160 is MATERIALLY load-bearing here, not
+    cosmetic: live docs/DECISIONS.md measures 518,839 bytes, EXCEEDING Decision 145's retired
+    500,000-byte live ceiling by 18,839 -- this plan's combined-ceiling-only size framing is
+    correct ONLY because Decision 160 retired that clause, so citing 145/146 without 160 would be
+    incomplete.
+  - "gates: decision-scout=<verdict>; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    ci-rca deferral rationale (recorded per the Related-Work check). Preflight reports
+    `ci_rca_unresolved_recs: []` -- there is NO hard block. The one open Critical source=ci_rca
+    rec, rec-2923 ("Sandbox subagent review starved; inherited errexit voided the retry and
+    latched a false red", source_file .github/actions/subagent-plan-review/action.yml), appears
+    under `ci_rca_likely_resolved_recs`. It is ACTIVELY owned and being remediated by a
+    concurrent session (PRs #818/#820/#821/#823 are its approved plans and fixes) and is fully
+    DISJOINT from this plan: no shared source_file, no shared Decision, and a different failure
+    category (V3 harness / subagent-review failure vs this plan's mypy-regression category).
+    The human has authorized proceeding. Do not touch rec-2923.
+  - >-
+    Preflight state at planning time: venv=True, creds=ok, branch=claude/mypy-gate-status-ratchet-plan,
+    main 0 behind / 0 ahead (base 2e60bdd), uncommitted_changes false, ops_outbox empty,
+    main_files_changed_since_branch [] so the Main Divergence Assessment finds no overlap,
+    budget_bypass_alert null, open_recs 880 / non_automatable 753 (surfaced as context only per
+    Decision 73). Advisory notes: 10 fast-tier budget breaches in the last 7 days (dominant
+    phase validate_verification_registry) -- directly relevant to this plan's tier choice; and a
+    stale Platform End-State fingerprint.
+  - >-
+    Complexity: 10 scope files exceeds the >5-file STRATEGIC heuristic, but STRATEGIC
+    classification is SUSPENDED (AGENTS.md Temporary Operational Constraints, Decision 67 -- the
+    executor that consumes decomposed recommendations is frozen, so STRATEGIC plans produce dead
+    work). Authored as a single larger IMPLEMENTATION plan per the freeze override. The ten files
+    are one atomic unit -- the three-place ritual alone spans three of them and cannot be split
+    across PRs without leaving a KeyErroring check on main.
+  - >-
+    verification_tier V2 rationale: no `.tf` in scope (infrastructure_dependencies is [], no
+    speculative-plan pipeline engagement), and `compute_affected_artifacts()` over the full scope
+    list returns {} -- no Lambda artifact is affected, so no build/deploy/smoke-test steps are
+    required. The single external touch is the ops-portal `--backfill-decisions-md` ETL, which
+    every Decision-authoring plan performs; repo precedent classifies those V2
+    (PLAN-decision-scout-bounded-retrieval, PLAN-coverage-diff-base-baseline, both
+    IMPLEMENTATION/V2 with DECISIONS.md in scope).
+  - >-
+    Closure obligation: this plan is NOT rec-resolving (bundled_recommendations is [] by explicit
+    constraint) but IS surface-retiring -- the `mypy_full` informational scaffold is cut over to
+    the enforcing `validate_mypy_ratchet` check. VP step 4 is the required stale-reference sweep
+    for that cutover, and acceptance criterion 8 states the full retirement condition.
+  - >-
+    Known non-goal, deliberately deferred with NO rec filed (per the explicit no-new-recs
+    constraint): pre-merge BLOCKING. Because the ratchet is full-tier-only and main-validate runs
+    on push to main, a type regression is detected POST-merge and spawns a source=ci_rca
+    priority=critical rec (forward-fix, never auto-revert) rather than blocking the PR. This is
+    real enforcement in this repo's model but is strictly weaker than a pre-merge gate. The
+    upgrade path -- a separate CI job invoking the ratchet in parallel with pr-validate, on the
+    `terraform-validate` job pattern, installed with `-c requirements.lock`, later added to the
+    `main-protection` required checks via terraform/github -- is named in Decision 161's reversal
+    conditions so the choice is reversible and traceable, not silently permanent.
+  - >-
+    DECLINED hardening, recorded so it is a decision rather than an omission: no
+    docs/contracts/file-router.yaml route row for config/mypy_baseline.yaml. It is not required
+    -- validate_placement only dead-target-checks routes that already exist, and config/ has no
+    root allowlist -- and the two sibling registries it mirrors (config/sloc_budgets.yaml,
+    config/coverage_baseline.yaml) carry no route row either, so adding one for this file alone
+    would create an inconsistency rather than remove one. Discoverability is served by the file's
+    own header comment and by the check module that reads it (AGENTS.md collocation rule); a
+    route row would be a second surface to keep in sync, which is drift by design (Decision 86).
+  - >-
+    Marker-token rationale, for the plan-critique gate to check for honesty: three baseline
+    registries now coexist, each with a direction-correct token -- sloc uses
+    `# raise-approved: dec-NNN` (budgets rising is the bad direction), coverage uses
+    `# baseline-lowered: dec-NNN` (coverage falling is the bad direction), and mypy uses
+    `# baseline-raised: dec-NNN` (error counts rising is the bad direction). Distinct tokens are
+    deliberate: a single shared token would let a marker written for one registry be copy-pasted
+    into another and silently authorize an unrelated regression.
+pre_implementation_checklist:
+  - Branch confirmed not on main (`git branch --show-current` shows the harness `claude/...` branch)
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read (128, 159, 130, 102/43, 73/135/153, 150,
+    134/145/146, 84, 86, 148, 104, 131, 55) -- not the whole of docs/DECISIONS.md
+  - >-
+    scripts/CLAUDE.md read for the three-place ritual; docs/contracts/decision-entry.yaml read
+    for the required-marker grammar before authoring Decision 161
+  - >-
+    Reference implementations read before writing the new module:
+    scripts/checks/sloc/validate_sloc_budget_raises.py, scripts/checks/sloc/sloc_limits.py,
+    scripts/checks/misc/coverage_baseline.py, and their test modules
+    tests/checks/sloc/test_validate_sloc_budget_raises.py and
+    tests/checks/misc/test_coverage_baseline.py
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Ground truth re-measured before seeding (mypy version, per-file counts, current
+    scripts/validate.py SLOC, current max `## Decision NNN:` header) -- the plan's numbers are
+    planning-time measurements and a concurrent PR may have moved them
+execution_steps:
+  - >-
+    Re-measure ground truth first: `bin/venv-python -m mypy --version` (expect 2.3.0, matching
+    requirements.lock), `bin/venv-python -m mypy scripts/ src/ 2>&1 | tail -2`, the current SLOC
+    of scripts/validate.py by validate_sloc_limits' counting rule, and the current max
+    `## Decision NNN:` header. Use the re-measured values everywhere the plan quotes a number.
+  - >-
+    pyproject.toml -- add the minimal [tool.mypy] block: `python_version = "3.12"` and
+    `disable_error_code = ["import-untyped"]`. Do NOT add ignore_missing_imports. Re-run
+    `bin/venv-python -m mypy scripts/ src/` and record the new totals; this is the seeding
+    measurement.
+  - >-
+    scripts/checks/typing/__init__.py and scripts/checks/typing/mypy_baseline.py -- create the
+    domain package and the module hosting both checks plus the baseline load/parse/seed
+    semantics, following scripts/checks/misc/coverage_baseline.py's shape. Parse the registry
+    from RAW TEXT (not yaml.safe_load) so inline markers survive. Include the injectable
+    `base_reader` and the SKIP-on-unreachable-base contract. Include the mandatory
+    proof-of-execution terminator guard in `_run_mypy()`. Include the `__main__` `--seed` and `--update`
+    entry point (downward-only; never raises; never seeds a newly-dirty unregistered file).
+  - >-
+    config/mypy_baseline.yaml -- seed it AFTER the pyproject block, using
+    `bin/venv-python -m scripts.checks.typing.mypy_baseline --seed`. Use `--seed`, NOT
+    `--update`: at this moment no roster exists, so all 57 dirty files are unregistered and
+    `--update`'s never-seed rule would write an EMPTY roster, after which the ratchet would fail
+    all 57 on the implicit-zero rule. Write the header comment: the seeding invocation, the
+    `# baseline-raised: dec-NNN
+    <reason>` marker grammar, the implicit-zero rule for unregistered files, and that this is a
+    one-time grandfather of pre-existing debt, not a precedent.
+  - >-
+    scripts/checks/registry.py -- insert `_c("validate_mypy_baseline_edits")` into
+    `pre_sequence()` beside the existing tamper-guard cluster; in `full_sequence()` replace
+    `_s("mypy_full")` with `_c("validate_mypy_ratchet")` and add
+    `_c("validate_mypy_baseline_edits")`.
+  - >-
+    scripts/validate.py -- DELETE `_scaffold_mypy_full` and its `scaffold_fns` entry FIRST (the
+    SLOC reclaim), then add the single facade re-export line. Verify the file measures at most
+    500 SLOC before moving on. Leave `_scaffold_mypy_diff` untouched.
+  - >-
+    tests/checks/typing/__init__.py and tests/checks/typing/test_mypy_baseline.py -- write the
+    oracle covering parser, mypy-output parser, PROOF-OF-EXECUTION (both required cases: neither
+    terminator present fails loudly; "Success: no issues found" is a legitimate clean run and is
+    NOT conflated with it), ratchet (equal/over/under/unregistered), tamper
+    guard (unmarked raise, marked raise, bogus citation, decrease, removal, unreachable base,
+    absent current file), SEED MODE (`--seed` writes the initial roster; refuses when the file
+    already exists), and UPDATE MODE (downward-only; never raises; never seeds; writes nothing
+    against an absent roster). Confirm each test fails without its production change
+    before moving on. Drive the module to 100% line coverage.
+  - >-
+    tests/test_checks_registry.py -- remove `"mypy_full"` from FROZEN_FULL_SCAFFOLDS and from
+    the line-63 explanatory comment; add both new check names to the per-tier membership floors.
+    Membership assertions only, never a hardcoded count.
+  - >-
+    docs/DECISIONS.md -- author `## Decision 161:` (or the next free number, re-checked now).
+    THE TITLE MUST CONTAIN THE LITERAL TOKEN "mypy" (case-insensitive) and must be the only live
+    title that does -- VP step 8 finds this entry by title and is hermetic, so it replays in
+    --pre; a title without the token reds the PR. Verified at planning time: no existing title in
+    docs/DECISIONS.md or docs/DECISIONS_ARCHIVE.md contains it, so uniqueness holds on authoring.
+    Required markers Status/Date/Decision plus Warehouse ID, Problem, Rationale, Reversal
+    conditions, Related. Target 2,500-3,000 bytes; route mechanism detail to the module
+    docstring and the baseline header. Reversal conditions must name the pre-merge-blocking
+    upgrade path and the condition under which the grandfather roster's emptiness retires the
+    baseline clauses. Related must include Decisions 60, 132 and 160 alongside
+    128/159/130/150/134/145/146. The entry must ALSO carry one sentence authorising
+    RE-REGISTRATION of unchanged pre-existing debt after a pure structural move (rename,
+    decomposition, facade split) under a `# baseline-raised: dec-161 moved from <old-path>`
+    marker. Without it, the next Decision 128 decomposition of a dirty file -- e.g.
+    scripts/execute_recommendation.py at 28 errors -- would appear to need its own new Decision
+    merely to re-home debt it is not adding to: `--update` drops the stale entry but never seeds
+    the new paths, leaving them at implicit-zero and reddening the ratchet. The marker mechanism
+    already supports this (`_decision_header_exists` only checks that the cited header exists),
+    so this is an authorising sentence, not new machinery.
+  - >-
+    Run `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` (VP step 9). A
+    write that cannot complete FAILS LOUDLY -- re-file after restoring connectivity; there is no
+    offline outbox.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until pass. On an unrecoverable
+    failure stop and RCA (Decision 55); do not patch around a red ratchet by widening the
+    baseline.
+  - >-
+    Run `bin/venv-python -m scripts.validate --pre` and then the full tier
+    (`bin/venv-python -m scripts.validate`) to completion, per handoff_policy
+    (full_validation_required_before_commit). The full tier is where validate_mypy_ratchet
+    actually runs -- a green `--pre` alone does NOT exercise it.
+  - 'Report: what was implemented, verification results, and the final seeded baseline totals'
+work_areas: []
+rollback: >-
+  Fully revertible in one commit with no external state to unwind: the only out-of-repo write is
+  the ops_decisions projection from --backfill-decisions-md, which is an append-only SCD2 ETL
+  from docs/DECISIONS.md and re-converges on the next backfill after a revert. Reverting restores
+  the informational `_scaffold_mypy_full` scaffold and deletes config/mypy_baseline.yaml,
+  scripts/checks/typing/, and tests/checks/typing/. If only the ENFORCEMENT needs backing out
+  while the governance stands, drop `_c("validate_mypy_ratchet")` from
+  registry.full_sequence() and leave the baseline file and tamper guard in place -- the roster
+  then survives as a measured, tamper-guarded record of the debt with no gate, which is a
+  strictly better resting state than the pre-plan status quo and requires no Decision reversal.
