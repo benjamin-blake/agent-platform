@@ -7,8 +7,9 @@ intent: >-
   Unwedge the decision-authoring path by removing the reason its ceiling exists: repoint the
   decision-scout gate from a whole-file read of docs/DECISIONS.md onto the already-built committed
   index plus targeted reads of only the shortlisted entries, then RETIRE the live-byte ceiling --
-  the response Decision 145's own reversal conditions name -- leaving the combined ceiling as the
-  binding backstop. No ceiling constant is raised.
+  the response Decision 145's own reversal conditions name. The retained HEADER ceiling (120) is
+  the first binding constraint afterwards (~4 days at measured inflow), with the combined ceiling
+  (~8 days) behind it. No ceiling constant is raised.
 plan_type: IMPLEMENTATION
 verification_tier: V2
 plan_path: docs/plans/PLAN-decision-scout-bounded-retrieval.yaml
@@ -25,7 +26,12 @@ scope:
       decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md]). The shared parser is NOT
       modified -- decision_header_numbers already accepts an explicit paths list, so provenance is
       derivable in the generator without changing parse_decisions_md's row shape (which feeds the
-      ops_decisions ETL allowlist).
+      ops_decisions ETL allowlist). ALSO add `triage_excerpt` (<=320 chars of the entry's Intent
+      marker, falling back to Problem then Context) plus `triage_excerpt_source` naming which marker
+      it came from. This is the Decision 152 gate (ii) anchor: a SPIRIT flag must quote the violated
+      entry VERBATIM, and without an excerpt a spirit violation in a NON-shortlisted entry is
+      structurally unquotable. Measured: 115 of 139 entries become quotable at triage time and the
+      projection grows to ~58,593 B (11.7% of the live file, still an 88% cut).
   - file: docs/decisions-index.json
     action: Modify
     purpose: Regenerated committed projection carrying the new `live` field.
@@ -51,7 +57,12 @@ scope:
       and its FAIL branch. _DECISIONS_LIVE_MAX_H2 (120) and _DECISIONS_COMBINED_MAX_BYTES (700_000)
       are UNCHANGED and remain enforced -- the combined ceiling continues to bound the live file
       (live <= 700_000 minus archive bytes, ~588_930 today). Rewrite the docstring, which currently
-      grounds the retired ceiling in the whole-file read this plan removes.
+      grounds the retired ceiling in the whole-file read this plan removes. ALSO rewrite
+      `_RELIEF_VALVES` (lines 24-28), which is emitted in the COMBINED-breach message and still
+      advises "archive superseded entries" -- provably inert against the combined ceiling, since
+      archival only moves bytes between the two counted files. This demotes a relief valve Decision
+      146 ratified, so the governing Decision must record a Decision 146 amendment alongside the
+      Decision 151 one.
   - file: docs/contracts/decision-entry.yaml
     action: Modify
     purpose: >-
@@ -84,9 +95,12 @@ scope:
   - file: tests/checks/decisions/test_validate_decisions_size.py
     action: Modify
     purpose: >-
-      Drop the retired live-ceiling assertions (module-level import at line 9 and the comment at
-      line 64 both reference the constant and must change together); pin 120 and 700_000; add a
-      case proving a live file above the old 500_000 value passes while a combined breach FAILs.
+      Drop the retired live-ceiling assertions. THREE sites consume the constant and must change
+      together: the module-level import (line 9), TestDecisionsSizeIssues' live-boundary cases
+      (lines 22-38), the comment at line 64, and TestDecisionsSizeIssuesReliefValveMessage (lines
+      93-95) -- the last must be re-pointed onto a COMBINED breach and assert the REWRITTEN valve
+      text, never that the guard still advises archival. Pin 120 and 700_000; add a case proving a
+      live file above the old 500_000 value passes while a combined breach FAILs.
   - file: tests/test_decision_scout_retrieval.py
     action: Create
     purpose: >-
@@ -105,7 +119,8 @@ acceptance_criteria:
   - >-
     docs/decisions-index.json carries a boolean `live` field on every entry; the count of live:true
     rows equals the live-file `## Decision` header count, and live:false equals the archive header
-    count.
+    count. Every entry that has an Intent, Problem or Context marker also carries a non-empty
+    `triage_excerpt` with `triage_excerpt_source` naming its origin (115 of 139 at authoring time).
   - >-
     scripts.decisions_index regenerates byte-identically on consecutive runs and
     validate_decisions_index_freshness passes.
@@ -115,17 +130,21 @@ acceptance_criteria:
     triage source, names T1.5 (rec-2774's recorded acceptance), and is STRICTLY SMALLER than 11379
     bytes with config/prose_budgets.yaml ratcheted down to match.
   - >-
-    No file under .claude/ instructs reading the entire OR full docs/DECISIONS.md, and no surface
-    cites .claude/skills/decision-scout/SKILL.md by line number (closes rec-2479).
+    No file under .claude/ carries an IMPERATIVE to read the entire or full docs/DECISIONS.md, and
+    no LIVE surface (docs/ROADMAP-PLATFORM.yaml, docs/contracts/, .claude/) cites
+    .claude/skills/decision-scout/SKILL.md by line number. Frozen historical artifacts
+    (docs/audit-prompts/, docs/plans/) are deliberately excluded -- they are not edited.
   - >-
     _DECISIONS_LIVE_MAX_BYTES no longer exists in
     scripts/checks/decisions/validate_decisions_size.py; _DECISIONS_LIVE_MAX_H2 is still 120 and
     _DECISIONS_COMBINED_MAX_BYTES is still 700000, and the combined guard still FAILs on a
     synthetic breach.
   - >-
-    A LIVE decision-scout dispatch on the bounded protocol loses NO CITE entry relative to the
-    pre-change whole-file baseline, across at least two probe briefs, with both runs recorded as
-    evidence.
+    A LIVE decision-scout dispatch on the bounded protocol loses NO CITE entry AND NO SPIRIT flag
+    relative to the pre-change whole-file baseline, across at least two probe briefs. This is an
+    ordering-constrained SELF-ATTESTATION over gitignored evidence, not a CI-enforced gate: its one
+    hard property is that the baseline is captured before the rewrite exists, so it cannot be
+    retro-fitted to a lossy bounded run without deliberate falsification.
   - >-
     A new `## Decision NNN:` entry exists recording the ceiling retirement, the Decision 145/152
     reversal-trigger adjudication, the Decision 145 and Decision 134 clause 2 amendments, the
@@ -137,25 +156,35 @@ acceptance_criteria:
     and every one of its six exit criteria is independently confirmed met.
   - The curated retrieval probes pass, and bin/venv-python -m scripts.validate --pre exits 0.
   - >-
+    .claude/skills/planning/SKILL.md contains the exact phrase "only the plan-cited decision
+    sections" (rec-2479's recorded acceptance string).
+  - >-
     Post-merge, rec-2783, rec-2774 and rec-2479 all read status closed in the synced local cache,
-    and a successor watch recommendation exists for the surviving binding ceilings.
+    and BOTH follow-on recommendations exist: the successor watch on the surviving binding ceilings
+    (rec-2783's named resolution) and the deferred per-entry authoring size norm on which the
+    runway disclosure's honesty depends.
 
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Assert the committed index's live/archive split matches actual file provenance. Read-only --
-      regeneration is an execution step, not a verification side effect.
+      Assert the committed index's live/archive split matches file provenance via the SHARED parser
+      (DAF-03 one-parser rule -- no second header regex), and that every triage_excerpt names its
+      source. Read-only; regeneration is an execution step, not a verification side effect.
     command: >-
-      bin/venv-python -c "import json,re,pathlib;
+      bin/venv-python -c "import json,pathlib;
+      from scripts.decisions_md import decision_header_numbers as H;
+      R=pathlib.Path('docs');
+      live=H(paths=[R/'DECISIONS.md']); arc=H(paths=[R/'DECISIONS_ARCHIVE.md']);
       d=json.load(open('docs/decisions-index.json'))['decisions'];
-      L=len([x for x in d if x['live']]); A=len([x for x in d if not x['live']]);
-      fl=len(re.findall(r'(?m)^## Decision \d+:', pathlib.Path('docs/DECISIONS.md').read_text()));
-      fa=len(re.findall(r'(?m)^## Decision \d+', pathlib.Path('docs/DECISIONS_ARCHIVE.md').read_text()));
-      print('live',L,'file',fl,'archive',A,'file',fa); assert L==fl and A==fa, 'provenance mismatch'"
+      L={x['number'] for x in d if x['live']}; A={x['number'] for x in d if not x['live']};
+      exc=[x for x in d if (x.get('triage_excerpt') or '').strip()];
+      print('live',len(L),len(live),'archive',len(A),len(arc),'excerpts',len(exc));
+      assert L==live and A==arc, 'provenance mismatch';
+      assert all(x.get('triage_excerpt_source') for x in exc), 'excerpt without source'"
     expected: >-
-      Prints matching counts and exits 0; live equals the DECISIONS.md header count and archive
-      equals the DECISIONS_ARCHIVE.md header count.
+      Prints matching counts and exits 0; the live and archive number SETS equal what
+      decision_header_numbers() reports per file, and every non-empty excerpt names its source.
     fix_if: >-
       Counts diverge -- the generator is deriving provenance from something other than
       decision_header_numbers(paths=[live]). Note build_index()'s dict comprehension at
@@ -231,16 +260,20 @@ verification_plan:
       Stale-reference sweep -- no agent-instruction surface still mandates a whole-corpus read, and
       no surface cites the rewritten skill by line number.
     command: >-
-      bash -c 'test $(rg -c -e "entire[^\n]{0,8}docs/DECISIONS\.md" -e "full[^\n]{0,12}DECISIONS\.md"
+      bash -c 'test $(rg -c -e "[Rr]ead the (\*\*)?(entire|full)(\*\*)?[^\n]{0,12}DECISIONS\.md"
       -e "DECISIONS\.md read" .claude/ 2>/dev/null | wc -l) -eq 0
-      && ! rg -q "decision-scout/SKILL\.md:[0-9]" docs/ .claude/'
+      && ! rg -q "decision-scout/SKILL\.md:[0-9]" docs/ROADMAP-PLATFORM.yaml docs/contracts/ .claude/'
     expected: Exit 0 -- zero matching files across .claude/, and no line-number citation anywhere.
     fix_if: >-
-      A match remains. Pre-change this pattern matches .claude/skills/decision-scout/SKILL.md
-      (lines 3, 8, 26, 134), .claude/skills/planning/SKILL.md (lines 423 and the plan-template
-      checklist, rec-2479) and .claude/commands/plan.md:47. The line-number clause targets
-      docs/ROADMAP-PLATFORM.yaml:2398's "SKILL.md:18-20" citation, which this plan replaces with a
-      section-name citation because rewriting the section invalidates the line numbers.
+      A match remains. The pattern deliberately targets the IMPERATIVE form ("Read the entire/full
+      ... DECISIONS.md") and NOT every mention: pre-change it matches exactly three sites --
+      decision-scout/SKILL.md:26 (Phase 1) and :134 (the Quality-Gate checkbox), and
+      planning/SKILL.md:514 (the plan-template checklist, rec-2479). It must NOT match
+      .claude/commands/plan.md:47 or planning/SKILL.md:423, which INSTRUCT AGENTS NOT to load the
+      file -- this step is graduated, so a mention-matching pattern would permanently forbid writing
+      "do not load the full DECISIONS.md". The line-number clause is scoped to LIVE surfaces only;
+      docs/audit-prompts/ and docs/plans/ carry three further citations and are frozen historical
+      artifacts that must not be edited.
     hermetic: true
     graduation: graduate
     graduation_check_id: "no-whole-decisions-read-instructions"
@@ -311,27 +344,38 @@ verification_plan:
   - step: 9
     phase: pre-deploy
     action: >-
-      Live recall measurement -- the bounded protocol must lose no CITE relative to the whole-file
-      baseline, across at least two probe briefs.
+      Live recall measurement -- the bounded protocol must lose no CITE and no SPIRIT flag relative
+      to the whole-file baseline, across at least two probe briefs.
     command: >-
       bin/venv-python -c "import json,pathlib;
-      b=json.loads(pathlib.Path('logs/debug/scout-baseline.json').read_text());
-      n=json.loads(pathlib.Path('logs/debug/scout-bounded.json').read_text());
-      assert len(b)>=2 and len(n)>=2, 'need >=2 probe briefs in each run';
-      miss={k:sorted(set(b[k])-set(n[k])) for k in b if set(b[k])-set(n[k])};
-      print('probes:', sorted(b)); print('missing CITEs:', miss); assert not miss, miss"
+      bp=pathlib.Path('logs/debug/scout-baseline.json'); np=pathlib.Path('logs/debug/scout-bounded.json');
+      assert bp.exists(), 'baseline missing -- it must be captured BEFORE the SKILL.md rewrite';
+      assert np.exists(), 'bounded run missing -- dispatch the rewritten scout on the SAME briefs';
+      b=json.loads(bp.read_text()); n=json.loads(np.read_text());
+      assert len(b)>=2, f'need >=2 probe briefs, got {len(b)}';
+      assert set(b)==set(n), f'probe-name mismatch: {sorted(set(b)^set(n))}';
+      miss={k:{a:sorted(set(b[k].get(a,[]))-set(n[k].get(a,[]))) for a in ('cite','spirit')
+      if set(b[k].get(a,[]))-set(n[k].get(a,[]))} for k in b};
+      miss={k:v for k,v in miss.items() if v};
+      print('probes:', sorted(b)); print('regressions:', miss); assert not miss, miss"
     expected: >-
-      Exit 0 -- every CITE the whole-file baseline produced is also produced by the bounded
-      protocol, for each of >=2 probe briefs.
+      Exit 0 -- for each of >=2 probe briefs, every CITE and every SPIRIT flag the whole-file
+      baseline produced is also produced by the bounded protocol.
     fix_if: >-
-      A CITE went missing -- the index projection lacks the signal that surfaced it. Enrich the
-      projection (the typed Intent field from Decision 151 is the cheapest lever) and re-measure. Do
-      NOT relax the probe or drop the missing decision. If the baseline file is absent, the
-      execution order was violated: the baseline MUST be captured before the SKILL.md rewrite, or
-      recovered via `git show origin/main:.claude/skills/decision-scout/SKILL.md`.
+      A CITE or SPIRIT entry went missing -- the index projection lacks the signal that surfaced it.
+      For SPIRIT specifically, Decision 152 gate (ii) requires a verbatim quote, so a miss means the
+      entry's triage_excerpt is absent or too short; widen the excerpt before anything else. Do NOT
+      relax the probe or drop the missing decision. If the BASELINE file is absent the execution
+      order was violated -- recover via `git show origin/main:.claude/skills/decision-scout/SKILL.md`
+      and re-run. If the BOUNDED file is absent, the post-rewrite dispatch was skipped.
     hermetic: false
-    graduation: not-applicable
-    graduation_waiver_reason: ""
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible in shape (command_exit_zero) but it reads two gitignored artifacts produced
+      by this session's own scout dispatches -- exactly the "depends on this session's transient
+      repo state" waiver case. Graduating it would make the standing registry fail on every future
+      run where logs/debug/ is empty, and the registry is hermetic-only (same reasoning as steps 10
+      and 11).
   - step: 10
     phase: pre-deploy
     action: >-
@@ -366,14 +410,18 @@ verification_plan:
       (recursion).
   - step: 12
     phase: post-deploy
-    action: Confirm every bundled recommendation actually closed, and the successor watch exists.
+    action: >-
+      Confirm every bundled rec closed, BOTH follow-on recs exist, and rec-2479's positive
+      acceptance string is present.
     command: >-
       bash -c 'bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json;
       rows=[json.loads(l) for l in open(\"logs/.recommendations-log.jsonl\")];
       byid={r[\"id\"]: r for r in rows if r.get(\"id\")};
       bad=[i for i in (\"rec-2783\",\"rec-2774\",\"rec-2479\") if byid.get(i,{}).get(\"status\")!=\"closed\"];
       print(\"not closed:\", bad); assert not bad, bad"'
-    expected: All three recs read status closed after the post-merge sync.
+    expected: >-
+      All three bundled recs read closed; both follow-on recs exist as open recs; and
+      planning/SKILL.md carries rec-2479's exact acceptance phrase.
     fix_if: >-
       A rec is still open -- the Resolves: trailer was missing or malformed in the squash-merge
       commit body, or rec-autoclose.yml failed. Fall back to the documented portal command:
@@ -412,17 +460,25 @@ constraints:
     DOWN. Decision 152's reversal clause mandates the SPIRIT axis become leaner and query-driven
     "rather than prose-budget-funded"; the freed whole-file-read text funds the new protocol.
   - >-
-    The decision-scout output contract is UNCHANGED -- same buckets (CITE / CONTRADICT / RELATED /
-    IRRELEVANT), same SPIRIT lane, same severity taxonomy, same quality gates, same
-    "Decisions triaged: N of M" echo, same Verdict line. Callers must not need updating.
+    The decision-scout output CONTRACT is unchanged -- same buckets (CITE / CONTRADICT / RELATED /
+    IRRELEVANT / SPIRIT), same severity taxonomy, same quality gates, same "Decisions triaged: N of
+    M" echo, same Verdict line. Callers must not need updating. The SPIRIT LANE'S EVIDENCE BASE
+    does change, and this is not asserted away: Decision 152 gate (ii) requires a verbatim quote of
+    the violated entry, which under bounded retrieval is only available for shortlisted entries
+    unless the index carries an excerpt -- hence triage_excerpt. Measured residual: 24 of 139
+    entries carry no Intent, Problem or Context marker and are therefore unquotable at triage time;
+    for those, a SPIRIT flag can still fire only if the entry is shortlisted. VP step 9 measures
+    SPIRIT loss, and the governing Decision records this residual as the honest cost.
   - >-
     Triage and fetch must both remain credential-free and hermetic. The committed index and the
     source files are all in-tree. A degraded or truncated triage is stated VISIBLY in the report --
     never silent (Decision 55).
   - >-
     The header ceiling (120) and combined ceiling (700_000) are RETAINED. Decision 150's
-    significance bar is complementary to the size guards, not a substitute, and the combined
-    ceiling is what continues to bound the live file once the live-byte ceiling retires.
+    significance bar is complementary to the size guards, not a substitute. After retirement the
+    HEADER ceiling is the FIRST binding constraint (~4 days at measured inflow), with the combined
+    ceiling (~8 days) behind it -- the governing Decision's reversal conditions must key to the
+    header axis, not the byte axis.
   - >-
     LAMBDA GATE DISPOSITION -- compute_affected_artifacts() flags the active `data-pipeline`
     artifact because docs/ROADMAP-PLATFORM.yaml is in scope, but that file appears only under the
@@ -465,8 +521,9 @@ context:
     is the sanctioned response. The combined ceiling continues to bound the live file at 700,000
     minus archive bytes, ~588,930 today. NO ceiling constant is raised by this plan.
   - >-
-    WHY NOT AN OUTFLOW WAVE -- measured, not assumed. Only 3,658 bytes of live entries are marked
-    superseded. A citation-scan of all 112 live entries produced 12 archive-shaped candidates
+    WHY NOT AN OUTFLOW WAVE -- measured, not assumed. Only 9,048 bytes of live entries carry a
+    `**Status:** Superseded` marker (an earlier draft cited 3,658 on a narrower index-status basis;
+    the larger marker-based figure is the correct one and still does not change the conclusion). A citation-scan of all 112 live entries produced 12 archive-shaped candidates
     (29,053 B), but ten of the twelve carry armed reversal conditions or live "necessary, not
     sufficient" scoping (Decision 107 alone has four swap-back triggers), so a stub must preserve
     them -- realistic reclaim is ~15.7 KB, roughly three entries of runway. This measurement is what
@@ -481,6 +538,12 @@ context:
     tiers. The only genuinely missing element is one boolean distinguishing live from archived
     entries: `status` cannot substitute (13 of the 27 archive entries carry no supersession marker
     in status, and 2 live entries do), and `superseded_by` is populated for only 3 of 112 live rows.
+  - >-
+    AUDIT LINEAGE -- Decision 152's own Intent assigns "HOW the corpus is read" to the deferred
+    agent-context-governance audit, which exists in-tree at
+    audits/agent-context-governance-cdfda88.yaml, rates JIT retrieval "partial", and records in
+    ACG-06 that the decision-scout migration contract has no owning item. This plan is the first
+    concrete step against that finding and the governing Decision must cite it.
   - >-
     T1.5 RELATIONSHIP -- this is an INTERIM retrieval arrangement, explicitly not the portal
     cutover. Decision 134 clause 5 designates the end state as portal-read; T1.5 c1 still owns
@@ -542,7 +605,7 @@ context:
     SPIRIT: Decision 146 [NOTE] relief-valve bypass -- answered by the 15.7 KB measurement;
     Decision 114 [NOTE] coherent-load analogy -- answered in context. RELATED: Decision 147,
     Decision 159, Decision 155, Decision 131, Decision 86, Decision 110, Decision 127."
-  - "gates: decision-scout=FLAGS_FOUND (all flags resolved in-plan); plan-critique=REVISE after 1 round(s), revised"
+  - "gates: decision-scout=FLAGS_FOUND (all flags resolved in-plan); plan-critique=REVISE after 2 round(s), revised"
 
 pre_implementation_checklist:
   - Branch confirmed not on main
@@ -563,7 +626,8 @@ execution_steps:
     skill file.
   - >-
     scripts/decisions_index.py -- add `live` to the projected row, derived from
-    decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md]). Do not modify
+    decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md]); add `triage_excerpt` (<=320
+    chars of Intent, falling back to Problem then Context) and `triage_excerpt_source`. Do not modify
     scripts/decisions_md.py; the parser's row shape feeds the ops_decisions ETL allowlist.
     Regenerate docs/decisions-index.json via --write.
   - >-
@@ -615,6 +679,10 @@ execution_steps:
     backstop consequence; the Decision 114 coherent-load adjudication; and the DATED runway (~8 days
     combined, ~4 days headers at 294 KB / 56 entries per month) with the per-entry size norm named
     as owner. Include reversal conditions tied to that runway.
+  - >-
+    AFTER the SKILL.md rewrite -- dispatch the scout on the BOUNDED protocol against the SAME probe
+    briefs, with identical probe names, and record logs/debug/scout-bounded.json in the same shape.
+    VP step 9 reads both files and fails loudly if either is missing.
   - >-
     File TWO follow-on recommendations via scripts.ops_data_portal file_rec (call
     get_rec_write_guidance() first): (a) the deferred per-entry authoring size norm; (b) a successor
