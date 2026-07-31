@@ -18,7 +18,8 @@ instead resolves via the MIRROR convention:
 - A declared concern-split monolith (a single-file source with no per-submodule source to mirror
   1:1) instead resolves to a test PACKAGE DIRECTORY, not a single file -- e.g.
   `scripts/ops_writer.py` -> `tests/ops_writer/` (concern-split `test_*.py` modules inside), which
-  `check_test_file_exists` accepts once it exists with >=1 `test_*.py`.
+  `check_test_file_exists` accepts once it exists with >=1 `test_*.py` -- also pre-retirement
+  (`scripts/test_coverage_checker.py` -> `tests/test_coverage_checker/`).
 - A wave retires a home by deleting exactly its one basename line from `_RETIRING_GRANDFATHER_HOMES`
   -- a low-conflict, one-line edit -- then creates the mirror test file(s)/package and deletes the
   home's `config/sloc_budgets.yaml` entry.
@@ -35,12 +36,11 @@ its `__init__.py` and will be normalized by its own wave, not this one.
 `None` in the grandfather helper, preserved per Decision 124). Their decomposition is a PURE
 test-file split + `config/sloc_budgets.yaml` entry deletion; deleting their
 `_RETIRING_GRANDFATHER_HOMES` line is a no-op (the mirror branch never fires, since the source still
-returns `None`). The "one-line retirement" is therefore NOT uniform across all 24 roster homes.
+returns `None`), so "one-line retirement" isn't uniform across all 24 roster homes.
 (b) Drop-root is safe/chosen because it matches repo precedent (`tests/checks/`,
 `tests/test_verifiers/`) and is collision-free for the fixed 24-home roster (no `scripts/<x>/` vs
-`src/<x>/` subdirectory-name overlap exists). Known boundary: a future such collision would need a
-preserve-root exception for that pair -- out of scope now, flagged for the map's maintainer
-(`scripts/test_coverage_checker.py`).
+`src/<x>/` subdirectory-name overlap exists). A future collision needs a preserve-root
+exception -- out of scope, flagged on the map itself.
 
 ## No cross-test imports
 A test module must never import from another `test_*` module -- each mirror package must be

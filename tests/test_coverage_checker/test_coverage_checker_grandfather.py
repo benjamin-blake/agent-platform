@@ -8,6 +8,8 @@ for the shared module-under-test singleton.
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tests.fixtures.coverage_checker_module import _ALL_MIRROR_TARGET_HOMES, _RETIRING_GRANDFATHER_HOMES, ROOT, checker
 
 map_source_to_test = checker.map_source_to_test
@@ -235,6 +237,7 @@ class TestPerFileCoverageDottedModuleForm:
     the file's PARENT DIRECTORY (verified working at plan time: 87.7% on scripts/roadmap/
     plan_audit.py), which fixes both the original slash-path defect and the dotted-file gap."""
 
+    @pytest.mark.real_subprocess
     def test_dotted_cov_form_flags_undertested_module(self, tmp_path: Path, monkeypatch) -> None:
         """Behavioral proof (rec-2791/rec-2633/rec-2681 acceptance): a REAL coverage subprocess
         against a deliberately-undertested scripts/-style module returns a non-empty error on the

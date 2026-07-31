@@ -341,7 +341,7 @@ verification_plan:
     command: >-
       test ! -f tests/test_test_coverage_checker.py && test ! -f tests/test_coverage_checker_checks.py
       && test ! -f tests/test_coverage_checker_grandfather.py && test ! -f tests/test_coverage_checker_map.py
-      && { grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md
+      && { grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md --exclude=registry.yaml
       -e 'tests/test_test_coverage_checker\.py' -e 'tests/test_coverage_checker_checks\.py'
       -e 'tests/test_coverage_checker_grandfather\.py' -e 'tests/test_coverage_checker_map\.py'
       scripts/ config/ tests/ docs/contracts/ .github/; test $? -eq 1; }
@@ -353,7 +353,11 @@ verification_plan:
       grep finds a hit - repoint it. The one KNOWN hit is
       config/agent/verification_registry/registry.yaml line ~24
       (check_id mapped-coverage-diagnostic-contract). Final grep fails - the registry node_id
-      was not repointed to the package path.
+      was not repointed to the package path. Note: --exclude=registry.yaml was added after this
+      step's own command text was itself graduated into that file's check_spec (as check_id
+      coverage-checker-move-no-stale-refs) -- once persisted there, the literal moved-path
+      patterns this step greps for appear inside registry.yaml's own check_spec string,
+      self-matching without the exclusion.
     hermetic: true
     graduation: graduate
     graduation_check_id: coverage-checker-move-no-stale-refs
