@@ -233,6 +233,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/ci_rca/evidence.py",
         "scripts/checks/deps/affected_tests.py",
         "scripts/test_coverage_checker.py",
+        "scripts/sync/recommendations.py",
     }
 )
 

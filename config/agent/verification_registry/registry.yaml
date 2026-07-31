@@ -2605,3 +2605,91 @@ entries:
       - -c
       - |-
         test ! -f tests/test_test_coverage_checker.py && test ! -f tests/test_coverage_checker_checks.py && test ! -f tests/test_coverage_checker_grandfather.py && test ! -f tests/test_coverage_checker_map.py && { grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md --exclude=registry.yaml -e 'tests/test_test_coverage_checker\.py' -e 'tests/test_coverage_checker_checks\.py' -e 'tests/test_coverage_checker_grandfather\.py' -e 'tests/test_coverage_checker_map\.py' scripts/ config/ tests/ docs/contracts/ .github/; test $? -eq 1; } && grep -q 'tests/test_coverage_checker/test_coverage_checker_checks.py::test_coverage_reports_owning_target_and_module' config/agent/verification_registry/registry.yaml && echo 'no stale references; registry row repointed'
+  - check_id: ops-writer-at-100
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ops_writer.py
+    plan_slug: coverage-paydown-ops-writer-sync-ops
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.'); s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); from scripts.checks.misc import coverage_baseline as cb; p=(pathlib.Path.cwd()/'scripts/ops_writer.py').resolve(); pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test, is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess); v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement (dead gate): {pcts} {errs}'; assert v>=100.0, f'{v}% < 100%'; print(f'ops_writer {v:.2f}%')
+  - check_id: sync-ops-at-100
+    primitive_slot: command_exit_zero
+    guard_target: scripts/sync/ops.py
+    plan_slug: coverage-paydown-ops-writer-sync-ops
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.'); s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); from scripts.checks.misc import coverage_baseline as cb; p=(pathlib.Path.cwd()/'scripts/sync/ops.py').resolve(); pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test, is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess); v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement (dead gate): {pcts} {errs}'; assert v>=100.0, f'{v}% < 100%'; print(f'sync/ops {v:.2f}%')
+  - check_id: sync-recommendations-concern-split-recovery
+    primitive_slot: command_exit_zero
+    guard_target: scripts/sync/recommendations.py
+    plan_slug: coverage-paydown-ops-writer-sync-ops
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import importlib.util,sys,pathlib,subprocess; sys.path.insert(0,'.'); s=importlib.util.spec_from_file_location('tcc','scripts/test_coverage_checker.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); p=(pathlib.Path.cwd()/'scripts/sync/recommendations.py').resolve(); t=m.map_source_to_test(p); assert t is not None and t.is_dir() and t.name=='recommendations', t; from scripts.checks.misc import coverage_baseline as cb; pcts,errs=cb.measure_and_check([p], root=pathlib.Path.cwd(), map_source_to_test=m.map_source_to_test, is_empty_dir=m._is_empty_directory_target, subprocess_module=subprocess); v=pcts.get(str(p)); assert isinstance(v,float), f'no measurement: {pcts} {errs}'; assert round(v,1)>=78.0, f'{v}% (rounded {round(v,1)}) < 78.0 -- recovery did not land'; print(f'sync/recommendations {v:.2f}% -> rounds to {round(v,1)} via {t}')
+  - check_id: drain-tests-avoid-migrated-tables
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ops_writer.py
+    guard_symbol: drain
+    plan_slug: coverage-paydown-ops-writer-sync-ops
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        test -f tests/ops_writer/test_drain.py && ! grep -qE 'ops_decisions|ops_priority_queue' tests/ops_writer/test_drain.py && echo 'drain tests use only legitimately-drainable tables'
+  - check_id: roster-twelve-to-ten
+    primitive_slot: command_exit_zero
+    guard_target: config/coverage_baseline.yaml
+    plan_slug: coverage-paydown-ops-writer-sync-ops
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import yaml; e=yaml.safe_load(open('config/coverage_baseline.yaml'))['entries']; assert 'scripts/ops_writer.py' not in e, 'ops_writer still rostered'; assert 'scripts/sync/ops.py' not in e, 'sync/ops still rostered'; r=e.get('scripts/sync/recommendations.py'); assert r is not None and r>=78.0, f'sync/recommendations not raised: {r}'; print(f'roster now {len(e)} entries; sync/recommendations raised to {r}')
+  - check_id: sync-recommendations-move-no-stale-refs
+    primitive_slot: command_exit_zero
+    guard_target: tests/sync/recommendations/
+    plan_slug: coverage-paydown-ops-writer-sync-ops
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |-
+        test ! -f tests/test_sync_recommendations.py && test ! -f tests/test_sync_recommendations_decisions.py && { grep -rn --include=*.py --include=*.yaml --include=*.yml --include=*.md --exclude=registry.yaml -e 'tests/test_sync_recommendations\.py' -e 'tests/test_sync_recommendations_decisions\.py' -e '"tests"[[:space:]]*/[[:space:]]*"test_sync_recommendations' scripts/ config/ tests/ docs/contracts/ .github/ .claude/; test $? -eq 1; } && echo 'no stale references to the moved modules'
+  - check_id: paydown-packages-suite
+    primitive_slot: command_exit_zero
+    guard_target: tests/ops_writer,tests/sync/ops,tests/sync/recommendations
+    plan_slug: coverage-paydown-ops-writer-sync-ops
+    graduated_at: "2026-07-31"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -m
+      - pytest
+      - tests/ops_writer
+      - tests/sync/ops
+      - tests/sync/recommendations
+      - -q

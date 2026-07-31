@@ -75,13 +75,27 @@ class TestMapSourceToTest:
         assert result == ROOT / "tests" / "ci_rca" / "evidence"
 
     def test_maps_still_grandfathered_sync_sibling_to_flat_home(self) -> None:
-        """scripts/sync/recommendations.py (never on the 24-roster) still resolves to its flat
-        grandfathered home via _NESTED_SUBPACKAGE_TEST_PREFIX -- proves Wave 10's retirement of
-        "test_sync_ops.py" did not perturb the family-sibling prefix rule."""
+        """scripts/sync/ducklake_version.py (never on the 24-roster, never concern-split) still
+        resolves to its flat grandfathered home via _NESTED_SUBPACKAGE_TEST_PREFIX -- proves
+        Wave 10's retirement of "test_sync_ops.py" did not perturb the family-sibling prefix
+        rule. (PLAN-coverage-paydown-ops-writer-sync-ops: this case used to run against
+        scripts/sync/recommendations.py, but that source is now itself a declared
+        _CONCERN_SPLIT_TEST_PACKAGES entry -- see test_maps_scripts_sync_recommendations_to_concern_split_package
+        below -- so it moved to a sibling that stays flat.)"""
+        source = ROOT / "scripts" / "sync" / "ducklake_version.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_sync_ducklake_version.py"
+
+    def test_maps_scripts_sync_recommendations_to_concern_split_package(self) -> None:
+        """scripts/sync/recommendations.py maps to the tests/sync/recommendations/ concern-split
+        package (PLAN-coverage-paydown-ops-writer-sync-ops: Option D registers it in
+        _CONCERN_SPLIT_TEST_PACKAGES to recover the coverage its former flat mapping was
+        discarding -- see tests/sync/recommendations/test_sync_recommendations_decisions.py)."""
         source = ROOT / "scripts" / "sync" / "recommendations.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_sync_recommendations.py"
+        assert result == ROOT / "tests" / "sync" / "recommendations"
 
     def test_maps_still_grandfathered_session_sibling_to_flat_home(self) -> None:
         """scripts/session/metrics.py (never on the 24-roster) still resolves to its flat
