@@ -77,10 +77,18 @@ scope:
       yaml.safe_load, because the approval marker lives in an inline comment that safe_load
       drops -- same rationale as validate_sloc_budget_raises); (b) `_run_mypy()` +
       `_parse_error_counts()` turning mypy stdout into {path: count}, counting only ": error:"
-      lines and never ": note:" lines, and normalising every parsed path key with
+      lines and never ": note:" lines. `_run_mypy()` invokes mypy as
+      `[sys.executable, "-m", "mypy", "scripts/", "src/"]` -- NOT a bare "mypy" executable -- so a
+      missing mypy surfaces as a normal non-zero run with no terminator (the guard below fires)
+      rather than an unhandled FileNotFoundError, and so the interpreter matches the one running
+      the check (AGENTS.md: use sys.executable, never the string "python"). Parsed keys are
+      RESTRICTED to paths under `scripts/` or `src/` and normalised with
       `.replace("\\", "/")` before matching baseline keys (the sibling
       coverage_baseline.measure_and_check does exactly this; harmless on Linux-only CI, correct
-      if the check is ever run from Windows). PROOF-OF-EXECUTION GUARD, mandatory and
+      if the check is ever run from Windows). The prefix restriction matters because mypy follows
+      imports: all 57 dirty files sit under scripts//src/ today (44 + 13, verified), but a future
+      import edge could surface a tests/ path, which -- being unregistered -- would red the
+      ratchet at implicit-zero for a file the governed scope deliberately excludes. PROOF-OF-EXECUTION GUARD, mandatory and
       load-bearing (Decision 55 fail-loud): `_run_mypy()` MUST require a recognizable terminator
       line in mypy's stdout -- either "Found N errors in M files" or "Success: no issues found"
       -- and when NEITHER is present it appends a DISTINCT, loudly-worded failure to `failed`
@@ -104,13 +112,21 @@ scope:
       (non-failing) when origin/main or the base file is unreachable -- byte-for-byte the
       contract of validate_sloc_budget_raises._default_base_reader and
       coverage_baseline._default_base_reader, so the seeding PR itself (no base file) SKIPs
-      instead of self-failing; (e) an `if __name__ == "__main__"` block exposing TWO DISTINCT
+      instead of self-failing. BOTH registrations pass `owner="platform"` EXPLICITLY -- it is the
+      default, so omitting it is not a CI red, but all 88 currently-registered checks state it
+      and silent reliance on a default is the kind of drift this repo's conventions exist to
+      prevent; (e) an `if __name__ == "__main__"` block exposing TWO DISTINCT
       MODES. `--seed` performs the ONE-TIME initial roster creation: it writes an entry for every
       file measuring >=1 error, and REFUSES to run (non-zero exit plus an explanatory message)
       when config/mypy_baseline.yaml already exists, so it can never be repurposed to launder new
       debt into the roster. `--update` is the steady-state downward-only ratchet: lowers entries
       whose file improved, drops files now clean or deleted, NEVER raises an entry, and NEVER
-      seeds a newly-dirty unregistered file. The two-mode split is REQUIRED, not cosmetic -- a
+      seeds a newly-dirty unregistered file. BOTH modes share the proof-of-execution terminator
+      guard from (b) and must exit non-zero rather than write a roster derived from a run that
+      did not complete -- a crashed mypy under `--update` would otherwise drop every entry. That
+      failure is loud downstream today (the ratchet then reds all 57 on implicit-zero, so it is
+      not a false-green), but the guard belongs on the write path too: a writer should not
+      persist a measurement it cannot vouch for. The two-mode split is REQUIRED, not cosmetic -- a
       single `--update` mode cannot perform the initial seed, because at seed time all 57 dirty
       files are unregistered, the never-seed rule would therefore write an EMPTY roster, and
       validate_mypy_ratchet would then fail all 57 files on the implicit-zero rule. This mirrors
@@ -144,7 +160,11 @@ scope:
       _scaffold_mypy_full` entry in the `scaffold_fns` dict (1 SLOC) = -6 SLOC - then ADD
       exactly ONE facade re-export line, `from scripts.checks.typing.mypy_baseline import
       validate_mypy_baseline_edits, validate_mypy_ratchet  # noqa: F401,E402` (118 characters,
-      inside the 127 line-length limit, so both names land on ONE line) = +1 SLOC. Net 499 - 6 +
+      inside the 127 line-length limit, so both names land on ONE line) = +1 SLOC. Ruff has `I`
+      (isort) selected, so the line must land in SORTED position -- after the
+      scripts.checks.sloc.* imports and before the scripts.checks.verification.* imports (between
+      the current lines 231 and 232) -- with the two names in the order
+      `validate_mypy_baseline_edits, validate_mypy_ratchet`, which is already isort-correct. Net 499 - 6 +
       1 = 494 SLOC, restoring 6 lines of headroom rather than consuming the last one. The
       deletion is not incidental cleanup - `_scaffold_mypy_full` IS the informational `mypy
       src/` run that VTS-15 indicts, and validate_mypy_ratchet is its enforcing replacement, so
@@ -241,7 +261,13 @@ acceptance_criteria:
     docs/DECISIONS.md contains a `## Decision 161:` (or the next free number) entry that names
     mypy's gate status as an error-count downward-ratchet, carries the Status/Date/Decision
     required markers, and passes validate_decision_entry_conformance,
-    validate_decisions_size, and validate_reversal_stanzas.
+    validate_decisions_size, and validate_reversal_stanzas. BINDING AUTHORING REQUIREMENT: the
+    H2 TITLE ITSELF must contain the literal token "mypy" (case-insensitive), and exactly one
+    live title may contain it. This is not stylistic -- VP step 8 locates this plan's entry BY
+    TITLE (deliberately, so a concurrent higher-numbered Decision cannot satisfy it) and step 8
+    is hermetic, so it replays inside --pre, the authoritative pre-merge gate. A reasonable-looking
+    title that omits the token, e.g. "Type-check gate status -- error-count downward ratchet",
+    makes step 8 exit 1 and REDS the PR.
   - >-
     pyproject.toml carries a [tool.mypy] block containing `disable_error_code` with
     "import-untyped" and NOT containing `ignore_missing_imports`, so [import-not-found] still
@@ -327,13 +353,18 @@ verification_plan:
       Confirm config/mypy_baseline.yaml is well-formed, that every registered path still exists
       on disk (no stale entries), that no entry is non-positive, and report the seeded totals.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,sys;e=yaml.safe_load(open('config/mypy_baseline.yaml'))['entries'];
+      bin/venv-python -c "import yaml,pathlib,sys;e=yaml.safe_load(open('config/mypy_baseline.yaml'))['entries'] or {};
       missing=[p for p in e if not pathlib.Path(p).exists()];bad=[p for p,v in e.items() if int(v)<1];
       print('entries',len(e),'total',sum(int(v) for v in e.values()),'missing',missing,'nonpositive',bad);
-      sys.exit(0 if not missing and not bad else 1)"
+      sys.exit(0 if len(e) >= 1 and not missing and not bad else 1)"
     expected: >-
       Prints entries/total (57 and 127 at planning-time measurement; use the value re-measured
-      at implement time), with missing [] and nonpositive []; exits 0.
+      at implement time), with missing [] and nonpositive []; exits 0. The minimum-length clause
+      is deliberate: without it an EMPTY roster yields missing [] and nonpositive [] and would
+      pass at "entries 0 total 0" -- silently green on precisely the seeded-with---update failure
+      this step's own fix_if anticipates. (No backtick literals in this field on purpose: every
+      backticked token in a hermetic step's expected becomes a required substring of the replayed
+      command's OUTPUT, and a snippet of the command's own source code is not output.)
     fix_if: >-
       A non-empty `missing` list means the baseline was seeded from a stale tree, or a file was
       renamed/decomposed after seeding. `--update` DROPS entries whose file no longer exists but
@@ -429,7 +460,8 @@ verification_plan:
       against a warm __pycache__ (handoff_policy requires full validation before commit), so a
       bare grep fires a false positive with near-certainty. A .pyc hit is stale bytecode, NOT a
       surviving reference -- never "fix" it by editing or deleting a .pyc. THEN, for a genuine
-      source hit: at planning time exactly four sites exist -- scripts/checks/registry.py's
+      source hit: at planning time exactly five source lines across three files carry the token
+      -- scripts/checks/registry.py's
       `_s("mypy_full")`, scripts/validate.py's `_scaffold_mypy_full` def and its scaffold_fns
       key, tests/test_checks_registry.py's FROZEN_FULL_SCAFFOLDS entry, and the explanatory
       comment near line 63 of that same test file. Delete each; the comment counts.
@@ -448,28 +480,51 @@ verification_plan:
       passes on the clean tree. Runs the check against the clean tree, appends a genuinely
       ill-typed function to an unregistered (implicit-zero) file, re-runs, then restores.
     command: |
-      bin/venv-python -c "import sys; from scripts.checks.typing.mypy_baseline import validate_mypy_ratchet as v; f=[]; v(f); print('CLEAN_FAILED=%d' % len(f)); sys.exit(0 if not f else 1)" && \
-      printf '\n\ndef _vp_probe(x: int) -> str:\n    return x\n' >> scripts/checks/typing/__init__.py && \
-      bin/venv-python -c "import sys; from scripts.checks.typing.mypy_baseline import validate_mypy_ratchet as v; f=[]; v(f); print('DIRTY_FAILED=%d' % len(f)); sys.exit(0 if len(f) == 1 else 1)"; \
-      rc=$?; git checkout -- scripts/checks/typing/__init__.py; \
-      bin/venv-python -c "from scripts.checks.typing.mypy_baseline import validate_mypy_ratchet as v; f=[]; v(f); print('RESTORED_FAILED=%d' % len(f))"; \
-      exit $rc
+      bin/venv-python -c "
+      import pathlib, sys
+      from scripts.checks.typing.mypy_baseline import validate_mypy_ratchet as v
+      p = pathlib.Path('scripts/checks/typing/__init__.py')
+      orig = p.read_text(encoding='utf-8')
+      f = []; v(f); clean = len(f)
+      try:
+          p.write_text(orig + '\n\ndef _vp_probe(x: int) -> str:\n    return x\n', encoding='utf-8')
+          f = []; v(f); dirty = len(f)
+      finally:
+          p.write_text(orig, encoding='utf-8')
+      restored_ok = p.read_text(encoding='utf-8') == orig
+      f = []; v(f); rest = len(f)
+      print('CLEAN_FAILED=%d DIRTY_FAILED=%d RESTORED_FAILED=%d RESTORE_BYTES_MATCH=%s' % (clean, dirty, rest, restored_ok))
+      sys.exit(0 if clean == 0 and dirty == 1 and rest == 0 and restored_ok else 1)
+      "
     expected: >-
-      `CLEAN_FAILED=0`, then `DIRTY_FAILED=1` (the injected `return x` on a `-> str` signature is
-      a [return-value] error in a file with no baseline entry, so the implicit-zero rule trips),
-      then `RESTORED_FAILED=0` -- AND the step exits 0. The step now SELF-ASSERTS: the dirty leg
-      exits non-zero unless exactly one failure was recorded, that code is captured in `rc`
-      before the restore leg runs, and `exit $rc` propagates it. Without this the chain ended on
-      the always-succeeding restore leg and the step would have "passed" by exit code even with
-      an inert ratchet -- and nothing else would have caught it, since hermetic: false means this
-      step is never replayed. Restore is `git checkout --`, not a copy into a temp directory.
+      Exactly `CLEAN_FAILED=0 DIRTY_FAILED=1 RESTORED_FAILED=0 RESTORE_BYTES_MATCH=True`, and the
+      step exits 0. The injected return-type mismatch is an error in a file with no baseline
+      entry, so the implicit-zero rule trips. The step SELF-ASSERTS all four conditions in one
+      exit code, so an inert ratchet (dirty 0) and a failed restore both exit non-zero -- which
+      matters because hermetic is false here, so nothing replays this step. Save/restore is done
+      IN-PROCESS -- read the original text, mutate, restore in a finally block, then byte-compare
+      -- deliberately using neither a temp file nor git. A git-based restore is unusable: this
+      file is CREATED by this PR and is still UNTRACKED when the VP runs (handoff_policy requires
+      full validation before the commit, and no execution step stages anything), so a git restore
+      errors with "did not match any file(s) known to git", leaves the probe permanently appended
+      to a new production source file, and -- if the exit code came only from the dirty leg --
+      would report success while doing it. A temp-file path is avoided because a
+      session-scoped scratchpad directory does not exist in the later implementing session. The
+      byte-compare is not redundant with RESTORED_FAILED: a botched restore that appends
+      something type-clean leaves RESTORED_FAILED at 0 and is caught only by the comparison.
     fix_if: >-
-      CLEAN_FAILED=1 means the baseline is out of step with the tree -- almost always because it
-      was seeded before the pyproject block; re-seed. DIRTY_FAILED=0 is the serious failure: the
-      ratchet is structurally inert. Check that unregistered files are compared against an
-      implicit 0 rather than being skipped, and that the mypy stdout parser is actually matching
-      ": error:" lines (a parser that silently returns {} makes every comparison vacuous).
-      RESTORED_FAILED nonzero means the restore leg did not run -- restore the file from git.
+      CLEAN_FAILED nonzero means the baseline is out of step with the tree -- almost always
+      because it was seeded before the pyproject block; delete it and re-run `--seed`.
+      DIRTY_FAILED=0 is the serious failure: the ratchet is structurally inert. Check that
+      unregistered files are compared against an implicit 0 rather than skipped, that the stdout
+      parser is matching ": error:" lines, and that the proof-of-execution terminator guard is
+      present -- a parser that silently returns an empty mapping makes every comparison vacuous
+      and is exactly the false-green mode acceptance criterion 6 exists to forbid.
+      RESTORE_BYTES_MATCH=False or RESTORED_FAILED nonzero means the file was NOT put back:
+      recover the original content from the PR diff or re-create the file, and do NOT reach for
+      `git checkout` -- the file is untracked at this point, which is why that command was
+      removed from this step. If the command raises before printing, the finally block has still
+      restored the file; fix the underlying error and re-run.
     graduation: not-applicable
   - step: 6
     phase: pre-deploy
@@ -551,7 +606,13 @@ verification_plan:
       The asserted literal is the stable token, not the number, for the replay reason given in
       step 3.
     fix_if: >-
-      markers False means a required marker from docs/contracts/decision-entry.yaml is missing or
+      FIRST branch, the likely one: output of the shape "DECISION_NONCONFORMANT number -1 markers
+      False ... entry_bytes 0" means NO live `## Decision N:` TITLE contains "mypy" -- or two do.
+      RETITLE THE ENTRY so exactly one live title carries the token; do NOT change the check, and
+      do NOT fall back to a highest-number lookup (that is the defect this locator replaced). A
+      number of -1 with entry_bytes 0 always means "entry not located", never "entry malformed".
+      Otherwise, with a real number printed: markers False means a required marker from
+      docs/contracts/decision-entry.yaml is missing or
       misspelled -- it must be the exact bold colon-terminated `**Status:**` / `**Date:**` /
       `**Decision:**` form. headers > 120 or combined > 700,000 means a ceiling was breached;
       the relief valve is compaction of superseded bodies or a leaner entry, never a raise.
@@ -745,6 +806,15 @@ context:
     `main-protection` required checks via terraform/github -- is named in Decision 161's reversal
     conditions so the choice is reversible and traceable, not silently permanent.
   - >-
+    DECLINED hardening, recorded so it is a decision rather than an omission: no
+    docs/contracts/file-router.yaml route row for config/mypy_baseline.yaml. It is not required
+    -- validate_placement only dead-target-checks routes that already exist, and config/ has no
+    root allowlist -- and the two sibling registries it mirrors (config/sloc_budgets.yaml,
+    config/coverage_baseline.yaml) carry no route row either, so adding one for this file alone
+    would create an inconsistency rather than remove one. Discoverability is served by the file's
+    own header comment and by the check module that reads it (AGENTS.md collocation rule); a
+    route row would be a second surface to keep in sync, which is drift by design (Decision 86).
+  - >-
     Marker-token rationale, for the plan-critique gate to check for honesty: three baseline
     registries now coexist, each with a direction-correct token -- sloc uses
     `# raise-approved: dec-NNN` (budgets rising is the bad direction), coverage uses
@@ -812,9 +882,13 @@ execution_steps:
     500 SLOC before moving on. Leave `_scaffold_mypy_diff` untouched.
   - >-
     tests/checks/typing/__init__.py and tests/checks/typing/test_mypy_baseline.py -- write the
-    oracle covering parser, mypy-output parser, ratchet (equal/over/under/unregistered), tamper
+    oracle covering parser, mypy-output parser, PROOF-OF-EXECUTION (both required cases: neither
+    terminator present fails loudly; "Success: no issues found" is a legitimate clean run and is
+    NOT conflated with it), ratchet (equal/over/under/unregistered), tamper
     guard (unmarked raise, marked raise, bogus citation, decrease, removal, unreachable base,
-    absent current file), and the updater. Confirm each test fails without its production change
+    absent current file), SEED MODE (`--seed` writes the initial roster; refuses when the file
+    already exists), and UPDATE MODE (downward-only; never raises; never seeds; writes nothing
+    against an absent roster). Confirm each test fails without its production change
     before moving on. Drive the module to 100% line coverage.
   - >-
     tests/test_checks_registry.py -- remove `"mypy_full"` from FROZEN_FULL_SCAFFOLDS and from
@@ -822,6 +896,10 @@ execution_steps:
     Membership assertions only, never a hardcoded count.
   - >-
     docs/DECISIONS.md -- author `## Decision 161:` (or the next free number, re-checked now).
+    THE TITLE MUST CONTAIN THE LITERAL TOKEN "mypy" (case-insensitive) and must be the only live
+    title that does -- VP step 8 finds this entry by title and is hermetic, so it replays in
+    --pre; a title without the token reds the PR. Verified at planning time: no existing title in
+    docs/DECISIONS.md or docs/DECISIONS_ARCHIVE.md contains it, so uniqueness holds on authoring.
     Required markers Status/Date/Decision plus Warehouse ID, Problem, Rationale, Reversal
     conditions, Related. Target 2,500-3,000 bytes; route mechanism detail to the module
     docstring and the baseline header. Reversal conditions must name the pre-merge-blocking
