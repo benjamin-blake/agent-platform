@@ -197,8 +197,20 @@ verification_plan:
       --cov-report=term-missing` and extend the new modules. None measurement - the package
       target is empty or unmapped.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: ops-writer-at-100
+    graduation: waive
+    graduation_waiver_reason: >-
+      Rejected on live/HEAD in the authoritative CI environment (Decision 148): the differential
+      admission gate runs during --pre, which pr-validate executes venv-less against
+      requirements-fast.txt only. This check's command runs pytest across tests/ops_writer/,
+      which contains pre-existing pandas/boto3-dependent modules (test_compact.py,
+      test_outbox_emit.py, test_write.py, and this plan's own test_compact_paths.py) --
+      pandas/boto3 ship only in requirements.txt, not requirements-fast.txt. The check passed
+      locally (full venv has both deps) and was initially admitted, but CI's pr-validate run
+      (job 91205051975) failed it with "Command exited 1" -- not admitted for real. The
+      differential-admission subprocess bypasses the ordinary --pre test-selection deferral
+      that keeps these same files out of the fast-tier test run, so it cannot certify a
+      pandas/boto3-dependent pytest invocation as a registry entry. Retained as a manual,
+      local-only VP step; not graduated.
   - step: 2
     phase: pre-deploy
     action: Same measurement for scripts/sync/ops.py.
@@ -314,8 +326,13 @@ verification_plan:
       `.parent.parent` must become `.parent.parent.parent.parent`. Only after ruling that out,
       check the package __init__.py and whether any tests.fixtures import still resolves.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: paydown-packages-suite
+    graduation: waive
+    graduation_waiver_reason: >-
+      Rejected on live/HEAD in the authoritative CI environment (Decision 148), same root cause
+      as step 1's waiver: this check's command runs pytest across all three packages including
+      tests/ops_writer/, which contains pandas/boto3-dependent modules absent from pr-validate's
+      venv-less requirements-fast.txt environment. CI's pr-validate run (job 91205051975) failed
+      it with "Command exited 2". Retained as a manual, local-only VP step; not graduated.
   - step: 8
     phase: pre-deploy
     action: >-
