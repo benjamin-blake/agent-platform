@@ -60,9 +60,11 @@ from scripts.checks import _common, registry  # noqa: E402
 #
 # FROZEN_*_SCAFFOLDS are exact ordered tuples over the "scaffold"-kind steps only -- a
 # fixed, non-growing structural skeleton (lint/precommit/mypy/pytest-diff/coverage/budget
-# for pre; lint/unit_tests/mypy_full/terraform/dependency_health/ensure_fresh_dq/precommit
-# for full). Exact order here is meaningful and does not grow as checks are added, so it is
-# not the test-count-coupling anti-pattern the membership floor replaces.
+# for pre; lint/unit_tests/terraform/dependency_health/ensure_fresh_dq/precommit for full --
+# the full tier's informational mypy scaffold was retired and replaced by the registered
+# validate_mypy_ratchet check, Decision 161). Exact order here is meaningful and does not
+# grow as checks are added, so it is not the test-count-coupling anti-pattern the membership
+# floor replaces.
 # ---------------------------------------------------------------------------
 
 REQUIRED_PRE_CHECKS: frozenset[str] = frozenset(
@@ -80,6 +82,7 @@ REQUIRED_PRE_CHECKS: frozenset[str] = frozenset(
         "validate_cc_limits",
         "validate_sloc_limits",
         "validate_sloc_budget_raises",
+        "validate_mypy_baseline_edits",
         "validate_subprocess_encoding",
         "validate_test_count_coupling",
         "validate_intent_doc_freeze",
@@ -147,6 +150,8 @@ REQUIRED_FULL_CHECKS: frozenset[str] = frozenset(
         "_check_graduation_guard",
         "validate_dq_manifest_gate",
         "validate_test_coverage",
+        "validate_mypy_ratchet",
+        "validate_mypy_baseline_edits",
         "validate_no_underscore_instructions",
         "validate_claude_md_pointer_invariant",
         "validate_environment_taxonomy",
@@ -187,7 +192,6 @@ REQUIRED_FULL_CHECKS: frozenset[str] = frozenset(
 FROZEN_FULL_SCAFFOLDS: tuple[str, ...] = (
     "lint",
     "unit_tests",
-    "mypy_full",
     "terraform_checks",
     "dependency_health",
     "ensure_fresh_dq",

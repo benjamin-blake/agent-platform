@@ -2,6 +2,26 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 161: Mypy gate status is an error-count downward-ratchet -- per-file baseline, full-tier enforcement, tamper-guarded (VTS-15) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-31
+**Warehouse ID:** dec-161 (canonical; per Decision 84)
+
+**Problem:** VTS-15: mypy runs in both presubmit tiers but is purely informational (the retired `_scaffold_mypy_full` step only printed a warning); no Decision owned that status, leaving 129 measured pre-existing errors across 57 `scripts/`+`src/` files ungoverned.
+
+**Decision:** Option (iii), an error-count DOWNWARD-RATCHET (mirrors the SLOC/Decision 128 and coverage/Decision 159 grandfather-roster precedents).
+1. `pyproject.toml` gains a minimal `[tool.mypy]` block (`disable_error_code = ["import-untyped"]`) -- surgical stub-noise silencing; `[import-not-found]` stays live.
+2. `config/mypy_baseline.yaml`: per-file `entries: {path: int}` roster (57 entries / 129 errors seeded), scoped to `scripts/`+`src/`. An unregistered file's implicit baseline is 0 (mirrors the SLOC/coverage registries). `--seed` is the one-time creation (refuses if the file exists); `--update` is downward-only, never seeding a newly-dirty file.
+3. `validate_mypy_ratchet` (FULL TIER ONLY, `scripts/checks/typing/mypy_baseline.py`) fails a file whose measured count exceeds its baseline; a lower count passes with a non-blocking advisory. Full-tier-only: a cold run costs ~57s against the fast tier's 5-minute budget, and only `main-validate` pins mypy via `requirements.lock`. A proof-of-execution guard treats stdout lacking both "Found N errors in M files" and "Success: no issues found" as a loud failure, never as zero errors everywhere. Retires the informational `_scaffold_mypy_full` scaffold (the `--pre` diff-aware scaffold is untouched).
+4. `validate_mypy_baseline_edits` (BOTH TIERS): tamper guard -- an unmarked increase or new registration fails; `# baseline-raised: dec-NNN <reason>` citing a real Decision header passes it; decreases/removals are unrestricted. Also authorises re-registering unchanged debt after a pure structural move under `# baseline-raised: dec-161 moved from <old-path>`, so a Decision-128 decomposition need not mint a new Decision.
+
+**Rationale:** Per-file (not a repo-wide total) gives blame locality and somewhere to hang the approval marker; a changed-files-only gate was rejected for dirty-file inheritance (blocks a PR on unrelated debt in a touched file). Full-tier placement nets +27s on `main-validate` rather than spending the fast tier's already-breach-prone budget on an unpinned-interpreter measurement.
+
+**Reversal conditions:** (a) pre-merge-blocking upgrade: a parallel CI job running the ratchet, pinned via `requirements.lock`, later required by `main-protection` -- until then a regression is a post-merge forward-fix rec, not a blocked PR; (b) an emptied roster retires the baseline/tamper-guard clauses; (c) net roster growth over any 90-day window triggers a gate-design re-audit, mirroring Decision 159's own condition.
+
+**Related:** Decision 128 (SLOC raise-gate mechanism mirrored here), Decision 159 (closest sibling), Decision 130 (whole-repo scope), Decision 150 (significance bar), Decision 134/145/146 (size governance), Decision 60 (two-tier presubmit definition), Decision 132 (verification-graduation obligation), Decision 160 (retired the live-byte ceiling this entry's sizing relies on).
+
 ## Decision 160: Retire the DECISIONS.md live-byte ceiling for bounded decision-scout retrieval; amends Decision 145, Decision 134 clause 2, and Decision 146; widens Decision 152 gate (ii) (Decided)
 
 **Status:** Decided
