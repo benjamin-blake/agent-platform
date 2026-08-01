@@ -34,14 +34,19 @@ scope:
   action: Modify
   purpose: >-
     Add the `review-step-outcome` input (default "", meaning "no review step in this job"), and
-    invoke assert_review_outcome.sh from the EXISTING body -- positioned AFTER the four existing
-    skip/marker branches (refused, still-actionable, routed/pending_gated, pre-apply-failure
-    infra_error) and IMMEDIATELY BEFORE the green/red write. Ordering is load-bearing and was
-    corrected by the decision-scout gate: making the assert the action's first step would let a
-    violation in an unrelated dimension suppress a Decision 92 / Decision 154 marker write those
-    decisions require, and would hard-fail paths that legitimately carry an empty review-outcome.
-    The rec-2923 shape (review ran, outcome empty) falls through all four branches to exactly this
-    position, so detection is unchanged while every marker write stays intact. Invoke it as
+    invoke assert_review_outcome.sh from the EXISTING body at ONE unambiguous position: AFTER the
+    STARVED skip branch (line 180) and IMMEDIATELY BEFORE the green/red write (line 184). There are
+    FIVE prior skip/marker branches, not four -- refused (102), still-actionable (106),
+    routed/pending_gated (110), pre-apply-failure infra_error (145), and the STARVED skip (180) --
+    a miscount the plan-critique gate caught, and it matters because "after the branches" and
+    "before the write" designate different points if the count is wrong. Placing the assert after
+    the STARVED branch means a starved episode can never be hard-failed by a future contract bug.
+    Ordering is load-bearing and was corrected by the decision-scout gate: making the assert the
+    action's first step would let a violation in an unrelated dimension suppress a Decision 92 /
+    Decision 154 marker write those decisions require, and would hard-fail paths that legitimately
+    carry an empty review-outcome. The rec-2923 shape (review ran, outcome empty) fails the
+    `= "starved"` test at 180 and falls to exactly this position, so detection is unchanged while
+    every marker write stays intact. Invoke it as
     `if ! bash "$GITHUB_ACTION_PATH/assert_review_outcome.sh"; then exit 1; fi` -- an explicit
     conditional, never a bare call relying on the ambient errexit, since inherited-errexit
     dependence is the very defect being closed. The existing ~94-line body is otherwise untouched.
@@ -60,8 +65,14 @@ scope:
     saved-plan review's step outcome with the DEP-10 fresh-replan path's `review_fresh` VALUE, i.e.
     validate the wrong pair. Pass the aggregated pair to the record-write step; pass an explicit
     empty pair at the gated-apply-reconcile call site. (ii) Add `review_outcome` to the
-    apply-reconcile job's `outputs:` block. (iii) rec-2664: a new NON-TERMINAL job (needs:
-    apply-reconcile, gated on `review_outcome == 'starved'`) that files a durable rec via
+    apply-reconcile job's `outputs:` block. (iii) rec-2664: a new NON-TERMINAL job whose `if:` MUST
+    be `always() && needs.apply-reconcile.outputs.review_outcome == 'starved'`. The bare form is a
+    trap the plan-critique gate caught: review.sh exits 1 on STARVED, so apply-reconcile concludes
+    `failure`, and a plain `needs:` dependant is SKIPPED on exactly the episode this job exists to
+    record. Job outputs survive the failure because `steps.resolved` is itself `if: always()`. The
+    job needs `permissions: id-token: write`, a checkout, `aws-actions/configure-aws-credentials`,
+    a Python env, and a `--file-rec` call satisfying get_rec_write_guidance() semantics. It files
+    a durable rec via
     `ops_data_portal --file-rec`, assuming `agent-platform-github-ci-branch` -- the only CI role
     holding the DuckLakeInvokeCI writer grant; github_ci_apply has none, so the filing must NOT run
     in the apply job. The job applies nothing and is no part of the terminal route set (Decision
@@ -97,22 +108,38 @@ scope:
     and that script must write a fail-closed default for every declared output before any fallible
     command. R2: each such script must be referenced by a test spawning it under the literal
     `bash --noprofile --norc -e -o pipefail` argv. R3 (ratchet): non-output-producing inline bodies
-    are checked against the baseline below and FAIL on a new entry or on growth. Every failure
-    message cites Decision 162. Filesystem-only, no network, no subprocess -- it runs in the fast
-    tier (Decision 153 budget).
+    are checked against the baseline below and FAIL on a new entry or on growth. R1 violators are
+    checked against that same baseline's R1 section. Every failure message cites Decision 162.
+    Filesystem-only, no network, no subprocess -- it runs in the fast tier (Decision 153 budget).
+    NOTE, corrected by the plan-critique gate: subagent-plan-review is NOT the only output-producing
+    action. `deterministic-guard` (outputs.routed, a 13-line inline body) and `fetch-saved-plan`
+    (outputs.pr_head_sha / pr_number, a 9-line inline body) also bind an `outputs.<id>.value` to an
+    inline body, so R1 has two in-tree violators on arrival and the guard does NOT come up clean.
 - file: config/composite_action_body_baseline.yaml
   action: Create
   purpose: >-
-    The R3 ratchet baseline: path -> effective (non-blank, non-comment) line count for each
-    non-output-producing inline composite body. Seeded at the state THIS PR leaves the repo in --
+    The ratchet baseline, in TWO sections keyed by rule. The `r1:` section pins the two known
+    output-producing violators -- deterministic-guard and fetch-saved-plan -- which are known
+    instances of the EXACT rec-2923 class and are therefore recorded as higher-severity than mere
+    long bodies, not silently equated with them. The `r3:` section pins non-output-producing inline
+    bodies by effective (non-blank, non-comment) line count. Why baseline rather than extract now:
+    deterministic-guard is the fail-closed apply guard and fetch-saved-plan feeds the no-TOCTOU
+    saved-plan path -- rewriting either during incident remediation is the same category error as
+    rewriting write-convergence-record, just smaller, and it is the sequencing error the Fable
+    consult warned about. R1's forward-blocking power is undiminished: a NEW output-producing
+    inline body still fails. Execution step 13 files an owned follow-on rec scoped to the R1
+    entries FIRST, then R3. Seeded at the state THIS PR leaves the repo in --
     a ONE-TIME grandfather in the sense of Decision 130 clause 2, explicitly NOT a precedent -- so
     the PR installing the ratchet is not punished by its own rule. Fails on any new entry or any
     growth. Touch-it-fix-it binds from the NEXT edit onward: a behavioural edit to a baselined body
     must extract it, and the only escape is the loud grammar Decision 128 already uses -- an inline
     `# raise-approved: dec-NNN <reason>` marker on the baselined entry naming a real Decision
-    header, absent which the PR fails. Seed entries: write-convergence-record (~94 effective lines,
-    +2 from this plan's assert invocation), terraform-init-retry (24), build-ducklake-artifacts (22),
-    plus any others the guard discovers at implementation time. Full extraction of
+    header, absent which the PR fails. Seed entries -- r1: deterministic-guard (13),
+    fetch-saved-plan `resolve` (9); r3: write-convergence-record (94 measured, +2 from this plan's
+    assert invocation), terraform-init-retry (24), build-ducklake-artifacts (22), and the smaller
+    bodies the guard discovers at implementation time (materialise-tfvars 5/14/4 and
+    fetch-saved-plan's three non-output bodies 8/4/1 are known to qualify -- enumerate, do not
+    guess). Full extraction of
     write-convergence-record is deliberately NOT bundled into incident remediation -- it is the
     highest-blast-radius script in the system, and it gets its own owned follow-on rec (execution
     step 13).
@@ -123,8 +150,10 @@ scope:
   action: Modify
   purpose: >-
     Facade import of the new check. validate.py is the single source of truth -- the check lands
-    here before CI can reference it (Decision 73).
-- file: tests/checks/ci_guards/test_composite_action_shell_bodies.py
+    here before CI can reference it (Decision 73). MEASURED 494 of the default 500 SLOC: the single
+    import takes it to 495, leaving 5 lines of headroom. Do not add anything else here; if it
+    crosses, decompose (Decision 128), never raise.
+- file: tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py
   action: Create
   purpose: >-
     Mirror path per Decision 131. Negative fixtures prove each of R1/R2/R3 actually FIRES (a guard
@@ -153,9 +182,6 @@ scope:
     and `review-outcome` are drawn from the SAME path selection, and the two gated call sites pass
     an explicitly empty pair. Also holds the existing recovery-workflow-topology assertions
     unchanged against the edited reconcile.yml (Decision 158, two-site property).
-- file: tests/test_checks_registry.py
-  action: Modify
-  purpose: Per-tier membership floors for the new required check name.
 - file: config/agent/data_quality/source_registry.yaml
   action: Modify
   purpose: >-
@@ -205,21 +231,27 @@ infrastructure_dependencies:
 acceptance_criteria:
 - >-
   A record-write call site whose review step RAN but produced an empty or unrecognised outcome
-  fails loudly with a distinct error BEFORE any S3 write -- it never latches red. This is the exact
-  rec-2923 shape, and it is the criterion the whole plan exists to satisfy.
+  fails loudly with a distinct error BEFORE any S3 write -- it never latches red. Stated honestly:
+  review.sh:38 already pre-writes `outcome=starved` before any fallible command (PR #812), so this
+  shape is unreachable THROUGH review.sh today. The criterion is defence-in-depth against a future
+  producer regression and against the one live path that is still reachable -- a review step that
+  fails BEFORE the pre-write executes (action resolution, missing bash, absent working-directory).
 - >-
   An explicit `revise` still latches red exactly as before (Decision 154 point 4 preserved), and
   `starved` still skips the write exactly as before (T2.39 c3 preserved). Only the undefined value
   is intercepted.
 - >-
-  The four existing skip/marker branches (refused, still-actionable, routed/pending_gated,
-  pre-apply-failure infra_error) still write their markers on every path, unaffected by the assert.
+  All FIVE existing skip/marker branches (refused, still-actionable, routed/pending_gated,
+  pre-apply-failure infra_error, and the STARVED skip) still take their own path and write their
+  markers, unaffected by the assert, which sits after the last of them.
 - >-
   At every record-write call site, `review-step-outcome` and `review-outcome` are provably drawn
   from the same path selection, and the two gated call sites pass an explicitly empty pair.
 - >-
-  A new composite `shell: bash` body that produces a consumed step output and carries inline logic
-  FAILS the fast tier, with an error message citing Decision 162.
+  A NEW composite `shell: bash` body that produces a consumed step output and carries inline logic
+  FAILS the fast tier, with an error message citing Decision 162. The two known in-tree violators
+  (deterministic-guard, fetch-saved-plan) are pinned in the baseline's r1 section and do not fail
+  the build; growing either, or adding a third, does.
 - >-
   A delegated output-producing script with no test driving it under the literal
   `bash --noprofile --norc -e -o pipefail` argv FAILS the fast tier.
@@ -247,7 +279,7 @@ verification_plan:
     Prove the class guard FIRES. Negative fixtures for R1 (inline logic in an output-producing
     body), R2 (delegated script with no literal-argv test), and R3 (new/grown baseline entry) must
     each be rejected; a positive fixture must pass.
-  command: bin/venv-python -m pytest tests/checks/ci_guards/test_composite_action_shell_bodies.py -q
+  command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -q
   expected: All tests pass, including every negative fixture asserting a specific violation string.
   fix_if: >-
     A negative fixture passes the guard -- the rule is not actually enforced and the guard is
@@ -257,12 +289,18 @@ verification_plan:
   graduation_check_id: composite-action-shell-body-rules
 - step: 2
   phase: pre-deploy
-  action: Run the new guard against the live repository tree.
-  command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as v; f=[]; v(f); assert not f, f; print('CLEAN')"
-  expected: Prints CLEAN. subagent-plan-review (the only output-producing action) is conformant post-#812.
+  action: >-
+    Run the new guard against the live repository tree with the seeded baseline in place. This is a
+    baseline-relative pass, NOT a clean tree: deterministic-guard and fetch-saved-plan are known R1
+    violators pinned in the baseline's r1 section.
+  command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as v; f=[]; v(f); assert not f, f; print('BASELINE CLEAN')"
+  expected: >-
+    Prints BASELINE CLEAN -- no unbaselined violation. subagent-plan-review is genuinely conformant
+    post-#812 (a 1-line adapter to review.sh); the other two are pinned, not passing.
   fix_if: >-
-    Violations reported. If write-convergence-record is flagged under R1 the scope rule is wrong --
-    it produces no step outputs and belongs under the R3 ratchet, not R1.
+    An unbaselined violation is reported. If it is write-convergence-record under R1 the rule is
+    mis-scoped -- it declares no `outputs:` and belongs under R3. If it is a THIRD output-producing
+    action, enumerate before pinning: the baseline seeds must be measured, never assumed.
   hermetic: true
   graduation: graduate
   graduation_check_id: composite-action-shell-bodies-clean
@@ -271,7 +309,7 @@ verification_plan:
   action: >-
     Prove the ratchet ratchets: growth of a baselined entry and addition of a new entry are both
     rejected, and only the inline Decision-citing marker overrides.
-  command: bin/venv-python -m pytest tests/checks/ci_guards/test_composite_action_shell_bodies.py::TestBaselineRatchet -q
+  command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py::TestBaselineRatchet -q
   expected: All ratchet cases pass, including rejection of a free-form (non-marker) override attempt.
   fix_if: >-
     Growth is tolerated, or a bare override works -- the baseline has become a frictionless
@@ -351,19 +389,24 @@ verification_plan:
 - step: 9
   phase: pre-deploy
   action: >-
-    Re-prove reconcile's terminal route set is intact after adding the rec-filing job (Decision 158
-    two-site property).
-  command: bin/venv-python -c "from scripts.verify_ci_workflow import _check_recovery_workflow_topology as c; c(); print('TOPOLOGY OK')"
-  expected: Prints TOPOLOGY OK -- the new job is recognised as non-terminal and applies nothing.
+    Assert the new rec-filing job's own shape directly, since the existing topology guard cannot:
+    the job carries NO `terraform apply`, rides `always() && ... == 'starved'`, and assumes the
+    branch role. The plan-critique gate established that _check_recovery_workflow_topology asserts
+    four fresh-plan reachability invariants over apply-reconcile / gated-apply-reconcile only,
+    never enumerates jobs, and would pass vacuously here -- so it proves nothing about this job and
+    must not be cited as if it did.
+  command: bin/venv-python -m pytest tests/verify_ci_workflow/test_apply_and_terraform.py -q
+  expected: >-
+    New assertions pass (no apply in the job, `always()` present in its `if:`, branch-role ARN
+    declared), AND the pre-existing recovery-topology assertions still pass unchanged -- the latter
+    as a no-regression check only, not as evidence of non-terminality.
   fix_if: >-
-    The guard reads the new job as an apply route. Do not weaken the guard; restructure the job
-    (e.g. as a separate workflow triggered on the starved signal).
-  hermetic: true
-  graduation: waive
-  graduation_waiver_reason: >-
-    Already enforced by the registered recovery-workflow-topology guard inside
-    validate_ci_workflow_guards, which runs in both presubmit tiers; graduating a second row for
-    the same assertion would duplicate an existing registry entry rather than add coverage.
+    The `if:` lacks `always()` -- the job is skipped on the failing episode it exists to record
+    (the B3 trap). A `terraform apply` appears -- the job has become an apply route and Decision
+    158's route set really is engaged; restructure it as a separate workflow instead.
+  hermetic: false
+  graduation: graduate
+  graduation_check_id: reconcile-starved-filing-job-shape
 - step: 10
   phase: pre-deploy
   action: Confirm Decision 162 landed, the index is fresh, and the header ceiling is not breached.
@@ -464,8 +507,10 @@ constraints:
   script in the system and belongs in its own separately-reviewed change (execution step 13 files
   the rec).
 - >-
-  The assert MUST sit after the four existing skip/marker branches and immediately before the
-  green/red write. Making it a first step is a rejected design, not a refactoring preference.
+  The assert MUST sit after ALL FIVE existing skip/marker branches -- refused, still-actionable,
+  routed, pre-apply-failure, STARVED -- and immediately before the green/red write. Making it a
+  first step is a rejected design, not a refactoring preference. The count is five, verified
+  against the file at lines 102/106/110/145/180 with the write at 184.
 - >-
   An explicit `revise` must keep latching red (Decision 154 point 4) and `starved` must keep
   skipping the write (T2.39 c3). Only the undefined value changes behaviour.
@@ -493,7 +538,34 @@ context:
   128, 130, 150, 149, 105, 158, 156, 155, 86, 127, 134, 72, 73.
 - >-
   "gates: decision-scout=FLAGS_FOUND (2 rounds, second re-dispatched against the revised
-  strict-consumer approach); plan-critique=<verdict> after <N> round(s)"
+  strict-consumer approach); plan-critique=REVISE round 1 (5 blockers, all adopted), round 2 pending"
+- >-
+  THE FULL TWO-SIDED CONTRACT, including the one case that REMOVES an existing red latch. Against
+  the four real call sites: PROCEED -> success/proceed; REVISE -> failure/revise; STARVED ->
+  failure/starved; guard-routed -> skipped/""; both gated-apply sites run no review step -> ""/"".
+  `cancelled` is safe -- a cancelled job never reaches the record-write step. The genuine gap the
+  plan-critique gate named: a review step that fails BEFORE review.sh's pre-write executes (action
+  resolution failure, missing bash, absent working-directory) yields failure + "", so the assert
+  fires, the step exits 1, and NO record is written where red was previously latched. That is
+  intended -- an infrastructure failure that never reached the reviewer is not evidence that
+  infrastructure is in an unknown state -- but it is the ONLY case where this change removes a red
+  latch, so it is named here rather than left as a corollary of the anti-masking account.
+- >-
+  The two gated call sites already pass no `review-outcome` at all and run no review step, so the
+  new input's "" default satisfies the contract without any edit. Making the empty pair explicit is
+  for VP7 legibility -- so the pairing invariant is asserted rather than inferred from absence --
+  NOT a correctness fix. Do not let a reviewer read it as one.
+- >-
+  WHAT THE PLAN-CRITIQUE GATE CAUGHT, recorded because it changed the plan materially. Five
+  blockers, all verified against the real tree before acting: (B1) R1 has TWO in-tree violators
+  (deterministic-guard, fetch-saved-plan), so the original VP2 `expected: Prints CLEAN` was
+  unsatisfiable and would have failed CI via validate_vp_replay -- resolved by the baseline's r1
+  section rather than by extending the blast radius mid-remediation; (B2) tests/test_checks_registry.py
+  sits at exactly its 643 raise-approved budget, so the membership-floor edit was a guaranteed
+  SLOC failure -- scope row deleted, following the unfloored sibling precedent; (B3) the rec-filing
+  job's bare `needs:` would skip it on precisely the failing episode it serves; (B4) VP9 cited a
+  guard that passes vacuously on the new job -- replaced with real assertions; (B5) the test path
+  violated the mirror convention (missing `validate_` prefix), which test_coverage_checker enforces.
 - >-
   ORIGIN AND STANDING. rec-2923 is the sole open CI-RCA rec and hard-blocks /plan. Its reviewer-path
   defect was already fixed by PR #812 (commit 0726593): review.sh now clears the inherited errexit
@@ -632,17 +704,23 @@ execution_steps:
 - >-
   Create scripts/checks/ci_guards/validate_composite_action_shell_bodies.py implementing R1/R2/R3
   with Decision-162-citing failure messages, plus config/composite_action_body_baseline.yaml seeded
-  at the post-edit state. Register in scripts/checks/registry.py (--pre and full) and
-  scripts/validate.py; update tests/test_checks_registry.py membership floors.
+  at the post-edit state with its r1 and r3 sections MEASURED, not assumed. Register in
+  scripts/checks/registry.py (--pre and full) and scripts/validate.py. Do NOT add the check to
+  tests/test_checks_registry.py's per-tier membership floors: that file sits at exactly its 643
+  raise-approved budget, the addition is optional, and the sibling this guard mirrors
+  (validate_composite_action_manifests) is not floored either.
 - >-
-  Create tests/checks/ci_guards/test_composite_action_shell_bodies.py with negative fixtures for
+  Create tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py with negative fixtures for
   each rule and TestBaselineRatchet for growth, new-entry, and marker-override cases.
 - >-
   Add the `reconcile_starved` source to config/agent/data_quality/source_registry.yaml; check
   validate_test_count_coupling's coupling and satisfy it if it fires.
 - >-
-  Add the rec-2664 filing job to reconcile.yml (non-terminal, branch role, gated on starved) and the
-  `review_outcome` job output on apply-reconcile. Re-run the topology guard before proceeding.
+  Add the rec-2664 filing job to reconcile.yml -- non-terminal, branch role, and gated on
+  `always() && needs.apply-reconcile.outputs.review_outcome == 'starved'` (the bare `needs:` form is
+  skipped on the failing episode it serves) -- plus the `review_outcome` job output on
+  apply-reconcile. Add the job-shape assertions to tests/verify_ci_workflow/test_apply_and_terraform.py
+  in the same step, since the existing topology guard passes vacuously on this job.
 - >-
   Author Decision 162 in docs/DECISIONS.md (re-checking the max header first), regenerate
   docs/decisions-index.json via `--write`, create docs/contracts/composite-action-shape.yaml,
@@ -656,8 +734,10 @@ execution_steps:
   rec-2923 --status closed --resolution "<live closure proof>"` then
   `stamp_fixed_by_sha('rec-2923', '0726593d465f3772c004dd1bbb8585f6491b5376')`; (b) file the
   follow-on rec to teach rec-autoclose an explicit fixed-by override; (c) file the owned follow-on
-  rec to extract write-convergence-record's inline body under the new R1 shape, citing this plan and
-  Decision 162. rec-2664 closes via the Resolves trailer.
+  rec to extract the baselined bodies under the new R1 shape, citing this plan and Decision 162 --
+  scoped to the r1 entries FIRST (deterministic-guard, fetch-saved-plan: known instances of the
+  exact rec-2923 class), then the r3 entries, with write-convergence-record last as the largest and
+  highest-blast-radius. rec-2664 closes via the Resolves trailer.
 - 'Report: what was implemented, verification results, and the state of both recs.'
 work_areas: []
 rollback: >-
