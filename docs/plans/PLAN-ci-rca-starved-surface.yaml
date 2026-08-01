@@ -79,10 +79,12 @@ scope:
     `permissions: id-token: write`, a checkout, `aws-actions/configure-aws-credentials`, a Python
     env, and a `--file-rec` call satisfying get_rec_write_guidance() semantics. It files a durable
     rec via
-    `ops_data_portal --file-rec`, assuming `agent-platform-github-ci-branch` -- the only CI role
-    holding the DuckLakeInvokeCI writer grant; github_ci_apply has none, so the filing must NOT run
-    in the apply job. The job applies nothing and is no part of the terminal route set (Decision
-    158); VP step 9 re-proves the topology guard against the edited workflow.
+    `ops_data_portal --file-rec`, assuming `agent-platform-github-ci-branch`, which holds the
+    DuckLakeInvokeCI writer grant (oidc.tf:524). The operative fact is that github_ci_apply holds NO
+    lambda invoke grant at all, so the filing must NOT run in the apply job -- the branch role is
+    not the UNIQUE holder (github_ci_pr carries a DuckLakeInvokeCI statement too, oidc.tf:712), it
+    is the correct one for this dispatch-on-main path. The job applies nothing and is no part of the
+    terminal route set (Decision 158); VP step 9 asserts its shape directly.
 - file: .github/actions/subagent-plan-review/review.sh
   action: Modify
   purpose: >-
@@ -252,8 +254,10 @@ acceptance_criteria:
   is intercepted.
 - >-
   All FIVE existing skip/marker branches (refused, still-actionable, routed/pending_gated,
-  pre-apply-failure infra_error, and the STARVED skip) still take their own path and write their
-  markers, unaffected by the assert, which sits after the last of them.
+  pre-apply-failure infra_error, and the STARVED skip) still take their own path, unaffected by the
+  assert, which sits after the last of them. Only two of the five actually write a marker (routed
+  and pre-apply-failure perform read-modify-writes); refused, still-actionable and STARVED echo and
+  exit. The invariant is "each branch still takes its own path", not "all five write markers".
 - >-
   At every record-write call site, `review-step-outcome` and `review-outcome` are provably drawn
   from the same path selection, and the two gated call sites pass an explicitly empty pair.
@@ -570,8 +574,22 @@ context:
   128, 130, 150, 149, 105, 158, 156, 155, 86, 127, 134, 72, 73.
 - >-
   "gates: decision-scout=FLAGS_FOUND (2 rounds, second re-dispatched against the revised
-  strict-consumer approach); plan-critique=REVISE rounds 1-2 (5 then 4 findings, all adopted),
-  round 3 pending"
+  strict-consumer approach); plan-critique=PROCEED after 3 round(s) -- REVISE rounds 1 and 2 (5
+  then 4 findings, all adopted), PROCEED round 3"
+- >-
+  ROUND 3 POLISH, carried here rather than escalated (the gate returned PROCEED and directed these
+  to be handled inline at implementation time). (a) VP5 is also `graduate` against a pre-existing
+  module, so the node_id constraint's general rule reaches it even though the enumeration names
+  only VP6/VP7/VP9 -- harmless either way, because its command also names
+  test_convergence_review_outcome_contract.py, which is absent on origin/main and makes the revert
+  leg fail regardless; narrow it anyway for consistency. (b) The new archive_transcripts.sh step
+  needs its own `working-directory:` -- composite steps do NOT inherit the previous step's, so the
+  "transcripts sit in the action's working directory, readable by the next step" claim is only true
+  if it is set explicitly. This is a real trap, not a style point. (c) R3 as specified would
+  baseline even a CONFORMANT 1-line thin adapter, including the archive_transcripts.sh delegation
+  this plan adds -- add an explicit thin-adapter exemption rather than pinning the very shape R1
+  exists to encourage. (d) Nine new registry rows is within observed norms (recent plans contributed
+  11, 10, 9, 8), so the added --pre differential cost is not a new budget risk.
 - >-
   ROUND 2 OF PLAN-CRITIQUE caught a second unsatisfiable-VP-field defect, structurally the same
   class as round 1's B1: four `graduation: graduate` dispositions the differential admission gate
