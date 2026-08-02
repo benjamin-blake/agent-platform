@@ -6,6 +6,7 @@ plus the recovery-workflow-topology guard (rec-2847 part (c)).
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from scripts.verify_ci_workflow import (
     _check_apply_rca_fallback,
     _check_recovery_workflow_topology,
     _check_terraform_apply_concurrency,
+    _load,
 )
 
 # ---------------------------------------------------------------------------
@@ -357,3 +359,130 @@ class TestRecoveryWorkflowTopologyFailPath:
             mock_load.return_value = data
             with pytest.raises(AssertionError, match="mutually exclusive"):
                 _check_recovery_workflow_topology()
+
+
+# ---------------------------------------------------------------------------
+# Decision 162 / PLAN-ci-rca-starved-surface: the strict review-outcome consumer's call-site
+# pairing invariant (VP7), and the rec-2664 filing job's own shape (VP9) -- neither is covered by
+# _check_recovery_workflow_topology, which enumerates four fresh-plan reachability invariants over
+# apply-reconcile/gated-apply-reconcile only and would pass vacuously on both concerns here. These
+# assertions load and parse the REAL workflow files directly (never a synthetic fixture) -- the
+# call-site wiring and the new job are both load-bearing exactly as landed in this repo.
+# ---------------------------------------------------------------------------
+
+
+class TestReviewOutcomeCallsitePairing:
+    """At every record-write call site, review-step-outcome and review-outcome are provably drawn
+    from the SAME path selection, and the two gated call sites pass an explicitly empty pair.
+    """
+
+    def test_apply_sandbox_pairs_from_the_same_review_step(self) -> None:
+        data = _load(".github/workflows/terraform-apply-sandbox.yml")
+        step = next(s for s in data["jobs"]["apply-sandbox"]["steps"] if s.get("id") == "record_write")
+        assert step["with"]["review-outcome"] == "${{ steps.review.outputs.outcome }}"
+        assert step["with"]["review-step-outcome"] == "${{ steps.review.outcome }}"
+
+    def test_sandbox_gated_apply_passes_explicit_empty_pair(self) -> None:
+        data = _load(".github/workflows/terraform-apply-sandbox.yml")
+        step = next(s for s in data["jobs"]["gated-apply"]["steps"] if s.get("id") == "record_write")
+        assert step["with"].get("review-step-outcome", "") == ""
+        assert "review-outcome" not in step["with"]
+
+    def test_apply_reconcile_pairs_from_the_same_resolved_aggregator(self) -> None:
+        data = _load(".github/workflows/reconcile.yml")
+        step = next(s for s in data["jobs"]["apply-reconcile"]["steps"] if s.get("id") == "record_write")
+        assert step["with"]["review-outcome"] == "${{ steps.resolved.outputs.review_outcome }}"
+        assert step["with"]["review-step-outcome"] == "${{ steps.resolved.outputs.review_step_outcome }}"
+
+    def test_gated_apply_reconcile_passes_explicit_empty_pair(self) -> None:
+        data = _load(".github/workflows/reconcile.yml")
+        step = next(s for s in data["jobs"]["gated-apply-reconcile"]["steps"] if s.get("id") == "record_write")
+        assert step["with"].get("review-step-outcome", "") == ""
+        assert "review-outcome" not in step["with"]
+
+    def test_resolved_aggregator_pairs_review_step_outcome_from_the_same_branch(self) -> None:
+        """The decision-scout catch: a naive `steps.review.outcome` reused across all three arms
+        would pair the SAVED-PLAN review's step outcome with the FRESH-REPLAN path's value.
+        """
+        data = _load(".github/workflows/reconcile.yml")
+        resolved = next(s for s in data["jobs"]["apply-reconcile"]["steps"] if s.get("id") == "resolved")
+        body = resolved["run"]
+        # The two needs_fresh=true arms pair with review_fresh; the else arm pairs with review.
+        assert body.count("review_step_outcome=${{ steps.review_fresh.outcome }}") == 2
+        assert body.count("review_step_outcome=${{ steps.review.outcome }}") == 1
+        assert "review_outcome=${{ steps.review_fresh.outputs.outcome }}" in body
+        assert "review_outcome=${{ steps.review.outputs.outcome }}" in body
+
+    def test_apply_reconcile_declares_review_outcome_job_output(self) -> None:
+        data = _load(".github/workflows/reconcile.yml")
+        outputs = data["jobs"]["apply-reconcile"]["outputs"]
+        assert outputs["review_outcome"] == "${{ steps.resolved.outputs.review_outcome }}"
+
+
+class TestReconcileStarvedFilingJobShape:
+    """rec-2664 / Decision 162: assert the new job's own shape directly -- it carries NO
+    `terraform apply`, rides `always() && ... == 'starved'`, and assumes the branch role.
+    """
+
+    @pytest.fixture()
+    def job(self) -> dict[str, Any]:
+        data = _load(".github/workflows/reconcile.yml")
+        return data["jobs"]["file-reconcile-starved-rec"]
+
+    def test_job_exists(self, job: dict[str, Any]) -> None:
+        assert job is not None
+
+    def test_no_terraform_apply_in_any_step(self, job: dict[str, Any]) -> None:
+        for step in job["steps"]:
+            assert "terraform apply" not in (step.get("run") or "")
+
+    def test_if_carries_always_and_the_starved_condition(self, job: dict[str, Any]) -> None:
+        """The B3 trap the plan-critique gate caught: a bare `needs:` dependant is SKIPPED on
+        exactly the failing episode this job exists to record (apply-reconcile concludes
+        `failure` on STARVED, since review.sh exits 1).
+        """
+        condition = str(job["if"])
+        assert "always()" in condition
+        assert "needs.apply-reconcile.outputs.review_outcome == 'starved'" in condition
+
+    def test_needs_apply_reconcile_explicitly(self, job: dict[str, Any]) -> None:
+        assert "apply-reconcile" in job["needs"]
+
+    def test_assumes_the_branch_role(self, job: dict[str, Any]) -> None:
+        text = "\n".join(str(step) for step in job["steps"])
+        assert "agent-platform-github-ci-branch" in text
+
+    def test_files_a_rec_via_the_portal(self, job: dict[str, Any]) -> None:
+        text = "\n".join(step.get("run") or "" for step in job["steps"])
+        assert "file_rec" in text
+        assert "reconcile_starved" in text
+
+    def test_acceptance_passes_the_live_portal_linter(self, job: dict[str, Any]) -> None:
+        """LOAD-BEARING (code-review round 1, High #1). The portal registers acceptance_lint as a
+        WRITE-TIME validator, so a prose acceptance value makes file_rec RAISE and this job file
+        NOTHING on precisely the starved episode it exists to record -- a failure that would only
+        ever surface during a live incident. Extract the literal the job actually passes and run
+        it through the REAL linter, rather than grepping for the string 'file_rec' and inferring
+        the write would succeed.
+        """
+        from scripts.executor.acceptance_lint import lint_acceptance_command
+
+        text = "\n".join(step.get("run") or "" for step in job["steps"])
+        match = re.search(r'"acceptance":\s*\(\s*((?:\s*"[^"]*"\s*)+)\)', text)
+        assert match, "could not locate the acceptance literal in the filing job's body"
+        acceptance = "".join(re.findall(r'"([^"]*)"', match.group(1)))
+        assert acceptance.strip(), "acceptance literal resolved empty"
+
+        ok, error = lint_acceptance_command(acceptance)
+        assert ok, f"acceptance value would be REJECTED by the portal at write time: {error}"
+
+    def test_acceptance_is_not_prose(self, job: dict[str, Any]) -> None:
+        """A defence-in-depth companion to the linter check: the linter only runs `bash -n`, so a
+        prose sentence that happens to be bash-parseable would slip through it.
+        """
+        text = "\n".join(step.get("run") or "" for step in job["steps"])
+        match = re.search(r'"acceptance":\s*\(\s*((?:\s*"[^"]*"\s*)+)\)', text)
+        assert match
+        acceptance = "".join(re.findall(r'"([^"]*)"', match.group(1)))
+        assert not acceptance.startswith("Re-dispatch"), "acceptance regressed to the prose form"
+        assert any(tok in acceptance for tok in ("aws ", "bin/venv-python", "grep ", "test ")), acceptance

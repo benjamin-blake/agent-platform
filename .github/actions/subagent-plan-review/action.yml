@@ -47,3 +47,18 @@ runs:
       # outcome; do NOT re-inline this logic. review.sh's own exit status propagates as this
       # step's status (last command of the body).
       run: bash "${{ github.action_path }}/review.sh"
+
+    - name: Archive review transcripts (best-effort, rec-2923 preventive action)
+      # ALWAYS runs, regardless of the review step's outcome -- this is what makes a starved
+      # transcript recoverable for investigation. archive_transcripts.sh is TOTAL (always exits
+      # 0), so it can never change outputs.outcome above; `if: always()` is used rather than
+      # `continue-on-error` (a documented GitHub grey area on composite steps).
+      if: always()
+      shell: bash
+      # Composite steps do NOT inherit the previous step's working-directory -- review.json /
+      # review_retry.json were written in inputs.working-directory by the step above, so this
+      # step must set it explicitly or it looks in the wrong directory and archives nothing.
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_ID: ${{ github.run_id }}
+      run: bash "${{ github.action_path }}/archive_transcripts.sh"

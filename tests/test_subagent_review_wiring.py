@@ -34,6 +34,7 @@ import yaml
 ROOT = Path(__file__).parent.parent
 ACTION_DIR = ROOT / ".github" / "actions" / "subagent-plan-review"
 REVIEW_SH = ACTION_DIR / "review.sh"
+ARCHIVE_SH = ACTION_DIR / "archive_transcripts.sh"
 ACTION_YML = ACTION_DIR / "action.yml"
 VERDICT_SCRIPT = ROOT / "scripts" / "ci" / "review_verdict.py"
 
@@ -193,6 +194,11 @@ class _Harness:
     def retry_transcript(self) -> Path:
         return self.workdir / "review_retry.json"
 
+    @property
+    def step_summary_text(self) -> str:
+        path = Path(self.env["GITHUB_STEP_SUMMARY"])
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
 
 @pytest.fixture()
 def harness(tmp_path: Path, verdict_exit_codes: dict[str, int]) -> _Harness:
@@ -219,6 +225,7 @@ def harness(tmp_path: Path, verdict_exit_codes: dict[str, int]) -> _Harness:
     env["CONTEXT_DESCRIPTION"] = "the sandbox auto-apply pipeline"
     env["WORKSPACE_ROOT"] = str(ROOT)
     env["GITHUB_OUTPUT"] = str(tmp_path / "github_output")
+    env["GITHUB_STEP_SUMMARY"] = str(tmp_path / "step_summary")
     env["CLAUDE_INVOCATION_LOG"] = str(tmp_path / "claude_invocations")
     env["NETWORK_CALL_LOG"] = str(tmp_path / "network_calls")
     env["VERDICT_COUNTER"] = str(tmp_path / "verdict_counter")
@@ -427,3 +434,152 @@ class TestActionAdapter:
     def test_script_clears_inherited_errexit(self):
         """The one line that makes the whole no-errexit design hold."""
         assert "\nset +e\n" in REVIEW_SH.read_text(encoding="utf-8")
+
+    def test_second_step_delegates_to_archive_transcripts_sh(self, manifest):
+        steps = manifest["runs"]["steps"]
+        assert len(steps) == 2
+        assert "archive_transcripts.sh" in steps[1]["run"]
+
+    def test_second_step_runs_always(self, manifest):
+        assert manifest["runs"]["steps"][1]["if"] == "always()"
+
+    def test_second_step_sets_its_own_working_directory(self, manifest):
+        """Composite steps do NOT inherit the previous step's working-directory -- a regression
+        here silently strands the archival step in the wrong directory (Round-3 polish (b)).
+        """
+        assert manifest["runs"]["steps"][1]["working-directory"] == "${{ inputs.working-directory }}"
+
+
+class TestStarvedMarker:
+    """Decision 155 marker shape (mirrors the DCG-03 orphan-guard skip marker, Decision 149):
+    distinct, greppable, and mirrored to $GITHUB_STEP_SUMMARY on every STARVED exit path, so an
+    accumulating STARVED rate is operator-observable rather than buried in a per-run job log.
+    """
+
+    def test_missing_token_prints_marker_and_summary(self, harness):
+        harness.set_verdicts("PROCEED")
+        harness.env["CLAUDE_CODE_OAUTH_TOKEN"] = ""
+        result = harness.run()
+        assert "[SUBAGENT-REVIEW] STARVED" in result.stderr
+        assert "[SUBAGENT-REVIEW] STARVED" in harness.step_summary_text
+
+    def test_guard_digest_failure_prints_marker_and_summary(self, harness):
+        harness.set_verdicts("PROCEED")
+        harness.env["PY3_SHIM_GUARD_FAIL"] = "1"
+        result = harness.run()
+        assert "[SUBAGENT-REVIEW] STARVED" in result.stderr
+        assert "[SUBAGENT-REVIEW] STARVED" in harness.step_summary_text
+
+    def test_starved_twice_prints_marker_and_summary(self, harness):
+        harness.set_verdicts("STARVED", "STARVED")
+        result = harness.run()
+        assert "[SUBAGENT-REVIEW] STARVED" in result.stderr
+        assert "[SUBAGENT-REVIEW] STARVED" in harness.step_summary_text
+
+    def test_marker_never_changes_the_outcome_or_exit_status(self, harness):
+        harness.set_verdicts("STARVED", "STARVED")
+        result = harness.run()
+        assert result.returncode != 0
+        assert harness.outcome == "starved"
+
+    def test_marker_absent_on_proceed(self, harness):
+        """The marker is STARVED-specific -- a clean PROCEED must not print it."""
+        harness.set_verdicts("PROCEED")
+        result = harness.run()
+        assert "[SUBAGENT-REVIEW] STARVED" not in result.stderr
+        assert harness.step_summary_text == ""
+
+    def test_marker_absent_on_revise(self, harness):
+        """REVISE is a substantive rejection, not starvation -- no STARVED marker."""
+        harness.set_verdicts("REVISE")
+        result = harness.run()
+        assert "[SUBAGENT-REVIEW] STARVED" not in result.stderr
+
+    def test_no_crash_when_step_summary_unset(self, harness):
+        """GITHUB_STEP_SUMMARY absent (e.g. a non-Actions harness) must not abort the script --
+        the marker still prints to stderr.
+        """
+        harness.set_verdicts("STARVED", "STARVED")
+        del harness.env["GITHUB_STEP_SUMMARY"]
+        result = harness.run()
+        assert result.returncode != 0
+        assert "[SUBAGENT-REVIEW] STARVED" in result.stderr
+
+
+_AWS_SUCCESS_SHIM = "#!/usr/bin/env bash\nexit 0\n"
+_AWS_FAIL_SHIM = '#!/usr/bin/env bash\necho "aws: simulated failure" >&2\nexit 1\n'
+
+
+class TestArchivalTotality:
+    """archive_transcripts.sh (rec-2923 preventive action) is TOTAL: always exits 0 regardless of
+    outcome, and its own failure path prints a distinct marker -- never a bare `|| true`.
+    """
+
+    def _run(
+        self, tmp_path: Path, *, aws: str, transcripts: tuple[str, ...] = ("review.json",)
+    ) -> tuple[subprocess.CompletedProcess[str], str]:
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+        for name in transcripts:
+            (workdir / name).write_text("{}", encoding="utf-8")
+
+        env = {"PATH": "/usr/bin:/bin"}
+        if aws != "absent":
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            _write_shim(bin_dir / "aws", _AWS_SUCCESS_SHIM if aws == "success" else _AWS_FAIL_SHIM)
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+        env["RUN_ID"] = "999"
+        env["ARCHIVE_BUCKET"] = "test-bucket"
+        env["GITHUB_STEP_SUMMARY"] = str(tmp_path / "step_summary")
+
+        result = subprocess.run(
+            [*GITHUB_COMPOSITE_BASH, str(ARCHIVE_SH)],
+            cwd=workdir,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        summary_path = Path(env["GITHUB_STEP_SUMMARY"])
+        summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+        return result, summary
+
+    def test_aws_absent_exits_zero_with_marker(self, tmp_path: Path) -> None:
+        result, summary = self._run(tmp_path, aws="absent")
+        assert result.returncode == 0, result.stderr
+        assert "[SUBAGENT-REVIEW] transcript archival FAILED" in result.stderr
+        assert "aws CLI not found" in result.stderr
+        assert "[SUBAGENT-REVIEW] transcript archival FAILED" in summary
+
+    def test_aws_failing_exits_zero_with_marker(self, tmp_path: Path) -> None:
+        result, summary = self._run(tmp_path, aws="fail")
+        assert result.returncode == 0, result.stderr
+        assert "[SUBAGENT-REVIEW] transcript archival FAILED" in result.stderr
+        assert "aws s3 cp failed" in result.stderr
+        assert "[SUBAGENT-REVIEW] transcript archival FAILED" in summary
+
+    def test_aws_succeeding_exits_zero_no_failure_marker(self, tmp_path: Path) -> None:
+        result, _summary = self._run(tmp_path, aws="success")
+        assert result.returncode == 0, result.stderr
+        assert "transcript archival FAILED" not in result.stderr
+
+    def test_no_transcripts_present_exits_zero(self, tmp_path: Path) -> None:
+        result, _summary = self._run(tmp_path, aws="success", transcripts=())
+        assert result.returncode == 0, result.stderr
+        assert "nothing to archive" in result.stdout
+
+    def test_partial_failure_both_files_attempted(self, tmp_path: Path) -> None:
+        """A failure on one transcript must not abort the loop before the other is attempted."""
+        result, _summary = self._run(tmp_path, aws="fail", transcripts=("review.json", "review_retry.json"))
+        assert result.returncode == 0, result.stderr
+        assert result.stderr.count("aws s3 cp failed") == 2
+
+    def test_script_is_total_by_construction(self) -> None:
+        """No bare `|| true` in actual code (the phrase appears in prose comments only) --
+        every failure path prints its own distinct marker instead.
+        """
+        code_lines = [line for line in ARCHIVE_SH.read_text(encoding="utf-8").splitlines() if not line.strip().startswith("#")]
+        assert not any("|| true" in line for line in code_lines)
+        assert "\nset +e\n" in ARCHIVE_SH.read_text(encoding="utf-8")

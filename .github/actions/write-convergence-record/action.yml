@@ -52,6 +52,17 @@ inputs:
     description: "'starved' skips the write without overwriting (reviewer-infra failure, not a plan rejection or a genuine apply failure -- Decision 55 anti-masking)."
     required: false
     default: ""
+  review-step-outcome:
+    description: >-
+      Decision 162 / rec-2923. The calling job's `steps.review.outcome` (GitHub's own per-step
+      conclusion, success|failure|skipped|cancelled) -- default "" means "no review step ran in
+      this job" (the guard-routed and gated-apply call sites). Paired with review-outcome and
+      enforced by assert_review_outcome.sh BEFORE any write: when a review step ran,
+      review-outcome must be exactly one of proceed|revise|starved; when none ran, review-outcome
+      must be empty. Closes the false-red path where a review step's outcome output is left
+      undefined and this action's fall-through green/red write silently misreads it.
+    required: false
+    default: ""
   plan-sha-mode:
     description: >-
       'event-gated' computes plan_sha via sha256sum only when plan.bin exists (and, for the
@@ -88,6 +99,7 @@ runs:
         PRE_APPLY_FAILURE: ${{ inputs.pre-apply-failure }}
         FAILED_STEP: ${{ inputs.failed-step }}
         REVIEW_OUTCOME: ${{ inputs.review-outcome }}
+        REVIEW_STEP_OUTCOME: ${{ inputs.review-step-outcome }}
         APPLY_OUTCOME: ${{ inputs.apply-outcome }}
         SHA: ${{ inputs.sha }}
         PLAN_SHA_MODE: ${{ inputs.plan-sha-mode }}
@@ -180,6 +192,15 @@ runs:
         if [ "$REVIEW_OUTCOME" = "starved" ]; then
           echo "Subagent reviewer STARVED (max-turns/no-verdict/API-exhausted after the same-budget retry): NOT overwriting the convergence record -- this is a reviewer-infra failure, not a plan rejection or a genuine apply failure (Decision 55 anti-masking, T2.39 c3)."
           exit 0
+        fi
+        # Decision 162 / rec-2923: the strict consumer. Sits AFTER all five prior skip/marker
+        # branches (refused/still-actionable/routed/pre-apply-failure/STARVED above) and
+        # IMMEDIATELY BEFORE the green/red write below -- a starved episode can never be
+        # hard-failed by a contract bug here, and every marker write above stays reachable. An
+        # explicit conditional, never a bare call relying on the ambient errexit (inherited-errexit
+        # dependence on a silently-non-running control path is the very defect this closes).
+        if ! bash "$GITHUB_ACTION_PATH/assert_review_outcome.sh"; then
+          exit 1
         fi
         if [ "$APPLY_OUTCOME" = "success" ]; then
           STATUS="green"

@@ -2979,3 +2979,97 @@ entries:
         assert len(esb01) == 1, f'expected exactly 1 ESB-01 precondition, found {len(esb01)}'
         assert 'CD.43' in esb01[0], 'the ESB-01 precondition must point at the CD holding the criteria'
         print('OK layer-2 preconditions cover ESB-01/ESB-04/ESB-06; found', sorted(set(found)))
+  - check_id: composite-action-shell-body-rules
+    primitive_slot: test_selector
+    guard_target: scripts/checks/ci_guards/validate_composite_action_shell_bodies.py
+    guard_symbol: validate_composite_action_shell_bodies
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py
+  - check_id: composite-action-shell-bodies-clean
+    primitive_slot: command_output_matches
+    guard_target: config/composite_action_body_baseline.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as v; f=[]; v(f); assert not f, f; print('BASELINE CLEAN')"
+      expected: 'BASELINE CLEAN$'
+      use_regex: true
+  - check_id: composite-action-baseline-ratchet-fails-on-growth
+    primitive_slot: test_selector
+    guard_target: config/composite_action_body_baseline.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py::TestBaselineRatchet
+  - check_id: convergence-review-outcome-strict-enum
+    primitive_slot: test_selector
+    guard_target: .github/actions/write-convergence-record/assert_review_outcome.sh
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_convergence_review_outcome_contract.py
+  - check_id: convergence-assert-ordering-preserves-markers
+    primitive_slot: command_output_matches
+    guard_target: .github/actions/write-convergence-record/action.yml
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "import pathlib\nt = pathlib.Path('.github/actions/write-convergence-record/action.yml').read_text()\ni_starved = t.index('REVIEW_OUTCOME\" = \"starved\"')\ni_assert = t.index('if ! bash \"$GITHUB_ACTION_PATH/assert_review_outcome.sh\"')\ni_write = t.index('APPLY_OUTCOME\" = \"success\"')\nassert i_starved < i_assert < i_write, (i_starved, i_assert, i_write)\nprint('ORDER OK')"
+      expected: 'ORDER OK'
+  - check_id: subagent-review-starved-marker-and-archival
+    primitive_slot: test_selector
+    guard_target: .github/actions/subagent-plan-review/review.sh
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_subagent_review_wiring.py::TestStarvedMarker
+  - check_id: convergence-review-outcome-callsite-pairing
+    primitive_slot: test_selector
+    guard_target: .github/workflows/reconcile.yml
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/verify_ci_workflow/test_apply_and_terraform.py::TestReviewOutcomeCallsitePairing
+  - check_id: reconcile-starved-source-registered
+    primitive_slot: command_output_matches
+    guard_target: config/agent/data_quality/source_registry.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "from scripts.executor.rec_write_guidance import validate_source; validate_source('reconcile_starved'); print('OK')"
+      expected: 'OK'
+  - check_id: reconcile-starved-filing-job-shape
+    primitive_slot: test_selector
+    guard_target: .github/workflows/reconcile.yml
+    guard_symbol: null
+    plan_slug: ci-rca-starved-surface
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/verify_ci_workflow/test_apply_and_terraform.py::TestReconcileStarvedFilingJobShape

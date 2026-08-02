@@ -37,8 +37,21 @@ set +e
 # reaching the right branch.
 echo "outcome=starved" >> "$GITHUB_OUTPUT"
 
+# Decision 155 marker shape (mirrors the DCG-03 orphan-guard skip marker): distinct, greppable,
+# and mirrored to $GITHUB_STEP_SUMMARY when set, so an accumulating STARVED rate is
+# operator-observable rather than buried in a per-run job log. Never changes the outcome or exit
+# status this script has already decided -- pure observability.
+_starved_marker() {
+  local reason="$1"
+  local msg="[SUBAGENT-REVIEW] STARVED: ${reason}"
+  echo "$msg" >&2
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '\n## Subagent review STARVED\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+  fi
+}
+
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
-  echo "Subagent review unavailable (no token); failing closed." >&2
+  _starved_marker "no CLAUDE_CODE_OAUTH_TOKEN available; failing closed before any reviewer invocation."
   echo "outcome=starved" >> "$GITHUB_OUTPUT"
   exit 1
 fi
@@ -47,7 +60,7 @@ if ! command -v claude &> /dev/null; then
 fi
 
 if ! python3 "${WORKSPACE_ROOT}/scripts/terraform_apply_guard.py" --digest plan.json > plan_digest.txt; then
-  echo "Failed to build the guard digest; failing closed (infra failure, not a plan rejection)." >&2
+  _starved_marker "guard digest build failed (infra failure, not a plan rejection)."
   echo "outcome=starved" >> "$GITHUB_OUTPUT"
   exit 1
 fi
@@ -79,6 +92,7 @@ case "$VERDICT" in
     ;;
   *)
     echo "Subagent STARVED (max-turns/no-verdict/API-exhausted) after the same-budget retry; blocking apply WITHOUT latching the convergence record red." >&2
+    _starved_marker "max-turns/no-verdict/API-exhausted after the same-budget retry (T2.39 c2); apply blocked, convergence record NOT overwritten (Decision 55 anti-masking)."
     echo "outcome=starved" >> "$GITHUB_OUTPUT"
     exit 1
     ;;
