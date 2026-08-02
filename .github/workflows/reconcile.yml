@@ -189,6 +189,9 @@ jobs:
       # RECONCILE_FRESH_PLAN_ARTIFACT in that case instead of fetch-saved-plan.
       fresh_plan_pending: ${{ steps.upload_fresh_plan_sha256.outcome == 'success' }}
       fresh_plan_sha256: ${{ steps.upload_fresh_plan_sha256.outputs.sha256 }}
+      # Decision 162 / rec-2664: consumed by the file-reconcile-starved-rec job below to detect a
+      # STARVED episode without re-deriving the resolved triple a second time.
+      review_outcome: ${{ steps.resolved.outputs.review_outcome }}
     permissions:
       id-token: write
       contents: read
@@ -515,6 +518,13 @@ jobs:
         # triple the record-write step below consumes -- so write-convergence-record's contract
         # (skip on routed, green iff apply succeeded) is satisfied identically regardless of which
         # path this run actually took.
+        #
+        # Decision 162 / rec-2923: review_step_outcome is emitted from the SAME branch as
+        # review_outcome in every arm below -- `steps.review_fresh.outcome` pairs with
+        # `steps.review_fresh.outputs.outcome`, `steps.review.outcome` pairs with
+        # `steps.review.outputs.outcome`. A naive `steps.review.outcome` reused across all three
+        # arms would pair the SAVED-PLAN review's step outcome with the FRESH-REPLAN path's value
+        # on the two needs_fresh=true arms -- validating the wrong pair.
         if: always()
         run: |
           NEEDS_FRESH="${{ steps.route.outputs.needs_fresh_plan }}"
@@ -524,10 +534,12 @@ jobs:
               echo "routed=true" >> "$GITHUB_OUTPUT"
               echo "apply_outcome=skipped" >> "$GITHUB_OUTPUT"
               echo "review_outcome=" >> "$GITHUB_OUTPUT"
+              echo "review_step_outcome=${{ steps.review_fresh.outcome }}" >> "$GITHUB_OUTPUT"
             else
               echo "routed=false" >> "$GITHUB_OUTPUT"
               echo "apply_outcome=${{ steps.apply_fresh.outcome }}" >> "$GITHUB_OUTPUT"
               echo "review_outcome=${{ steps.review_fresh.outputs.outcome }}" >> "$GITHUB_OUTPUT"
+              echo "review_step_outcome=${{ steps.review_fresh.outcome }}" >> "$GITHUB_OUTPUT"
             fi
           else
             # routed=false is now provably the ONLY reachable value here, not a defaulted fallback:
@@ -538,6 +550,7 @@ jobs:
             echo "routed=false" >> "$GITHUB_OUTPUT"
             echo "apply_outcome=${{ steps.apply.outcome }}" >> "$GITHUB_OUTPUT"
             echo "review_outcome=${{ steps.review.outputs.outcome }}" >> "$GITHUB_OUTPUT"
+            echo "review_step_outcome=${{ steps.review.outcome }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Write convergence record (always-run, red-on-failure)
@@ -563,6 +576,7 @@ jobs:
           still-actionable: ${{ steps.recheck.outputs.still_actionable }}
           routed: ${{ steps.resolved.outputs.routed }}
           review-outcome: ${{ steps.resolved.outputs.review_outcome }}
+          review-step-outcome: ${{ steps.resolved.outputs.review_step_outcome }}
           plan-sha-mode: unchecked
           working-directory: ${{ env.WORKDIR }}
           pre-apply-failure: >-
@@ -793,6 +807,7 @@ jobs:
           apply-outcome: ${{ steps.apply.outcome }}
           plan-sha-mode: unchecked
           working-directory: ${{ env.WORKDIR }}
+          review-step-outcome: ""
           pre-apply-failure: >-
             ${{ steps.apply.outcome == 'skipped' && (steps.artifact_sha.outcome == 'failure' || steps.tfvars.outcome == 'failure' || steps.tf_init.outcome == 'failure' || steps.build_ducklake.outcome == 'failure' || steps.fetch_plan.outcome == 'failure') }}
           failed-step: >-
@@ -816,3 +831,101 @@ jobs:
             MSG="Reconcile's gated apply did NOT converge (RED) for ${RED_SHA}. Inspect this run's logs directly."
           fi
           gh pr comment "$PR_NUM" --repo "$REPO" --body "$MSG" || true
+
+  # ---------------------------------------------------------------------------
+  # File-reconcile-starved-rec job: Decision 162 / rec-2664. A starved Reconcile subagent reviewer
+  # (max-turns/no-verdict/API-exhausted after the same-budget retry) blocks apply WITHOUT latching
+  # the convergence record red (Decision 55 anti-masking, T2.39 c3) -- correct, but on the
+  # Reconcile heal-button path that silence has no durable record anywhere else. This job closes
+  # that observability gap: it files ONE durable rec per starved episode and is otherwise a LEAF --
+  # it applies nothing, gates nothing downstream, and is no part of reconcile.yml's terminal route
+  # set (Decision 158). `always()` in the `if:` is load-bearing: apply-reconcile CONCLUDES
+  # `failure` on a starved episode (review.sh exits 1 on STARVED), so a bare `needs:` dependant
+  # would be SKIPPED on exactly the episode this job exists to record.
+  # ---------------------------------------------------------------------------
+  file-reconcile-starved-rec:
+    needs: [resolve-target, apply-reconcile]
+    if: always() && needs.apply-reconcile.outputs.review_outcome == 'starved'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC -- branch role, DuckLakeInvokeCI writer grant)
+        # github_ci_apply (the apply-role apply-reconcile/gated-apply-reconcile assume) holds NO
+        # lambda invoke grant at all -- this filing job must NOT run under it. The branch role is
+        # not the UNIQUE holder of DuckLakeInvokeCI (github_ci_pr carries a statement too,
+        # oidc.tf:712), but it is the correct one for this dispatch-on-main path (mirrors
+        # resolve-target's own role choice above).
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: File reconcile_starved rec (Decision 55 anti-masking observability)
+        env:
+          DUCKLAKE_WRITER_URL: ${{ secrets.DUCKLAKE_WRITER_URL }}
+          RED_SHA: ${{ needs.resolve-target.outputs.commit_sha }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+
+          .venv/bin/python << 'PYEOF'
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, os.environ.get("GITHUB_WORKSPACE", str(Path.cwd())))
+
+          from scripts.ops_data_portal import file_rec
+
+          red_sha = os.environ.get("RED_SHA", "unknown")
+          repo = os.environ.get("GITHUB_REPOSITORY", "unknown")
+          run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
+          run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
+
+          fields = {
+              "title": f"Reconcile subagent reviewer STARVED for {red_sha}",
+              "file": ".github/workflows/reconcile.yml",
+              "status": "open",
+              "source": "reconcile_starved",
+              "priority": "High",
+              "effort": "S",
+              "risk": "low",
+              "verification_tier": "V2",
+              "context": (
+                  "Reconcile's subagent plan reviewer STARVED (max-turns/no-verdict/API-exhausted "
+                  "after the same-budget retry, T2.39 c2) while re-applying previously red sandbox "
+                  f"commit {red_sha}. Apply was blocked and the convergence record was NOT "
+                  "overwritten (Decision 55 anti-masking, T2.39 c3) -- correct behaviour, but this "
+                  "rec is the durable record of the episode on the Reconcile heal-button path. "
+                  f"Run: {run_url}."
+              ),
+              # MUST be a single runnable inline command, never prose: the portal registers
+              # acceptance_lint as a WRITE-TIME validator (scripts/executor/acceptance_lint.py runs
+              # `bash -n` on this value), so a prose sentence -- especially one containing
+              # parentheses -- makes file_rec RAISE and this job file nothing on precisely the
+              # starved episode it exists to record. Verified offline by
+              # TestReconcileStarvedFilingJobShape::test_acceptance_passes_the_live_portal_linter.
+              "acceptance": (
+                  "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - "
+                  "--profile agent_platform | grep -q green"
+              ),
+          }
+          rec_id = file_rec(fields)
+          print(f"file-reconcile-starved-rec: filed {rec_id}")
+          PYEOF

@@ -1,0 +1,99 @@
+# Machine-readable home for the R1/R2/R3 composite-action shell-body field semantics (Decision
+# 162 / rec-2923 preventive action). Rationale lives in Decision 162, not here (Decision 86/127
+# routing: field semantics live collocated with their enforcement counterpart). NOT a Class
+# A/B/C ritual contract -- no top-level contract:/class: block, so the CD.25 drift gate
+# (validate_contract_drift) skips this file as a non-ritual doc (precedent: ci-rca-lifecycle.yaml,
+# file-router.yaml).
+projection_id: composite-action-shape
+version: 1
+status: active
+ratified_via: "Decision 162 / PLAN-ci-rca-starved-surface merge to main"
+description: >-
+  Three authoring rules for every .github/actions/**/action.yml composite `shell: bash`/`sh` step
+  body, enforced by scripts/checks/ci_guards/validate_composite_action_shell_bodies.py in both
+  presubmit tiers, filesystem-only (no network, no subprocess -- Decision 153 fast-tier budget).
+
+rules:
+  r1:
+    name: thin_adapter_required
+    scope: >-
+      Any composite `shell: bash`/`sh` step body that PRODUCES a consumed `outputs.<id>.value`
+      binding -- i.e. its step `id` is referenced by a `steps.<id>.outputs.<key>` expression
+      inside the manifest's top-level `outputs:` block.
+    requirement: >-
+      Must delegate to a `.sh` script under the action directory. The delegate line is FULLY
+      ANCHORED to one of exactly two shapes -- `bash "${{ github.action_path }}/<script>.sh"` or
+      `if ! bash "$GITHUB_ACTION_PATH/<script>.sh"; then` -- and every OTHER effective line must be
+      a BARE scaffolding token (`then`, `else`, `fi`, `exit`, or `exit N`). Deliberately no
+      `if <anything>` wildcard: a one-line `if OUT=$(...); then echo "k=$OUT" >> "$GITHUB_OUTPUT";
+      fi` would otherwise ride alongside a delegation while computing and publishing a step output,
+      which is the rec-2923 shape itself. Anchoring the delegate line likewise rejects a compound
+      line such as `rm -rf x; bash "$GITHUB_ACTION_PATH/x.sh"`.
+    escape: >-
+      NONE, in either direction. (a) MEMBERSHIP: the known-violator set (deterministic-guard,
+      fetch-saved-plan) is pinned in config/composite_action_body_baseline.yaml's r1: section AND
+      cross-checked against a frozen constant (_R1_KNOWN_VIOLATORS) in the guard module itself --
+      a config-file edit alone can never admit a third entry; growing the set requires editing the
+      guard's own source in a reviewed change. (b) SIZE: each pinned entry's declared line count is
+      an ENFORCED ceiling, not a record -- a pinned body that grows FAILS, and no
+      `# raise-approved:` marker rescues it (that escape is r3-only). The set is strictly
+      shrinking on both axes: extract or reduce, never grow.
+    rationale_pointer: Decision 162 point 1.
+  r2:
+    name: literal_argv_test_coverage
+    scope: Each `.sh` script an R1-conformant step delegates to.
+    requirement: >-
+      A test under tests/**/*.py must reference the script AND drive something under the literal
+      GitHub composite-step argv `("bash", "--noprofile", "--norc", "-e", "-o", "pipefail")` --
+      the exact invocation GitHub uses for a composite `shell: bash` step body, and the exact
+      argv whose inherited errexit was rec-2923's root cause.
+    escape: None -- a script with no such test always fails.
+    rationale_pointer: Decision 162 point 2.
+  r3:
+    name: ratcheted_inline_body_ceiling
+    scope: >-
+      Every OTHER inline `shell: bash`/`sh` body: non-output-producing bodies, and
+      output-producing bodies that already fail R1 (an R1 violation is checked against R1's own
+      baseline section, never double-counted against r3). A non-output-producing body that IS
+      already a thin adapter (the R1-conformant shape) is excluded entirely -- never ratcheted,
+      never penalized for being conformant.
+    measurement: >-
+      Effective (non-blank, non-comment) line count, identical counting rule to
+      scripts/checks/sloc/sloc_limits.py's SLOC measurement.
+    requirement: >-
+      A live body's measured line count must not exceed its config/composite_action_body_baseline.yaml
+      r3: entry's declared ceiling.
+    escape: >-
+      An inline `# raise-approved: dec-NNN <reason>` marker (Decision 128 grammar, reused
+      verbatim) on the baseline entry's own line, naming a real `## Decision N:` header in
+      docs/DECISIONS.md. A present-but-invalid marker (citing a non-existent header) still fails.
+      A bare, non-marker comment never exempts an entry -- only the exact grammar does.
+    rationale_pointer: Decision 162 point 3.
+
+baseline_file:
+  path: config/composite_action_body_baseline.yaml
+  seeded_at: >-
+    The state PLAN-ci-rca-starved-surface (Decision 162) leaves the repo in (2026-08-02) -- a
+    ONE-TIME grandfather in the sense of Decision 130 clause 2, explicitly not a precedent.
+  key_form: '"<action-relative-dir>::<step-id>"' # a positional "#<index>" fallback when a step declares no id.
+
+known_r1_violators:
+  # `pinned_lines` is an ENFORCED CEILING, not a record of the current size: exceeding it fails
+  # the build with no marker escape (see rules.r1.escape clause (b)).
+  - key: ".github/actions/deterministic-guard::guard"
+    pinned_lines: 13
+    status: pending_extraction
+  - key: ".github/actions/fetch-saved-plan::resolve"
+    pinned_lines: 9
+    status: pending_extraction
+
+known_r1_conformant:
+  - key: ".github/actions/subagent-plan-review::review"
+    delegate: review.sh
+    note: "Extracted at rec-2924; the shape R1/R2 generalise."
+
+closing_instance:
+  script: .github/actions/write-convergence-record/assert_review_outcome.sh
+  note: >-
+    The strict consumer that closes rec-2923 itself -- the concrete instance R1's rule
+    generalises. See Decision 162 point 4.

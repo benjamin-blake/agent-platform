@@ -348,3 +348,29 @@ closure_dependency:
     stamp_fixed_by_sha('<rec-id>', '<merge-sha>')"`. This is the closure route for a
     rec-autoclose-sourced ci_rca rec whenever rec-autoclose itself cannot be trusted to process
     the Resolves trailer.
+  rec_2923_precedent: >-
+    PLAN-ci-rca-starved-surface (Decision 162) applies this exact manual_route to close rec-2923:
+    `--status closed --resolution "<live closure proof, Decision 103>"` then
+    `stamp_fixed_by_sha('rec-2923', '<full 0726593 commit sha>')` -- the commit that actually
+    fixed the reviewer path (PR #812), NOT this plan's own merge sha. A Resolves trailer naming
+    rec-2923 is deliberately NOT used: rec-autoclose stamps context_v2_json.fixed_by_sha to the
+    MERGE sha, which would make the status_aware_chain.regression_vs_drop ancestry check lie for
+    any genuine recurrence of the reviewer defect occurring between 0726593 and this plan's merge
+    (it would be misclassified drop, not regression). bundled_recommendations therefore carries
+    only rec-2664 (the observability-gap rec this plan's own preventive action satisfies).
+
+starved_review_observability: >-
+  Decision 162 / rec-2923 preventive action. review.sh (subagent-plan-review) prints a distinct
+  greppable marker on each STARVED exit path -- "[SUBAGENT-REVIEW] STARVED: <reason>" -- mirrored
+  to $GITHUB_STEP_SUMMARY when set, using the Decision 155 marker shape (mirrors the DCG-03
+  orphan-guard skip marker). archive_transcripts.sh (a second, always-run composite step) then
+  best-effort-archives review.json / review_retry.json (whichever exist) to
+  s3://agent-platform-data-lake/ci-rca-evidence/review-transcripts/<run_id>/ -- TOTAL by
+  construction (always exits 0, so it can never change the review outcome); its own failure path
+  prints a distinct "[SUBAGENT-REVIEW] transcript archival FAILED: <reason>" marker, also mirrored
+  to $GITHUB_STEP_SUMMARY, never a bare `|| true`. On the Reconcile heal-button path specifically,
+  a starved episode additionally files a durable `source=reconcile_starved` rec (the
+  file-reconcile-starved-rec job in reconcile.yml, rec-2664) -- the routine sandbox push path has
+  no equivalent filing job because ci-rca already watches terraform-apply-sandbox.yml directly
+  (Decision 142); reconcile.yml is absent from ci-rca's watched_workflow_set above, so this job is
+  Reconcile's own substitute observability path for the same episode class.
