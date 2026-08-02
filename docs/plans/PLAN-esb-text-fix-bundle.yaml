@@ -26,8 +26,9 @@ scope:
       folded into c1, no backing store named); ESB-07 (T4.1 files_in_scope :6841-6843 re-pointed
       to terraform/personal/); ESB-08 (CD.27 :822 prose stability definition replaced by a
       structured stability_definition_14d mapping); ESB-09 (cost_projection :268-321 arithmetic
-      repair plus a structured executor_substrate_billing block); ESB-10 (CD.27 :748 title de-mechanised at layer 2, and :817 personas point de-mechanised to
-      P1/P2/P3 with its deterministic-only half scoped);
+      repair plus a structured executor_substrate_billing block); ESB-10 (all four CD.27 substrate-naming surfaces de-mechanised at layer 2 -- :748 title,
+      :817 personas point plus its deterministic-only scoping, `discipline_points[3]` Fargate
+      escape-hatch point, and `narrowly_supersedes.clause`);
       ESB-11 (:791 runtime list, :803-804 cross-references); ESB-04/ESB-06 ratification-obligation
       discipline_points. Line :821 is NOT touched -- it is wave 3's (ESB-02).
   - file: docs/DECISIONS.md
@@ -62,7 +63,9 @@ scope:
       persona-node typings AND CD.27's personas discipline point each reference the property ids
       POSITIVELY (the personas point is not exempt -- it is the site ESB-10 targets, and a
       negative-only check there is the mechanism-free-but-property-free failure this guard exists
-      to catch); mechanism vocabulary absent from all six sites plus CD.27's title; c1 asserts
+      to catch); mechanism vocabulary absent from all NINE de-mechanised sites -- the seven
+      property-bound contract sites (c1, four node typings, personas point, Fargate escape-hatch
+      point) plus the two descriptive sites (CD.27's title and narrowly_supersedes clause); c1 asserts
       workspace continuity and names no backing store; T4.2's criteria remain bare strings and no
       `- id:` header line appears in the roadmap diff.
   - file: tests/esb_text_fix/test_executor_tf_paths.py
@@ -122,8 +125,9 @@ acceptance_criteria:
     explicitly -- a mechanism-free but property-free rewording does NOT satisfy this -- AND CD.27's
     personas discipline point does the same (it is checked positively, not merely for banned
     tokens); and the tokens "checkpoint-replay", "Durable Function", "forced timeout" and "replay"
-    no longer appear in c1, in the four node typings, in the personas discipline point, or in
-    CD.27's title.
+    no longer appear at ANY of the nine de-mechanised sites -- c1, the four node typings, the
+    personas discipline point, the Fargate escape-hatch discipline point, CD.27's title, and
+    CD.27's `narrowly_supersedes.clause`.
   - >-
     ESB-01 (c1 half only): T4.2 c1 asserts workspace continuity via P2 ("without losing workspace
     state") and names NO backing store -- the store choice remains open for a later wave.
@@ -160,11 +164,14 @@ acceptance_criteria:
     `substrate_reevaluation_triggers` -- NOT `re_evaluation_triggers`, which sits one underscore
     away from the block's existing `cost_projection.reevaluation_triggers` and is a drift surface.
   - >-
-    ESB-10: neither CD.27's TITLE (:748) nor its personas discipline point (:817) mandates the
-    LAYER-2 substrate by name -- both state the requirement as P1/P2/P3 and leave the mechanism to
-    layer-2 ratification, while layer 1 (Step Functions, ratified by Decision 39) and layer 3
-    (Lambda deterministic glue) remain named because neither is in dispute -- AND :817's
-    deterministic-only half is scoped to ITERATIVE persona loops, co-citing Decision 39.
+    ESB-10: none of CD.27's FOUR substrate-naming surfaces -- its title (:748), its personas
+    discipline point (:817), its Fargate escape-hatch discipline point (`discipline_points[3]`),
+    or its `narrowly_supersedes.clause` -- mandates the LAYER-2 substrate by name. The two
+    requirement-bearing surfaces (:817 and the Fargate point) state the requirement as P1/P2/P3;
+    the two descriptive surfaces (title, supersession clause) are simply mechanism-free. Layer 1
+    (Step Functions, ratified by Decision 39) and layer 3 (Lambda deterministic glue) remain named
+    throughout because neither is in dispute. AND :817's deterministic-only half is scoped to
+    ITERATIVE persona loops, co-citing Decision 39.
     Decision 39 carries a sanctioned dated trailer recording the same scope, and its original body
     is byte-identical to origin/main.
   - >-
@@ -263,34 +270,39 @@ verification_plan:
       assert len(nodes)==4, f'expected 4 persona-node typings, found {len(nodes)}';
       personas=[p for p in cd['discipline_points'] if isinstance(p,str) and 'Agent personas' in p];
       assert len(personas)==1, f'expected 1 personas discipline point, found {len(personas)}';
+      fargate=[p for p in cd['discipline_points'] if isinstance(p,str) and 'ECS Run Task escape hatch' in p];
+      assert len(fargate)==1, f'expected 1 Fargate escape-hatch discipline point, found {len(fargate)}';
       banned=['checkpoint-replay','durable function','forced timeout','replay'];
-      contracts={'c1':c1,'personas_discipline_point':personas[0]};
-      contracts.update({f'node[{n}]':t for n,t in enumerate(nodes)});
-      hits={k:[b for b in banned if b in v.lower()] for k,v in contracts.items()};
+      property_bound={'c1':c1,'personas_discipline_point':personas[0],'fargate_discipline_point':fargate[0]};
+      property_bound.update({f'node[{n}]':t for n,t in enumerate(nodes)});
+      descriptive={'cd_title':cd['title'],'narrowly_supersedes_clause':cd['narrowly_supersedes']['clause']};
+      allsites={**property_bound, **descriptive};
+      hits={k:[b for b in banned if b in v.lower()] for k,v in allsites.items()};
       hits={k:v for k,v in hits.items() if v};
-      assert not hits, f'mechanism vocabulary survives in contract text: {hits}';
-      ttl=cd['title'];
-      assert 'durable function' not in ttl.lower(), f'CD.27 title still mandates the layer-2 substrate by name -- {ttl}';
-      missing={k:[p for p in ('P1','P2','P3') if p not in v] for k,v in contracts.items()};
+      assert not hits, f'mechanism vocabulary survives at a de-mechanised site: {hits}';
+      missing={k:[p for p in ('P1','P2','P3') if p not in v] for k,v in property_bound.items()};
       missing={k:v for k,v in missing.items() if v};
       assert not missing, f'contract text does not reference the resume properties: {missing}';
       assert 'workspace' in c1.lower(), 'c1 must assert workspace continuity (ESB-01 half)';
-      print('OK', sorted(props), len(nodes), 'nodes, all referencing P1/P2/P3')"
+      print('OK', sorted(props), len(nodes), 'nodes;', len(property_bound), 'property-bound sites;', len(descriptive), 'descriptive sites; all 9 mechanism-free')"
     expected: >-
-      Prints OK with exactly P1/P2/P3 and 4 nodes. Proves the vocabulary is single-sourced, every
-      persona node was retyped (including the Parallel critic fan-out line the audit's own anchor
-      hint omitted), every contract site references the property ids rather than merely gesturing
-      at them, the personas discipline point no longer mandates the substrate by name, and c1
-      carries the workspace clause.
+      Prints OK with exactly P1/P2/P3, 4 nodes, 7 property-bound sites and 2 descriptive sites.
+      Proves the vocabulary is single-sourced; every persona node was retyped (including the
+      Parallel critic fan-out line the audit's own anchor hint omitted); all seven CONTRACT sites
+      reference the property ids rather than merely gesturing at them; all NINE de-mechanised sites
+      (the seven contract sites plus CD.27's title and narrowly_supersedes clause) are free of
+      mechanism vocabulary; and c1 carries the workspace clause.
     fix_if: >-
       "expected 1 personas discipline point, found 0" means the rewrite dropped the literal
       `Agent personas` anchor token, or turned the entry into a YAML mapping via a colon-space --
       restore the token and keep the entry a plain string. A count of 3 nodes means the Parallel
       critic fan-out line was missed. A mechanism-vocabulary hit means a criterion, node typing or
-      the personas discipline point still names the incumbent. A `missing` failure means a contract site was reworded mechanism-free but never
-      bound to P1/P2/P3 -- add the explicit property reference; this is the keystone's failure
-      mode and it propagates to waves 2, 3 and 5. A missing workspace token means the ESB-01 half
-      was dropped.
+      the personas discipline point still names the incumbent. "expected 1 Fargate escape-hatch
+      discipline point, found 0" means the S2 site-A rewrite dropped its
+      `ECS Run Task escape hatch` anchor token -- restore it. A `missing` failure means a contract
+      site was reworded mechanism-free but never bound to P1/P2/P3 -- add the explicit property
+      reference; this is the keystone's failure mode and it propagates to waves 2, 3 and 5. A
+      missing workspace token means the ESB-01 half was dropped.
     graduation: graduate
     graduation_check_id: t4x-persona-contracts-mechanism-word-free
   - step: 3
@@ -846,6 +858,15 @@ context:
     ratification-time obligations recorded on CD.27 so layer-2 ratification trips over them.
     Silently dropping 2 of 11 findings would repeat exactly the defect ESB-02 documents: a
     promised-but-uncarried re-evaluation.
+    OWNED BY THIS WAVE BY EXPLICIT DECISION, not silently absorbed: all FOUR of CD.27's
+    substrate-naming surfaces. The title (:748) and the personas discipline point (:817) were
+    folded in during critique rounds 2 and 3; `discipline_points[3]` and
+    `narrowly_supersedes.clause` were folded in on explicit human approval (the S2 item, prepared
+    at the convergence cap and deliberately withheld from autonomous application). The shared
+    argument is the same in all four cases: each names the layer-2 substrate the Q5 spike is
+    supposed to decide, and no later wave owns any of them under these boundaries -- so deferring
+    would leave them unowned rather than sequenced. All four are guarded by VP step 2, because an
+    unguarded de-mechanisation site is how this class of defect persists.
   - >-
     THE KEYSTONE IS ESB-05 AND IT IS WHERE CRITIQUE ATTENTION BELONGS. The three-property
     vocabulary authored here is inherited verbatim by waves 2, 3 and 5. If P1/P2/P3 are wrong,
@@ -927,6 +948,21 @@ context:
     any rejected candidate to `waive` per VF-05 step 5. The "Scope discipline" acceptance criterion
     names only the two rec-2923-owned paths as untouched; it does not assert an exhaustive
     untouched set, so it does not conflict with this write.
+  - >-
+    GUARD BUCKETS AT THE NINE DE-MECHANISED SITES -- a deliberate distinction, surfaced rather than
+    buried. VP step 2 checks all nine sites NEGATIVELY (no mechanism vocabulary), but applies the
+    POSITIVE P1/P2/P3 requirement to only seven of them. The seven `property_bound` sites are
+    requirement-bearing contract text -- T4.2 c1, the four T4.1 node typings, CD.27's personas
+    discipline point, and CD.27's Fargate escape-hatch discipline point -- each of which states an
+    obligation personas must satisfy, so each must name the properties. The two `descriptive` sites
+    -- CD.27's title and its `narrowly_supersedes.clause` -- record WHICH decision is being made
+    and which prior clause it replaces; they impose no obligation on personas and cannot carry
+    property ids without contorting them, exactly as a title cannot. They are still guarded, so
+    the mechanism cannot creep back. This is NOT a re-run of the round-3 exemption defect, which
+    concerned the personas discipline point -- a requirement-bearing site that is now positively
+    bound. Note the human-approved S2 site-B text carries no P1/P2/P3 by construction; if a later
+    review prefers it property-bound, the minimal change is "resumable persona execution (nodes
+    satisfying P1/P2/P3; layer-2 substrate pinned at ratification)" and it would move buckets.
   - >-
     Preflight at plan time: venv ok, creds ok, working tree clean, 0 commits behind origin/main
     (so the Main Divergence Assessment found no overlap and no rebase was deferred), ops_outbox
@@ -1025,8 +1061,19 @@ execution_steps:
     at the scoring layer, in the very discipline point the keystone sits beside, and no later wave
     owns :817 under this plan's WAVE BOUNDARIES -- so deferring it would leave it unowned. Second,
     scope its deterministic-only half to ITERATIVE persona loops in the executor and co-cite
-    Decision 39. Then append a sanctioned dated trailer AFTER Decision 39's entry body recording
-    that scope, so its `agent` state type for single-shot LLM-backed Lambdas is explicitly not
+    Decision 39. THIRD and FOURTH (human-approved S2 fold-in), de-mechanise CD.27's two remaining
+    substrate-naming surfaces, which name layer 2 exactly as :748 and :817 did and which no later
+    wave owns. Site A, `discipline_points[3]`: replace its trailing clause so it reads "ECS Run
+    Task escape hatch is the ONLY remaining Fargate path. Long-running agent loops are NOT a
+    Fargate use case under CD.27 -- they run as resumable persona nodes satisfying P1/P2/P3, with
+    the layer-2 substrate pinned at ratification." The Fargate/ECS escape-hatch clause itself is
+    UNTOUCHED, and the literal `ECS Run Task escape hatch` anchor token must survive (VP step 2
+    locates the entry by it). Site B, `narrowly_supersedes.clause`: replace "Step Functions +
+    Lambda Durable Functions + Lambda is the new executor substrate" with "Step Functions
+    orchestration + resumable persona execution (layer-2 substrate pinned at ratification) +
+    Lambda deterministic glue is the new executor substrate", mirroring the title edit; the rest
+    of the clause, including the terraform-apply carve-out, is unchanged. Then append a sanctioned
+    dated trailer AFTER Decision 39's entry body recording that scope, so its `agent` state type for single-shot LLM-backed Lambdas is explicitly not
     narrowed. Do not edit Decision 39's body. Note the mechanism legitimately REMAINS in CD.27's
     layer-2 `detail` prose (the audit's own ideal_behavior keeps it there) -- it is removed from the
     CONTRACT lines only.
