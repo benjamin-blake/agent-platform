@@ -47,15 +47,24 @@ acceptance_criteria:
   - >-
     CD.43 carries exactly one `workspace_store_selection` block whose `selection_criteria` are
     EXACTLY W1-W8, each a non-empty string (not a YAML mapping -- a bare scalar carrying a
-    colon-space silently becomes one, the hazard that bit wave 1). W1 substrate portability across
-    CD.27's pinned candidate set; W2 foreclosure disclosure; W3 standing cost recomputed from the
-    region-pinned published rate; W4 egress-profile validity; W5 re-materialization cost with both a
-    byte term and an object-count term; W6 scale basis; W7 coverage of every listed handoff case; W8 managed-primitive preference (Decision 100).
+    colon-space silently becomes one, the hazard that bit wave 1). MECHANICALLY ENFORCED: the id set,
+    the string typing, W3's region-pin and recompute clauses, and W8's Decision 100 binding. PROSE
+    OBLIGATIONS, reviewed by the plan-critique gate and NOT asserted by any check -- W1 substrate
+    portability across CD.27's pinned candidate set; W2 foreclosure disclosure; W4 egress-profile
+    validity; W5 re-materialization cost carrying both a byte term and an object-count term; W6 scale
+    basis; W7 coverage of every listed handoff case. The split is deliberate: content assertions are
+    worth their brittleness only where a criterion could be silently gutted while still reading
+    plausibly, which is true of W3 (a number instead of a basis) and W8 (a preference instead of an
+    argument) but not of the descriptive criteria.
   - >-
     NO store is selected, asserted by a POSITIVE equality rather than a token absence:
     `status` == `criteria_only` and `selected_store` == the literal `TBD_at_CD.43_ratification`, so a
     blanked or removed field fails exactly as loudly as a real store name. `option_set` and
-    `coverage_cases` are duplicate-free and contain their four and three required members.
+    `coverage_cases` are duplicate-free and meet their membership floors (seven options, three
+    coverage cases), and `options_considered_and_rejected` is non-empty so a rejected candidate is
+    recorded with its reason rather than silently omitted. These equality assertions live in VP steps
+    3 and 5 and in the pytest module, and are deliberately NOT graduated -- they become false when
+    wave 5 ratifies CD.43, and the registry has no retirement field.
   - >-
     No selection criterion publishes a cost figure (no `$<digit>` anywhere in W1-W8); W3 instead
     names `terraform/personal/variables.tf` as the region pin and demands the figure be RECOMPUTED at
@@ -149,18 +158,22 @@ verification_plan:
       The schema-load and R1/R2/R3 halves are already covered by two checks registered in BOTH tiers
       -- validate_platform_roadmap and validate_candidate_decision_ratification -- which run on every
       PR regardless of this plan. A registry row would re-execute the same schema load under a second
-      name. The CD.43-specific content assertions that are NOT covered there (the criteria block, the
-      deferral marker) graduate under step 2 instead, so nothing is lost by waiving here.
+      name. Note this step's own state/ratified_as/filed_via assertions are TRANSIENT -- they become
+      false when CD.43 ratifies -- which is a second, independent reason not to graduate them. The
+      CD.43-specific content assertions that are durable and not covered by those checks graduate
+      under step 2 instead, so nothing is lost by waiving here.
   - step: 2
     phase: pre-deploy
     hermetic: true
     action: >-
-      KEYSTONE. Both halves of "criteria, not a choice", verified INDEPENDENTLY of the plan's own
-      test package. Positively: exactly W1-W8 exist as non-empty strings, W3 names the region pin and
-      demands recomputation. Negatively but POSITIVELY BOUND: status and selected_store are asserted
-      by EQUALITY against literals, so this cannot be satisfied by deleting the field, and no
-      criterion carries a cost figure. The isinstance(str) sweep is the colon-space YAML hazard guard
-      -- eight folded scalars is eight chances to accidentally author a mapping.
+      KEYSTONE, DURABLE HALF -- the assertions that stay true after CD.43 ratifies, verified
+      INDEPENDENTLY of the plan's own test package. Exactly W1-W8 exist as non-empty strings; the
+      option and coverage sets are duplicate-free and meet their membership floors; no criterion
+      publishes a cost figure; W3 names the region pin and demands recomputation; W8 binds to
+      Decision 100; the block carries no confidential identifier. The isinstance(str) sweep is the
+      colon-space YAML hazard guard -- eight folded scalars is eight chances to author a mapping by
+      accident. Every assertion here survives the store being chosen, which is precisely why this is
+      the step that graduates.
     command: |-
       bin/venv-python -c "
       import re, yaml
@@ -174,13 +187,13 @@ verification_plan:
       assert set(sc) == {'W1','W2','W3','W4','W5','W6','W7','W8'}, f'expected exactly W1-W8, got {sorted(sc)}'
       bad = {k: type(v).__name__ for k, v in sc.items() if not isinstance(v, str) or not v.strip()}
       assert not bad, f'criteria must be non-empty strings (a colon-space turns a scalar into a mapping): {bad}'
-      assert b['status'] == 'criteria_only', b['status']
-      assert b['selected_store'] == 'TBD_at_CD.43_ratification', f\"a store was selected: {b['selected_store']!r}\"
       opts, cases = b['option_set'], b['coverage_cases']
       assert len(opts) == len(set(opts)), f'option_set has duplicates: {opts}'
-      assert {'efs_mount','s3_sync','container_local_disk','git_as_store_commit_at_step_boundaries'} <= set(opts), opts
+      required_opts = {'efs_mount','s3_sync','container_local_disk','git_as_store_commit_at_step_boundaries','s3_express_one_zone','fsx_managed_filesystem','lambda_ephemeral_tmp_10gb'}
+      assert required_opts <= set(opts), f'option_set missing {sorted(required_opts - set(opts))}'
       assert len(cases) == len(set(cases)), f'coverage_cases has duplicates: {cases}'
       assert {'cross_invocation_persistence','inter_persona_handoff','persona_to_ecs_task_handoff'} <= set(cases), cases
+      assert b['options_considered_and_rejected'], 'a rejected option must be recorded with its reason, not silently omitted'
       money = {k: re.search(r'[\$]\s*\d', v).group(0) for k, v in sc.items() if re.search(r'[\$]\s*\d', v)}
       assert not money, f'a criterion publishes a cost figure instead of a basis: {money}'
       assert 'terraform/personal/variables.tf' in sc['W3'], 'W3 must name the region-pin source'
@@ -189,33 +202,73 @@ verification_plan:
       blob = yaml.safe_dump(cds[0], sort_keys=False)
       assert 'arn:' not in blob.lower(), 'CD.43 text contains an ARN (PUBLIC repository)'
       assert not re.search(r'(?<!\d)\d{12}(?!\d)', blob), 'CD.43 text contains a 12-digit account-id-shaped token'
-      print('OK', len(sc), 'criteria, store deferred')
+      print('OK', len(sc), 'criteria well-formed;', len(opts), 'options under evaluation')
       "
     expected: >-
-      Exit 0, printing `8 criteria, store deferred`. Proves the criteria set is complete and
-      well-typed, that the store choice is still explicitly deferred by its marker rather than merely
-      unmentioned, and that W3 states a recomputable basis instead of a number. Verified by mutation
-      this session: replacing the marker with a real store name fails with "a store was selected";
-      inserting a NAT figure into W3 fails with "a criterion publishes a cost figure instead of a
-      basis". Illustrative values in this field are deliberately NOT backticked -- validate_vp_replay
-      treats every backtick literal in an expected field as a required substring of stdout, so only
-      the printed token above carries backticks.
+      Exit 0, printing `criteria well-formed;` with the criterion and option counts. Proves the
+      criteria set is complete, well-typed and figure-free, that W3 states a recomputable basis
+      instead of a number, that W8 binds to Decision 100, and that a rejected option was recorded
+      rather than silently dropped. Verified by mutation this session: removing W8 fails with
+      "expected exactly W1-W8"; stripping both Decision 100 references from W8 fails with "W8 must
+      name Decision 100"; inserting a NAT figure into W3 fails with "publishes a cost figure";
+      planting an ARN or a 12-digit token fails the PUBLIC-boundary assertions. Illustrative values
+      in this field are deliberately NOT backticked -- validate_vp_replay treats every backtick
+      literal in an expected field as a required substring of stdout, so only the printed token
+      above carries backticks.
     fix_if: >-
       "expected exactly W1-W8" means a criterion was dropped or renamed -- restore the missing id
-      rather than renumbering the survivors, because T4.1's criterion (step 3) names all eight by id
+      rather than renumbering the survivors, because T4.1's criterion (step 4) names all eight by id
       and would then dangle. A non-string type for some Wn means that criterion was authored as a
       bare scalar containing a colon-space and YAML parsed it as a mapping; re-author it as a `>-`
-      folded block scalar. "a store was selected" means the implementation chose a backing store --
-      it must NOT; revert to the deferral marker and leave the choice to the CD.43 ratification
-      alongside the layer-2 spike. "publishes a cost figure" means a criterion carried a number
+      folded block scalar. "option_set missing" means a candidate store was dropped from the
+      evaluation set; restore it -- narrowing the set is a substantive decision that belongs to the
+      ratifying plan, not to this one. "publishes a cost figure" means a criterion carried a number
       instead of a basis; state the rate source and the arithmetic to perform, not the result. "W8
       must name Decision 100" means the managed-primitive criterion was written as a generic
       preference rather than binding to the Decision that makes it enforceable -- an unbound W8
       restores exactly the bias the decision-scout gate flagged, since a self-built store could then
       satisfy it with a sentence rather than an argument.
     graduation: graduate
-    graduation_check_id: cd43-workspace-store-criteria-only
+    graduation_check_id: cd43-selection-criteria-well-formed
   - step: 3
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      KEYSTONE, TRANSIENT HALF -- the "no store has been chosen" assertions, deliberately kept OUT of
+      the graduated set. Both are equality assertions against literals, so neither can be satisfied by
+      deleting the field: status must equal criteria_only and selected_store must equal the deferral
+      marker. These become FALSE the moment wave 5 does the right thing and ratifies CD.43, which is
+      exactly why they must not become a standing registry row.
+    command: |-
+      bin/venv-python -c "
+      import yaml
+      d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+      cds = [c for c in d['candidate_decisions'] if c['id'] == 'CD.43']
+      assert cds, 'CD.43 absent -- the criteria CD was never added'
+      b = [p for p in cds[0]['discipline_points'] if isinstance(p, dict) and 'workspace_store_selection' in p][0]['workspace_store_selection']
+      assert b['status'] == 'criteria_only', f\"status is not criteria_only: {b['status']!r}\"
+      assert b['selected_store'] == 'TBD_at_CD.43_ratification', f\"a store was selected: {b['selected_store']!r}\"
+      print('OK store choice deferred')
+      "
+    expected: >-
+      Exit 0, printing `store choice deferred`. Proves this wave recorded criteria and chose nothing.
+      Verified by mutation this session: replacing the marker with a real store name fails with "a
+      store was selected".
+    fix_if: >-
+      "a store was selected" or "status is not criteria_only" means the implementation chose a
+      backing store, which this wave must NOT do -- restore the deferral marker and leave the choice
+      to the CD.43 ratification alongside the layer-2 spike. If this step fails during a LATER wave
+      that is legitimately ratifying CD.43, the correct response is to delete this plan's guard
+      module along with this step, not to weaken either -- they are wave-2 artefacts by design.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Deliberately un-graduated because it is TRUE ONLY DURING THIS WAVE. The registry has no expiry
+      or retirement field, so a row asserting selected_store == the deferral marker would redden main
+      the moment wave 5 ratifies CD.43, with no owner and no obvious remedy except weakening the
+      check -- which is how a guard becomes worse than no guard. The durable half of this keystone
+      graduates under step 2 instead. This is the same reasoning that waives the scope-discipline
+      step: a guard that stops being true by design does not belong in a store of standing guards.
+  - step: 4
     phase: pre-deploy
     hermetic: true
     action: >-
@@ -231,7 +284,6 @@ verification_plan:
       cds = [c for c in d['candidate_decisions'] if c['id'] == 'CD.43']
       assert cds, 'CD.43 absent -- the criteria CD was never added'
       cd = cds[0]
-      b = [p for p in cd['discipline_points'] if isinstance(p, dict) and 'workspace_store_selection' in p][0]['workspace_store_selection']
       items = {i['id']: i for i in d['tier_items']}
       t41 = items['T4.1']
       nonstr = [c for c in t41['exit_criteria'] if not isinstance(c, str)]
@@ -242,20 +294,16 @@ verification_plan:
       assert 'workspace_uri' in crit, 'the criterion must bind to prepare_workspace workspace_uri'
       missing = [w for w in ('W1','W2','W3','W4','W5','W6','W7','W8') if w not in crit]
       assert not missing, f'T4.1 names CD.43 but not its criteria {missing}'
-      chosen = [o for o in b['option_set'] if o in crit]
-      assert not chosen, f'T4.1 criterion names a candidate store as chosen: {chosen}'
       unlinked = [g for g in cd['gates'] if 'CD.43' not in (items[g].get('related_candidate_decisions') or [])]
       assert not unlinked, f'tier item(s) gated by CD.43 never name it back: {unlinked}'
-      print('OK T4.1 names CD.43 + W1-W8, no store named;', len(cd['gates']), 'gated item(s) linked back')
+      print('OK T4.1 names CD.43 + W1-W8;', len(cd['gates']), 'gated item(s) linked back')
       "
     expected: >-
-      Exit 0, printing `T4.1 names CD.43 + W1-W8, no store named` followed by the gated-item count.
-      Proves the tier item names both the mechanism-selection obligation and every criterion id, that
-      it commits to no store, and that both gated tier items point back at CD.43. Verified by
-      mutation this session: dropping W5/W6/W7 from the criterion fails with "names CD.43 but not its
-      criteria ['W5', 'W6', 'W7']"; removing CD.43 from T4.2's related_candidate_decisions fails with
-      "never name it back: ['T4.2']"; writing a store name into the criterion fails with "names a
-      candidate store as chosen".
+      Exit 0, printing `T4.1 names CD.43 + W1-W8` followed by the gated-item count. Proves the tier
+      item names the mechanism-selection obligation and every criterion id, and that both gated tier
+      items point back at CD.43. Verified by mutation this session: dropping W5/W6/W7 from the
+      criterion fails with "names CD.43 but not its criteria ['W5', 'W6', 'W7']"; removing CD.43 from
+      T4.2's related_candidate_decisions fails with "never name it back: ['T4.2']".
     fix_if: >-
       "found 0" means the T4.1 criterion was never added, or was added without the literal token
       `CD.43`. "found 2" means it was added twice, most likely once to T4.1 and once to T4.2 -- T4.2
@@ -268,7 +316,44 @@ verification_plan:
       carried an unquoted colon-space.
     graduation: graduate
     graduation_check_id: t41-names-workspace-store-criteria
-  - step: 4
+  - step: 5
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      T4.1's TRANSIENT half -- the criterion commits to no store yet. Kept out of the graduated set
+      for the same reason as step 3: once CD.43 ratifies, T4.1's criterion may legitimately name the
+      selected store, and a standing row forbidding that would redden main for a correct edit. The
+      positive binding that makes this meaningful (the criterion names CD.43 and all eight W ids)
+      lives in step 4, which does graduate.
+    command: |-
+      bin/venv-python -c "
+      import yaml
+      d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+      cds = [c for c in d['candidate_decisions'] if c['id'] == 'CD.43']
+      assert cds, 'CD.43 absent -- the criteria CD was never added'
+      b = [p for p in cds[0]['discipline_points'] if isinstance(p, dict) and 'workspace_store_selection' in p][0]['workspace_store_selection']
+      t41 = {i['id']: i for i in d['tier_items']}['T4.1']
+      named = [c for c in t41['exit_criteria'] if 'CD.43' in c]
+      assert len(named) == 1, f'expected exactly 1 T4.1 criterion naming CD.43, found {len(named)}'
+      chosen = [o for o in b['option_set'] if o in named[0]]
+      assert not chosen, f'T4.1 criterion names a candidate store as chosen: {chosen}'
+      print('OK T4.1 names no candidate store')
+      "
+    expected: >-
+      Exit 0, printing `T4.1 names no candidate store`. Verified by mutation this session: writing a
+      store name into the criterion fails with "names a candidate store as chosen".
+    fix_if: >-
+      "names a candidate store as chosen" means T4.1's criterion committed to a backing store, which
+      this wave must not do -- describe the selection OBLIGATION and its criteria, never an outcome.
+      If this fails during a later wave that is legitimately ratifying CD.43, delete this step and
+      this plan's guard module rather than weakening either.
+    graduation: waive
+    graduation_waiver_reason: >-
+      True only until CD.43 ratifies, exactly like step 3. A registry row asserting that T4.1's
+      criterion names no store would fail the moment wave 5 records the selected store on the tier
+      item, with no owner to retire it. The durable half -- that T4.1 names CD.43 and all eight
+      criterion ids -- graduates under step 4.
+  - step: 6
     phase: pre-deploy
     hermetic: true
     action: >-
@@ -307,7 +392,7 @@ verification_plan:
       them, which would create a second source of truth for the criteria.
     graduation: graduate
     graduation_check_id: cd27-layer2-preconditions-cover-esb01
-  - step: 5
+  - step: 7
     phase: pre-deploy
     hermetic: false
     action: >-
@@ -363,7 +448,7 @@ verification_plan:
       necessarily true, so it can never be admitted. It is also transient by construction: it guards
       this wave's boundary with wave 3, and stops meaning anything once wave 3 lands its own edits to
       the same clause.
-  - step: 6
+  - step: 8
     phase: pre-deploy
     hermetic: false
     action: >-
@@ -382,14 +467,14 @@ verification_plan:
       phrases. A failure in test_decision_scope_notes.py's cross-reference guard means the new entry
       contains a `T4.x exit criterion <id>` reference, which that guard resolves against the item's
       actual criteria and requires to carry P1/P2/P3; refer to CD.43 instead of to a criterion id. A
-      failure in this plan's own module reproduces one of VP steps 1-5 -- fix per that step's fix_if.
+      failure in this plan's own module reproduces one of VP steps 1-7 -- fix per that step's fix_if.
     graduation: waive
     graduation_waiver_reason: >-
       A pytest invocation is not one of the six canonical primitive slots, and graduating a
       whole-package run would create a registry row whose guard_target is the package rather than any
       one property. The individual properties worth guarding standingly graduate under steps 2, 3 and
       4 with narrow single-command specs, which is the shape the registry is built for.
-  - step: 7
+  - step: 9
     phase: pre-deploy
     hermetic: false
     action: >-
@@ -405,7 +490,7 @@ verification_plan:
       diff-touched tier_item.
     fix_if: >-
       A validate_platform_roadmap "touched in the git diff but still has bare-string criteria" failure
-      naming T4.1 or T4.2 means a tier_item header entered the diff; VP step 5 diagnoses the same
+      naming T4.1 or T4.2 means a tier_item header entered the diff; VP step 7 diagnoses the same
       condition with a clearer message -- fix per that step, do NOT convert the criteria to
       ExitCriterion objects, which would be a large unrelated change to a file two other waves are
       also editing. A validate_candidate_decision_ratification R2 failure means CD.43 carries a
@@ -417,7 +502,7 @@ verification_plan:
       validate.py is the standing regression surface itself; graduating a check whose command invokes
       it would be circular, and the planning skill explicitly forbids marking such a step hermetic for
       the same recursion reason.
-  - step: 8
+  - step: 10
     phase: pre-deploy
     hermetic: false
     action: >-
@@ -496,7 +581,7 @@ constraints:
   - >-
     YAML colon-space hazard, inherited from wave 1 and re-verified this session: a bare unquoted
     scalar containing ": " parses as a MAPPING, not a string. Every W1-W8 criterion and the new CD.27
-    discipline_point must be authored as a `>-` folded block scalar. VP steps 2 and 3 both assert
+    discipline_point must be authored as a `>-` folded block scalar. VP steps 2 and 4 both assert
     isinstance(str) precisely because this failure is silent.
   - >-
     Decision 105 lane shape: CD.43 stays `state: pending` with `filed_via: pending_log_decision_lambda`
@@ -527,6 +612,11 @@ constraints:
     Decision 128 SLOC governance: the new test module lands under 500 lines and is NOT registered in
     config/sloc_budgets.yaml. If it would cross, decompose it into a second module in the same package
     -- never raise a budget, and never run `--update-sloc-budgets` to seed it.
+  - >-
+    Do NOT add build/deploy/smoke-test steps for the data-pipeline Lambda artifact. See the
+    DEPLOY DEFERRAL entry in context; the ruling is deliberate and recorded. Do not re-derive the
+    CD.16 / Decision 79 arithmetic and resolve it toward action -- skipping a deploy takes no
+    governed action, whereas invoking one fires a production channel for a roadmap-text edit.
   - >-
     Do NOT modify `.github/actions/subagent-plan-review/**` or `scripts/ci/review_verdict.py` -- they
     belong to rec-2923's owner (see the ci-rca deferral in context).
@@ -563,7 +653,7 @@ context:
     exit_criteria are therefore left as bare strings. Converting them to structured ExitCriterion
     objects is scope growth no acceptance criterion authorises, on a file two other waves are also
     editing; wave 1's most expensive lesson was that unauthorised adjacent edits generate their own
-    findings. VP step 5 asserts the empty intersection so the deferral stays true rather than
+    findings. VP step 7 asserts the empty intersection so the deferral stays true rather than
     assumed.
   - >-
     DECISION FLAG 3 -- Decision 104 [NOTE], CLARIFICATION, no contradiction. "Guard module" in this
@@ -602,7 +692,25 @@ context:
     across the full candidate set". W3 from the Q2 billing prose (:185-187) -- the NAT gateway is "the
     single candidate-material term". W5 from the same passage plus ESB-01's own current_behavior. W7
     from ESB-01's current_behavior, which names inter-persona handoff and persona-to-ECS-task handoff
-    as "equally uncovered". W8 is the one criterion NOT derived from the audit: it comes from the
+    as "equally uncovered". OPTION-SET COMPOSITION was widened at plan-critique round 1, which
+    observed that one managed primitive against three self-built ones tilts precisely the direction
+    W8 exists to correct -- an under-represented managed side makes the managed-preference criterion
+    harder to satisfy on the evidence. Added, each justifiable on its own terms rather than to
+    balance a count: `s3_express_one_zone` (managed; bears directly on W5's request-count term, which
+    is the cost driver for a ~38,000-file tree); `fsx_managed_filesystem` (managed; the non-EFS
+    managed-file-system family, reachable from the container class); and `lambda_ephemeral_tmp_10gb`
+    (managed; the cheapest option in the set if it fits, since 10 GB exceeds the re-derived 5.4 GB
+    figure -- and its fit is exactly what W7's cross_invocation_persistence case tests, because
+    ephemeral /tmp does not survive suspension, which is the original ESB-01 observation). REJECTED
+    and recorded rather than silently omitted: `mountpoint_for_s3`, because it is AWS-provided
+    CLIENT-side FUSE tooling over S3 rather than a managed-service primitive -- under W8 it scores as
+    a substitute, not as a primitive -- and it needs FUSE in the execution environment, which
+    forecloses the Lambda-class substrates under W1; it is therefore evaluated as a variant of
+    s3_sync rather than as a distinct managed option. The membership floor uses `<=`, so wave 5 may
+    extend the set without touching this plan's guards. Note the option_set records what is UNDER
+    EVALUATION and asserts no capability claim about any member.
+  - >-
+    W8 is the one criterion NOT derived from the audit: it comes from the
     decision-scout gate's Decision 100 flag, and it corrects a bias the audit's own framing carried
     -- the audit priced EFS's foreclosure cost but never the reciprocal cost of hand-rolling a
     substitute for a managed primitive, which would have let a self-built store win on portability
@@ -641,7 +749,36 @@ context:
     structured stability block, the cost projection, and the ESB-04/ESB-06 preconditions. Wave 3 owns
     ESB-02 -- CD.27's maturity-monitoring/fallback clause, the audit's stale :821 anchor. Wave 5 owns
     the layer-2 spike and, with it, the CD.43 ratification that selects the store. This wave touches
-    none of those; VP step 5 proves the CD.27 half mechanically.
+    none of those; VP step 7 proves the CD.27 half mechanically.
+  - >-
+    DEPLOY DEFERRAL (deliberate, not overlooked; mirrors PLAN-esb-text-fix-bundle's ruling on the
+    same file and the same artifact). docs/ROADMAP-PLATFORM.yaml is an `assets:` entry in
+    src/lambdas/data-pipeline/manifest.yaml, which is `status: active`; compute_affected_artifacts
+    returns {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']}, verified again this session, and its
+    governed channel is .github/workflows/deploy-prod-lambdas.yml. Read literally, CD.16 and Decision
+    79 would require per-Lambda build + deploy + smoke-test steps. Deferred on four grounds: (i) 48
+    of 48 prior doc-only plans touching this file carry no build_lambda step; (ii) both packaged
+    consumers are inert -- SCHEDULED_AGENTS_ENABLED="false" and both EventBridge rules are
+    state="DISABLED" in terraform/scheduled_agents.tf; (iii) the asset is roadmap text on no live
+    code path, and the tier floor's own Lambda arm agrees -- validate_tier_floor.py:19-24's
+    `_lambda_code_files()` docstring says it is "deliberately NOT compute_affected_artifacts, which
+    also unions assets/config and would over-flag bundled non-code assets (e.g.
+    docs/ROADMAP-PLATFORM.yaml)", naming this exact file as the example; (iv) skipping a deploy takes
+    no governed action, whereas invoking one would fire a production deploy channel for a text edit.
+    The contract-versus-practice divergence is already filed as a recommendation by the orchestrator
+    -- it is not this plan's to file. This entry exists because SILENCE is the dangerous shape here:
+    an implementing agent that re-derives the arithmetic, finds no recorded ruling, and resolves the
+    ambiguity toward action would deploy.
+  - >-
+    VERIFICATION-REGISTRY OWNERSHIP: config/agent/verification_registry/registry.yaml is
+    deliberately absent from the Scope table and has no execution step. The implement skill's VF-05
+    producer walk OWNS it -- it enumerates this plan's `graduate`-disposition steps, builds each row
+    from the declared `graduation_check_id`, runs the real differential admission gate, appends
+    admitted rows, and flips any rejected step to `waive` in this plan file, all committed by Step
+    7's `git add -A`. An execution step instructing the implementer to write those rows would
+    duplicate a walk that fires automatically, and a Scope row would imply this plan authors them.
+    Checked against the skill rather than assumed (`.claude/skills/implement/SKILL.md`, Verification
+    Graduation section), which is how wave 1 resolved the same question.
   - >-
     CI-RCA DEFERRAL (planning-skill hard block, discharged explicitly). rec-2923 ("Sandbox subagent
     review starved; inherited errexit voided the retry and latched a false red", critical,
@@ -667,7 +804,7 @@ context:
   - >-
     VERIFICATION EVIDENCE GATHERED AT PLAN TIME, not asserted. Every VP step was executed against a
     simulated post-change tree and against the current pre-edit tree: steps 1-4 exit 0 on the former
-    and exit 1 with a specific diagnostic on the latter; step 5 is a regression invariant that passes
+    and exit 1 with a specific diagnostic on the latter; step 7 is a regression invariant that passes
     on both by design and was proven to fire by rewording the maturity-monitoring clause. Six targeted
     mutations were run and each produced the intended failure with a readable message: selecting a
     store, naming a store in T4.1's criterion, publishing a cost figure in W3, editing the
@@ -676,20 +813,34 @@ context:
     re-run green against the simulated tree. The simulation was then reverted; the tree this plan
     lands on is unmodified.
   - >-
-    GRADUATION SHAPE (Decision 132 / VF-05). Three steps graduate -- cd43-workspace-store-criteria-only,
-    t41-names-workspace-store-criteria, cd27-layer2-preconditions-cover-esb01 -- each a single
-    command_exit_zero spec over docs/ROADMAP-PLATFORM.yaml, and each fails when its guarded change is
-    reverted (proven above), which is what the differential admission gate requires. Five steps waive
-    with substantive reasons; step 5's waiver is structural rather than convenient, since an
-    "unchanged versus origin/main" assertion is necessarily true on the origin/main baseline the gate
-    reverts to and therefore can never be admitted.
+    GRADUATION SHAPE (Decision 132 / VF-05), restructured at plan-critique round 1 along a
+    DURABLE-versus-TRANSIENT split. The VP is deliberately paired: each keystone is one graduating
+    step carrying only assertions that stay true after CD.43 ratifies, plus a waived sibling carrying
+    the assertions that become false when wave 5 does the right thing. Step 2
+    (cd43-selection-criteria-well-formed) graduates the criteria set, typing, membership floors,
+    figure ban, W3's recompute basis, W8's Decision 100 binding and the PUBLIC-boundary sweep; step 3
+    waives `status`/`selected_store` equality. Step 4 (t41-names-workspace-store-criteria) graduates
+    T4.1 naming CD.43 with all eight criterion ids plus the bidirectional link and the bare-string
+    invariant; step 5 waives "names no candidate store". Step 6
+    (cd27-layer2-preconditions-cover-esb01) graduates the precondition floor. All three graduating
+    specs are single command_exit_zero commands over docs/ROADMAP-PLATFORM.yaml and each fails on the
+    origin/main revert (proven above), which is what the differential admission gate requires. WHY
+    the split rather than a retirement obligation on wave 5: the registry carries no expiry or
+    retirement field, so a transient row reddens main at ratification with no owner, and the cheapest
+    response for whoever hits it is to weaken the check rather than retire it. Durable by
+    construction beats durable by memory -- this run has already produced two recs about
+    promised-but-uncarried re-evaluations. The transient assertions survive in the pytest module,
+    which wave 5 deletes wholesale along with the rest of wave 2's guards. Seven steps waive; step
+    7's waiver is structural rather than convenient, since an "unchanged versus origin/main"
+    assertion is necessarily true on the baseline the gate reverts to and can never be admitted.
   - >-
-    HERMETIC MARKING (Decision 148). Steps 1-4 are hermetic and WILL be independently re-executed by
+    HERMETIC MARKING (Decision 148). Steps 1-6 are hermetic and WILL be independently re-executed by
     validate_vp_replay on the implement PR, with backtick literals in `expected` matched against
-    stdout+stderr. Every backticked literal was chosen to be invariant: step 4's omits the found list
-    so a future fourth precondition cannot break the match, and step 3's omits the gated-item count.
-    Steps 5-8 are non-hermetic (git fetch, pytest, validate.py recursion ban, subprocess fan-out) and
-    are printed as EXCLUDED with a reason rather than silently skipped.
+    stdout+stderr. Every backticked literal was chosen to be invariant: step 6's omits the found list
+    so a future fourth precondition cannot break the match, step 2's omits the criterion and option
+    counts, and step 4's omits the gated-item count. Steps 7-10 are non-hermetic (git fetch, pytest,
+    validate.py recursion ban, subprocess fan-out) and are printed as EXCLUDED with a reason rather
+    than silently skipped.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -711,7 +862,9 @@ execution_steps:
   - >-
     The `workspace_store_selection` mapping carries: `status: criteria_only`; `selected_store:
     TBD_at_CD.43_ratification`; `resolved_by` naming the CD.27 layer-2 spike; `option_set` with
-    efs_mount, s3_sync, container_local_disk, git_as_store_commit_at_step_boundaries; `coverage_cases`
+    efs_mount, s3_express_one_zone, fsx_managed_filesystem, lambda_ephemeral_tmp_10gb, s3_sync,
+    container_local_disk, git_as_store_commit_at_step_boundaries; `options_considered_and_rejected`
+    carrying mountpoint_for_s3 with its reason; `coverage_cases`
     with cross_invocation_persistence, inter_persona_handoff, persona_to_ecs_task_handoff; and
     `selection_criteria` W1-W8, each a `>-` folded scalar. W1 substrate portability across CD.27's
     pinned candidate set, naming all five substrates. W2 foreclosure disclosure with the EFS/hosted
@@ -766,10 +919,11 @@ execution_steps:
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
     RCA (Decision 55).
   - >-
-    Verification graduation walk: register the three `graduate` steps in
-    config/agent/verification_registry/registry.yaml using their declared check_ids verbatim, each as
-    a command_exit_zero primitive with guard_target docs/ROADMAP-PLATFORM.yaml, and let
-    validate_verification_registry run the real differential admission gate on them.
+    Let the implement skill's VF-05 producer walk handle graduation -- do NOT hand-author registry
+    rows. It reads this plan's three `graduate` steps (2, 4, 6), uses their declared
+    graduation_check_ids verbatim, and runs the real differential admission gate. If a candidate is
+    rejected, follow the skill: flip that step to `waive` with the concrete rejection reason in this
+    plan file rather than weakening the check.
   - "Report: what was implemented, verification results, and the graduation outcomes."
 work_areas: []
 rollback: >-
