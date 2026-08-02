@@ -85,7 +85,9 @@ scope:
       (never prose, which a substring test would satisfy even when negated); a nonzero
       scheduled-continuation count proves the exemption is exercised; the OLD prose stability entry
       is absent; the days-1-7 thresholds carry the literal TBD_at_T4.2_atomic_plan deferral marker
-      rather than invented numbers; INTENT :352 is annotated.
+      rather than invented numbers; the WHOLE stability block is scanned for mechanism vocabulary
+      (ESB-05's third site -- renaming the signal key alone leaves denominator/exempt/
+      baseline_window and the worked example's free text unconstrained); INTENT :352 is annotated.
   - file: tests/esb_text_fix/test_cost_projection.py
     action: Create
     purpose: >-
@@ -94,7 +96,8 @@ scope:
       recomputes from an explicit `headline_basis` (boolean include-flag, enumerated subtotal,
       add-on) rather than being asserted against a magic ceiling; a named Neon catalog egress line
       exists; the NAT figure is a bracket carrying confidence medium; the gross/free-tier stance is
-      explicit; exactly four `substrate_reevaluation_triggers` are present under that name; and
+      explicit; exactly four `substrate_reevaluation_triggers` are present under that name; every
+      enumerated breakdown line is either summed into the subtotal or explicitly excluded; and
       the PUBLIC-repository guard -- no 12-digit AWS account id, no arn:aws: string, no ExternalId
       pattern, no internal hostname anywhere in the cost text.
   - file: tests/esb_text_fix/test_decision_scope_notes.py
@@ -140,8 +143,11 @@ acceptance_criteria:
     example's rate recomputes exactly from its own `inputs` (not from `computed`), exercises a
     nonzero scheduled-continuation count, and carries an explicit boolean `verdict.fires`; the OLD
     prose stability entry is GONE rather than joined by a structured sibling; the days-1-7 absolute
-    thresholds carry the literal marker `TBD_at_T4.2_atomic_plan` rather than invented values; and
-    the INTENT :352 alarm row is annotated as counting unplanned resumes only.
+    thresholds carry the literal marker `TBD_at_T4.2_atomic_plan` rather than invented values; the
+    ENTIRE structured stability block is free of mechanism vocabulary (it is ESB-05's third named
+    site alongside c1 and the node typing, so the rename of the signal key is necessary but not
+    sufficient -- `denominator`, `exempt`, `baseline_window` and the worked example's free text are
+    all covered); and the INTENT :352 alarm row is annotated as counting unplanned resumes only.
   - >-
     ESB-09a: `step_functions_transitions` reads "$0.075-0.225" and recomputes exactly from its own
     stated assumptions (30 transitions/rec x 100-300 recs/month x $0.000025/transition); the
@@ -149,7 +155,10 @@ acceptance_criteria:
   - >-
     ESB-09b: `current_scale` carries a `headline_basis` mapping with an explicit boolean
     `includes_line_items_not_enumerated`, an `enumerated_subtotal_usd` and an `add_on_usd`, and
-    `total_per_month_usd` RECOMPUTES exactly from them. The defect being corrected is that the
+    `total_per_month_usd` RECOMPUTES exactly from them, and `headline_basis.derivation` accounts
+    for EVERY enumerated breakdown line as either summed or explicitly excluded (the Neon egress
+    line being the expected exclusion, since Decision 88 clause 2 gives it a measurement obligation
+    and no figure yet), so a future added cost line cannot silently fall outside the headline. The defect being corrected is that the
     45-65 headline was never recomputed after the EC2 and RDS retirements -- NOT that stale lines
     need removing: `ec2_runner_24_7` already reads "$0 (retired 2026-05-28 per CD.21 ...)" and
     there is no RDS line at all (RDS survives only as prose inside `ducklake_catalog_neon`). Also:
@@ -190,8 +199,12 @@ acceptance_criteria:
     appears anywhere in the added cost text, asserted mechanically rather than by inspection.
   - >-
     Guards: the `tests/esb_text_fix/` package lands with every module under 500 SLOC and none
-    registered in `config/sloc_budgets.yaml`; each module was demonstrated to FAIL against the
-    pre-edit tree before the corresponding edit was applied.
+    registered in `config/sloc_budgets.yaml`; each of the FIVE guard modules was demonstrated to
+    FAIL against the pre-edit tree before the corresponding edit was applied. (The count is five,
+    not six: `_anchors.py` is a loader from which pytest collects no tests, so it has no failing
+    state to demonstrate. VP step 10's "six-module package" and VP step 11's six-file glob use a
+    different and correct denominator -- every non-`__init__` file in the package, loader included,
+    is SLOC-governed and ships in the package.)
   - >-
     Scope discipline: `docs/ROADMAP-PLATFORM.yaml` line :821 (the CD.27 fallback clause, owned by
     wave 3 / ESB-02) is unchanged versus origin/main; the roadmap diff contains no `- id:` header
@@ -355,6 +368,9 @@ verification_plan:
       sd=[p for p in cd['discipline_points'] if isinstance(p,dict) and 'stability_definition_14d' in p];
       assert len(sd)==1, f'expected exactly 1 stability_definition_14d, found {len(sd)}';
       s=sd[0]['stability_definition_14d'];
+      blob=yaml.safe_dump(s).lower();
+      banned=[b for b in ('checkpoint-replay','durable function','forced timeout','replay') if b in blob];
+      assert not banned, f'mechanism vocabulary survives in the stability definition: {banned}';
       sig=s['signals']['unplanned_resume_rate'];
       assert sig.get('denominator') and sig.get('exempt'), sig;
       assert s.get('baseline_window'), 'baseline_window missing';
@@ -375,8 +391,9 @@ verification_plan:
     expected: >-
       Prints a rate derived from the worked example's own inputs, strictly below the 5% threshold;
       a nonzero scheduled-continuation count proving the exemption is exercised; an explicit
-      boolean verdict; the days-1-7 deferral marker; and no surviving prose stability entry -- i.e.
-      a routine 2-hour persona run no longer makes the gate structurally unfirable. On a passing
+      boolean verdict; the days-1-7 deferral marker; no mechanism vocabulary anywhere in the
+      stability block; and no surviving prose stability entry -- i.e. a routine 2-hour persona run
+      no longer makes the gate structurally unfirable. On a passing
       tree the step prints exactly `OK derived rate` and `fires True marker TBD_at_T4.2_atomic_plan`.
     fix_if: >-
       A `stale` failure means `stability_definition_14d` was ADDED beside the old prose entry
@@ -388,6 +405,9 @@ verification_plan:
       prose verdict reading "cannot fire" would satisfy a substring test while asserting the exact
       opposite of what this step exists to prove. A `days_1_7_absolute_thresholds` failure means
       threshold values were invented; restore the `TBD_at_T4.2_atomic_plan` marker (see context).
+      "mechanism vocabulary survives in the stability definition" means the signal key was renamed
+      but the incumbent's mechanism still appears in a value -- most likely `denominator`, `exempt`
+      or the worked example's note; reword it in interruption/resume terms.
     graduation: graduate
     graduation_check_id: cd27-stability-gate-evaluable
   - step: 5
@@ -471,6 +491,10 @@ verification_plan:
       band=str(natc['standing_usd_per_month']).strip();
       assert re.fullmatch(r'[$]?[0-9]+(?:[.][0-9]+)?-[$]?[0-9]+(?:[.][0-9]+)?', band), f'NAT must be a bracket low-high, not a point value -- got {band}';
       hb=cs['headline_basis'];
+      covered=set(hb['derivation']['sums']) | set(hb['derivation']['excluded']);
+      enumerated=set(cs['breakdown']);
+      assert covered==enumerated, f'headline_basis.derivation does not account for every breakdown line -- unlisted {sorted(enumerated-covered)}, phantom {sorted(covered-enumerated)}';
+      assert any('neon' in k.lower() and 'egress' in k.lower() for k in hb['derivation']['excluded']), 'the Neon egress line must be the declared exclusion (Decision 88 measurement obligation, no figure yet)';
       rng=lambda s: [float(x) for x in re.match(r'^\\\$?([0-9.]+)-\\\$?([0-9.]+)$', str(s).strip()).groups()];
       sub=rng(hb['enumerated_subtotal_usd']); add=rng(hb['add_on_usd']);
       inc=hb['includes_line_items_not_enumerated'];
@@ -488,7 +512,10 @@ verification_plan:
       A headline still at 45-65 means the retired lines were left in the sum. A point-value NAT
       figure reproduces the false precision ESB-09 exists to correct -- restore the bracket. A
       Neon egress line carrying a dollar figure violates Decision 88 clause 2's
-      measurement-not-guess obligation.
+      measurement-not-guess obligation. An "unlisted" derivation failure means a breakdown line is
+      neither summed nor excluded -- add it to `sums` or `excluded`; this is the guard that stops
+      ESB-09b's own defect (a headline never recomputed after the line items moved) recurring one
+      level down when a future edit adds a cost line.
     graduation: waive
     graduation_waiver_reason: >-
       The assertions bind to this specific edit's structural shape (a named Neon key, a four-entry
@@ -796,7 +823,11 @@ context:
   - >-
     'Decision-scout verdict FLAGS_FOUND. CITE list (verbatim decision ids): Decision 39, Decision
     75, Decision 84, Decision 105, Decision 112, Decision 126, Decision 130, Decision 150.'
-  - 'gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)'
+  - >-
+    'gates: decision-scout=FLAGS_FOUND (5 flags, all resolved by PIVOT); plan-critique=REVISE after
+    4 round(s), with the 3-round convergence cap cleared by explicit human authorisation and the S2
+    fold-in (CD.27 discipline_points[3] + narrowly_supersedes.clause) applied on explicit human
+    approval at round 4'
   - >-
     Decision-scout round 1 (gate_run_id esb-text-fix-bundle-decision-scout-r1-7c3f1a9e) triaged 114
     of 114 decisions and raised five flags, ALL resolved by PIVOT: (1) Decision 145 -- no in-place
@@ -867,6 +898,17 @@ context:
     supposed to decide, and no later wave owns any of them under these boundaries -- so deferring
     would leave them unowned rather than sequenced. All four are guarded by VP step 2, because an
     unguarded de-mechanisation site is how this class of defect persists.
+    CONSCIOUSLY DEFERRED, and named here so the ownership argument is not selectively applied:
+    T4.1's `intent` opening sentence ("Per CD.27, the executor substrate is Step Functions + Lambda
+    Durable Functions + Lambda (agent-persona execution) + Lambda (deterministic glue)") also names
+    the layer-2 substrate, and no wave owns it either. It is left mechanism-bound under the same
+    rule that keeps CD.27's layer-2 `detail` prose mechanism-bound: descriptive prose explaining
+    WHAT the CD decided may name the incumbent, while CONTRACT text -- exit criteria, node typings,
+    discipline points, health signals -- may not, because only contract text is what a future
+    substrate evaluation is scored against. The four CD.27 surfaces folded in above are titles,
+    discipline points and a supersession clause, none of which is explanatory prose. If a later
+    review disagrees with that line, T4.1's intent is a one-sentence edit; it is deferred by
+    reasoning, not by oversight.
   - >-
     THE KEYSTONE IS ESB-05 AND IT IS WHERE CRITIQUE ATTENTION BELONGS. The three-property
     vocabulary authored here is inherited verbatim by waves 2, 3 and 5. If P1/P2/P3 are wrong,
@@ -1035,7 +1077,14 @@ execution_steps:
     "$0.075-0.225" recomputed exactly from its own assumptions (NOT rounded to cents -- $0.08-0.23
     does not equal 30 x 100 x $0.000025); recompute the `current_scale` headline, which was never
     updated after the EC2 and RDS retirements (the EC2 line already reads $0 and there is no RDS
-    line to remove -- the stale artefact is the 45-65 SUM, not the line items); recompute the current_scale headline
+    line to remove -- the stale artefact is the 45-65 SUM, not the line items); author
+    `current_scale.headline_basis` as `{includes_line_items_not_enumerated: <bool>,
+    enumerated_subtotal_usd: "<lo-hi>", add_on_usd: "<lo-hi>", derivation: {sums: [<breakdown
+    keys>], excluded: [<breakdown keys>], note: <why excluded>}}`, where `sums` + `excluded`
+    together cover EVERY key in `current_scale.breakdown` (hand-authored totals are fine -- the
+    lines are not mechanically parseable -- but the coverage obligation is what stops a future
+    added line falling silently outside the headline), with `neon_catalog_egress` as the declared
+    exclusion per Decision 88 clause 2; recompute the current_scale headline
     (currently :279) and dominant_cost (:280) so they no longer sum the retired EC2 and RDS lines;
     add a NAMED Neon catalog egress line carrying the Decision 88 clause 2 measurement obligation
     with no invented figure; and add the structured `executor_substrate_billing` block folding in
