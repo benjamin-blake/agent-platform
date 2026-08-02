@@ -276,8 +276,8 @@ cost_projection:
     "sibling CD.17" as the cost-ratification home; CD.17 was subsequently allocated to STRATEGIC-freeze-reversal,
     leaving cost-projection without a home. CD.6 covers it instead.)
   current_scale:
-    total_per_month_usd: 45-65
-    dominant_cost: "EC2 self-hosted runner historically (~$35/mo) -- RETIRED 2026-05-28 per CD.21; with the RDS catalog migrated to Neon ($0) per CD.34, the dominant live AWS line is CloudWatch logs / DeepSeek inference (~$5-8/mo)"
+    total_per_month_usd: "22-59"
+    dominant_cost: "The unenumerated-item add-on (headline_basis.add_on_usd, ~$10-30/mo) is now the single largest component of the 22-59 headline -- larger than any individually-enumerated breakdown line, of which CloudWatch logs / DeepSeek inference (~$5-8/mo) is the biggest. EC2 self-hosted runner historically (~$35/mo) was the pre-2026-05-28 dominant cost, RETIRED per CD.21; the RDS catalog has since migrated to Neon ($0) per CD.34. Headline recomputed 2026-08-02 (ESB-09): the prior 45-65 figure summed the retired EC2/RDS lines rather than reflecting the unenumerated-item add-on; see headline_basis."
     breakdown:
       s3_storage: "<$1"
       athena_queries: "$1-5"
@@ -288,9 +288,70 @@ cost_projection:
       deepseek_executor_inference: "~$5 (~100 recs/month at ~$0.05 each via DeepSeek direct API, ~75% lower than the retired Bedrock path; native cache hit drops repeat-prefix cost further)"
       anthropic_escape_hatch_spillover: "$0-5 (warm-fetched Tier-2 per CD.28; usually $0 because Max x5 programmatic-pool credit absorbs the typical volume; spillover only when escape hatch activates heavily)"
       ducklake_catalog_neon: "$0 (Neon serverless Postgres free tier; scale-to-zero; built-in pooler replaces RDS Proxy) per CD.34, replacing the prior RDS catalog (~$12-15/mo single-AZ db.t4g.micro + gp3 + PITR; deferrable RDS Proxy +$10-12 was never provisioned -- OQ.8). Realized saving ~$12-15/mo. Daily pg_dump-to-S3 DR is a negligible add-on. Migrated before T2.17 to avoid building RDS-in-a-VPC + NAT plumbing."
-    line_items_not_enumerated: VPC endpoints, NAT, DynamoDB PITR, CloudTrail, Config, KMS, GH-hosted runner minutes, S3 Intelligent-Tiering monitoring fee, Step Functions state-transition cost (negligible at current scale, ~$0.025 per 1000 transitions Standard Workflow) -- realistic add-on $10-30/month at current scale.
+      neon_catalog_egress: "TBD (Decision 88 clause 2 measurement obligation -- a post-deploy figure via the catalog_stats action, not a planning-time guess)"
+    headline_basis:
+      includes_line_items_not_enumerated: true
+      enumerated_subtotal_usd: "12-29"
+      add_on_usd: "10-30"
+      derivation:
+        sums: [s3_storage, athena_queries, dynamodb_on_demand, ec2_runner_24_7, secrets_manager, cloudwatch_logs, deepseek_executor_inference, anthropic_escape_hatch_spillover, ducklake_catalog_neon]
+        excluded: [neon_catalog_egress]
+        note: total_per_month_usd recomputes to the enumerated subtotal PLUS add_on_usd, reaffirming the plan-critique round 2 ruling to fold the unenumerated-item estimate into the headline on anti-under-reporting grounds rather than silently dropping it; the individual VPC/NAT/CloudTrail/etc items are not provisioned as their own breakdown lines (see line_items_not_enumerated for the reason -- itemising them individually is out of this wave's scope, not that their aggregate cost is zero); neon_catalog_egress is excluded because Decision 88 clause 2 makes its figure a post-deploy measurement obligation, not a planning-time guess -- no dollar value exists to sum yet, and no anti-under-reporting stand-in is invented for it either
+    line_items_not_enumerated: VPC endpoints, NAT, DynamoDB PITR, CloudTrail, Config, KMS, GH-hosted runner minutes, S3 Intelligent-Tiering monitoring fee, Step Functions state-transition cost (negligible at current scale, ~$0.025 per 1000 transitions Standard Workflow). Not individually provisioned as their own breakdown lines; their realistic aggregate cost ($10-30/month at current scale) is folded into total_per_month_usd via headline_basis.add_on_usd (anti-under-reporting, per plan-critique round 2) rather than published as a headline-excluded footnote.
+  executor_substrate_billing:
+    provenance: Folded from audits/executor-substrate-and-billing-shape-ad02653.yaml billing_model (ESB-09); per-substrate envelope at concurrency=1 (T4.1's current cap), recorded scale 100-300 recs/month
+    gross_free_tier_stance: Figures are GROSS. Lambda's 400k GB-s / 1M requests, the 4000 free SFN transitions and CloudWatch's 5 GB free tier are ignored, because a 2026-created account may sit on the post-2025 credit plan rather than the perpetual free tier (unverified)
+    non_discrimination_conclusion: At concurrency=1, every candidate substrate (durable_functions, sfn_over_stateless_workers, self_checkpointed_lambda_dynamodb, long_running_container, plus the near-zero-marginal-dollar hosted_cli_runner) costs single-digit-to-low-double-digit dollars per month at recorded scale; envelope deltas between AWS-priced candidates are <= approximately $10-15/month -- economics do NOT discriminate the layer-2 substrate choice
+    per_substrate_envelope_usd_per_month:
+      durable_functions:
+        envelope: "1-8"
+        note: per-operation $8.00/M ops at 250-1000 ops/rec (0.20-0.80) plus data-written and retention terms
+        region: eu-west-2
+        rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+      sfn_over_stateless_workers:
+        envelope: "1-10"
+        note: transitions dominate at higher per-iteration counts (I~20-30 iterations x 5 personas)
+        region: eu-west-2
+        rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+      self_checkpointed_lambda_dynamodb:
+        envelope: "1-8"
+        note: DynamoDB on-demand write/read plus storage; state lives in owned storage
+        region: eu-west-2
+        rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+      long_running_container:
+        envelope: "~5"
+        note: Fargate x86 0.04656 usd per vCPU-hr plus 0.00511 usd per GB-hr at roughly 1 task-hour/rec
+        region: eu-west-2
+        rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+    durable_execution_corrected_rates:
+      per_operation_usd:
+        value: 0.0000134
+        region: eu-west-2
+        rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+        note: corrects the audit's understated 8e-6 figure, 1.7x low
+      data_written_usd_per_gb:
+        value: 0.41
+        region: eu-west-2
+        rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+        note: corrects the audit's understated 0.25/GB figure, 1.6x low
+      retention_usd_per_gb_month:
+        value: 0.25
+        region: eu-west-2
+        rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+        note: corrects the audit's understated 0.15/GB-month figure, 1.7x low
+    nat_contingency:
+      applies_to: EFS-for-Lambda workspace backing store, IF selected at wave 2 (ESB-01); not incurred under the incumbent or the container/hosted-CLI candidates
+      standing_usd_per_month: "33-35"
+      confidence: medium
+      region: eu-west-2
+      rate_basis: Published EFS plus VPC plus NAT Gateway tier pricing plus one third-party aggregator estimate, cross-checked against the audit's independent approximately 32 usd/month note; NOT the AWS Price List bulk offer files this block's other lines cite -- that basis does not cover NAT Gateway or EFS, which is exactly why this line is a bracket at confidence medium rather than an exact figure
+    substrate_reevaluation_triggers:
+      - A2+ concurrency raise (T4.4 autonomy-gate ratchet) -- the concurrency=1 non-discrimination conclusion no longer holds
+      - 100x scale (recs/month grows an order of magnitude beyond the 100-300 recorded baseline)
+      - Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)
+      - Egress shape change per Decision 88 clause 2 (the Neon catalog egress measurement lands a real figure)
   projected_100tb_scale:
-    total_per_month_usd: 880-1750
+    total_per_month_usd: "910-1880"
     dominant_cost: S3 storage (~$800-1500/mo with Intelligent-Tiering)
     breakdown:
       s3_storage_100tb_tiered: "$800-1500"
@@ -300,9 +361,17 @@ cost_projection:
       ec2_runner_scheduled: "$15-30"
       deepseek_executor_inference: "$15-80 (volume scaling per CD.28; ~75% lower than the retired Bedrock-DeepSeek path; assumes typical cache-hit ratios on repository-context prefix)"
       anthropic_escape_hatch_spillover: "$0-30 (Max x5 programmatic pool absorbs ~$100/mo; spillover above that bills at API rates -- CD.28 discipline-point recommends org-billed Anthropic API key once sustained >70% of pool over 30d)"
-      step_functions_transitions: "$1-10 (per-rec state transitions at Standard Workflow rates -- $0.025 per 1000 transitions; assumes ~30 transitions per rec and 100-300 recs/month)"
+      step_functions_transitions: "$0.075-0.225 (per-rec state transitions at Standard Workflow rates -- $0.000025/transition in eu-west-2; recomputed exactly from 30 transitions/rec x 100-300 recs/month)"
       other_secrets_cloudwatch_transfer: "$20-50"
-    add_ons_at_scale: $50-150/month for the line items not enumerated above (object count matters at 100 TB).
+    headline_basis:
+      includes_line_items_not_enumerated: true
+      enumerated_subtotal_usd: "860-1730"
+      add_on_usd: "50-150"
+      derivation:
+        sums: [s3_storage_100tb_tiered, athena_escape_hatch, duckdb_queries, dynamodb_ops_tables, ec2_runner_scheduled, deepseek_executor_inference, anthropic_escape_hatch_spillover, step_functions_transitions, other_secrets_cloudwatch_transfer]
+        excluded: []
+        note: total_per_month_usd recomputes to the enumerated subtotal plus add_on_usd (add_ons_at_scale) -- every breakdown key is summed, none excluded, since no line here carries an unmeasured Decision-88-style placeholder. Folding the add-on in reaffirms the same anti-under-reporting stance applied to current_scale (M3, code-review round 2) rather than leaving this block, whose step_functions_transitions line this wave actually corrected, without the same coverage obligation (M4, code-review round 2).
+    add_ons_at_scale: $50-150/month for the line items not enumerated above (object count matters at 100 TB); folded into total_per_month_usd via headline_basis.add_on_usd, not excluded from it.
   alternative_architectures_considered:
     - shape: SageMaker per-symbol fan-out for formula discovery
       cost_per_month_usd: 521 (or ~$160 with Spot + checkpointing)
@@ -745,7 +814,7 @@ candidate_decisions:
     supersedes_decisions: ["PR-361 commit 26ac4c2"]
 
   - id: CD.27
-    title: Executor compute substrate = Step Functions + Lambda Durable Functions + Lambda (per-step decomposition)
+    title: Executor compute substrate = Step Functions orchestration + resumable persona execution (layer-2 substrate pinned at ratification) + Lambda deterministic glue (per-step decomposition)
     detail: |
       Replaces the Fargate-as-single-executor-substrate decision (CD.11 Fargate-as-executor clause). The
       per-rec plan->critique->implement->review loop is natively a state machine, not a single long-running
@@ -788,7 +857,7 @@ candidate_decisions:
         - AWS Lambda Durable Functions launched at re:Invent 2025 (December 2025); GA in US-East (Ohio)
           + 13 additional regions December 2025; expanded to 16 additional regions including eu-west-2
           (London) April 2026; documented at https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html.
-          Supported runtimes: Python 3.13/3.14, Node.js 22/24, Java 17+. Max execution duration: 1 year.
+          Supported runtimes: Python 3.13/3.14, Node.js 22/24, Java 17+, .NET/C# 8/10. Max execution duration: 1 year.
           Checkpoint-replay model: on Lambda timeout, next invocation replays the event handler from start
           and skips completed durable operations (Steps/Waits). Verified availability in eu-west-2 (the
           project's region) as of 2026-05-27.
@@ -800,28 +869,66 @@ candidate_decisions:
         - Cites Decision 39 (Step Functions over Airflow) as precedent. The orchestrator choice is already ratified.
         - Preserves Decision 55 (RCA-first executor) verbatim. Step Functions retry policies are deterministic-only.
         - Replaces CD.11's Fargate-as-executor-substrate clause. Fargate-via-ECS-Run-Task retained as escape hatch.
-        - T4.3 (scheduled-agent loop) substrate choice remains open between Step Functions scheduled execution
-          and self-hosted runner cron (Decision 68); CD.27 keeps both options available; T4.3 atomic plans decide.
+        - T4.12 (scheduled-agent loop; renamed off T4.3 by the 2026-07-06 producer-repoint rewrite) decides
+          its own substrate at its own exit criterion cD (Step Functions scheduled execution vs
+          GitHub-hosted Actions schedule, still open, documented with rationale there); the CD.21 /
+          Decision 112 retirement already removed the sole alternative execution mechanism that used to
+          sit outside that pair, so cD's still-open choice is exactly between those two -- this CD does
+          not pre-empt it.
     gates: [T4.1, T4.2, T4.3, T4.4]
     state: pending
     filed_via: pending_log_decision_lambda
     narrowly_supersedes:
       decision_id: "CD.11"
       clause: |
-        Fargate-as-executor-substrate clause. Step Functions + Lambda Durable Functions + Lambda is the
-        new executor substrate. Fargate retained for ECS Run Task escape-hatch integration within Step
+        Fargate-as-executor-substrate clause. Step Functions orchestration + resumable persona execution
+        (layer-2 substrate pinned at ratification) + Lambda deterministic glue is the new executor
+        substrate. Fargate retained for ECS Run Task escape-hatch integration within Step
         Functions for steps that genuinely exceed 15 minutes (full pytest, large data migration, etc.;
         terraform apply is NOT an in-executor task -- it rides the CD.35 / Decision 92 gated-apply pipeline).
     discipline_points:
       - One Step Functions execution per rec (clean lifecycle scoping).
-      - Agent personas as Durable Functions, not as regular Lambdas. Regular Lambdas are deterministic-only.
       - Large artefacts (plans, diffs, transcripts) pass via S3 pointer pattern in Step Functions state. Payload stays well under the 256 KB transition limit.
-      - ECS Run Task escape hatch is the ONLY remaining Fargate path. Long-running agent loops are NOT a Fargate use case under CD.27 -- they are a Durable Function use case.
       - Step Functions retry policies are deterministic-only. LLM-judgment failure escalates via the rec/RCA path (Decision 55), never via automatic LLM-call retry-on-bad-output.
       - Lambda Durable Functions maturity monitoring -- the service is ~5 months in GA at the time of CD.27 ratification. If API semantics regress within the first 12 months, fall back to self-checkpointed Lambda with state in DynamoDB (intentional re-evaluation trigger; recorded as an INTENT Open Question for re-eval at each T4.2 atomic-plan filing). Track via T4.2 exit criterion "checkpoint-replay verified" and the Health Signal "Lambda Durable Function checkpoint-replay rate" (INTENT line surfaces alarm threshold).
-      - T4.2 "stable for 14 days" operational definition (required for the CD.17 reversal trigger). Across the 14-day grace window: per-persona checkpoint-replay rate < 5%; per-rec success rate >= rolling 7-day baseline; zero unrecovered failures (Decision 55 stop-clean-and-RCA path counts as recovered if a rec was filed); cost-per-rec rolling avg within 1.5x rolling 7-day baseline. Trigger fires only when ALL personas' executions satisfy these per-signal thresholds for the full 14-day window. This is the explicit semantic definition replacing the pre-CD.27 "Fargate handler runs the loop end-to-end without recovery agent" implicit definition.
+      - Cross-reference correction (H1, code-review round 1, 2026-08-02) on the maturity-monitoring point above -- untouched verbatim per this wave's own wave-3/ESB-02 ownership boundary on :821, not overlooked. Its quoted "checkpoint-replay verified" tracking pointer predates this wave's ESB-05 property rewrite of T4.2 c1 and is stale. The live, resolving references are T4.2 exit criterion c1 (persona deployments satisfy CD.27 resume_properties P1, P2 and P3) and this CD's stability_definition_14d unplanned_resume_rate signal (INTENT line :352 surfaces the alarm threshold).
       - T4.x atomic-plan template: each T4.x atomic plan must declare Plan Type IMPLEMENTATION (STRATEGIC remains suspended per AGENTS.md Temporary Operational Constraints) and must include CD.16 per-Lambda build/deploy/smoke-test steps for the Lambdas it touches (Decision 79 lifted the blanket Decision-67 deploy freeze; only the dispatcher smoke-test deferral survives until T4.3 -- audit F-009). T4.2 in particular splits per-persona; not all personas need to land in the same window.
       - "[Amended 2026-07-07, EXR-07 / audit 7d57a0d; extends nothing, overturns nothing:] terraform apply is removed from the ECS Run-Task escape-hatch examples -- apply authority is the GitHub-Actions CD.35 / Decision 92 gated-apply pipeline (CD.38 sole-runner), never an in-executor task. Reconciles a stale example with the ratified apply authority."
+      - resume_properties:
+          P1: A resumed persona execution completes remaining work without re-doing operations already completed before the interruption.
+          P2: A resumed persona execution continues from the same workspace state (files, branch, in-progress edits) it held before the interruption, without losing that state.
+          P3: An interruption bounds the amount of lost work to a small, characterizable slice of the persona's operations, never the whole run.
+      - Agent personas run as resumable persona nodes satisfying P1/P2/P3 (resume-without-redo, workspace continuity, bounded loss per this CD's resume_properties), not as regular Lambdas -- the layer-2 substrate providing that resumability is pinned at ratification. The deterministic-only rule for regular Lambdas is scoped to the executor's ITERATIVE persona loops, co-citing Decision 39's managed-orchestration precedent for the `agent` state type it continues to govern outside that scope.
+      - ECS Run Task escape hatch is the ONLY remaining Fargate path. Long-running agent loops are NOT a Fargate use case under CD.27 -- they run as resumable persona nodes satisfying P1/P2/P3, with the layer-2 substrate pinned at ratification.
+      - stability_definition_14d:
+          purpose: T4.2 operational definition of "stable for 14 days", required for the CD.17 reversal trigger. This is the explicit semantic definition replacing the pre-CD.27 "Fargate handler runs the loop end-to-end without recovery agent" implicit definition.
+          signals:
+            unplanned_resume_rate:
+              denominator: persona-node executions STARTED in the 14-day window
+              exempt: scheduled duration-ceiling continuations -- routine resumes triggered by a persona hitting its max-invocation-duration ceiling, not by an unplanned interruption
+              threshold: less than 5 percent
+            per_rec_success_rate:
+              threshold: at or above the rolling 7-day baseline
+            unrecovered_failures:
+              threshold: zero (the Decision 55 stop-clean-and-RCA path counts as recovered if a rec was filed)
+            cost_per_rec:
+              threshold: rolling average within 1.5x the rolling 7-day baseline
+          baseline_window: the scored evaluation span is days 8-14 of the grace window; days 1-7 establish the in-window baseline only and are never themselves scored against the thresholds above -- this is what stops the gate self-delaying on its own bootstrap data
+          days_1_7_absolute_thresholds: TBD_at_T4.2_atomic_plan
+          worked_example:
+            scenario: a 2-hour implement_agent run
+            inputs:
+              persona_node_executions: 25
+              unplanned_resumes: 1
+              scheduled_continuations: 15
+            computed:
+              unplanned_resume_rate: 0.04
+            verdict:
+              signal_passes: true
+              rationale: 0.04 is under the 5 percent threshold for this signal, so signal_passes is true for unplanned_resume_rate on this persona; the 14-day trigger overall fires only when ALL personas satisfy every per-signal threshold above across days 8-14 -- this worked example demonstrates one persona's unplanned_resume_rate signal passing, not the whole 14-day trigger alone
+          trigger_semantics: fires only when ALL personas' executions satisfy every per-signal threshold above across days 8-14 of the grace window (see baseline_window)
+      - Layer-2 ratification precondition (ESB-04). Before this CD ratifies, the ratifying plan must carry a comparative record over the pinned candidate substrate set (durable_functions, sfn_over_stateless_workers, self_checkpointed_lambda_dynamodb, long_running_container, hosted_cli_runner) plus the Q5 spike outcome (decision_scout as the spike vehicle). The selected layer-2 substrate must be a MANAGED orchestration primitive unless the selecting plan authors an explicit Decision 39 supersession -- this CD does not by itself widen the admissible substrate set beyond what Decision 39 ratified.
+      - Layer-2 ratification precondition (ESB-06). If the Q5 spike selects a substrate whose resume model is replay-based (re-runs handler code from the start on resume, as durable_functions and sfn_over_stateless_workers do), the ratifying plan must also carry the determinism rules for step-wrapped code plus a validate.py static check enforcing them, before ratification. If the spike instead selects a non-replay substrate (self_checkpointed_lambda_dynamodb, long_running_container, hosted_cli_runner), this determinism-rules-plus-static-check obligation LAPSES -- it does not carry forward as dead weight onto a substrate the rules do not apply to.
 
   - id: CD.28
     title: LLM inference = DeepSeek-direct via LiteLLM (Tier 1); Anthropic-direct (Tier 2); Bedrock retired from architecture
@@ -6825,11 +6932,11 @@ tier_items:
       State-machine shape (per CD.27 boundary diagram):
         - pick_rec [Lambda]                          : poll priority queue; ADMISSION PREDICATE gates the return -- admit a rec only when its T3.8 relevance verdict == relevant (CD.36 / Decision 103), automatable == true, and risk is within the current T4.4 autonomy-gate ceiling (Decision 92 ratchet), AND its targets do NOT match Decision 117 boundary_patterns (config/agent/executor/capabilities.yaml); a refused pick emits a typed telemetry event and a boundary_patterns hit re-routes the rec to the human path (Decision 55), never auto-executed; returns rec_id + branch_slug
         - prepare_workspace [Lambda]                 : clone repo, create agent/{slug} branch, set up worktree, return workspace_uri
-        - plan_agent [Durable Function, T4.2]        : iterative read-code -> LLM -> tool-use -> emit plan; writes PLAN-{slug}.md to S3; returns {plan_s3_uri, plan_summary}
-        - Parallel { plan_critic, decision_scout, ... } [Durable Functions, T4.2]  : critic personas run in parallel
+        - plan_agent [resumable persona (CD.27 P1/P2/P3), T4.2]        : iterative read-code -> LLM -> tool-use -> emit plan; writes PLAN-{slug}.md to S3; returns {plan_s3_uri, plan_summary}
+        - Parallel { plan_critic, decision_scout, ... } [resumable persona (CD.27 P1/P2/P3), T4.2]  : critic personas run in parallel
         - critique_gate [Lambda]                     : aggregate parallel critic verdicts; route back to plan_agent on block, forward on pass
-        - implement_agent [Durable Function, T4.2]   : iterative read-plan -> edit-files -> run-tests -> emit-diff
-        - code_review [Durable Function, T4.2]       : structured review verdict
+        - implement_agent [resumable persona (CD.27 P1/P2/P3), T4.2]   : iterative read-plan -> edit-files -> run-tests -> emit-diff
+        - code_review [resumable persona (CD.27 P1/P2/P3), T4.2]       : structured review verdict
         - file_pr [Lambda]                           : idempotent PR creation via gh
         - await_verdict [Lambda, waitForTaskToken]   : wait on the GitHub Actions verdict callback (T4.9a); Step Functions stores correlation ids incl. head SHA
         - merge [Lambda]                             : callback-gated squash-merge (T4.9a) -- PRE_PASS permits merge only when the callback head SHA equals the PR head
@@ -6838,9 +6945,9 @@ tier_items:
         - ESCAPE [ECS Run Task synchronous integration] : for deterministic steps that exceed 15 min (e.g. full pytest, large data migration); terraform apply is NOT an in-executor escape-hatch task -- see deploy_dispatch (dispatched to the CD.35 / Decision 92 GitHub-Actions gated-apply pipeline, per CD.38)
     depends_on: [T2.1, T3.2]
     files_in_scope:
-      - terraform/executor_step_functions.tf    # new -- state machine + EventBridge trigger
-      - terraform/executor_lambdas_iam.tf       # new -- per-Lambda execution roles
-      - terraform/executor_observability.tf     # new -- CloudWatch log groups, metrics, alarms
+      - terraform/personal/executor_step_functions.tf    # new -- state machine + EventBridge trigger
+      - terraform/personal/executor_lambdas_iam.tf       # new -- per-Lambda execution roles
+      - terraform/personal/executor_observability.tf     # new -- CloudWatch log groups, metrics, alarms
       - src/lambdas/pick_rec/                   # new -- deterministic glue Lambda
       - src/lambdas/prepare_workspace/          # new -- deterministic glue Lambda
       - src/lambdas/critique_gate/              # new -- deterministic glue Lambda
@@ -6932,7 +7039,7 @@ tier_items:
       - scripts/llm/client.py           # rewrite to LiteLLM transport; remove Bedrock + Gemini-CLI paths
       - config/agent/executor/prompts/  # per-persona prompt templates (one per Durable Function)
     exit_criteria:
-      - "Each persona Lambda Durable Function deployed; checkpoint-replay verified: a forced timeout mid-persona-loop resumes from last completed tool call on next invocation without re-issuing completed LLM calls"
+      - "Each persona deployment satisfies CD.27 resume_properties P1, P2 and P3: an interruption mid-persona-loop resumes without re-doing completed work (P1), continues without losing workspace state (P2), and bounds any lost work to a small, characterizable slice of the persona's operations (P3)"
       - "End-to-end smoke: rec -> plan_agent -> Parallel(plan_critic, decision_scout) -> critique_gate PASS -> implement_agent -> code_reviewer -> file_pr -> verdict-callback (T4.9a) PRE_PASS permits merge -> PR opens and validates green"
       - "All telemetry emitted via agent_sdk per turn (rec_id, step_id, turn_index, model_id, tokens_in, tokens_out, cached_tokens_read, cached_tokens_written, est_cost_usd, latency_ms); no orphan process_events"
       - "LiteLLM is the only LLM transport: grep `import boto3.*bedrock` and `import google.generativeai` and `from copilot` return zero hits in src/lambdas/*/"

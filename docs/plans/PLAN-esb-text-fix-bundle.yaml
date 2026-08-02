@@ -229,29 +229,37 @@ verification_plan:
       assert cd.ratified_as is None;
       assert cd.filed_via=='pending_log_decision_lambda', cd.filed_via;
       dp=cd.discipline_points;
-      assert len(dp)==12, f'expected EXACTLY 12 discipline_points (9 pre-existing + resume_properties + 2 ratification obligations; stability_definition_14d REPLACES entry 6 in place, adding none), found {len(dp)}';
+      assert len(dp)==13, f'expected EXACTLY 13 discipline_points (9 pre-existing + resume_properties + 2 ratification obligations + 1 H1 cross-reference correction; stability_definition_14d REPLACES entry 6 in place, adding none), found {len(dp)}';
       blob=str(dp);
       assert 'managed orchestration primitive' in blob.lower(), 'ESB-04 obligation missing its Decision 39 managed-primitive clause';
       assert 'lapse' in blob.lower(), 'ESB-06 obligation missing its explicit lapse clause';
       print('OK', len(dp), 'discipline_points; both ratification obligations present')"
     expected: >-
-      Loads without raising and prints OK with a discipline_points count of EXACTLY 12 -- the 9
-      pre-existing entries, plus the resume_properties entry and the two ratification-obligation
-      entries, with stability_definition_14d replacing pre-existing entry 6 in place rather than
-      adding one. Exactness matters: a greater-than-or-equal bound would pass on a tree where the
-      structured stability block was appended and the stale prose entry left standing. Both
+      Loads without raising and prints OK with a discipline_points count of EXACTLY 13 -- the 9
+      pre-existing entries, plus the resume_properties entry, the two ratification-obligation
+      entries, and one H1 cross-reference-correction entry (code-review round 1; see AMENDMENT
+      note below), with stability_definition_14d replacing pre-existing entry 6 in place rather
+      than adding one. Exactness matters: a greater-than-or-equal bound would pass on a tree where
+      the structured stability block was appended and the stale prose entry left standing. Both
       obligations are additionally asserted BY CONTENT, so dropping either one fails here even if
       the count is satisfied. On a passing tree the step prints exactly
       `discipline_points; both ratification obligations present`.
     fix_if: >-
       A ValidationError naming an unexpected CD.27 key means a structured block was added as a new
       top-level key instead of a discipline_points entry -- move it into discipline_points. A count
-      of 13 means `stability_definition_14d` was APPENDED rather than replacing entry 6 -- delete
-      the stale prose entry (VP step 4 asserts this independently). A count of 11 means one of the
-      three intended ADDITIONS was dropped -- check which of `resume_properties`, the ESB-04
-      obligation or the ESB-06 obligation is missing. A content-assertion failure means an
-      ESB-04/ESB-06 obligation was silently dropped, the exact defect this slice exists to prevent
-      (see WAVE BOUNDARIES in context).
+      of 14 means `stability_definition_14d` was APPENDED rather than replacing entry 6 -- delete
+      the stale prose entry (VP step 4 asserts this independently). A count of 12 means one of the
+      four intended ADDITIONS was dropped -- check which of `resume_properties`, the ESB-04
+      obligation, the ESB-06 obligation, or the H1 correction entry is missing. A content-assertion
+      failure means an ESB-04/ESB-06 obligation was silently dropped, the exact defect this slice
+      exists to prevent (see WAVE BOUNDARIES in context).
+      AMENDMENT (2026-08-02, code-review round 1, H1): the count moved from 12 to 13. H1 found
+      that renaming T4.2 c1 (ESB-05) left CD.27's wave-3-owned (:821) maturity-monitoring point
+      quoting a now-nonexistent T4.2 criterion phrase verbatim. That point is VP step 9's own
+      protected text (byte-identical to origin/main, wave-3/ESB-02 ownership) and cannot be edited
+      in place, so the fix is a new, separate discipline_point entry that acknowledges the stale
+      quote and supplies a resolving replacement reference -- additive, not a replacement of an
+      existing entry, hence +1 to the count rather than 0.
     graduation: waive
     graduation_waiver_reason: >-
       Duplicates the already-registered validate_platform_roadmap check, which performs the same
@@ -386,28 +394,36 @@ verification_plan:
       assert abs(we['computed']['unplanned_resume_rate']-derived) < 1e-9, f\"recorded {we['computed']['unplanned_resume_rate']} != derived-from-inputs {derived}\";
       assert derived < 0.05, f'worked example rate {derived} contradicts the <5% threshold';
       vd=we['verdict'];
-      assert isinstance(vd,dict) and vd.get('fires') is True, f'verdict must be a mapping carrying an explicit boolean fires:true, got {vd}';
-      print('OK derived rate', derived, 'scheduled_continuations', inp['scheduled_continuations'], 'fires', vd['fires'], 'marker', thr)"
+      assert isinstance(vd,dict) and vd.get('signal_passes') is True, f'verdict must be a mapping carrying an explicit boolean signal_passes:true, got {vd}';
+      assert 'fires' not in vd, 'verdict must not carry a fires key -- it overclaims relative to a single-signal worked example (M2, code-review round 1)';
+      print('OK derived rate', derived, 'scheduled_continuations', inp['scheduled_continuations'], 'signal_passes', vd['signal_passes'], 'marker', thr)"
     expected: >-
       Prints a rate derived from the worked example's own inputs, strictly below the 5% threshold;
       a nonzero scheduled-continuation count proving the exemption is exercised; an explicit
       boolean verdict; the days-1-7 deferral marker; no mechanism vocabulary anywhere in the
       stability block; and no surviving prose stability entry -- i.e. a routine 2-hour persona run
       no longer makes the gate structurally unfirable. On a passing
-      tree the step prints exactly `OK derived rate` and `fires True marker TBD_at_T4.2_atomic_plan`.
+      tree the step prints exactly `OK derived rate` and `signal_passes True marker TBD_at_T4.2_atomic_plan`.
     fix_if: >-
       A `stale` failure means `stability_definition_14d` was ADDED beside the old prose entry
       instead of replacing it -- delete the prose entry. A derived-vs-recorded mismatch means
       `computed` was hand-written rather than computed from `inputs`; fix the recorded value, not
       the assertion. A rate at or above 0.05 means scheduled duration-ceiling continuations are
       still in the numerator; move them into `exempt`. "verdict must be a mapping carrying an
-      explicit boolean" means `fires` was left as prose -- it must be a real boolean, because a
-      prose verdict reading "cannot fire" would satisfy a substring test while asserting the exact
-      opposite of what this step exists to prove. A `days_1_7_absolute_thresholds` failure means
-      threshold values were invented; restore the `TBD_at_T4.2_atomic_plan` marker (see context).
-      "mechanism vocabulary survives in the stability definition" means the signal key was renamed
-      but the incumbent's mechanism still appears in a value -- most likely `denominator`, `exempt`
-      or the worked example's note; reword it in interruption/resume terms.
+      explicit boolean" means `signal_passes` was left as prose -- it must be a real boolean,
+      because a prose verdict reading "cannot fire" would satisfy a substring test while asserting
+      the exact opposite of what this step exists to prove. A `days_1_7_absolute_thresholds`
+      failure means threshold values were invented; restore the `TBD_at_T4.2_atomic_plan` marker
+      (see context). "mechanism vocabulary survives in the stability definition" means the signal
+      key was renamed but the incumbent's mechanism still appears in a value -- most likely
+      `denominator`, `exempt` or the worked example's note; reword it in interruption/resume terms.
+      AMENDMENT (2026-08-02, code-review round 1, M2): `verdict.fires` was renamed to
+      `verdict.signal_passes` and a `'fires' not in vd` guard was added. The original key
+      overclaimed: it named itself after the CD.17 reversal trigger's own verb ("fires") while the
+      worked example only demonstrates ONE persona's ONE signal (unplanned_resume_rate) passing,
+      not that ALL personas satisfy ALL four signals across the full baseline_window (the actual
+      firing condition, per `trigger_semantics`) -- the adjacent rationale text already said this
+      but the key name asserted the opposite. `signal_passes` names exactly what is proven.
     graduation: graduate
     graduation_check_id: cd27-stability-gate-evaluable
   - step: 5
@@ -574,13 +590,13 @@ verification_plan:
       appended lines -- no in-place body rewrite (Decision 145 clause 2).
     command: >-
       git fetch origin main --quiet; bin/venv-python -c "import subprocess,re,sys;
-      r=subprocess.run(['git','diff','origin/main','--','docs/ROADMAP-PLATFORM.yaml','docs/DECISIONS.md'],capture_output=True,text=True);
+      r=subprocess.run(['git','diff','-U0','origin/main','--','docs/ROADMAP-PLATFORM.yaml','docs/DECISIONS.md'],capture_output=True,text=True);
       out=r.stdout;
       assert out.strip(), 'no diff versus origin/main -- cannot assert scope discipline';
       hdr=re.findall(r'^[+-]\\s+- id: (\\S+)',out,re.MULTILINE);
       assert not hdr, f'tier_item/CD header lines in diff: {hdr}';
       assert 'self-checkpointed Lambda with state in DynamoDB' not in out, 'wave-3 fallback clause (:821) was modified';
-      dec=subprocess.run(['git','diff','origin/main','--','docs/DECISIONS.md'],capture_output=True,text=True).stdout;
+      dec=subprocess.run(['git','diff','-U0','origin/main','--','docs/DECISIONS.md'],capture_output=True,text=True).stdout;
       removed=[l for l in dec.splitlines() if l.startswith('-') and not l.startswith('--- ')];
       assert not removed, f'in-place edits to decision bodies: {removed[:3]}';
       print('OK scope discipline held')"
@@ -597,6 +613,24 @@ verification_plan:
       edit. A removed DECISIONS.md line means a body was edited in place; move the change into the
       trailer. Note the removed-line filter skips only real diff file headers (`--- ` with a
       trailing space), so deletion of a literal `---` separator is caught rather than exempted.
+      AMENDMENT (2026-08-02, implement-time, ESB text-fix-bundle execution): the command was
+      changed from `git diff origin/main -- ...` to `git diff -U0 origin/main -- ...` (zero
+      context lines). Discovered live during implementation: origin/main's discipline_points list
+      places the untouched CD.27 :821 fallback entry immediately between discipline_points[3]
+      (ESB-10 Site A, required edit) and discipline_points[6] (ESB-08's old prose entry, required
+      deletion), with only one genuinely-unchanged buffer line on either side -- inside git's
+      default 3-line diff context radius. Three independent restructuring attempts (in-place edit;
+      full reorder; order-preserving delete-and-append, which proved the fallback line carries no
+      +/- prefix and appears exactly once) confirmed this is a diff-context-merge artifact, not an
+      actual modification -- so the original command produced a false positive on a CORRECT
+      implementation, which is exactly the failure mode VF-01/Decision 148 hermetic replay exists
+      to catch, not cause. `-U0` fixes the check at its root cause (STRENGTHENS it, does not
+      relax it): with zero context, the diff emits only `+`/`-` lines, so a substring hit means the
+      line genuinely changed -- precisely what the assertion always intended to express. Verified
+      the header-line and removed-line assertions are unaffected by context width (both already
+      key off `^[+-]` and `-`-prefixed lines only, confirmed identical under `-U0` before and after
+      this amendment). Ruled by the /overseer orchestrator; this is a plan-document defect
+      discovered only once real edits existed to diff, not catchable by static plan-critique.
     graduation: waive
     graduation_waiver_reason: >-
       Depends on the branch's transient diff against origin/main, which by construction does not
@@ -1012,6 +1046,27 @@ context:
     (so the Main Divergence Assessment found no overlap and no rebase was deferred), ops_outbox
     empty, open_recommendations 881 with the non-automatable soft cap breached (754, informational
     per Decision 73), ci_rca_unresolved = [rec-2923] only.
+  - >-
+    IMPLEMENT-TIME PLAN AMENDMENT (2026-08-02, VP step 9). VP step 9's `command` was changed to add
+    `-U0` to both `git diff origin/main` invocations, after the pre-edit-tree/simulated-correct-tree
+    proof this plan's Verification Plan otherwise relies on turned out to have a gap: origin/main's
+    CD.27 discipline_points list places the untouched :821 fallback entry directly between
+    discipline_points[3] (ESB-10 Site A, required edit) and discipline_points[6] (ESB-08's required
+    deletion), inside git's default 3-line diff context radius, so a correct implementation still
+    pulls the fallback text into the diff as unmodified context and fails the original command's
+    literal string-absence assertion -- a false positive discoverable only once real edits existed
+    to diff (no static plan-critique round could have caught it). `-U0` fixes this at the check's
+    actual purpose (a substring hit under zero-context means the line genuinely changed) without
+    weakening the header-line or removed-line assertions, both already keyed off `^[+-]`/`-`-prefixed
+    lines only (reverified identical under `-U0`). Full reasoning and verification trail recorded in
+    VP step 9's `fix_if`. Ruled by the /overseer orchestrator under the same authority that approved
+    this plan; edited on the implementing session's branch (validate_vp_replay's implement-PR leg
+    resolves and replays PLAN-esb-text-fix-bundle.yaml from this branch's own working tree per
+    Decision 148's two-leg model, so the amended command is what CI actually replays). Precedent for
+    editing docs/plans/PLAN-{slug}.yaml itself during implementation: the implement skill's
+    Verification Graduation step 5 (disposition flip from `graduate` to `waive` on rejection,
+    committed in the same PR) -- the same family of sanctioned out-of-Scope-table plan-document
+    edit, extended here from a disposition-field fix to a diff-tooling-artifact fix.
 
 pre_implementation_checklist:
   - Branch confirmed not on main (harness `claude/...` session branch)

@@ -349,7 +349,7 @@ Production health is not observable today (Gemini CLI failures surface as exit c
 | Anthropic 5xx rate (Tier 2 escape hatch) | Counter | >2 in 5 min when actively routed |
 | Anthropic programmatic-pool utilisation | Gauge | >70% of Max x5 pool over 30 days (per CD.28 discipline point -- file rec for org-billed key) |
 | LiteLLM exception rate | Counter | Any exception not handled by the harness |
-| Lambda Durable Function checkpoint-replay rate | Counter | >5 in 1 hour (signals persona-loop hitting Lambda timeout regularly; investigate persona work decomposition) |
+| Unplanned persona-resume rate (CD.27 stability_definition_14d unplanned_resume_rate signal; formerly named "Lambda Durable Function checkpoint-replay rate") | Counter | >5 in 1 hour (signals persona-loop hitting Lambda timeout regularly; investigate persona work decomposition). ANNOTATED 2026-08-02 (CD.27 stability_definition_14d, ESB-08): this counter measures UNPLANNED resumes only -- scheduled duration-ceiling continuations are routine under CD.27 and are excluded from it; cited by CD.27 as provenance only, never as gate authority (Decision 86). |
 | Cost-per-rec rolling avg | Gauge | >1.5x rolling 7-day baseline |
 | Tier 2 Anthropic credential validation at boot | Boolean | False blocks harness start (escape hatch must be warm) |
 | Outbox drain lag | Gauge | >5 min since last successful drain |

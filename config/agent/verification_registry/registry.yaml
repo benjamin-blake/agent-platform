@@ -2838,3 +2838,51 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/test_decision_scout_retrieval.py
+  - check_id: t4x-persona-contracts-mechanism-word-free
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-text-fix-bundle
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - 'bin/venv-python -c "import yaml; d=yaml.safe_load(open(''docs/ROADMAP-PLATFORM.yaml'')); cd=[c for c in d[''candidate_decisions''] if c[''id'']==''CD.27''][0]; rp=[p for p in cd[''discipline_points''] if isinstance(p,dict) and ''resume_properties'' in p]; assert len(rp)==1, f''resume_properties must be defined exactly once, found {len(rp)}''; props=rp[0][''resume_properties'']; assert set(props)=={''P1'',''P2'',''P3''}, f''expected exactly P1/P2/P3, got {sorted(props)}''; t41=[i for i in d[''tier_items''] if i[''id'']==''T4.1''][0]; t42=[i for i in d[''tier_items''] if i[''id'']==''T4.2''][0]; c1=t42[''exit_criteria''][0]; nodes=[l for l in t41[''intent''].splitlines() if ''['' in l and ''T4.2]'' in l]; assert len(nodes)==4, f''expected 4 persona-node typings, found {len(nodes)}''; personas=[p for p in cd[''discipline_points''] if isinstance(p,str) and ''Agent personas'' in p]; assert len(personas)==1, f''expected 1 personas discipline point, found {len(personas)}''; fargate=[p for p in cd[''discipline_points''] if isinstance(p,str) and ''ECS Run Task escape hatch'' in p]; assert len(fargate)==1, f''expected 1 Fargate escape-hatch discipline point, found {len(fargate)}''; banned=[''checkpoint-replay'',''durable function'',''forced timeout'',''replay'']; property_bound={''c1'':c1,''personas_discipline_point'':personas[0],''fargate_discipline_point'':fargate[0]}; property_bound.update({f''node[{n}]'':t for n,t in enumerate(nodes)}); descriptive={''cd_title'':cd[''title''],''narrowly_supersedes_clause'':cd[''narrowly_supersedes''][''clause'']}; allsites={**property_bound, **descriptive}; hits={k:[b for b in banned if b in v.lower()] for k,v in allsites.items()}; hits={k:v for k,v in hits.items() if v}; assert not hits, f''mechanism vocabulary survives at a de-mechanised site: {hits}''; missing={k:[p for p in (''P1'',''P2'',''P3'') if p not in v] for k,v in property_bound.items()}; missing={k:v for k,v in missing.items() if v}; assert not missing, f''contract text does not reference the resume properties: {missing}''; assert ''workspace'' in c1.lower(), ''c1 must assert workspace continuity (ESB-01 half)''; print(''OK'', sorted(props), len(nodes), ''nodes;'', len(property_bound), ''property-bound sites;'', len(descriptive), ''descriptive sites; all 9 mechanism-free'')"'
+  - check_id: executor-tf-paths-under-terraform-personal
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-text-fix-bundle
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - 'bin/venv-python -c "import yaml; d=yaml.safe_load(open(''docs/ROADMAP-PLATFORM.yaml'')); tf=[(i[''id''],f.split(''#'')[0].strip()) for i in d[''tier_items''] if i[''id''].startswith(''T4.'') for f in (i.get(''files_in_scope'') or []) if f.split(''#'')[0].strip().endswith(''.tf'')]; ex=[(t,p) for t,p in tf if p.rsplit(''/'',1)[-1].startswith(''executor_'')]; bad=[(t,p) for t,p in ex if not p.startswith(''terraform/personal/'')]; assert not bad, f''executor .tf still under the retired root: {bad}''; assert len(ex)>=5, ex; nonex=[(t,p) for t,p in tf if not p.rsplit(''/'',1)[-1].startswith(''executor_'')]; assert (''T4.12'',''terraform/scheduled_agents.tf'') in nonex, ''T4.12 scheduled_agents.tf must remain untouched at the legacy root''; print(''OK'', len(ex), ''executor .tf paths under terraform/personal/;'', len(nonex), ''non-executor path(s) correctly excluded'')"'
+  - check_id: cd27-stability-gate-evaluable
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-text-fix-bundle
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - 'bin/venv-python -c "import yaml; d=yaml.safe_load(open(''docs/ROADMAP-PLATFORM.yaml'')); cd=[c for c in d[''candidate_decisions''] if c[''id'']==''CD.27''][0]; sd=[p for p in cd[''discipline_points''] if isinstance(p,dict) and ''stability_definition_14d'' in p]; assert len(sd)==1, f''expected exactly 1 stability_definition_14d, found {len(sd)}''; s=sd[0][''stability_definition_14d'']; blob=yaml.safe_dump(s).lower(); banned=[b for b in (''checkpoint-replay'',''durable function'',''forced timeout'',''replay'') if b in blob]; assert not banned, f''mechanism vocabulary survives in the stability definition: {banned}''; sig=s[''signals''][''unplanned_resume_rate'']; assert sig.get(''denominator'') and sig.get(''exempt''), sig; assert s.get(''baseline_window''), ''baseline_window missing''; thr=s[''days_1_7_absolute_thresholds'']; assert thr==''TBD_at_T4.2_atomic_plan'', f''days-1-7 thresholds must carry the deferral marker verbatim, got {thr}''; stale=[q for q in cd[''discipline_points''] if isinstance(q,dict) and any(''stable for 14 days'' in str(k) for k in q)]; assert not stale, f''the OLD prose stability entry survives beside the structured one: {[list(q)[0][:60] for q in stale]}''; we=s[''worked_example'']; assert {''inputs'',''computed'',''verdict''}<=set(we), sorted(we); inp=we[''inputs'']; assert inp.get(''scheduled_continuations'',0) > 0, ''the worked example must actually exercise the scheduled-continuation exemption''; derived=inp[''unplanned_resumes'']/inp[''persona_node_executions'']; assert abs(we[''computed''][''unplanned_resume_rate'']-derived) < 1e-9, f\"recorded {we[''computed''][''unplanned_resume_rate'']} != derived-from-inputs {derived}\"; assert derived < 0.05, f''worked example rate {derived} contradicts the <5% threshold''; vd=we[''verdict'']; assert isinstance(vd,dict) and vd.get(''signal_passes'') is True, f''verdict must be a mapping carrying an explicit boolean signal_passes:true, got {vd}''; assert ''fires'' not in vd, ''verdict must not carry a fires key -- it overclaims relative to a single-signal worked example (M2, code-review round 1)''; print(''OK derived rate'', derived, ''scheduled_continuations'', inp[''scheduled_continuations''], ''signal_passes'', vd[''signal_passes''], ''marker'', thr)"'
+  - check_id: sfn-transition-line-arithmetic-consistent
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-text-fix-bundle
+    graduated_at: '2026-08-02'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - bin/venv-python -c "import yaml,re; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); line=d['cost_projection']['projected_100tb_scale']['breakdown']['step_functions_transitions']; assert '1-10' not in line, 'the overstated \$1-10 figure survives'; lo,hi=[float(x) for x in re.match(r'^\\\$([0-9.]+)-([0-9.]+)', line).groups()]; tx_per_rec=30; rate=0.000025; exp_lo=round(tx_per_rec*100*rate,4); exp_hi=round(tx_per_rec*300*rate,4); assert (lo,hi)==(exp_lo,exp_hi), f'published {lo}-{hi} != recomputed {exp_lo}-{exp_hi}'; assert 'eu-west-2' in line or 'eu-west-2' in str(d['cost_projection']), 'region unstated'; print('OK', lo, hi, '==', exp_lo, exp_hi)"

@@ -4523,6 +4523,8 @@ Recognise frame-lock as a named architectural-planning failure mode. Embed two m
 
 **Related:** Decision 39, Decision 55, Decision 58, Decision 72, `docs/INTENT-recommendation-executor.md`, `docs/INTENT-provider-agnostic-executor.md`, `docs/ROADMAP-PLATFORM.yaml` (CD.11, T4.1, T4.2)
 
+> **Update (2026-08-02):** ESB-11 (audit ad02653) -- the `terraform/data_pipeline.tf` precedent this entry cites under "primitives already in production" sits at the retained-not-applied legacy Terraform root (see `terraform/CLAUDE.md`), not a deployed pipeline. The five-Lambda Step Functions shape it demonstrates is a design-and-skill precedent, not a runtime-evidence precedent. This annotation does not amend the frame-lock finding or its mitigations.
+
 ---
 
 ## Decision 74: Pre-Install Claude Code CLI in Runner user_data + workflow_dispatch Escape Hatch (Decided)
@@ -5221,6 +5223,8 @@ This scales from the current 5 agents to 30+ workflows without architectural cha
 **Related:** rec-164 (repo restructuring), rec-159 (Fear & Greed scraper PoC proves the task/agent pattern)
 
 **Decision status:** Decided — April 2026
+
+> **Update (2026-08-02):** ESB-10 (audit ad02653) -- CD.27's "Regular Lambdas are deterministic-only" discipline point is scoped to the executor's ITERATIVE persona loops (CD.27 personas satisfying P1/P2/P3); it does not narrow this Decision's `agent` state type for single-shot LLM-backed regular Lambdas, which continues to govern unchanged. This annotation does not amend the Decision above.
 
 ---
 
