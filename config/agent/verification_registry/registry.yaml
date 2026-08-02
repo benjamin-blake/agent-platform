@@ -2886,3 +2886,96 @@ entries:
       - bash
       - -c
       - bin/venv-python -c "import yaml,re; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); line=d['cost_projection']['projected_100tb_scale']['breakdown']['step_functions_transitions']; assert '1-10' not in line, 'the overstated \$1-10 figure survives'; lo,hi=[float(x) for x in re.match(r'^\\\$([0-9.]+)-([0-9.]+)', line).groups()]; tx_per_rec=30; rate=0.000025; exp_lo=round(tx_per_rec*100*rate,4); exp_hi=round(tx_per_rec*300*rate,4); assert (lo,hi)==(exp_lo,exp_hi), f'published {lo}-{hi} != recomputed {exp_lo}-{exp_hi}'; assert 'eu-west-2' in line or 'eu-west-2' in str(d['cost_projection']), 'region unstated'; print('OK', lo, hi, '==', exp_lo, exp_hi)"
+  - check_id: cd43-selection-criteria-well-formed
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-workspace-store-criteria
+    graduated_at: "2026-08-02"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import re, yaml
+        d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+        cds = [c for c in d['candidate_decisions'] if c['id'] == 'CD.43']
+        assert cds, 'CD.43 absent -- the criteria CD was never added'
+        blocks = [p for p in cds[0]['discipline_points'] if isinstance(p, dict) and 'workspace_store_selection' in p]
+        assert len(blocks) == 1, f'workspace_store_selection must appear exactly once, found {len(blocks)}'
+        b = blocks[0]['workspace_store_selection']
+        sc = b['selection_criteria']
+        required_ids = {'W1','W2','W3','W4','W5','W6','W7','W8'}
+        assert required_ids <= set(sc), f'selection_criteria missing {sorted(required_ids - set(sc))}'
+        bad = {k: type(v).__name__ for k, v in sc.items() if not isinstance(v, str) or not v.strip()}
+        assert not bad, f'criteria must be non-empty strings (a colon-space turns a scalar into a mapping): {bad}'
+        cases = b['coverage_cases']
+        assert len(cases) == len(set(cases)), f'coverage_cases has duplicates: {cases}'
+        assert {'cross_invocation_persistence','inter_persona_handoff','persona_to_ecs_task_handoff'} <= set(cases), cases
+        assert b['options_considered_and_rejected'], 'a rejected option must be recorded with its reason, not silently omitted'
+        money = {k: re.search(r'[\$]\s*\d', v).group(0) for k, v in sc.items() if re.search(r'[\$]\s*\d', v)}
+        assert not money, f'a criterion publishes a cost figure instead of a basis: {money}'
+        assert 'terraform/personal/variables.tf' in sc['W3'], 'W3 must name the region-pin source'
+        assert 'RECOMPUTED' in sc['W3'], 'W3 must demand recomputation at decision time'
+        assert 'Decision 100' in sc['W8'], 'W8 must name Decision 100 as the standard a self-built store argues against'
+        blob = yaml.safe_dump(cds[0], sort_keys=False)
+        assert 'arn:' not in blob.lower(), 'CD.43 text contains an ARN (PUBLIC repository)'
+        assert not re.search(r'(?<!\d)\d{12}(?!\d)', blob), 'CD.43 text contains a 12-digit account-id-shaped token'
+        print('OK', len(sc), 'criteria well-formed;', len(cases), 'coverage cases covered')
+  - check_id: t41-names-workspace-store-criteria
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-workspace-store-criteria
+    graduated_at: "2026-08-02"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml
+        d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+        cds = [c for c in d['candidate_decisions'] if c['id'] == 'CD.43']
+        assert cds, 'CD.43 absent -- the criteria CD was never added'
+        cd = cds[0]
+        b = [p for p in cd['discipline_points'] if isinstance(p, dict) and 'workspace_store_selection' in p][0]['workspace_store_selection']
+        items = {i['id']: i for i in d['tier_items']}
+        t41 = items['T4.1']
+        nonstr = [c for c in t41['exit_criteria'] if not isinstance(c, str)]
+        assert not nonstr, f'a T4.1 exit criterion became a mapping (colon hazard): {nonstr}'
+        named = [c for c in t41['exit_criteria'] if 'CD.43' in c]
+        assert named, 'expected at least 1 T4.1 criterion naming CD.43, found 0'
+        combined = ' '.join(named)
+        assert 'workspace_uri' in combined, 'the CD.43-naming criterion (or criteria) must bind to prepare_workspace workspace_uri'
+        declared = sorted(b['selection_criteria'])
+        missing = [w for w in declared if w not in combined]
+        assert not missing, f'T4.1 names CD.43 but not its criteria {missing} (declared: {declared})'
+        unlinked = [g for g in cd['gates'] if 'CD.43' not in (items[g].get('related_candidate_decisions') or [])]
+        assert not unlinked, f'tier item(s) gated by CD.43 never name it back: {unlinked}'
+        print('OK T4.1 names CD.43 + W1-W8;', len(cd['gates']), 'gated item(s) linked back')
+  - check_id: cd27-layer2-preconditions-cover-esb01
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-workspace-store-criteria
+    graduated_at: "2026-08-02"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import re, yaml
+        REQUIRED = {'ESB-01', 'ESB-04', 'ESB-06'}
+        d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+        cd27 = [c for c in d['candidate_decisions'] if c['id'] == 'CD.27'][0]
+        points = [p for p in cd27['discipline_points'] if isinstance(p, str)]
+        found = [m for p in points for m in re.findall(r'Layer-2 ratification precondition \((ESB-\d+)\)', p)]
+        assert len(found) == len(set(found)), f'a finding id is claimed by two preconditions: {found}'
+        assert REQUIRED <= set(found), f'missing layer-2 ratification precondition(s): {sorted(REQUIRED - set(found))}'
+        esb01 = [p for p in points if 'Layer-2 ratification precondition (ESB-01)' in p]
+        assert len(esb01) == 1, f'expected exactly 1 ESB-01 precondition, found {len(esb01)}'
+        assert 'CD.43' in esb01[0], 'the ESB-01 precondition must point at the CD holding the criteria'
+        print('OK layer-2 preconditions cover ESB-01/ESB-04/ESB-06; found', sorted(set(found)))

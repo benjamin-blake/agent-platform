@@ -173,16 +173,23 @@ verification_plan:
     action: >-
       KEYSTONE, DURABLE HALF -- the assertions that stay true after CD.43 ratifies, verified
       INDEPENDENTLY of the plan's own test package. Exactly W1-W8 exist as non-empty strings; the
-      option and coverage sets are duplicate-free and meet their membership floors; no criterion
-      publishes a `$`-anchored cost figure; W3 names the region pin and demands recomputation; W8
-      binds to Decision 100; the block carries no confidential identifier. The isinstance(str) sweep
-      is the colon-space YAML hazard guard -- eight folded scalars is eight chances to author a
-      mapping by accident. Every assertion here survives the store being chosen, which is precisely
-      why this is the step that graduates. GROWTH-SAFE BY CONSTRUCTION: every collection assertion
-      here is a membership FLOOR, never an exact set -- including the criterion ids, so wave 5 may
-      add a W9 without reddening a standing row it never touched. The ratchet that keeps a new
-      criterion from being ignored lives in step 4, which requires T4.1 to name every id actually
-      present in selection_criteria rather than a hardcoded eight.
+      coverage set is duplicate-free and meets its membership floor; no criterion publishes a
+      `$`-anchored cost figure; W3 names the region pin and demands recomputation; W8 binds to
+      Decision 100; the block carries no confidential identifier. The isinstance(str) sweep is the
+      colon-space YAML hazard guard -- eight folded scalars is eight chances to author a mapping by
+      accident. Every assertion here survives the store being chosen, which is precisely why this
+      is the step that graduates. GROWTH-SAFE BY CONSTRUCTION: every collection assertion here is a
+      membership FLOOR, never an exact set -- including the criterion ids, so wave 5 may add a W9
+      without reddening a standing row it never touched. The ratchet that keeps a new criterion from
+      being ignored lives in step 4, which requires T4.1 to name every id actually present in
+      selection_criteria rather than a hardcoded eight. CODE-REVIEW ROUND 1 FIX (M3): the
+      option_set breadth floor (`required_opts <= set(opts)`) moved OUT of this step into step 3.
+      It has the mirror problem of the transient status/selected_store equality this keystone
+      already splits on -- growth is durable, but at ratification NARROWING option_set to the
+      selected store is equally legitimate, so a floor over the candidate set is transient, not
+      durable, and does not belong in a standing row. option_set's duplicate-freedom is transient
+      alongside it for the same reason; only coverage_cases (which describes what must be covered,
+      not which stores are still candidates) stays here.
     command: |-
       bin/venv-python -c "
       import re, yaml
@@ -197,10 +204,7 @@ verification_plan:
       assert required_ids <= set(sc), f'selection_criteria missing {sorted(required_ids - set(sc))}'
       bad = {k: type(v).__name__ for k, v in sc.items() if not isinstance(v, str) or not v.strip()}
       assert not bad, f'criteria must be non-empty strings (a colon-space turns a scalar into a mapping): {bad}'
-      opts, cases = b['option_set'], b['coverage_cases']
-      assert len(opts) == len(set(opts)), f'option_set has duplicates: {opts}'
-      required_opts = {'efs_mount','s3_sync','container_local_disk','git_as_store_commit_at_step_boundaries','s3_express_one_zone','fsx_managed_filesystem','lambda_ephemeral_tmp_10gb'}
-      assert required_opts <= set(opts), f'option_set missing {sorted(required_opts - set(opts))}'
+      cases = b['coverage_cases']
       assert len(cases) == len(set(cases)), f'coverage_cases has duplicates: {cases}'
       assert {'cross_invocation_persistence','inter_persona_handoff','persona_to_ecs_task_handoff'} <= set(cases), cases
       assert b['options_considered_and_rejected'], 'a rejected option must be recorded with its reason, not silently omitted'
@@ -212,11 +216,11 @@ verification_plan:
       blob = yaml.safe_dump(cds[0], sort_keys=False)
       assert 'arn:' not in blob.lower(), 'CD.43 text contains an ARN (PUBLIC repository)'
       assert not re.search(r'(?<!\d)\d{12}(?!\d)', blob), 'CD.43 text contains a 12-digit account-id-shaped token'
-      print('OK', len(sc), 'criteria well-formed;', len(opts), 'options under evaluation')
+      print('OK', len(sc), 'criteria well-formed;', len(cases), 'coverage cases covered')
       "
     expected: >-
-      Exit 0, printing `criteria well-formed;` with the criterion and option counts. Proves the
-      criteria set is complete, well-typed and figure-free, that W3 states a recomputable basis
+      Exit 0, printing `criteria well-formed;` with the criterion and coverage-case counts. Proves
+      the criteria set is complete, well-typed and figure-free, that W3 states a recomputable basis
       instead of a number, that W8 binds to Decision 100, and that a rejected option was recorded
       rather than silently dropped. Verified by mutation this session: removing W8 fails with
       "expected exactly W1-W8"; stripping both Decision 100 references from W8 fails with "W8 must
@@ -230,14 +234,14 @@ verification_plan:
       rather than renumbering the survivors, because T4.1's criterion (step 4) names all eight by id
       and would then dangle. A non-string type for some Wn means that criterion was authored as a
       bare scalar containing a colon-space and YAML parsed it as a mapping; re-author it as a `>-`
-      folded block scalar. "option_set missing" means a candidate store was dropped from the
-      evaluation set; restore it -- narrowing the set is a substantive decision that belongs to the
-      ratifying plan, not to this one. "publishes a cost figure" means a criterion carried a number
-      instead of a basis; state the rate source and the arithmetic to perform, not the result. "W8
-      must name Decision 100" means the managed-primitive criterion was written as a generic
-      preference rather than binding to the Decision that makes it enforceable -- an unbound W8
-      restores exactly the bias the decision-scout gate flagged, since a self-built store could then
-      satisfy it with a sentence rather than an argument.
+      folded block scalar. "publishes a cost figure" means a criterion carried a number instead of a
+      basis; state the rate source and the arithmetic to perform, not the result. "W8 must name
+      Decision 100" means the managed-primitive criterion was written as a generic preference rather
+      than binding to the Decision that makes it enforceable -- an unbound W8 restores exactly the
+      bias the decision-scout gate flagged, since a self-built store could then satisfy it with a
+      sentence rather than an argument. A missing coverage case means a handoff scenario was dropped
+      from evaluation; restore it -- unlike option_set, coverage_cases describes the obligation, not
+      the candidate set, so it never legitimately narrows.
     graduation: graduate
     graduation_check_id: cd43-selection-criteria-well-formed
   - step: 3
@@ -248,7 +252,12 @@ verification_plan:
       the graduated set. Both are equality assertions against literals, so neither can be satisfied by
       deleting the field: status must equal criteria_only and selected_store must equal the deferral
       marker. These become FALSE the moment wave 5 does the right thing and ratifies CD.43, which is
-      exactly why they must not become a standing registry row.
+      exactly why they must not become a standing registry row. CODE-REVIEW ROUND 1 FIX (M3): also
+      carries the option_set breadth floor (all seven pinned candidates present, duplicate-free) that
+      moved out of step 2's graduated command. option_set breadth is transient for the same reason
+      status/selected_store are -- a ratifying wave legitimately NARROWS option_set to the selected
+      store, so a floor requiring the full pre-ratification candidate list would redden main for
+      doing the right thing; it belongs beside its sibling transient assertions, not in a standing row.
     command: |-
       bin/venv-python -c "
       import yaml
@@ -258,26 +267,35 @@ verification_plan:
       b = [p for p in cds[0]['discipline_points'] if isinstance(p, dict) and 'workspace_store_selection' in p][0]['workspace_store_selection']
       assert b['status'] == 'criteria_only', f\"status is not criteria_only: {b['status']!r}\"
       assert b['selected_store'] == 'TBD_at_CD.43_ratification', f\"a store was selected: {b['selected_store']!r}\"
-      print('OK store choice deferred')
+      opts = b['option_set']
+      assert len(opts) == len(set(opts)), f'option_set has duplicates: {opts}'
+      required_opts = {'efs_mount','s3_sync','container_local_disk','git_as_store_commit_at_step_boundaries','s3_express_one_zone','fsx_managed_filesystem','lambda_ephemeral_tmp_10gb'}
+      assert required_opts <= set(opts), f'option_set missing {sorted(required_opts - set(opts))}'
+      print('OK store choice deferred; option set at full pre-ratification breadth')
       "
     expected: >-
-      Exit 0, printing `store choice deferred`. Proves this wave recorded criteria and chose nothing.
-      Verified by mutation this session: replacing the marker with a real store name fails with "a
-      store was selected".
+      Exit 0, printing `store choice deferred`. Proves this wave recorded criteria and chose nothing,
+      and that option_set still carries the full seven-candidate evaluation set. Verified by mutation
+      this session: replacing the marker with a real store name fails with "a store was selected";
+      dropping a candidate from option_set fails with "option_set missing".
     fix_if: >-
       "a store was selected" or "status is not criteria_only" means the implementation chose a
       backing store, which this wave must NOT do -- restore the deferral marker and leave the choice
-      to the CD.43 ratification alongside the layer-2 spike. If this step fails during a LATER wave
-      that is legitimately ratifying CD.43, the correct response is to delete this plan's guard
-      module along with this step, not to weaken either -- they are wave-2 artefacts by design.
+      to the CD.43 ratification alongside the layer-2 spike. "option_set missing" means a candidate
+      store was dropped from the evaluation set during THIS wave; restore it -- narrowing the set is a
+      substantive decision that belongs to the ratifying plan, not to this one. If this step fails
+      during a LATER wave that is legitimately ratifying CD.43 (a real store choice, or a deliberate
+      narrowing of option_set to it), the correct response is to delete this plan's guard module along
+      with this step, not to weaken either -- they are wave-2 artefacts by design.
     graduation: waive
     graduation_waiver_reason: >-
       Deliberately un-graduated because it is TRUE ONLY DURING THIS WAVE. The registry has no expiry
-      or retirement field, so a row asserting selected_store == the deferral marker would redden main
-      the moment wave 5 ratifies CD.43, with no owner and no obvious remedy except weakening the
-      check -- which is how a guard becomes worse than no guard. The durable half of this keystone
-      graduates under step 2 instead. This is the same reasoning that waives the scope-discipline
-      step: a guard that stops being true by design does not belong in a store of standing guards.
+      or retirement field, so a row asserting selected_store == the deferral marker (or the full
+      option_set breadth) would redden main the moment wave 5 ratifies CD.43, with no owner and no
+      obvious remedy except weakening the check -- which is how a guard becomes worse than no guard.
+      The durable half of this keystone graduates under step 2 instead. This is the same reasoning
+      that waives the scope-discipline step: a guard that stops being true by design does not belong
+      in a store of standing guards.
   - step: 4
     phase: pre-deploy
     hermetic: true
@@ -291,7 +309,13 @@ verification_plan:
       so if a later wave adds a W9 to the CD without naming it on T4.1, this step fails and names the
       gap. That is what lets step 2 use a growth-safe floor without letting a new criterion slip in
       unnamed -- the pair is strictly stronger than an exact-set assertion in either step alone, and
-      it fails only on the genuinely incomplete edit rather than on any edit at all.
+      it fails only on the genuinely incomplete edit rather than on any edit at all. CODE-REVIEW
+      ROUND 1 FIX (M2): "exactly 1 criterion naming CD.43" relaxed to a FLOOR (at least 1), and the
+      W-id/workspace_uri checks now run against the UNION of every CD.43-naming criterion rather than
+      criterion[0] alone. A ratifying wave may legitimately record the selected store as a second
+      criterion rather than editing the first; the previous exact-1 assertion would have reddened
+      main for that correct edit. The "exactly 1" fact stays true only for this wave and lives in
+      step 5's waived command instead.
     command: |-
       bin/venv-python -c "
       import yaml
@@ -305,11 +329,11 @@ verification_plan:
       nonstr = [c for c in t41['exit_criteria'] if not isinstance(c, str)]
       assert not nonstr, f'a T4.1 exit criterion became a mapping (colon hazard): {nonstr}'
       named = [c for c in t41['exit_criteria'] if 'CD.43' in c]
-      assert len(named) == 1, f'expected exactly 1 T4.1 criterion naming CD.43, found {len(named)}'
-      crit = named[0]
-      assert 'workspace_uri' in crit, 'the criterion must bind to prepare_workspace workspace_uri'
+      assert named, 'expected at least 1 T4.1 criterion naming CD.43, found 0'
+      combined = ' '.join(named)
+      assert 'workspace_uri' in combined, 'the CD.43-naming criterion (or criteria) must bind to prepare_workspace workspace_uri'
       declared = sorted(b['selection_criteria'])
-      missing = [w for w in declared if w not in crit]
+      missing = [w for w in declared if w not in combined]
       assert not missing, f'T4.1 names CD.43 but not its criteria {missing} (declared: {declared})'
       unlinked = [g for g in cd['gates'] if 'CD.43' not in (items[g].get('related_candidate_decisions') or [])]
       assert not unlinked, f'tier item(s) gated by CD.43 never name it back: {unlinked}'
@@ -320,17 +344,18 @@ verification_plan:
       item names the mechanism-selection obligation and every criterion id, and that both gated tier
       items point back at CD.43. Verified by mutation this session: dropping W5/W6/W7 from the
       criterion fails with "names CD.43 but not its criteria ['W5', 'W6', 'W7']"; removing CD.43 from
-      T4.2's related_candidate_decisions fails with "never name it back: ['T4.2']".
+      T4.2's related_candidate_decisions fails with "never name it back: ['T4.2']"; removing all
+      CD.43-naming criteria fails with "found 0".
     fix_if: >-
-      "found 0" means the T4.1 criterion was never added, or was added without the literal token
-      `CD.43`. "found 2" means it was added twice, most likely once to T4.1 and once to T4.2 -- T4.2
-      needs only the related_candidate_decisions link, because its workspace criterion (c1) already
-      landed in wave 1 and duplicating it here would create two sources for one obligation. "names
-      CD.43 but not its criteria" means the criterion gestures at the CD without naming the criterion
-      ids, which is the exact failure ESB-01's acceptance is written to prevent -- add the missing W
-      ids. "never name it back" means related_candidate_decisions was updated on one gated item but
-      not the other; update the named item. A non-string criterion means the appended criterion
-      carried an unquoted colon-space.
+      "found 0" means no T4.1 criterion names CD.43 (the literal token `CD.43` is absent from every
+      exit_criteria entry) -- add one. "names CD.43 but not its criteria" means the combined text of
+      every CD.43-naming criterion gestures at the CD without naming a criterion id, which is the
+      exact failure ESB-01's acceptance is written to prevent -- add the missing W ids to one of them.
+      "never name it back" means related_candidate_decisions was updated on one gated item but not the
+      other; update the named item. A non-string criterion means the appended criterion carried an
+      unquoted colon-space. T4.2 needs only the related_candidate_decisions link, never its own
+      CD.43-naming criterion -- its workspace criterion (c1) already landed in wave 1 and a second
+      would create two sources for one obligation.
     graduation: graduate
     graduation_check_id: t41-names-workspace-store-criteria
   - step: 5
@@ -341,7 +366,10 @@ verification_plan:
       for the same reason as step 3: once CD.43 ratifies, T4.1's criterion may legitimately name the
       selected store, and a standing row forbidding that would redden main for a correct edit. The
       positive binding that makes this meaningful (the criterion names CD.43 and all eight W ids)
-      lives in step 4, which does graduate.
+      lives in step 4, which does graduate. CODE-REVIEW ROUND 1 FIX (M2): this step is now also the
+      sole owner of the "exactly 1 criterion naming CD.43" fact -- true only for this wave, since a
+      ratifying wave may legitimately add a second criterion recording the selected store. Step 4's
+      graduated command only requires at least 1.
     command: |-
       bin/venv-python -c "
       import yaml
@@ -833,25 +861,38 @@ context:
     lands on is unmodified.
   - >-
     GRADUATION SHAPE (Decision 132 / VF-05), restructured at plan-critique round 1 along a
-    DURABLE-versus-TRANSIENT split. The VP is deliberately paired: each keystone is one graduating
-    step carrying only assertions that stay true after CD.43 ratifies, plus a waived sibling carrying
-    the assertions that become false when wave 5 does the right thing. Step 2
-    (cd43-selection-criteria-well-formed) graduates the criteria set, typing, membership floors,
-    figure ban, W3's recompute basis, W8's Decision 100 binding and the PUBLIC-boundary sweep; step 3
-    waives `status`/`selected_store` equality. Step 4 (t41-names-workspace-store-criteria) graduates
-    T4.1 naming CD.43 with all eight criterion ids plus the bidirectional link and the bare-string
-    invariant; step 5 waives "names no candidate store". Step 6
-    (cd27-layer2-preconditions-cover-esb01) graduates the precondition floor. All three graduating
-    specs are single command_exit_zero commands over docs/ROADMAP-PLATFORM.yaml and each fails on the
-    origin/main revert (proven above), which is what the differential admission gate requires. WHY
-    the split rather than a retirement obligation on wave 5: the registry carries no expiry or
-    retirement field, so a transient row reddens main at ratification with no owner, and the cheapest
-    response for whoever hits it is to weaken the check rather than retire it. Durable by
-    construction beats durable by memory -- this run has already produced two recs about
-    promised-but-uncarried re-evaluations. The transient assertions survive in the pytest module,
-    which wave 5 deletes wholesale along with the rest of wave 2's guards. Seven steps waive; step
-    7's waiver is structural rather than convenient, since an "unchanged versus origin/main"
-    assertion is necessarily true on the baseline the gate reverts to and can never be admitted.
+    DURABLE-versus-TRANSIENT split, and TIGHTENED at code-review round 1 (M2/M3) after the split's
+    own logic was found under-applied at the registry level. The VP is deliberately paired: each
+    keystone is one graduating step carrying only assertions that stay true after CD.43 ratifies,
+    plus a waived sibling carrying the assertions that become false when wave 5 does the right thing.
+    Step 2 (cd43-selection-criteria-well-formed) graduates the criteria set, typing, the
+    coverage_cases floor, figure ban, W3's recompute basis, W8's Decision 100 binding and the
+    PUBLIC-boundary sweep; step 3 waives `status`/`selected_store` equality PLUS the option_set
+    breadth floor (moved here at M3 -- narrowing option_set to the selected store is a legitimate
+    ratification-time edit, so a floor over the full candidate set is transient like status/
+    selected_store, not durable). Step 4 (t41-names-workspace-store-criteria) graduates T4.1 naming
+    CD.43 with all eight criterion ids (checked against the UNION of every CD.43-naming criterion,
+    floor of at least 1, not exactly 1 -- relaxed at M2) plus the bidirectional link and the
+    bare-string invariant; step 5 waives "names no candidate store" AND now owns the "exactly 1
+    criterion naming CD.43" fact outright (M2), since a ratifying wave may legitimately record the
+    selected store as a second criterion. Step 6 (cd27-layer2-preconditions-cover-esb01) graduates
+    the precondition floor. All three graduating specs are single command_exit_zero commands over
+    docs/ROADMAP-PLATFORM.yaml and each fails on the origin/main revert (re-proven after the M2/M3
+    edit via the real differential admission gate, worktree-backed, not simulated), which is what the
+    differential admission gate requires. WHY the split rather than a retirement obligation on wave 5:
+    the registry carries no expiry or retirement field, so a transient row reddens main at
+    ratification with no owner, and the cheapest response for whoever hits it is to weaken the check
+    rather than retire it. Durable by construction beats durable by memory -- this run has already
+    produced two recs about promised-but-uncarried re-evaluations. M2/M3 are the same lesson applied
+    a level down: a FLOOR is durable against growth but not against the legitimate NARROWING that
+    ratification performs, so "floor" and "exact set" are both potentially transient shapes depending
+    on which direction the state change moves -- only a floor over an OBLIGATION (coverage_cases, the
+    W-id set) is durable in both directions; a floor over a CANDIDATE SET (option_set) or an exact
+    count of a field a ratifying edit may legitimately add to (the CD.43-naming criterion count) is
+    not. The transient assertions survive in the pytest module, which wave 5 deletes wholesale along
+    with the rest of wave 2's guards. Seven steps waive; step 7's waiver is structural rather than
+    convenient, since an "unchanged versus origin/main" assertion is necessarily true on the baseline
+    the gate reverts to and can never be admitted.
   - >-
     HERMETIC MARKING (Decision 148). Steps 1-6 are hermetic and WILL be independently re-executed by
     validate_vp_replay on the implement PR, with backtick literals in `expected` matched against
@@ -919,7 +960,10 @@ execution_steps:
     it lives in wave 1's package, a local `cd43()` accessor that raises a NAMED assertion when CD.43
     is absent (never a bare StopIteration -- the diagnostic is the point), and eleven guards:
     test_cd43_is_pending_and_r2_shaped; test_cd43_gates_reference_only_existing_tier_items;
-    test_selection_criteria_cover_w1_w8_and_are_non_empty_strings; test_store_choice_is_deferred_not_made;
+    test_selection_criteria_cover_w1_w8_and_are_non_empty_strings;
+    test_store_choice_deferred_and_evaluation_floors_hold (code-review round 1, L1: renamed from
+    test_store_choice_is_deferred_not_made -- it also asserts option-set and coverage-case floors,
+    so an option-set defect used to report under a name naming only the deferral half);
     test_cd43_and_its_gated_items_are_bidirectionally_linked;
     test_t41_names_the_criteria_and_leaves_the_choice_open; test_t41_exit_criteria_remain_bare_strings;
     test_layer2_ratification_preconditions_cover_esb01_esb04_esb06;

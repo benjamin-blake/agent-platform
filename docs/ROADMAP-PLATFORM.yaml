@@ -929,6 +929,7 @@ candidate_decisions:
           trigger_semantics: fires only when ALL personas' executions satisfy every per-signal threshold above across days 8-14 of the grace window (see baseline_window)
       - Layer-2 ratification precondition (ESB-04). Before this CD ratifies, the ratifying plan must carry a comparative record over the pinned candidate substrate set (durable_functions, sfn_over_stateless_workers, self_checkpointed_lambda_dynamodb, long_running_container, hosted_cli_runner) plus the Q5 spike outcome (decision_scout as the spike vehicle). The selected layer-2 substrate must be a MANAGED orchestration primitive unless the selecting plan authors an explicit Decision 39 supersession -- this CD does not by itself widen the admissible substrate set beyond what Decision 39 ratified.
       - Layer-2 ratification precondition (ESB-06). If the Q5 spike selects a substrate whose resume model is replay-based (re-runs handler code from the start on resume, as durable_functions and sfn_over_stateless_workers do), the ratifying plan must also carry the determinism rules for step-wrapped code plus a validate.py static check enforcing them, before ratification. If the spike instead selects a non-replay substrate (self_checkpointed_lambda_dynamodb, long_running_container, hosted_cli_runner), this determinism-rules-plus-static-check obligation LAPSES -- it does not carry forward as dead weight onto a substrate the rules do not apply to.
+      - Layer-2 ratification precondition (ESB-01). Before this CD ratifies, the ratifying plan (the CD.27 layer-2 spike, wave 5) must select the executor's workspace backing store against CD.43's criteria and record the choice in CD.43's workspace_store_selection.selected_store, replacing the TBD_at_CD.43_ratification deferral marker. The store discriminates directly between substrates -- container-local disk erases the workspace half of the resumability gap this CD exists to close; an EFS-backed store imposes a standing VPC/NAT term and forecloses the hosted_cli_runner candidate outright; S3-sync is the only fully portable option across the candidate set but commits every interruption to a re-materialization cost. CD.43 holds the full criteria set; this precondition does not restate them.
 
   - id: CD.28
     title: LLM inference = DeepSeek-direct via LiteLLM (Tier 1); Anthropic-direct (Tier 2); Bedrock retired from architecture
@@ -1451,6 +1452,104 @@ candidate_decisions:
         replacing it (or removing the UI entirely and reverting to structured agent reports) is
         plumbing with zero data movement and no change to the named-verb contracts. Cites Decisions
         84, 86, 88, 93, 100, 101, 104, 105, 111, 127, 137, 150, 55, 62, 75, 87.
+
+  - id: CD.43
+    title: Executor workspace backing-store selection criteria (ESB-01) -- store selection deferred to the CD.27 layer-2 spike
+    detail: |
+      Names the criteria (W1-W8) against which the executor's workspace backing store is selected,
+      per audit finding ESB-01. This CD selects NO store: workspace_store_selection.status stays
+      criteria_only and selected_store stays the literal TBD_at_CD.43_ratification until
+      ratification. Criteria precede the choice deliberately -- the store choice is itself a
+      portability commitment the CD.27 layer-2 spike (wave 5) should inform, not follow; fixing the
+      store first and rationalizing the criteria after would make the criteria decorative rather
+      than governing.
+
+      Ratifies alongside that spike: the ratifying plan selects a store from option_set against
+      W1-W8, records the choice in selected_store, and flips this CD to the canonical ratified
+      shape per docs/contracts/candidate-decision-ratification.yaml:29-36 -- state: ratified,
+      ratified_as: dec-NNN, AND filed_via: ops_decisions:dec-NNN (same NNN in both fields; filed_via
+      alone is not the shape R1/R2 require). Gates T4.1 (which names the mechanism
+      and criteria per ESB-01's literal acceptance) and T4.2 (whose exit criterion c1 requires CD.27
+      resume property P2, workspace continuity, which is unachievable without a backing store).
+    gates: [T4.1, T4.2]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - workspace_store_selection:
+          status: criteria_only
+          selected_store: TBD_at_CD.43_ratification
+          resolved_by: >-
+            The CD.27 layer-2 substrate spike (wave 5 of the ESB-01 remediation run), which selects
+            the store and ratifies this CD in the same act.
+          option_set:
+            - efs_mount
+            - s3_express_one_zone
+            - fsx_managed_filesystem
+            - lambda_ephemeral_tmp_10gb
+            - s3_sync
+            - container_local_disk
+            - git_as_store_commit_at_step_boundaries
+          options_considered_and_rejected:
+            - option: mountpoint_for_s3
+              reason: >-
+                AWS-provided CLIENT-side FUSE tooling over S3, not a managed-service primitive --
+                under W8 it scores as a substitute, not a primitive, and it needs FUSE in the
+                execution environment, which forecloses the Lambda-class substrates under W1.
+                Evaluated as a variant of s3_sync rather than as a distinct managed option.
+          coverage_cases:
+            - cross_invocation_persistence
+            - inter_persona_handoff
+            - persona_to_ecs_task_handoff
+          selection_criteria:
+            W1: >-
+              Substrate portability across CD.27's pinned layer-2 candidate set -- durable_functions,
+              sfn_over_stateless_workers, self_checkpointed_lambda_dynamodb, long_running_container,
+              and hosted_cli_runner. State plainly, for each of these five substrates, whether the
+              candidate backing store is reachable from it, naming any substrate it forecloses.
+            W2: >-
+              Foreclosure disclosure. Choosing a backing store that silently eliminates a CD.27
+              candidate substrate must be recorded as an explicit decision, not a side effect --
+              for example, EFS is structurally unreachable from GitHub-hosted runners, so an
+              EFS-backed store would silently eliminate hosted_cli_runner unless that elimination is
+              stated outright and argued.
+            W3: >-
+              Standing cost basis, RECOMPUTED at ratification time rather than quoted from this
+              document. Name the rate source (the AWS price list for the region pinned at
+              terraform/personal/variables.tf) and show the arithmetic performed against the
+              then-published rate. Never state a cost figure here -- a criteria paper that ships a
+              number ships a magic ceiling that is stale the day it lands.
+            W4: >-
+              Egress-profile validity. Any NAT or VPC-egress reachability or cost claim must be
+              validated against the production LiteLLM external-call profile (CD.28's inference
+              transport), not a spike measurement taken with those calls mocked -- restating the
+              egress assumption is a condition of using any measurement gathered under a mocked
+              call profile.
+            W5: >-
+              Re-materialization cost, carrying both a byte term (total bytes moved to reconstruct
+              the workspace after an interruption) and an object-count term (total objects or files
+              touched) -- a store's per-request pricing can dominate for a many-small-files tree
+              even when its byte-cost term looks small.
+            W6: >-
+              Scale basis. State the on-disk size of the dependency environment the workspace must
+              hold, together with the measurement command run and the date it was run, never a
+              stale or copied figure.
+            W7: >-
+              Coverage of every case in coverage_cases -- cross_invocation_persistence,
+              inter_persona_handoff, and persona_to_ecs_task_handoff -- rather than only the case
+              that is easiest to argue for the candidate store.
+            W8: >-
+              Managed-primitive preference, per Decision 100. For each candidate store, state
+              whether a managed AWS primitive already supplies the capability. A candidate that
+              substitutes custom scripting or vendored client tooling for a managed primitive must
+              argue that substitution explicitly against Decision 100, naming the primitive it
+              replaces and the hand-roll cost incurred -- portability alone does not satisfy this
+              criterion.
+      - >-
+        Criteria-only discipline. This CD's authority is bounded to the workspace_store_selection
+        block above -- no field on this CD names a chosen backing store, and no dependent plan may
+        cite this CD as authorizing a selection. The store is selected by a separate ratifying act
+        (the CD.27 layer-2 spike, wave 5), which records the choice in selected_store and flips
+        this CD's state to ratified.
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -6963,7 +7062,8 @@ tier_items:
       - "pick_rec admission predicate enforced (not merely poll priority queue): a rec is admitted for autonomous execution only when its T3.8 relevance verdict == relevant (CD.36 / Decision 103), automatable == true, and its risk is within the current T4.4 autonomy-gate ceiling (Decision 92 ratchet), AND none of its targets match the Decision 117 boundary_patterns SSOT (config/agent/executor/capabilities.yaml); a refused pick emits a typed telemetry event, and a boundary_patterns hit re-routes the rec to the human path (Decision 55) -- never auto-executed"
       - "file_pr / merge GitHub-side credential scoping is specified in the T4.1 / T4.9(a) atomic plans (the IAM criteria above cover the AWS leg only): which credential (PAT or GitHub App) files and merges PRs, its scopes, storage, rotation, and why no persona environment other than file_pr / merge holds it (Decision 92 least-privilege OIDC precedent)"
       - "A single named operator kill-switch is documented (disable the EventBridge trigger AND set state-machine concurrency to 0) with its authority, and is covered by a test proving an in-flight execution stops cleanly (Decision 55) and no new execution starts"
-    related_candidate_decisions: [CD.10, CD.16, CD.17, CD.24, CD.27, CD.28]
+      - "The executor's workspace backing store for prepare_workspace's workspace_uri output is selected by CD.43's ratification alongside the CD.27 layer-2 spike, not implied by prepare_workspace's implementation -- against CD.43's criteria W1 substrate portability, W2 foreclosure disclosure, W3 recomputed standing cost, W4 egress-profile validity, W5 re-materialization cost, W6 scale basis, W7 coverage-case completeness, and W8 managed-primitive preference"
+    related_candidate_decisions: [CD.10, CD.16, CD.17, CD.24, CD.27, CD.28, CD.43]
     related_intents: [recommendation-executor]
     effort: L
     strategic: true
@@ -7045,7 +7145,7 @@ tier_items:
       - "LiteLLM is the only LLM transport: grep `import boto3.*bedrock` and `import google.generativeai` and `from copilot` return zero hits in src/lambdas/*/"
       - "Stability: grace_period_elapsed(T4.2, 14) AND zero unrecovered failures during the grace period -- this is the CD.17 reversal precondition (verbatim, structurally unchanged from the pre-amendment CD.17)"
       - "State-machine-enforced budget counters (max plan/implementation revisions and total LLM calls per rec, per T4.11) are live and exercised in the e2e smoke run"
-    related_candidate_decisions: [CD.17, CD.27, CD.28]
+    related_candidate_decisions: [CD.17, CD.27, CD.28, CD.43]
     related_intents: [recommendation-executor, provider-agnostic-executor]
     effort: XL
     strategic: true
