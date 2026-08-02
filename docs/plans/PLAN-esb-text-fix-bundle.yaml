@@ -81,8 +81,8 @@ scope:
       re-derived FROM `inputs` and compared to `computed`; `verdict.fires` is an explicit boolean
       (never prose, which a substring test would satisfy even when negated); a nonzero
       scheduled-continuation count proves the exemption is exercised; the OLD prose stability entry
-      is absent; the days-1-7 thresholds are stated inline rather than by reference; INTENT :352 is
-      annotated.
+      is absent; the days-1-7 thresholds carry the literal TBD_at_T4.2_atomic_plan deferral marker
+      rather than invented numbers; INTENT :352 is annotated.
   - file: tests/esb_text_fix/test_cost_projection.py
     action: Create
     purpose: >-
@@ -136,8 +136,8 @@ acceptance_criteria:
     example's rate recomputes exactly from its own `inputs` (not from `computed`), exercises a
     nonzero scheduled-continuation count, and carries an explicit boolean `verdict.fires`; the OLD
     prose stability entry is GONE rather than joined by a structured sibling; the days-1-7 absolute
-    thresholds are restated inline; and the INTENT :352 alarm row is annotated as counting
-    unplanned resumes only.
+    thresholds carry the literal marker `TBD_at_T4.2_atomic_plan` rather than invented values; and
+    the INTENT :352 alarm row is annotated as counting unplanned resumes only.
   - >-
     ESB-09a: `step_functions_transitions` reads "$0.075-0.225" and recomputes exactly from its own
     stated assumptions (30 transitions/rec x 100-300 recs/month x $0.000025/transition); the
@@ -145,9 +145,12 @@ acceptance_criteria:
   - >-
     ESB-09b: `current_scale` carries a `headline_basis` mapping with an explicit boolean
     `includes_line_items_not_enumerated`, an `enumerated_subtotal_usd` and an `add_on_usd`, and
-    `total_per_month_usd` RECOMPUTES exactly from them; the enumerated subtotal no longer sums the
-    retired EC2 and RDS lines; and a NAMED Neon catalog egress line exists carrying the Decision 88
-    clause 2 measurement obligation rather than a guessed figure.
+    `total_per_month_usd` RECOMPUTES exactly from them. The defect being corrected is that the
+    45-65 headline was never recomputed after the EC2 and RDS retirements -- NOT that stale lines
+    need removing: `ec2_runner_24_7` already reads "$0 (retired 2026-05-28 per CD.21 ...)" and
+    there is no RDS line at all (RDS survives only as prose inside `ducklake_catalog_neon`). Also:
+    a NAMED Neon catalog egress line exists carrying the Decision 88 clause 2 measurement
+    obligation rather than a guessed figure.
   - >-
     ESB-09c: a structured `executor_substrate_billing` block exists carrying, for every cost line,
     an explicit `region: eu-west-2` and a `rate_basis` naming the AWS Price List bulk offer files
@@ -186,7 +189,9 @@ acceptance_criteria:
     Scope discipline: `docs/ROADMAP-PLATFORM.yaml` line :821 (the CD.27 fallback clause, owned by
     wave 3 / ESB-02) is unchanged versus origin/main; the roadmap diff contains no `- id:` header
     line; and `.github/actions/subagent-plan-review/**` and `scripts/ci/review_verdict.py` are
-    untouched.
+    untouched. This names specific paths and is deliberately NOT an exhaustive untouched-file
+    assertion -- `config/agent/verification_registry/registry.yaml` is legitimately written by the
+    implement skill's VF-05 producer walk (see context).
 
 verification_plan:
   - step: 1
@@ -211,11 +216,13 @@ verification_plan:
       print('OK', len(dp), 'discipline_points; both ratification obligations present')"
     expected: >-
       Loads without raising and prints OK with a discipline_points count of EXACTLY 12 -- the 9
-      pre-existing entries, plus `resume_properties` and the two ratification-obligation entries,
-      with `stability_definition_14d` replacing pre-existing entry 6 in place rather than adding
-      one. Exactness matters: a `>=` bound would pass on a tree where the structured stability
-      block was appended and the stale prose entry left standing. Both obligations are additionally
-      asserted BY CONTENT, so dropping either one fails here even if the count is satisfied.
+      pre-existing entries, plus the resume_properties entry and the two ratification-obligation
+      entries, with stability_definition_14d replacing pre-existing entry 6 in place rather than
+      adding one. Exactness matters: a greater-than-or-equal bound would pass on a tree where the
+      structured stability block was appended and the stale prose entry left standing. Both
+      obligations are additionally asserted BY CONTENT, so dropping either one fails here even if
+      the count is satisfied. On a passing tree the step prints exactly
+      `discipline_points; both ratification obligations present`.
     fix_if: >-
       A ValidationError naming an unexpected CD.27 key means a structured block was added as a new
       top-level key instead of a discipline_points entry -- move it into discipline_points. A count
@@ -262,7 +269,8 @@ verification_plan:
       hits={k:[b for b in banned if b in v.lower()] for k,v in contracts.items()};
       hits={k:v for k,v in hits.items() if v};
       assert not hits, f'mechanism vocabulary survives in contract text: {hits}';
-      assert 'durable function' not in cd['title'].lower(), f'CD.27 title still mandates the layer-2 substrate by name: {cd[chr(34)+"title"+chr(34)]}';
+      ttl=cd['title'];
+      assert 'durable function' not in ttl.lower(), f'CD.27 title still mandates the layer-2 substrate by name -- {ttl}';
       missing={k:[p for p in ('P1','P2','P3') if p not in v] for k,v in contracts.items()};
       missing={k:v for k,v in missing.items() if v};
       assert not missing, f'contract text does not reference the resume properties: {missing}';
@@ -275,9 +283,11 @@ verification_plan:
       at them, the personas discipline point no longer mandates the substrate by name, and c1
       carries the workspace clause.
     fix_if: >-
-      A count of 3 nodes means the Parallel critic fan-out line was missed. A mechanism-vocabulary
-      hit means a criterion, node typing or the personas discipline point still names the
-      incumbent. A `missing` failure means a contract site was reworded mechanism-free but never
+      "expected 1 personas discipline point, found 0" means the rewrite dropped the literal
+      `Agent personas` anchor token, or turned the entry into a YAML mapping via a colon-space --
+      restore the token and keep the entry a plain string. A count of 3 nodes means the Parallel
+      critic fan-out line was missed. A mechanism-vocabulary hit means a criterion, node typing or
+      the personas discipline point still names the incumbent. A `missing` failure means a contract site was reworded mechanism-free but never
       bound to P1/P2/P3 -- add the explicit property reference; this is the keystone's failure
       mode and it propagates to waves 2, 3 and 5. A missing workspace token means the ESB-01 half
       was dropped.
@@ -336,6 +346,8 @@ verification_plan:
       sig=s['signals']['unplanned_resume_rate'];
       assert sig.get('denominator') and sig.get('exempt'), sig;
       assert s.get('baseline_window'), 'baseline_window missing';
+      thr=s['days_1_7_absolute_thresholds'];
+      assert thr=='TBD_at_T4.2_atomic_plan', f'days-1-7 thresholds must carry the deferral marker verbatim, got {thr}';
       stale=[q for q in cd['discipline_points'] if isinstance(q,dict) and any('stable for 14 days' in str(k) for k in q)];
       assert not stale, f'the OLD prose stability entry survives beside the structured one: {[list(q)[0][:60] for q in stale]}';
       we=s['worked_example'];
@@ -345,21 +357,25 @@ verification_plan:
       derived=inp['unplanned_resumes']/inp['persona_node_executions'];
       assert abs(we['computed']['unplanned_resume_rate']-derived) < 1e-9, f\"recorded {we['computed']['unplanned_resume_rate']} != derived-from-inputs {derived}\";
       assert derived < 0.05, f'worked example rate {derived} contradicts the <5% threshold';
-      assert we['verdict']['fires'] is True, f'verdict must be an explicit boolean, got {we[chr(34)+"verdict"+chr(34)]}';
-      print('OK derived rate', derived, 'from inputs', inp, 'fires', we['verdict']['fires'])"
+      vd=we['verdict'];
+      assert isinstance(vd,dict) and vd.get('fires') is True, f'verdict must be a mapping carrying an explicit boolean fires:true, got {vd}';
+      print('OK derived rate', derived, 'scheduled_continuations', inp['scheduled_continuations'], 'fires', vd['fires'], 'marker', thr)"
     expected: >-
-      Prints OK with a rate DERIVED FROM `inputs` strictly below the 5% threshold, a nonzero
-      scheduled-continuation count proving the exemption is exercised, `verdict.fires is True` as
-      an explicit boolean, and no surviving prose stability entry -- i.e. a routine 2-hour persona
-      run no longer makes the gate structurally unfirable.
+      Prints a rate derived from the worked example's own inputs, strictly below the 5% threshold;
+      a nonzero scheduled-continuation count proving the exemption is exercised; an explicit
+      boolean verdict; the days-1-7 deferral marker; and no surviving prose stability entry -- i.e.
+      a routine 2-hour persona run no longer makes the gate structurally unfirable. On a passing
+      tree the step prints exactly `OK derived rate` and `fires True marker TBD_at_T4.2_atomic_plan`.
     fix_if: >-
       A `stale` failure means `stability_definition_14d` was ADDED beside the old prose entry
       instead of replacing it -- delete the prose entry. A derived-vs-recorded mismatch means
       `computed` was hand-written rather than computed from `inputs`; fix the recorded value, not
       the assertion. A rate at or above 0.05 means scheduled duration-ceiling continuations are
-      still in the numerator; move them into `exempt`. A verdict TypeError means `fires` was left
-      as prose -- it must be a real boolean, because a prose verdict reading "cannot fire" would
-      satisfy a substring test while asserting the exact opposite of what this step exists to prove.
+      still in the numerator; move them into `exempt`. "verdict must be a mapping carrying an
+      explicit boolean" means `fires` was left as prose -- it must be a real boolean, because a
+      prose verdict reading "cannot fire" would satisfy a substring test while asserting the exact
+      opposite of what this step exists to prove. A `days_1_7_absolute_thresholds` failure means
+      threshold values were invented; restore the `TBD_at_T4.2_atomic_plan` marker (see context).
     graduation: graduate
     graduation_check_id: cd27-stability-gate-evaluable
   - step: 5
@@ -411,8 +427,14 @@ verification_plan:
     fix_if: >-
       Any hit is a PUBLIC-repository boundary violation (Decision 73 / AGENTS.md) -- remove the
       identifier and re-express the figure without it. Never suppress the pattern.
-    graduation: graduate
-    graduation_check_id: cost-projection-no-aws-identifiers
+    graduation: waive
+    graduation_waiver_reason: >-
+      Standing PUBLIC-repository boundary invariant, not differentially admissible: it exits 0 on
+      the CURRENT tree (verified -- there are no confidential identifiers in cost_projection today),
+      so it has no pre-edit failing state and VF-06's differential gate (FAIL at origin/main, PASS
+      at HEAD) would reject it as tautological. The property is already backstopped by the
+      `never-commit` pre-commit hook and GHAS push protection; this step remains valuable as an
+      in-plan regression guard on the ESB-09 edit without being registry-admissible.
   - step: 7
     phase: pre-deploy
     hermetic: true
@@ -432,8 +454,10 @@ verification_plan:
       assert 're_evaluation_triggers' not in esb, 'rename to substrate_reevaluation_triggers -- too close to cost_projection.reevaluation_triggers';
       assert len(esb['substrate_reevaluation_triggers'])==4, esb['substrate_reevaluation_triggers'];
       assert 'gross' in yaml.safe_dump(esb).lower(), 'free-tier stance not stated';
-      nat=yaml.safe_dump(esb['nat_contingency']);
-      assert 'medium' in nat.lower() and '-' in nat, nat;
+      natc=esb['nat_contingency'];
+      assert natc['confidence']=='medium', f'NAT confidence must be medium, got {natc}';
+      band=str(natc['standing_usd_per_month']).strip();
+      assert re.fullmatch(r'[$]?[0-9]+(?:[.][0-9]+)?-[$]?[0-9]+(?:[.][0-9]+)?', band), f'NAT must be a bracket low-high, not a point value -- got {band}';
       hb=cs['headline_basis'];
       rng=lambda s: [float(x) for x in re.match(r'^\\\$?([0-9.]+)-\\\$?([0-9.]+)$', str(s).strip()).groups()];
       sub=rng(hb['enumerated_subtotal_usd']); add=rng(hb['add_on_usd']);
@@ -473,7 +497,8 @@ verification_plan:
       from scripts.decisions_md import _iter_decision_sections
       forms = yaml.safe_load(open('docs/contracts/decision-entry.yaml'))['amendment_forms']
       pinned = [f for f in forms if f['form'] == 'blockquote_update']
-      assert len(pinned) == 1, f'blockquote_update form missing from the contract: {[f[chr(34)+"form"+chr(34)] for f in forms]}'
+      names = [f['form'] for f in forms]
+      assert len(pinned) == 1, f'blockquote_update form missing from the contract -- {names}'
       prefixes = [pinned[0]['example'].split('(')[0].strip()]
       txt = open('docs/DECISIONS.md', encoding='utf-8').read()
       blocks = {int(m.group(1)): b for m, b in _iter_decision_sections(txt)}
@@ -690,7 +715,11 @@ constraints:
     bare (unquoted) string containing a colon-space becomes a MAPPING when parsed, not a string.
     The reworded personas discipline point must therefore avoid `": "` or be explicitly quoted --
     otherwise VP step 2's `isinstance(p, str)` lookup finds 0 personas points and fails. This is
-    exactly how CD.27's existing entries 6 and 7 became accidental mappings.
+    exactly how CD.27's existing entries 6 and 7 became accidental mappings. The SAME hazard
+    applies to T4.2's c1 rewrite: the six criteria are currently double-quoted scalars in the raw
+    YAML, so a strict in-place edit preserves the quoting and the criterion stays a string -- but if
+    the quoting is dropped while the new text contains a colon-space, c1 silently becomes a mapping
+    and VP step 2's string operations fail. Keep the surrounding double quotes.
   - >-
     Never touch a `- id:` line in docs/ROADMAP-PLATFORM.yaml. validate_platform_roadmap check (ii)
     force-flags every bare-string criterion on any tier_item whose header appears in the diff, and
@@ -759,7 +788,8 @@ context:
   - >-
     Decision-scout round 1 (gate_run_id esb-text-fix-bundle-decision-scout-r1-7c3f1a9e) triaged 114
     of 114 decisions and raised five flags, ALL resolved by PIVOT: (1) Decision 145 -- no in-place
-    decision-body edits, use the sanctioned trailer forms; (2) Decision 86 -- restate the days-1-7
+    decision-body edits, use the sanctioned trailer forms; (2) Decision 86 -- do not make the gate
+    depend on a doc slated for retirement, so do not cite the days-1-7
     thresholds inline rather than making the gate depend on a doc slated for retirement; (3)
     Decision 88 -- Neon catalog egress is first-class, named explicitly and given a fourth
     re-evaluation trigger; (4) Decision 110 -- structured keys, not narrative prose, in the
@@ -872,6 +902,32 @@ context:
     an assumption, with VP step 12's fix_if naming
     `bin/venv-python -m scripts.decisions_index --write` as the remedy if it ever does fire.
   - >-
+    DAYS-1-7 ABSOLUTE THRESHOLDS ARE DEFERRED, NOT INVENTED (S1). CD.27's reworded stability
+    definition sets `days_1_7_absolute_thresholds: TBD_at_T4.2_atomic_plan` rather than carrying
+    numbers. Those thresholds do not exist anywhere in the repo:
+    docs/INTENT-provider-agnostic-executor.md's baseline-bootstrap policy says only that absolute
+    thresholds "are codified before Stage 2 launch", and they never were. Inventing them in a
+    text-remediation wave would land half the CD.17 reversal gate -- the platform's headline
+    unfreeze trigger -- as unreviewed numbers chosen by an implementing agent. They are a
+    substantive gate-calibration decision belonging to the T4.2 atomic plan with the human in the
+    loop. The marker is asserted verbatim by VP step 4, so the deferral is visible and machine-
+    checkable rather than an omission. This does NOT reintroduce the Decision 86 defect the round-1
+    scout flagged: the gate cites no retiring doc as authority either.
+  - >-
+    VERIFICATION REGISTRY OWNERSHIP (B3). `config/agent/verification_registry/registry.yaml` is
+    deliberately ABSENT from the Scope table, and that is correct rather than an omission. The
+    implement skill's VF-05 producer walk owns it: step 4 appends admitted rows to its `entries`
+    list, and step 7 names "the registry.yaml diff and any plan disposition flips" as durable
+    artefacts "committed in the same commit as the plan's other changes (Step 7's `git add -A`
+    picks it up)". It is therefore a SANCTIONED out-of-Scope-table modification produced by the
+    implement workflow, not by an execution step of this plan -- which is why no execution step
+    authors rows and no VP step asserts them. The implementing session must still run the real
+    differential admission gate (`scripts.verification_graduation.run_differential`, a genuine git
+    worktree against origin/main) for each of the FOUR surviving `graduate` steps, and must flip
+    any rejected candidate to `waive` per VF-05 step 5. The "Scope discipline" acceptance criterion
+    names only the two rec-2923-owned paths as untouched; it does not assert an exhaustive
+    untouched set, so it does not conflict with this write.
+  - >-
     Preflight at plan time: venv ok, creds ok, working tree clean, 0 commits behind origin/main
     (so the Main Divergence Assessment found no overlap and no rebase was deferred), ops_outbox
     empty, open_recommendations 881 with the non-automatable soft cap breached (754, informational
@@ -928,9 +984,12 @@ execution_steps:
     structured `stability_definition_14d` mapping. Rename the signal substrate-neutrally, define
     `denominator` as persona-node executions STARTED in the window, put scheduled duration-ceiling
     continuations in `exempt`, fix the self-delaying baseline via a `baseline_window` evaluating
-    days 8-14 against a days-1-7 in-window baseline with the days-1-7 absolute thresholds RESTATED
-    INLINE, and add `worked_example` with inputs/computed/verdict for a 2-hour implement_agent run.
-    Do NOT touch :821.
+    days 8-14 against a days-1-7 in-window baseline, and add `worked_example` with
+    inputs/computed/verdict for a 2-hour implement_agent run (`verdict.fires` must be a real
+    boolean). Set `days_1_7_absolute_thresholds` to the literal string `TBD_at_T4.2_atomic_plan`.
+    Do NOT invent threshold values: they exist nowhere in the repo (the INTENT doc says only that
+    they "are codified before Stage 2 launch", and they never were), and inventing them here would
+    land half the CD.17 reversal gate unreviewed inside a text-remediation wave. Do NOT touch :821.
   - >-
     ESB-08 continued: annotate the alarm row at docs/INTENT-provider-agnostic-executor.md :352 so
     it reads as counting UNPLANNED resumes only, with scheduled continuations excluded as routine
@@ -938,7 +997,9 @@ execution_steps:
   - >-
     ESB-09: repair cost_projection. Correct step_functions_transitions (currently :303) to
     "$0.075-0.225" recomputed exactly from its own assumptions (NOT rounded to cents -- $0.08-0.23
-    does not equal 30 x 100 x $0.000025); recompute the current_scale headline
+    does not equal 30 x 100 x $0.000025); recompute the `current_scale` headline, which was never
+    updated after the EC2 and RDS retirements (the EC2 line already reads $0 and there is no RDS
+    line to remove -- the stale artefact is the 45-65 SUM, not the line items); recompute the current_scale headline
     (currently :279) and dominant_cost (:280) so they no longer sum the retired EC2 and RDS lines;
     add a NAMED Neon catalog egress line carrying the Decision 88 clause 2 measurement obligation
     with no invented figure; and add the structured `executor_substrate_billing` block folding in
@@ -953,7 +1014,10 @@ execution_steps:
     uncontested; only layer 2 is what the Q5 spike decides. Verified referentially safe this
     session: the title string appears nowhere but its own line, no code reads CandidateDecision
     titles, and the ratification guard keys on state/ratified_as/filed_via only. Then, BOTH halves
-    of the personas discipline point (currently :817). De-mechanise
+    of the personas discipline point (currently :817). The rewritten entry MUST retain the literal
+    token `Agent personas` as its opening -- VP step 2 locates it by that anchor, and losing it
+    surfaces as "expected 1 personas discipline point, found 0" rather than as a content failure.
+    De-mechanise
     it: "Agent personas as Durable Functions, not as regular Lambdas" currently mandates the layer-2
     substrate by name, one line above where resume_properties is inserted -- restate it so agent
     personas are required to satisfy P1/P2/P3, with the substrate that provides them pinned at
