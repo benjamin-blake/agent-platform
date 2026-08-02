@@ -66,10 +66,15 @@ acceptance_criteria:
     3 and 5 and in the pytest module, and are deliberately NOT graduated -- they become false when
     wave 5 ratifies CD.43, and the registry has no retirement field.
   - >-
-    No selection criterion publishes a cost figure (no `$<digit>` anywhere in W1-W8); W3 instead
-    names `terraform/personal/variables.tf` as the region pin and demands the figure be RECOMPUTED at
+    No selection criterion publishes a CURRENCY-ANCHORED cost figure -- mechanically enforced as no
+    `$` followed by a digit anywhere in the criteria; W3 instead names
+    `terraform/personal/variables.tf` as the region pin and demands the figure be RECOMPUTED at
     decision time from the then-published rate. A criteria paper that ships a number ships a magic
-    ceiling that is stale the day it lands.
+    ceiling that is stale the day it lands. SCOPE OF ENFORCEMENT, stated rather than implied: the
+    regex catches the `$0.045` form and NOT a bare unit-denominated one such as "0.045 per GB-month"
+    or "32 USD". It is deliberately not widened, because a general numeric ban would false-positive
+    on the criterion ids themselves and on "Decision 100"; keeping figures out in the unanchored form
+    is a prose obligation reviewed at the plan-critique gate, not a mechanically-caught one.
   - >-
     W8 binds to Decision 100 by name, so a store that substitutes custom scripting for a managed
     primitive must be ARGUED against that Decision at ratification rather than winning on
@@ -169,11 +174,15 @@ verification_plan:
       KEYSTONE, DURABLE HALF -- the assertions that stay true after CD.43 ratifies, verified
       INDEPENDENTLY of the plan's own test package. Exactly W1-W8 exist as non-empty strings; the
       option and coverage sets are duplicate-free and meet their membership floors; no criterion
-      publishes a cost figure; W3 names the region pin and demands recomputation; W8 binds to
-      Decision 100; the block carries no confidential identifier. The isinstance(str) sweep is the
-      colon-space YAML hazard guard -- eight folded scalars is eight chances to author a mapping by
-      accident. Every assertion here survives the store being chosen, which is precisely why this is
-      the step that graduates.
+      publishes a `$`-anchored cost figure; W3 names the region pin and demands recomputation; W8
+      binds to Decision 100; the block carries no confidential identifier. The isinstance(str) sweep
+      is the colon-space YAML hazard guard -- eight folded scalars is eight chances to author a
+      mapping by accident. Every assertion here survives the store being chosen, which is precisely
+      why this is the step that graduates. GROWTH-SAFE BY CONSTRUCTION: every collection assertion
+      here is a membership FLOOR, never an exact set -- including the criterion ids, so wave 5 may
+      add a W9 without reddening a standing row it never touched. The ratchet that keeps a new
+      criterion from being ignored lives in step 4, which requires T4.1 to name every id actually
+      present in selection_criteria rather than a hardcoded eight.
     command: |-
       bin/venv-python -c "
       import re, yaml
@@ -184,7 +193,8 @@ verification_plan:
       assert len(blocks) == 1, f'workspace_store_selection must appear exactly once, found {len(blocks)}'
       b = blocks[0]['workspace_store_selection']
       sc = b['selection_criteria']
-      assert set(sc) == {'W1','W2','W3','W4','W5','W6','W7','W8'}, f'expected exactly W1-W8, got {sorted(sc)}'
+      required_ids = {'W1','W2','W3','W4','W5','W6','W7','W8'}
+      assert required_ids <= set(sc), f'selection_criteria missing {sorted(required_ids - set(sc))}'
       bad = {k: type(v).__name__ for k, v in sc.items() if not isinstance(v, str) or not v.strip()}
       assert not bad, f'criteria must be non-empty strings (a colon-space turns a scalar into a mapping): {bad}'
       opts, cases = b['option_set'], b['coverage_cases']
@@ -276,7 +286,12 @@ verification_plan:
       bidirectional link that keeps CD.43 reachable from the tier-item reader, plus the T4.1
       bare-string invariant -- the deliberate sibling of wave 1's identical guard on T4.2. Appending a
       criterion never puts T4.1's header into the diff, so validate_platform_roadmap check (ii) will
-      not fire and cannot serve as the backstop here; this step is that backstop.
+      not fire and cannot serve as the backstop here; this step is that backstop. THE RATCHET: the
+      required id list is read from CD.43's own selection_criteria at run time rather than hardcoded,
+      so if a later wave adds a W9 to the CD without naming it on T4.1, this step fails and names the
+      gap. That is what lets step 2 use a growth-safe floor without letting a new criterion slip in
+      unnamed -- the pair is strictly stronger than an exact-set assertion in either step alone, and
+      it fails only on the genuinely incomplete edit rather than on any edit at all.
     command: |-
       bin/venv-python -c "
       import yaml
@@ -284,6 +299,7 @@ verification_plan:
       cds = [c for c in d['candidate_decisions'] if c['id'] == 'CD.43']
       assert cds, 'CD.43 absent -- the criteria CD was never added'
       cd = cds[0]
+      b = [p for p in cd['discipline_points'] if isinstance(p, dict) and 'workspace_store_selection' in p][0]['workspace_store_selection']
       items = {i['id']: i for i in d['tier_items']}
       t41 = items['T4.1']
       nonstr = [c for c in t41['exit_criteria'] if not isinstance(c, str)]
@@ -292,8 +308,9 @@ verification_plan:
       assert len(named) == 1, f'expected exactly 1 T4.1 criterion naming CD.43, found {len(named)}'
       crit = named[0]
       assert 'workspace_uri' in crit, 'the criterion must bind to prepare_workspace workspace_uri'
-      missing = [w for w in ('W1','W2','W3','W4','W5','W6','W7','W8') if w not in crit]
-      assert not missing, f'T4.1 names CD.43 but not its criteria {missing}'
+      declared = sorted(b['selection_criteria'])
+      missing = [w for w in declared if w not in crit]
+      assert not missing, f'T4.1 names CD.43 but not its criteria {missing} (declared: {declared})'
       unlinked = [g for g in cd['gates'] if 'CD.43' not in (items[g].get('related_candidate_decisions') or [])]
       assert not unlinked, f'tier item(s) gated by CD.43 never name it back: {unlinked}'
       print('OK T4.1 names CD.43 + W1-W8;', len(cd['gates']), 'gated item(s) linked back')
@@ -458,8 +475,9 @@ verification_plan:
       carelessly worded new entry could inflate.
     command: bin/venv-python -m pytest tests/esb_text_fix/ -v
     expected: >-
-      Exit 0 with 45 tests passing: wave 1's 34 plus this wave's 11. A count below 45 means a guard
-      module failed to collect.
+      Exit 0 with wave 1's 34 guards plus this wave's 11 all passing. The total is stated as that sum
+      rather than as a literal, so an intervening wave adding its own guards to this package cannot
+      make correct prose read as wrong. A total below the sum means a guard module failed to collect.
     fix_if: >-
       A failure in test_resume_property_vocabulary.py's personas or Fargate count means the new CD.27
       discipline_point accidentally contains the anchor substring `Agent personas` or `ECS Run Task
@@ -765,7 +783,8 @@ context:
     also unions assets/config and would over-flag bundled non-code assets (e.g.
     docs/ROADMAP-PLATFORM.yaml)", naming this exact file as the example; (iv) skipping a deploy takes
     no governed action, whereas invoking one would fire a production deploy channel for a text edit.
-    The contract-versus-practice divergence is already filed as a recommendation by the orchestrator
+    The contract-versus-practice divergence is already filed as rec-2941 ("CD.16 Lambda-artifact
+    obligation diverges from doc-only-plan practice for ROADMAP-PLATFORM.yaml", filed 2026-08-01)
     -- it is not this plan's to file. This entry exists because SILENCE is the dangerous shape here:
     an implementing agent that re-derives the arithmetic, finds no recorded ruling, and resolves the
     ambiguity toward action would deploy.
@@ -900,7 +919,7 @@ execution_steps:
     it lives in wave 1's package, a local `cd43()` accessor that raises a NAMED assertion when CD.43
     is absent (never a bare StopIteration -- the diagnostic is the point), and eleven guards:
     test_cd43_is_pending_and_r2_shaped; test_cd43_gates_reference_only_existing_tier_items;
-    test_selection_criteria_are_exactly_w1_w8_non_empty_strings; test_store_choice_is_deferred_not_made;
+    test_selection_criteria_cover_w1_w8_and_are_non_empty_strings; test_store_choice_is_deferred_not_made;
     test_cd43_and_its_gated_items_are_bidirectionally_linked;
     test_t41_names_the_criteria_and_leaves_the_choice_open; test_t41_exit_criteria_remain_bare_strings;
     test_layer2_ratification_preconditions_cover_esb01_esb04_esb06;
