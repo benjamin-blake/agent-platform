@@ -26,7 +26,8 @@ scope:
       folded into c1, no backing store named); ESB-07 (T4.1 files_in_scope :6841-6843 re-pointed
       to terraform/personal/); ESB-08 (CD.27 :822 prose stability definition replaced by a
       structured stability_definition_14d mapping); ESB-09 (cost_projection :268-321 arithmetic
-      repair plus a structured executor_substrate_billing block); ESB-10 (CD.27 :817 scoped);
+      repair plus a structured executor_substrate_billing block); ESB-10 (CD.27 :817 -- personas point de-mechanised to P1/P2/P3 AND its deterministic-only half
+      scoped);
       ESB-11 (:791 runtime list, :803-804 cross-references); ESB-04/ESB-06 ratification-obligation
       discipline_points. Line :821 is NOT touched -- it is wave 3's (ESB-02).
   - file: docs/DECISIONS.md
@@ -104,9 +105,10 @@ acceptance_criteria:
     mechanism-free vocabulary, and it is the single definition site.
   - >-
     ESB-05b: T4.2 criterion c1 and all four T4.1 persona-node typings (plan_agent, the Parallel
-    critic fan-out, implement_agent, code_review) reference those property ids; the tokens
-    "checkpoint-replay", "Durable Function" and "forced timeout" no longer appear in c1 or in the
-    four node typings.
+    critic fan-out, implement_agent, code_review) each REFERENCE the property ids P1, P2 and P3
+    explicitly -- a mechanism-free but property-free rewording does NOT satisfy this; and the
+    tokens "checkpoint-replay", "Durable Function", "forced timeout" and "replay" no longer appear
+    in c1, in the four node typings, or in CD.27's personas discipline point.
   - >-
     ESB-01 (c1 half only): T4.2 c1 asserts workspace continuity via P2 ("without losing workspace
     state") and names NO backing store -- the store choice remains open for a later wave.
@@ -119,7 +121,7 @@ acceptance_criteria:
     example recomputes consistently from its own inputs; the days-1-7 absolute thresholds are
     restated inline; and the INTENT :352 alarm row is annotated as counting unplanned resumes only.
   - >-
-    ESB-09a: `step_functions_transitions` reads "$0.08-0.23" and recomputes exactly from its own
+    ESB-09a: `step_functions_transitions` reads "$0.075-0.225" and recomputes exactly from its own
     stated assumptions (30 transitions/rec x 100-300 recs/month x $0.000025/transition); the
     self-inconsistent "$1-10" figure is gone and is not preserved anywhere.
   - >-
@@ -133,9 +135,11 @@ acceptance_criteria:
     with `confidence: medium`; and exactly four `re_evaluation_triggers` (A2+ concurrency raise,
     100x scale, repo-visibility change, egress shape per Decision 88).
   - >-
-    ESB-10: CD.27's deterministic-only discipline point is scoped to ITERATIVE persona loops and
-    co-cites Decision 39; Decision 39 carries a sanctioned dated trailer recording the same scope,
-    and its original body is byte-identical to origin/main.
+    ESB-10: CD.27's personas discipline point (:817) no longer mandates the layer-2 substrate by
+    name -- it states the requirement as P1/P2/P3 and leaves the mechanism to layer-2 ratification
+    -- AND its deterministic-only half is scoped to ITERATIVE persona loops, co-citing Decision 39.
+    Decision 39 carries a sanctioned dated trailer recording the same scope, and its original body
+    is byte-identical to origin/main.
   - >-
     ESB-11: CD.27 names T4.12 (not the rewritten T4.3) for the scheduled-agent loop, no longer
     offers the CD.21-retired self-hosted-runner-cron option, and its runtime list includes .NET/C#;
@@ -175,14 +179,25 @@ verification_plan:
       assert cd.state=='pending', cd.state;
       assert cd.ratified_as is None;
       assert cd.filed_via=='pending_log_decision_lambda', cd.filed_via;
-      assert len(cd.discipline_points)>=10, f'expected >=10 discipline_points after the 2 new ratification obligations, found {len(cd.discipline_points)}';
-      print('OK', len(cd.discipline_points), 'discipline_points')"
+      dp=cd.discipline_points;
+      assert len(dp)>=12, f'expected >=12 discipline_points (9 pre-existing + resume_properties + 2 ratification obligations; stability_definition_14d replaces entry 6 in place), found {len(dp)}';
+      blob=str(dp);
+      assert 'managed orchestration primitive' in blob.lower(), 'ESB-04 obligation missing its Decision 39 managed-primitive clause';
+      assert 'lapse' in blob.lower(), 'ESB-06 obligation missing its explicit lapse clause';
+      print('OK', len(dp), 'discipline_points; both ratification obligations present')"
     expected: >-
-      Loads without raising, prints OK and a discipline_points count of at least 10 (the 8
-      pre-existing entries plus the 2 new ratification-obligation entries).
+      Loads without raising and prints OK with a discipline_points count of at least 12 -- the 9
+      pre-existing entries, plus `resume_properties` and the two ratification-obligation entries,
+      with `stability_definition_14d` replacing pre-existing entry 6 in place rather than adding
+      one. Both obligations are additionally asserted BY CONTENT, so dropping either one fails
+      here even if the count is satisfied by the other.
     fix_if: >-
       A ValidationError naming an unexpected CD.27 key means a structured block was added as a new
-      top-level key instead of a discipline_points entry -- move it into discipline_points.
+      top-level key instead of a discipline_points entry -- move it into discipline_points. A
+      count at 11 with both content assertions passing means `stability_definition_14d` was
+      APPENDED rather than replacing entry 6 -- replace in place. A content-assertion failure means
+      an ESB-04/ESB-06 obligation was silently dropped, the exact defect this slice exists to
+      prevent (see WAVE BOUNDARIES in context).
     graduation: waive
     graduation_waiver_reason: >-
       Duplicates the already-registered validate_platform_roadmap check, which performs the same
@@ -192,63 +207,86 @@ verification_plan:
     phase: pre-deploy
     hermetic: true
     action: >-
-      ESB-05 keystone, verified INDEPENDENTLY of the plan's own test package: assert the three
-      resume properties are defined exactly once in CD.27, and that the reworded T4.2 c1 and the
-      four T4.1 persona-node typings carry NONE of the incumbent's mechanism vocabulary.
+      ESB-05 keystone, verified INDEPENDENTLY of the plan's own test package. Asserts BOTH
+      directions: negatively, that T4.2 c1, the four T4.1 persona-node typings and CD.27's
+      personas discipline point carry none of the incumbent's mechanism vocabulary; and
+      POSITIVELY, that each of P1/P2/P3 is actually referenced by c1 and by every one of the four
+      node typings. The positive half is what makes ESB-05b real -- without it, a literal
+      execution that retypes nodes to a mechanism-free but property-free label would satisfy every
+      other check while leaving the contracts unbound to the vocabulary waves 2, 3 and 5 inherit.
     command: >-
-      bin/venv-python -c "import yaml,re,sys;
+      bin/venv-python -c "import yaml;
       d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
       cd=[c for c in d['candidate_decisions'] if c['id']=='CD.27'][0];
       rp=[p for p in cd['discipline_points'] if isinstance(p,dict) and 'resume_properties' in p];
       assert len(rp)==1, f'resume_properties must be defined exactly once, found {len(rp)}';
       props=rp[0]['resume_properties'];
-      assert set(props)>={'P1','P2','P3'}, sorted(props);
+      assert set(props)=={'P1','P2','P3'}, f'expected exactly P1/P2/P3, got {sorted(props)}';
       t41=[i for i in d['tier_items'] if i['id']=='T4.1'][0];
       t42=[i for i in d['tier_items'] if i['id']=='T4.2'][0];
       c1=t42['exit_criteria'][0];
       nodes=[l for l in t41['intent'].splitlines() if '[' in l and 'T4.2]' in l];
       assert len(nodes)==4, f'expected 4 persona-node typings, found {len(nodes)}';
-      banned=['checkpoint-replay','Durable Function','forced timeout'];
-      blob=c1+chr(10).join(nodes);
-      hits=[b for b in banned if b.lower() in blob.lower()];
-      assert not hits, f'mechanism vocabulary survives: {hits}';
+      personas=[p for p in cd['discipline_points'] if isinstance(p,str) and 'Agent personas' in p];
+      assert len(personas)==1, f'expected 1 personas discipline point, found {len(personas)}';
+      banned=['checkpoint-replay','durable function','forced timeout','replay'];
+      contracts={'c1':c1,'personas_discipline_point':personas[0]};
+      contracts.update({f'node[{n}]':t for n,t in enumerate(nodes)});
+      hits={k:[b for b in banned if b in v.lower()] for k,v in contracts.items()};
+      hits={k:v for k,v in hits.items() if v};
+      assert not hits, f'mechanism vocabulary survives in contract text: {hits}';
+      missing={k:[p for p in ('P1','P2','P3') if p not in v] for k,v in contracts.items() if k!='personas_discipline_point'};
+      missing={k:v for k,v in missing.items() if v};
+      assert not missing, f'contract text does not reference the resume properties: {missing}';
       assert 'workspace' in c1.lower(), 'c1 must assert workspace continuity (ESB-01 half)';
-      print('OK', sorted(props), len(nodes), 'nodes')"
+      print('OK', sorted(props), len(nodes), 'nodes, all referencing P1/P2/P3')"
     expected: >-
-      Prints OK with the property ids and 4 nodes. Proves the vocabulary is single-sourced, every
+      Prints OK with exactly P1/P2/P3 and 4 nodes. Proves the vocabulary is single-sourced, every
       persona node was retyped (including the Parallel critic fan-out line the audit's own anchor
-      hint omitted), and c1 carries the workspace clause.
+      hint omitted), every contract site references the property ids rather than merely gesturing
+      at them, the personas discipline point no longer mandates the substrate by name, and c1
+      carries the workspace clause.
     fix_if: >-
       A count of 3 nodes means the Parallel critic fan-out line was missed. A mechanism-vocabulary
-      hit means a criterion or node typing still names the incumbent. A missing workspace token
-      means the ESB-01 half was dropped.
+      hit means a criterion, node typing or the personas discipline point still names the
+      incumbent. A `missing` failure means a contract site was reworded mechanism-free but never
+      bound to P1/P2/P3 -- add the explicit property reference; this is the keystone's failure
+      mode and it propagates to waves 2, 3 and 5. A missing workspace token means the ESB-01 half
+      was dropped.
     graduation: graduate
     graduation_check_id: t4x-persona-contracts-mechanism-word-free
   - step: 3
     phase: pre-deploy
     hermetic: true
     action: >-
-      ESB-07: assert every executor `.tf` path across every T4.x tier_item files_in_scope sits
-      under terraform/personal/, so the executor infrastructure rides the governed Decision 126
-      infra channel rather than the retired terraform/ root.
+      ESB-07: assert every EXECUTOR `.tf` path across every T4.x tier_item files_in_scope sits under
+      terraform/personal/, so the executor infrastructure rides the governed Decision 126 infra
+      channel rather than the retired terraform/ root. Scoped by the `executor_` basename prefix --
+      this is deliberate and load-bearing: T4.12's `terraform/scheduled_agents.tf` is legacy-root by
+      design (its Lambdas are the inert scheduled agents, see the DEPLOY DEFERRAL context) and is
+      NOT this plan's to move. An unscoped assertion would fail on a correctly-implemented tree.
     command: >-
       bin/venv-python -c "import yaml;
       d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
-      bad=[(i['id'],f) for i in d['tier_items'] if i['id'].startswith('T4.')
-      for f in (i.get('files_in_scope') or [])
-      if f.split('#')[0].strip().endswith('.tf')
-      and not f.split('#')[0].strip().startswith('terraform/personal/')];
-      assert not bad, bad;
-      good=[f.split('#')[0].strip() for i in d['tier_items'] if i['id'].startswith('T4.')
+      tf=[(i['id'],f.split('#')[0].strip()) for i in d['tier_items'] if i['id'].startswith('T4.')
       for f in (i.get('files_in_scope') or []) if f.split('#')[0].strip().endswith('.tf')];
-      assert len(good)>=5, good;
-      print('OK', len(good), 'executor .tf paths, all under terraform/personal/')"
+      ex=[(t,p) for t,p in tf if p.rsplit('/',1)[-1].startswith('executor_')];
+      bad=[(t,p) for t,p in ex if not p.startswith('terraform/personal/')];
+      assert not bad, f'executor .tf still under the retired root: {bad}';
+      assert len(ex)>=5, ex;
+      nonex=[(t,p) for t,p in tf if not p.rsplit('/',1)[-1].startswith('executor_')];
+      assert ('T4.12','terraform/scheduled_agents.tf') in nonex, 'T4.12 scheduled_agents.tf must remain untouched at the legacy root';
+      print('OK', len(ex), 'executor .tf paths under terraform/personal/;', len(nonex), 'non-executor path(s) correctly excluded')"
     expected: >-
-      Prints OK with at least 5 paths (T4.1's three re-pointed files plus T4.9a's and T4.11's
-      already-correct entries), and an empty bad list.
+      Prints OK with at least 5 executor paths (T4.1's three re-pointed files plus T4.9a's and
+      T4.11's already-correct entries), an empty bad list, and T4.12's scheduled_agents.tf still
+      present at the legacy root as a non-executor path.
     fix_if: >-
-      A non-empty bad list names the tier_item and path still under the retired root; re-point it
-      to terraform/personal/ keeping the filename.
+      A non-empty bad list names an EXECUTOR-prefixed tier_item path still under the retired root;
+      re-point that path to terraform/personal/ keeping the filename. If the failure instead names
+      `T4.12` / `terraform/scheduled_agents.tf`, do NOT move it -- that path is correctly at the
+      legacy root and moving it would corrupt T4.12's scope and contradict this plan's DEPLOY
+      DEFERRAL; the fix is to restore it and re-check the executor-prefix filter.
     graduation: graduate
     graduation_check_id: executor-tf-paths-under-terraform-personal
   - step: 4
@@ -299,12 +337,14 @@ verification_plan:
       assert '1-10' not in line, 'the overstated \$1-10 figure survives';
       lo,hi=[float(x) for x in re.match(r'^\\\$([0-9.]+)-([0-9.]+)', line).groups()];
       tx_per_rec=30; rate=0.000025;
-      exp_lo=round(tx_per_rec*100*rate,2); exp_hi=round(tx_per_rec*300*rate,2);
-      assert abs(lo-exp_lo)<0.01 and abs(hi-exp_hi)<0.01, (lo,hi,exp_lo,exp_hi);
+      exp_lo=round(tx_per_rec*100*rate,4); exp_hi=round(tx_per_rec*300*rate,4);
+      assert (lo,hi)==(exp_lo,exp_hi), f'published {lo}-{hi} != recomputed {exp_lo}-{exp_hi}';
       assert 'eu-west-2' in line or 'eu-west-2' in str(d['cost_projection']), 'region unstated';
       print('OK', lo, hi, '==', exp_lo, exp_hi)"
     expected: >-
-      Prints OK with the published range equal to the recomputed 0.08 / 0.23, and the region named.
+      Prints OK with the published range EXACTLY equal to the recomputed 0.075 / 0.225, and the
+      region named. Equality is exact, not tolerance-based: a rounded-to-cents figure would fail
+      here, which is deliberate given ESB-09 exists to correct published cost arithmetic.
     fix_if: >-
       A mismatch means the published range and the stated assumptions disagree again -- recompute
       from transitions/rec x recs/month x rate rather than adjusting the assumptions to fit.
@@ -509,7 +549,11 @@ verification_plan:
     expected: Exit 0.
     fix_if: >-
       Any FAIL line names its own check; fix forward. Do NOT use --ignore-budget to pass this step.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step IS the aggregate registry gate -- validate.py --pre is what runs every graduated
+      check. Graduating it into the registry would make the gate a member of the set it evaluates,
+      which is circular.
   - step: 13
     phase: post-deploy
     hermetic: false
@@ -519,20 +563,24 @@ verification_plan:
       CI-owned (.github/workflows/rec-autoclose.yml detects any docs/DECISIONS.md change on push to
       main and runs backfill_decisions_from_md). Confirm the job ran green on the merge commit and
       that both rows were actually re-written -- a silently-failed backfill would leave a future
-      decision-scout reading pre-annotation text.
+      decision-scout reading pre-annotation text. FIRST, confirm the workflow run via the GitHub
+      MCP surface -- `mcp__github__actions_list` (workflow `rec-autoclose.yml`, branch `main`) or
+      `mcp__github__pull_request_read` on the merged PR -- and NOT via `gh`, which is not installed
+      in this container (PROJECT_CONTEXT: "Merge via a GitHub MCP PR (no local gh)"). THEN run the
+      command below for the warehouse half.
     command: >-
-      gh run list --workflow=rec-autoclose.yml --branch main --limit 3
-      --json conclusion,headSha,createdAt && bin/venv-python -m scripts.sync.ops pull &&
-      bin/venv-python -c "import json,pathlib;
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib;
       rows=[json.loads(l) for l in pathlib.Path('logs/.decisions-index.jsonl').read_text().splitlines() if l.strip()];
       idx={r.get('id'):r for r in rows};
       missing=[d for d in ('dec-039','dec-075') if d not in idx];
-      assert not missing, missing;
+      assert not missing, f'decision rows absent from the warehouse projection: {missing}';
       [print(d, idx[d].get('last_updated_timestamp')) for d in ('dec-039','dec-075')]"
     expected: >-
-      The most recent rec-autoclose run for the merge commit's SHA shows conclusion success, and
-      both dec-039 and dec-075 print a last_updated_timestamp at or after the merge time -- proving
-      the backfill re-wrote them rather than skipping.
+      The MCP query shows the rec-autoclose run for the merge commit's SHA concluded success, and
+      the command prints a last_updated_timestamp at or after the merge time for both dec-039 and
+      dec-075 -- proving the backfill re-wrote them rather than skipping. Note the portal `--sync`
+      verb is used rather than `scripts.sync.ops pull`, which the AGENTS.md Single Portal Invariant
+      names explicitly as a forbidden direct call.
     fix_if: >-
       A failed or absent run means the backfill did not execute -- re-run the workflow. Timestamps
       predating the merge mean the rows were not re-written; re-run
@@ -561,9 +609,18 @@ constraints:
     billing envelope are STRUCTURED KEYS. Rationale belongs on the DECISIONS.md side.
   - >-
     CandidateDecision is `extra="forbid"` (scripts/platform_roadmap_models.py:112). A new top-level
-    key on CD.27 FAILS schema validation. `discipline_points` is typed `list[Any]` and 11 entries
-    across CD.24/27/29/30/36/38 already parse as mappings, so a mapping entry there is both
-    sanctioned and the de-facto shape. Use it.
+    key on CD.27 FAILS schema validation. `discipline_points` is typed `list[Any]`, so a MAPPING
+    entry there is schema-valid and is the only viable slot for structured content. (Do not read the
+    11 existing mapping-shaped entries across CD.24/27/29/30/36/38 as precedent for a convention --
+    they are ACCIDENTAL: prose containing ": " that YAML split into key/value. The operative point
+    is the `list[Any]` typing, not those artefacts. Authoring a DELIBERATE mapping here is new, and
+    correct.)
+  - >-
+    YAML HAZARD, verified by simulation this session: a `discipline_points` entry authored as a
+    bare (unquoted) string containing a colon-space becomes a MAPPING when parsed, not a string.
+    The reworded personas discipline point must therefore avoid `": "` or be explicitly quoted --
+    otherwise VP step 2's `isinstance(p, str)` lookup finds 0 personas points and fails. This is
+    exactly how CD.27's existing entries 6 and 7 became accidental mappings.
   - >-
     Never touch a `- id:` line in docs/ROADMAP-PLATFORM.yaml. validate_platform_roadmap check (ii)
     force-flags every bare-string criterion on any tier_item whose header appears in the diff, and
@@ -756,8 +813,11 @@ execution_steps:
     the other five criteria as bare strings.
   - >-
     Retype all FOUR T4.1 persona nodes (currently :6828, :6829, :6831, :6832) from
-    `[Durable Function(s), T4.2]` to `[resumable persona, T4.2]`, pointing at CD.27's
-    resume_properties. Do not miss the Parallel critic fan-out line at :6829.
+    `[Durable Function(s), T4.2]` to the literal `[resumable persona (CD.27 P1/P2/P3), T4.2]` --
+    the parenthesised property ids are REQUIRED, not decorative. A bare `[resumable persona, T4.2]`
+    is mechanism-free but property-free and fails ESB-05b: it would leave the node typings unbound
+    to the vocabulary waves 2, 3 and 5 inherit. Likewise c1 must reference P1, P2 and P3 by id, not
+    merely paraphrase them. Do not miss the Parallel critic fan-out line at :6829.
   - >-
     ESB-07: re-point T4.1's three executor `.tf` files_in_scope entries (currently :6841-6843) from
     the retired `terraform/` root to `terraform/personal/`, matching siblings T4.9a and T4.11 so the
@@ -776,7 +836,8 @@ execution_steps:
     under CD.27. Cited by CD.27 as provenance only.
   - >-
     ESB-09: repair cost_projection. Correct step_functions_transitions (currently :303) to
-    "$0.08-0.23" recomputed from its own assumptions; recompute the current_scale headline
+    "$0.075-0.225" recomputed exactly from its own assumptions (NOT rounded to cents -- $0.08-0.23
+    does not equal 30 x 100 x $0.000025); recompute the current_scale headline
     (currently :279) and dominant_cost (:280) so they no longer sum the retired EC2 and RDS lines;
     add a NAMED Neon catalog egress line carrying the Decision 88 clause 2 measurement obligation
     with no invented figure; and add the structured `executor_substrate_billing` block folding in
@@ -785,10 +846,19 @@ execution_steps:
     free-tier-ignored stance, region and rate_basis on every line, the three corrected
     durable-execution rates, and exactly four re_evaluation_triggers.
   - >-
-    ESB-10: scope CD.27's deterministic-only discipline point (currently :817) to ITERATIVE persona
-    loops in the executor and co-cite Decision 39. Append a sanctioned dated trailer AFTER Decision
-    39's entry body recording the same scope, so its `agent` state type for single-shot LLM-backed
-    Lambdas is explicitly not narrowed. Do not edit Decision 39's body.
+    ESB-10, BOTH halves of CD.27's personas discipline point (currently :817). First, de-mechanise
+    it: "Agent personas as Durable Functions, not as regular Lambdas" currently mandates the layer-2
+    substrate by name, one line above where resume_properties is inserted -- restate it so agent
+    personas are required to satisfy P1/P2/P3, with the substrate that provides them pinned at
+    layer-2 ratification rather than here. Leaving this standing would be the Decision 75 frame-lock
+    at the scoring layer, in the very discipline point the keystone sits beside, and no later wave
+    owns :817 under this plan's WAVE BOUNDARIES -- so deferring it would leave it unowned. Second,
+    scope its deterministic-only half to ITERATIVE persona loops in the executor and co-cite
+    Decision 39. Then append a sanctioned dated trailer AFTER Decision 39's entry body recording
+    that scope, so its `agent` state type for single-shot LLM-backed Lambdas is explicitly not
+    narrowed. Do not edit Decision 39's body. Note the mechanism legitimately REMAINS in CD.27's
+    layer-2 `detail` prose (the audit's own ideal_behavior keeps it there) -- it is removed from the
+    CONTRACT lines only.
   - >-
     ESB-11: repoint CD.27's closing note (currently :803-804) off the rewritten T4.3 onto T4.12,
     dropping the self-hosted-runner-cron option retired by CD.21 / Decision 112; add .NET/C# to the
