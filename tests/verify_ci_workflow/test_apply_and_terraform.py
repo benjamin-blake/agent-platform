@@ -457,6 +457,22 @@ class TestReconcileStarvedFilingJobShape:
         assert "file_rec" in text
         assert "reconcile_starved" in text
 
+    @staticmethod
+    def _extract_acceptance(job: dict[str, Any]) -> str:
+        """Return the concatenated `acceptance` string literal the filing job passes to file_rec.
+
+        The repeated group deliberately carries NO leading `\\s*` (the preceding `\\(\\s*` already
+        consumes leading whitespace, and each iteration's trailing `\\s*` consumes the rest). A
+        `(?:\\s*"[^"]*"\\s*)+` form -- whitespace matchable at BOTH ends of the repeat -- lets the
+        gap between two literals be partitioned exponentially many ways, which CodeQL correctly
+        flagged as polynomial/exponential backtracking on this PR (alerts 16/17): a non-matching
+        input took 1.08s at 22 repetitions and quadrupled with every further pair.
+        """
+        text = "\n".join(step.get("run") or "" for step in job["steps"])
+        match = re.search(r'"acceptance":\s*\(\s*((?:"[^"]*"\s*)+)\)', text)
+        assert match, "could not locate the acceptance literal in the filing job's body"
+        return "".join(re.findall(r'"([^"]*)"', match.group(1)))
+
     def test_acceptance_passes_the_live_portal_linter(self, job: dict[str, Any]) -> None:
         """LOAD-BEARING (code-review round 1, High #1). The portal registers acceptance_lint as a
         WRITE-TIME validator, so a prose acceptance value makes file_rec RAISE and this job file
@@ -467,10 +483,7 @@ class TestReconcileStarvedFilingJobShape:
         """
         from scripts.executor.acceptance_lint import lint_acceptance_command
 
-        text = "\n".join(step.get("run") or "" for step in job["steps"])
-        match = re.search(r'"acceptance":\s*\(\s*((?:\s*"[^"]*"\s*)+)\)', text)
-        assert match, "could not locate the acceptance literal in the filing job's body"
-        acceptance = "".join(re.findall(r'"([^"]*)"', match.group(1)))
+        acceptance = self._extract_acceptance(job)
         assert acceptance.strip(), "acceptance literal resolved empty"
 
         ok, error = lint_acceptance_command(acceptance)
@@ -480,9 +493,6 @@ class TestReconcileStarvedFilingJobShape:
         """A defence-in-depth companion to the linter check: the linter only runs `bash -n`, so a
         prose sentence that happens to be bash-parseable would slip through it.
         """
-        text = "\n".join(step.get("run") or "" for step in job["steps"])
-        match = re.search(r'"acceptance":\s*\(\s*((?:\s*"[^"]*"\s*)+)\)', text)
-        assert match
-        acceptance = "".join(re.findall(r'"([^"]*)"', match.group(1)))
+        acceptance = self._extract_acceptance(job)
         assert not acceptance.startswith("Re-dispatch"), "acceptance regressed to the prose form"
         assert any(tok in acceptance for tok in ("aws ", "bin/venv-python", "grep ", "test ")), acceptance
