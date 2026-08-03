@@ -100,11 +100,13 @@ Six hazards. Each invites a specific misread that would waste most of a session.
    markdown) while its Decision 43 row is live -- so the row is easy to cite as dead coverage when
    it is not. Establish whether any check enforces it (verify against `config/prose_budgets.yaml`
    and against what `scripts/checks/prompts/validate_prompt_files.py` actually asserts), then
-   record the result as markdown observation (a) per THE MARKDOWN RULE. If you CONFIRM the row is
-   live and unenforced, that is a real defect and it may also be filed as a finding with
-   `surface: shared` -- `shared` is the legal home for a defect belonging to no class, and it is
-   what keeps this candidate adjudicable without reopening markdown. What you must NOT do is issue
-   a `class_verdicts` entry for markdown or census the markdown corpus.
+   record the result as markdown observation (a) per THE MARKDOWN RULE. If you CONFIRM the row is live and
+   unenforced, that is a real defect: file it as a finding with `surface: shared` (not optional --
+   `shared` is the legal home for a defect belonging to no class, and filing is what keeps this
+   candidate adjudicable). If you REFUTE it, it goes to `rejected_candidates[]`. Either way the Q8
+   observation also records it. This is the ONE markdown finding this audit may contain, and it is
+   the sense in which the Q8 observation is "the whole of markdown's presence": no markdown
+   `class_verdicts` entry, no markdown census, no second markdown finding.
 
 6. **Ratchet direction is per-registry, not universal.** `config/coverage_baseline.yaml` ratchets
    UP (a minimum that may only rise). `config/sloc_budgets.yaml`, `config/prose_budgets.yaml` and
@@ -766,6 +768,11 @@ is expected to move slightly with tree state; the counts are expected to reprodu
 - Of those, 48 are under `docs/plans/` and 22 under `audits/` -- roughly 81 percent of the affected
   population is workflow output. This is the single most consequential number in this map; DD-D
   exists because of it.
+- The two largest oversized files OUTSIDE `workflow_outputs` are `docs/ROADMAP-PRODUCT.yaml`
+  (about 4,707 effective lines, class `roadmaps`) and `docs/decisions-index.json` (about 2,245,
+  class `generated`). They are named here because they are where the `roadmaps` and `generated`
+  verdicts actually get decided -- `ROADMAP-PLATFORM.yaml` carries a do-not-flag carve-out and
+  `ROADMAP-PRODUCT.yaml` does not, and the provenance key stands or falls on files like the second.
 - 5 `.tf` files exceed 500, the largest being `terraform/iceberg_tables.tf`.
 - 3 files under `config/` exceed 500, the largest being
   `config/agent/verification_registry/registry.yaml`.
@@ -794,8 +801,8 @@ is expected to move slightly with tree state; the counts are expected to reprodu
 - `config/sloc_budgets.yaml` currently holds far fewer entries than the 24 its header comment
   describes -- composition counted 3 entries, 1 of them under `tests/`. Count both and compare. The
   drain was performed by the decomposition program the header names; the header text was not
-  updated alongside it. This is handed over as evidence for Q4 (the ratchet-plus-decompose pattern
-  demonstrably drained a 24-file grandfather roster), not as a documentation nit to file.
+  updated alongside it. Handed over as evidence for Q4: the ratchet-plus-decompose pattern
+  demonstrably drained a 24-file grandfather roster.
 
 ## EMPIRICAL PASS
 
@@ -915,6 +922,8 @@ positive.
 - **Model-agnostic design against a fixed floor** (NS-A). The requester has decided that
   consuming-model tier must NOT be a variable in the rule. Do not flag the absence of tier-aware
   governance as a gap, and do not recommend introducing it. You MAY note in Q8 what this costs.
+- The stale header comment in `config/sloc_budgets.yaml` (it describes 24 `tests/` entries; far
+  fewer remain). Known and trivial -- use it as Q4 evidence, do not file it as a finding.
 - Commits from this harness land unsigned. Expected, not a defect.
 
 ## OUTPUT
@@ -1115,9 +1124,13 @@ repo-wide checklist):
 
 - **frontier** -- 0 open critical and 0 open high findings anywhere (all classes plus `shared`),
   AND every property in Q7's `external_checklist` rated `met` or `partial`, never `missed`.
-- **strong** -- 0 critical and at most 1 high, anywhere.
-- **solid** -- at most 1 critical, anywhere.
+- **strong** -- 0 critical AND at most 1 high, anywhere.
+- **solid** -- at most 1 critical AND at most 3 high, anywhere.
 - **nascent** -- otherwise.
+
+Both ladders are deliberately sensitive to `high` at every rung: a run with no criticals but many
+highs must NOT be able to fall through to a favourable rating. If your overall rating reads better
+than most of your per-class ratings, re-check the counts before emitting it.
 
 Write per-class values into `per_surface_assessment[].maturity` and the overall value into
 `summary.maturity_overall`.
