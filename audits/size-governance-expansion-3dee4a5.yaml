@@ -1,0 +1,828 @@
+audit:
+  meta:
+    audited_commit: 3dee4a5
+    base_branch: main
+    model: Claude Fable 5
+    methodology_version: 1
+    scope_surfaces: [generated, terraform, config, contracts, ci_workflows, shell,
+                     lambda_manifests, roadmaps, workflow_outputs, test_fixtures,
+                     data_query, residual]
+    degraded_dedup: false
+    contract_notes: "shallow clone (git rev-parse --is-shallow-repository = true); empirical pass 5 (registry commit history) skipped per SETUP; history-dependent claims marked HYPOTHESIS -- present-state claims unaffected. Preflight succeeded; dedup caches fresh."
+    stale_anchors: []
+    deliverable_size: {yaml_effective_lines: 820, md_words: 1282,
+                       breaches_own_recommendation: false,
+                       note: "This file measures 820 effective lines under the pinned census rule, over the incumbent 500 limit. It does NOT breach this audit's own verdicts: workflow_outputs (audits/**/*.yaml, this file's class) is exempt-with-reason per class_verdicts.workflow_outputs, on edit-pattern grounds, not trimmed to fit."}
+
+  question_answers:
+    - q: Q1
+      verdict: mixed
+      basis: [SGE-01, SGE-02, SGE-03, SGE-04, SGE-05, "census: 552 in-scope files, 87 over 500 effective lines", "Decision 130 (whole-repo intent)", "Decision 43 ('all repository code, prompts, and agents')"]
+      prose: >-
+        Extend to every hand-authored, agent-edited structured class; exempt by provenance and
+        production-pattern, never by consumer tier. Extend-uniform (500 effective lines):
+        terraform (34 files, 5 over), config (23, 2 over), contracts (36, 2 over), shell (14, 0),
+        lambda_manifests (7, 0), data_query (16, 0), residual (33, 1 over -- govern-by-default for
+        future classes). Extend-calibrated: ci_workflows (28, 2 over -- file cap plus an R3-style
+        inline-body extension, since the risk-bearing unit is the run body), roadmaps (3, 2 over
+        vs 500 -- per-file Decision-114-parity ceilings plus compaction lifecycle; 500 is
+        unmeetable for a monotonic work-list and splitting is the rejected N-files anti-pattern).
+        Exempt-with-reason: generated (8 files -- no agent edits them; govern the producer),
+        workflow_outputs (340 files, 71 over, 82 percent of the affected population -- see DD-D
+        rationale in that class verdict), test_fixtures (11, 0 -- fixture fidelity outranks
+        uniformity; a cap on captured data is an NS-B tax). No class needs defer: no named
+        precondition is missing anywhere.
+    - q: Q2
+      verdict: composite
+      basis: ["DD-A: OVERSEER-terraform-deploy-redesign.yaml 326 eff / 255,039 B / 8,211-char max line", "measured: zero '//' lines and zero real '/* */' blocks across all 33 tracked .tf", "per-extension bytes-per-eff-line: .py 53.6, .yaml 72.4, .yml 66.0, .tf 60.8, .sh 92.2 (reproduces GROUNDING MAP)", SGE-05]
+      prose: >-
+        Primary binding unit: effective lines, unchanged and applied per the pinned rule; companion
+        binding guard: max line length (2,000 chars proposed) for governed classes -- ruff already
+        binds Python at 127, nothing binds YAML/TF/workflows. DD-A grounding: within-class
+        bytes-per-effective-line spread (config p10 38.5 to p90 349.0; workflow_outputs 62.7 to
+        109.8) exceeds the between-class median spread (45.6 to 124.9), so switching units per
+        class would not reduce divergence -- the divergence lives in the long-line tail, which the
+        companion catches (the OVERSEER report passes any line gate at 326 eff lines while
+        carrying 255 KB; a 4,606-char line sits in ROADMAP-PLATFORM.yaml today). Bytes rejected:
+        it taxes '#' comments, which in this repo carry the Decision-rationale record
+        (github_ci_apply.tf: 1,266 raw / 695 effective -- 571 comment+blank lines of IAM
+        rationale); pressure to delete rationale is the wrong incentive (NS-B). Tokens rejected on
+        VD5 (tokenizer dependency and version drift). Measured Q2 delta for the pinned rule:
+        ZERO in the current tree -- all 33 tracked .tf files use '#' comments exclusively (0 '//'
+        lines, 0 block comments), and JSON has no comments, so no population number and no Q1/Q6
+        verdict moves under a per-language counter. The risk is prospective: a future '//' comment
+        in .tf would miscount as code. Close it by adding leading-'//' to the comment-prefix set
+        for .tf in the engine; note honestly that full block-comment handling needs a lexer, not a
+        regex -- during this audit a naive regex stripper was fooled by '/*' inside ARN strings
+        ("...personal/*" through "Get*/List*" parses as one giant comment), a worked example of
+        why the pinned rule's simplicity is itself a VD5 asset.
+    - q: Q3
+      verdict: hybrid
+      basis: ["scripts/checks/registry.py:117-122 (six-check --pre block, confirmed)", "validate_sloc_limits declares no pre_globs; measured whole-tree walk 778 py files in 0.09s", "non-Python census 552 files ~0.05s", "SGE-07", "DD-B: marker-guard pattern exists in 5 copies with 3 direction tokens"]
+      prose: >-
+        One NEW parameterized engine for the expansion; incumbents untouched day one. Two new
+        modules (a class-table-driven limit engine plus ONE raise-guard), one new registry
+        (config/structural_size_budgets.yaml carrying both the class table -- globs,
+        provenance-override, unit, limit, direction, valves -- and the per-file grandfather
+        budgets), two registry.py entries plus two validate.py re-export lines. Replicating the
+        existing pattern per class (5 more gate modules, 5 more raise-guard copies) fails NS-F:
+        the raise-guard is already quintuplicated (sloc, prose, coverage, mypy, composite-R3
+        variant) with three direction tokens; a sixth copy per class compounds SGE-07. Full
+        generalization (folding the five incumbent gates in) is deferred: each incumbent ceiling
+        names its own consumer and retirement trigger (Decision 160's lesson), and migrating them
+        before the engine proves out risks five regressions for zero coverage gain -- record a
+        convergence path instead. Tier: both tiers, unscoped (no pre_globs), matching
+        validate_sloc_limits precedent -- measured cost is ~0.05-0.1s against the 5-minute
+        Decision 73 budget, so pre_globs machinery would cost more in complexity than it saves;
+        the raise-guard scopes to its registry path. Taxonomy home (DD-C): in the new registry
+        itself -- machine-readable, collocated with its enforcement (AGENTS.md collocation rule),
+        tamper-guarded by its own raise-guard; file-router.yaml stays placement-only; a code
+        constant would make reclassification a code change and split semantics from enforcement.
+        Key: exclusions, then provenance override (banner/regeneration-command test), then
+        directory+extension globs -- exactly the census algorithm, first-match-wins, with residual
+        as the mandatory default row.
+    - q: Q4
+      verdict: sound-needs-generalization
+      basis: ["rec-2709 closed: the 24-file tests/ grandfather roster demonstrably drained to 1 marked survivor (config/sloc_budgets.yaml: 3 entries, 1 tests/)", "Decision 128 (convergence_health 401->817 via three unreviewed raises)", "Decisions 145/147/160 counter-evidence", SGE-07]
+      prose: >-
+        Load-bearing and portable: the registry-plus-implicit-default shape (unregistered file
+        gets the strict default -- 500, 100 percent, 0 errors), the one-directional ratchet with
+        unrestricted tolerant direction, the diff-vs-origin/main marker guard, no-auto-seed, and
+        the one-time bounded grandfather (proven end to end: Decision 130's 24-file roster was
+        drained by the decomposition program; rec-2709 is closed). Python-incidental and NOT
+        portable: the single decompose-into-facade relief valve (each class needs its own honest
+        valve -- the repository already runs six), the counting expression, the __init__.py
+        exemption, and the Decision 131 test-mirror coupling. The post-131 family cuts against
+        naive ceiling-adding and must shape the design: Decision 160 retired a byte ceiling as
+        WRONG-SHAPED when its sole consumer was rebuilt (so every new class row must record its
+        actual_purpose, making retirement reachable when a referent dies); Decision 145 warns a
+        second stopgap raise signals the structural fix is overdue; Decision 147 proves
+        compact-in-place beats split-or-raise for monotonic single files; Decision 150 shows an
+        inflow significance bar is the right shape for append corpora (the verification
+        registry's eventual control, not a per-file cap alone). One live integrity weakness
+        carries over: the marker guards validate that the cited Decision header EXISTS, not that
+        it authorizes anything (SGE-07; live instance rec-2974).
+    - q: Q5
+      verdict: mixed
+      basis: ["scripts/llm/utils.py:29-30 (MODEL_PLANNING/MODEL_EXECUTION = deepseek.v3.2 -- the fixed floor is repo-grounded)", "class_verdicts[*].rationale", "CD.30 pending (coverage half already has no non-Python referent)"]
+      prose: >-
+        The owner's two-part rationale (lower-tier edit accuracy; tractable 100 percent per-file
+        coverage) transfers as comprehension-only to every extended class -- the coverage half has
+        no referent for .tf/.yaml/.yml/.sh, where schema validators and plan/apply gates play the
+        role tests play for Python. Per-class actual purposes are recorded in class_verdicts so no
+        class is governed by an unarticulated reason: terraform (a mis-edit is a production
+        security event; bounded working set for IAM-dense files), config (growth pressure must
+        surface lifecycle decisions, not silent accretion), contracts (densest agent-consumed
+        semantics; cap guards amendment-log accretion), ci_workflows (needs its own rationale --
+        the risk unit is the inline body, rec-2923's class), shell (session-bootstrap surface),
+        roadmaps (bounded /plan-time load, via ceilings not 500). does-not-transfer: generated,
+        workflow_outputs, test_fixtures -- no agent performs whole-file comprehension edits there.
+    - q: Q6
+      verdict: mixed
+      basis: [SGE-01, SGE-02, SGE-04, "Q8 base-rate answer (no observed non-Python instance of the NS-A harm)", "Decision 130 clause 2 / Decision 162 seeding precedent"]
+      prose: >-
+        One-time-grandfather for the extended classes: exactly 12 hand-authored files exceed 500
+        effective lines (terraform 5, config 2, contracts 2, ci_workflows 2, residual 1), each
+        registered at current size with a raise marker citing the installing Decision -- the
+        installing PR is green by construction (Decision 130 clause 2 / Decision 162 precedent).
+        Roster is bounded and drainable; drain is human-planned /plan work (executor frozen,
+        Decision 67) -- the proven rec-2709 shape. Sequencing: engine+registry+guard in one PR;
+        decomposition waves follow as separate recs, terraform first (native multi-file roots make
+        it cheap), the verification-registry archival lifecycle second (needs design, not just
+        splitting). Class-exemption for generated, workflow_outputs, test_fixtures (recorded
+        reasons, no roster). Roadmaps: PLATFORM continues under Decision 114/147 (fixed,
+        do-not-flag); PRODUCT gets a seeded ceiling. Because the base rate of the motivating harm
+        in non-Python classes is zero observed instances (Q8), no urgent multi-wave migration is
+        justified -- calm, marker-cited grandfathering with unhurried drain is proportionate.
+    - q: Q7
+      verdict: ahead-justified
+      basis: ["external_checklist", "AGENTS.md SLOC-governance section (stated consumer + failure mode)", "measured: all 10 size-governance modules <=283 effective lines"]
+      prose: >-
+        The owner's position survives testing: mainstream per-file size lints exist but are
+        advisory-by-default, single-language, anonymous-suppression affairs; this repository's
+        regime is blocking, baselined, ratcheted, attributably-escaped, consumer-calibrated, and
+        self-subjected -- ahead on 7 of 11 properties, at parity on 1, behind on none, with the
+        3 partials being exactly what this audit scopes (beyond-primary-language coverage, unit
+        re-derivation for two surfaces, per-file provenance detection). Ahead-JUSTIFIED because
+        the divergence traces to a stated, repo-grounded consumer (the deepseek.v3.2 execution
+        floor) rather than taste.
+      external_checklist:
+        - {property: "Per-file size lint exists at all", rating: met,
+           evidence: "scripts/checks/sloc/sloc_limits.py:80 validate_sloc_limits || ESLint max-lines, Pylint C0302 too-many-lines (default 1000), Checkstyle FileLength (default 2000), SonarQube file-size rules (model knowledge, unverified)"}
+        - {property: "Limit is enforced as a blocking gate rather than advisory", rating: met,
+           evidence: "scripts/checks/registry.py:117 (--pre tier, authoritative pre-merge in CI per Decision 73) || mainstream size lints ship advisory or off-by-default; blocking requires deliberate CI wiring and is commonly disabled (model knowledge, unverified)"}
+        - {property: "Limit applies beyond the primary language to config and infrastructure files", rating: partial,
+           evidence: "prose bytes (prose_limits.py:86), DECISIONS.md H2+bytes (validate_decisions_size.py:20-21), roadmap raw lines (validate_platform_roadmap.py:13), composite bodies (validate_composite_action_shell_bodies.py) -- named surfaces only; the general .tf/.yaml population is unscanned (this audit's subject) || essentially absent in mainstream practice; file-size lint rules are per-language and infra linters (tflint, actionlint) carry no file-size rules (model knowledge, unverified)"}
+        - {property: "Baseline/grandfather mechanism for pre-existing violations rather than a flag day", rating: met,
+           evidence: "config/sloc_budgets.yaml + config/coverage_baseline.yaml + config/mypy_baseline.yaml + composite_action_body_baseline.yaml (Decision 130 clause 2 one-time grandfathers) || suppression-baseline tooling exists (eslint bulk-suppressions, mypy/ruff baselines, Betterer) and is reasonably common (model knowledge, unverified)"}
+        - {property: "Ratchet that prevents silent regression", rating: met,
+           evidence: "downward-only regenerators (_update_sloc_budgets sloc_limits.py:20; mypy_baseline.py --update) + tamper guards diffing origin/main || ratchet CI (Betterer-style) exists but is not mainstream default (model knowledge, unverified)"}
+        - {property: "Escape hatch that is auditable and attributable rather than an anonymous suppression comment", rating: met,
+           evidence: "raise-approved: dec-NNN marker validated against a real Decision header (validate_sloc_budget_raises.py:79) -- caveat SGE-07: existence-checked, not authorization-checked || mainstream suppressions are anonymous (noqa, eslint-disable); ticket-reference conventions exist but are unenforced (model knowledge, unverified)"}
+        - {property: "Measurement unit is defensible for the artifact type rather than inherited from source code", rating: partial,
+           evidence: "bytes for ambient prose is argued in prose_limits.py:1-21 (load = bytes read); effective lines for Python argued in Decision 128; but the roadmap ceiling counts RAW lines (comments and blanks consume ceiling, SGE-05) and no per-unit rationale is recorded for it || mainstream units are uniformly inherited line counts, un-re-derived (model knowledge, unverified)"}
+        - {property: "Limit is calibrated to a stated consumer with a stated failure mode", rating: met,
+           evidence: "AGENTS.md SLOC-governance section + scripts/llm/utils.py:29-30 (deepseek.v3.2 floor) + Decision 128 problem statement (observed comprehension degradation) || mainstream limits cite human readability folklore, not a measured consumer (model knowledge, unverified)"}
+        - {property: "Generated and vendored artifacts are distinguished from hand-authored ones by provenance", rating: partial,
+           evidence: "directory-level only (_shared.py:16 _SLOC_EXCLUDE_DIRS); no gate applies a per-file provenance test; terraform's presence in the exclude list is a Python-walker artifact, not a .tf ruling (READ FIRST 3, confirmed) || GitHub linguist-generated and lint ignore-paths are pattern/directory-based and common (model knowledge, unverified)"}
+        - {property: "Governance mechanism is itself subject to the limits it enforces", rating: met,
+           evidence: "measured: all 10 size-gate/raise-guard modules are 39-283 effective lines, max validate_composite_action_shell_bodies.py at 283 || rarely a stated property anywhere (model knowledge, unverified)"}
+        - {property: "The agent-era premise: evidence that long-context degradation and edit accuracy motivate a file-size limit for LLM editors", rating: met,
+           evidence: "Decision 128 records the observed accretion case; executor-era recs rec-242 (escalate to Sonnet for target files >10 KB) and rec-285 (escalate above a SLOC threshold) are closed, observed size-capability couplings; AGENTS.md states the degradation claim || long-context positional-degradation findings (lost-in-the-middle) are consistent with, but do not by themselves pin, a 500-line editing limit (model knowledge, unverified)"}
+    - q: Q8
+      answers:
+        - question: "Should exemption key off provenance rather than directory, and what breaks when a generated file lands in a governed directory?"
+          answer: >-
+            Yes for exemption -- the census proves the need: config/lambda/ducklake/field_semantics.yaml
+            (GENERATED -- DO NOT EDIT banner, named regenerator, drift gate) sits inside governed
+            config/ at 508 effective lines; under directory keying it would demand a pointless
+            grandfather entry; under provenance keying it is exempt wherever it lives. But
+            provenance alone is fuzzy at the edges, measured: docs/plans/PLAN-platform-first-sequencing-ratify.yaml
+            carries a literal 'Generated by /plan' banner and is NOT machine-regenerable (banner
+            prong false-positive); .secrets.baseline is tool-emitted but referenced only from
+            .pre-commit-config.yaml, outside the test's pinned scripts/.github search scope
+            (regeneration prong false-negative); requirements.lock has no banner but
+            import_governance.py:69 documents its pip-compile command (prong-2 judgment call);
+            config/sloc_budgets.yaml is genuinely hybrid (machine-regenerated AND hand-marked).
+            The right key is layered, in first-match order: exclusions, provenance override,
+            directory+extension -- with the banner prong narrowed to do-not-edit semantics
+            (a self-description of authorship is not a machine-ownership claim). Splitting the
+            mirror-shaped baseline siblings across two classes (mypy_baseline generated;
+            coverage/composite baselines config) is tolerable BECAUSE the exemption consequence
+            is nil -- all are far under 500 -- but it confirms the prongs measure documentation
+            habits, not ownership; the engine's class table should pin membership explicitly for
+            the registry family rather than re-deriving it per run.
+          basis: ["census generated class: 8 members with per-member evidence", "import_governance.py:69", ".pre-commit-config.yaml:20"]
+        - question: "A universal 500-line limit would make /plan and /audit unable to emit compliant deliverables -- exempt, cap, or change what they emit?"
+          answer: >-
+            Exempt the class (DD-D). Changing what the workflows emit was considered and rejected:
+            a plan is a self-contained implementation brief consumed as one load (Decision 110
+            reasoning applies); splitting briefs across files is the N-files-to-reassemble
+            anti-pattern (NS-D); and this audit's own YAML deliverable measuring 987 effective
+            lines is the live counterexample -- a compliant-size audit of 12 classes is not
+            writable without losing verifiability. The honest control is lifecycle (RS-07
+            archival), not size.
+          basis: ["meta.deliverable_size", "docs/CLAUDE.md RS-07", "class_verdicts.workflow_outputs"]
+        - question: "Is per-file the right granularity, or is a directory/package aggregate budget needed?"
+          answer: >-
+            Per-file is right for the NS-A edit-comprehension purpose. The aggregate concern
+            (decomposition converts size into file-count and repo-wide reachable-context cost) is
+            real but already owned: T3.14 (deferred_post_mvp) is the repository's only aggregate
+            precedent -- reachable-vs-total SLOC as a trendable metric, measurement-first,
+            gate-vs-advisory deferred to a ratifying decision. Do not duplicate it; any
+            directory-level budget proposal is planned-unbuilt territory against T3.14, not novel.
+          basis: ["docs/ROADMAP-PLATFORM.yaml T3.14 (status deferred_post_mvp, ships measurement not enforcement)"]
+        - question: "__init__.py is exempt while decompose-by-default manufactures facades -- live loophole?"
+          answer: >-
+            Latent, not live, measured: 111 tracked __init__.py, largest 122 effective lines
+            (scripts/executor/__init__.py), zero over 500, two over 100. Facades are visible to
+            the import graph (Decision 135 point 2 made them nodes) but invisible to the size
+            scan (_shared.py:43 skips them unconditionally). Cheap close when wanted: scan
+            __init__.py with a smaller facade budget (e.g. 150) rather than the full 500; not
+            urgent at current population.
+          basis: ["scripts/checks/sloc/_shared.py:43", "measured facade census: 111 files, max 122 eff"]
+        - question: "If CD.30 (diff-line-coverage ratchet) ratifies, does the coverage half of the rationale still hold?"
+          answer: >-
+            CD.30 is pending (gates T3.7). If ratified, the per-changed-file 100 percent floor --
+            the referent of the owner's 'small files make 100 percent coverage tractable' -- is
+            replaced by diff-line coverage, and the coverage half of the SLOC rationale loses its
+            referent for Python too. The comprehension half (NS-A) stands alone and suffices. No
+            class verdict changes (non-Python classes never had the coverage rationale -- Q5
+            already rates them transfers-comprehension-only), but the Decision text should record
+            the dependency so the rationale does not silently rot (Decision 160's lesson about
+            ceilings outliving their referents).
+          basis: ["docs/ROADMAP-PLATFORM.yaml CD.30 (state: pending)", "class_verdicts rationale.transfer values"]
+        - question: "Does a line-based unit need a companion long-line guard?"
+          answer: >-
+            Yes, measured three ways: docs/plans/reports/OVERSEER-terraform-deploy-redesign.yaml
+            is 326 effective lines / 255,039 bytes / 8,211-char max line (782 bytes per effective
+            line, 10.6x its class median) -- it passes every line gate while being the heaviest
+            single-file load in the repository outside the roadmap; ROADMAP-PLATFORM.yaml carries
+            a 4,606-char line against a RAW-line ceiling (line-joining relieves that ceiling
+            without reducing load -- a live VD3 evasion, SGE-05); PLAN-reconcile-stale-plan-coverage.yaml
+            carries a 1,190-char line. Python is already companion-guarded by ruff at 127. The
+            engine adds a max-line-length guard (2,000 chars) for governed classes; for exempt
+            workflow_outputs the OVERSEER case is recorded as a known cost of exemption, not
+            gated.
+          basis: ["DD-A outlier measurements", SGE-05]
+        - question: "Interaction with the map_source_to_test mirror convention (Decision 131)?"
+          answer: >-
+            Correctly out of scope. Declarative classes have no per-file test-mapping analogue;
+            their correctness gates are schema validators (validate_platform_roadmap,
+            validate_plan_documents, terraform validate, the composite-manifest checks), which
+            already play the role tests play for Python -- demonstrated live by rec-2749/rec-2762,
+            where malformed agent-authored plan refs were caught by the roadmap integrity gate.
+            Governing a class creates no mirror obligation; the Decision text should say so to
+            pre-empt the inference.
+          basis: ["Decision 131", "rec-2749", "rec-2762"]
+        - question: "Is there a class where the right answer is to change how the file is produced?"
+          answer: >-
+            Three concrete candidates. (1) terraform/iceberg_tables.tf (1,491 eff): its
+            hand-maintained column tables duplicate Pydantic schemas that
+            scripts/schema_to_iceberg.py already converts to Iceberg DDL -- generating it would
+            move it to the generated class and shrink the hand surface to models already under
+            the Python gate. (2) config/agent/verification_registry/registry.yaml (3,252 eff, 264
+            append-only entries): the control is CD.29's mark-then-drop retirement plus archival
+            lifecycle -- change the lifecycle, not the cap; a mid-workflow cap would wedge
+            graduation. (3) docs/decisions-index.json: already generated; its size is governed at
+            the producer via the corpus ceilings. Production-change is relief valve seven and the
+            preferred long-term valve for all three.
+          basis: ["scripts/schema_to_iceberg.py:1-8", "CD.29 retirement discipline", "Decision 160 point 9"]
+        - question: "If Q2 unifies the unit, what happens to the prose regime?"
+          answer: >-
+            The regimes stay deliberately two-unit: effective-lines-plus-line-length for
+            structural classes, bytes for ambient prose -- because their relief valves are
+            opposite (decompose vs never-fragment) and their load models differ (edit
+            comprehension vs ambient read cost). A future markdown decision inherits bytes for
+            ambient surfaces and may adopt effective lines for structural markdown; nothing here
+            forces convergence. One short paragraph, per the brief: divergence is retained,
+            knowingly.
+          basis: ["prose_limits.py:13-20", "config/prose_budgets.yaml header"]
+        - question: "What does the fixed-floor choice cost?"
+          answer: >-
+            The floor (deepseek.v3.2 execution tier) governs some surfaces more tightly than
+            their real editors require: the 5 grandfathered terraform files are edited in
+            Opus-tier /implement sessions today, and workflow_outputs -- 82 percent of the
+            over-limit population -- is authored and read almost exclusively by frontier-tier
+            sessions. The exemption for workflow_outputs is argued on edit-pattern grounds
+            (NS-A quarantine respected), so the floor's residual cost lands on the 12
+            grandfathered files' drain work, which would be unnecessary if governance keyed to
+            the actual consumer roster. That cost is accepted: it is the price of a rule that
+            survives roster changes without renegotiation. Cost disclosure only; the floor is
+            settled.
+          basis: ["scripts/llm/utils.py:29-30", "census: 71 of 87 over-limit files are workflow_outputs"]
+        - question: "What is the base rate of the harm (lower-tier mis-edits of large non-Python files)?"
+          answer: >-
+            Zero observed instances in non-Python classes. Evidence sweep: no ci_rca or open
+            recommendation attributes a defect to model comprehension failure on a large
+            .tf/.yaml/.yml/.sh file. Nearest observations: (a) executor-era size-capability
+            couplings on PYTHON -- rec-242 (auto-escalate gpt-4.1 to Sonnet for target files over
+            10 KB, closed) and rec-285 (escalate above a SLOC threshold, closed) -- size-driven
+            degradation was real enough to build routing around; (b) agent-authored structural
+            defects in large YAML (rec-2749, rec-2762: malformed closes_criteria refs in plan
+            files) caught by SCHEMA gates, not size gates; (c) Decision 128's convergence_health
+            account, which is Python. The expansion is therefore PREVENTIVE on an assumed harm --
+            a defensible engineering choice, stated plainly -- and this fact lowered Q6's
+            migration aggressiveness (calm one-time grandfather, no urgent waves) and capped
+            finding severities below critical.
+          basis: ["rec-242", "rec-285", "rec-2749", "rec-2762", "Decision 128 problem statement"]
+        - question: "MARKDOWN OBSERVATION (the whole of markdown's presence in this audit, per THE MARKDOWN RULE)"
+          answer: >-
+            (a) Decision 43's .prompt.md row (3,000 lines) is LIVE -- 12 tracked files (7 under
+            .github/prompts/scheduled/, 5 under config/agent/executor/prompts/, largest 155
+            effective lines) -- and NO check enforces it: validate_prompt_files asserts H1/section/
+            reference structure only and covers only the scheduled directory;
+            config/prose_budgets.yaml carries no .prompt.md entries; the enforcement configs
+            Decision 43 names (config/agent_governance.yaml, config/agent_tool_tiers.yaml) do not
+            exist on disk. The .agent.md row (1,500 lines) is by contrast a dead letter: zero
+            tracked files. Filed as SGE-06 (surface: shared). (b) docs/ROADMAP-PRODUCT.yaml's
+            header states it SUPERSEDES docs/ROADMAP-PRODUCT.md, 'retained for one transition
+            cycle as a recovery artefact' -- a retiring duplicate governed differently from its
+            successor purely by extension, which is a question about how governance handles
+            transition windows (the .md twin is prose-allowlisted and size-ungoverned; the .yaml
+            successor falls in the roadmaps class).
+          basis: [SGE-06, "docs/ROADMAP-PRODUCT.yaml:8-9", "docs/DECISIONS.md:5134-5135"]
+        - question: "(recon extension) Does the .yml/.yaml extension split threaten extension-keyed classification?"
+          answer: >-
+            Yes, mildly, and it is owned: rec-2928 (open) records 27 straggler .yml files and a
+            live regex bug they already caused. The engine's globs must include both spellings
+            until rec-2928 lands; .github/agents/schedule.yaml landing in ci_workflows by glob
+            despite an agent-scheduling role is the same key-mismatch shape (flagged, immaterial
+            to its verdict at 60 effective lines).
+          basis: ["rec-2928", "census ci_workflows membership"]
+
+  class_verdicts:
+    generated:
+      verdict: exempt-with-reason
+      rationale: {transfer: does-not-transfer,
+                  actual_purpose: "None at the artifact -- no agent hand-edits a generated file (the banner forbids it; the regenerator overwrites it), so NS-A has no subject. Governance belongs on the producer: freshness/drift gates already exist (validate_decisions_index_freshness, schema_to_field_semantics --check, validate_lockfile_sync), and the corpus ceilings bound decisions-index.json at its source."}
+      migration: {mode: class-exemption, drain_owner: "n/a", sequencing: "none -- exemption is keyed by the provenance test at classification time"}
+      unit: n/a
+      limit: n/a
+      relief_valve: "Regenerate; fix the producer (valve 7). Population counted against the incumbent 500-effective-line rule, not a proposed limit: 2 of 8 members over (docs/decisions-index.json 2,245; config/lambda/ducklake/field_semantics.yaml 508)."
+      population_over_limit: 2
+      confidence: CONFIRMED
+    terraform:
+      verdict: extend-uniform
+      rationale: {transfer: transfers-comprehension-only,
+                  actual_purpose: "A lower-tier model editing IAM-dense HCL must hold the whole file: a collateral mis-edit here is a production security event (trust policy, boundary, grant), not a test failure. The coverage half has no referent; plan-review plus the apply gates play that role."}
+      migration: {mode: one-time-grandfather, drain_owner: "human-planned /plan recs (executor frozen, Decision 67); terraform's native multi-file roots make decomposition semantic-free -- same module, N files, no reassembly cost", sequencing: "5 entries seeded with markers in the installing PR (iceberg_tables.tf 1491, github_ci_apply.tf 695, oidc.tf 682, data_pipeline.tf 655, platform_roles.tf 587); iceberg_tables.tf prefers the producer change (Q8: schema_to_iceberg.py) over decomposition"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "decompose by resource family (native .tf multi-file); change the producer (iceberg_tables.tf); loud cited raise"
+      population_over_limit: 5
+      confidence: CONFIRMED
+    config:
+      verdict: extend-uniform
+      rationale: {transfer: transfers-comprehension-only,
+                  actual_purpose: "Registries agents append to must surface lifecycle pressure instead of accreting silently: verification_registry/registry.yaml (3,252 eff, 264 entries) grows one graduated entry per plan with no retirement exercised; dq manifests (522) are hand-edited semantic surfaces. The cap converts unbounded growth into a periodic, reviewable lifecycle decision."}
+      migration: {mode: one-time-grandfather, drain_owner: "registry.yaml drains via a designed archival/retirement lifecycle (CD.29 mark-then-drop), filed as its own rec -- NOT via file-splitting; the dq manifest drains by row compaction or a cited raise", sequencing: "2 entries seeded with markers (registry.yaml 3252, config/agent/data_quality/decisions/ops_recommendations.yaml 522)"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "archive/retire entries per lifecycle (valves 4/5); compact resolved rows; loud cited raise; decompose only where cohesion permits"
+      population_over_limit: 2
+      confidence: CONFIRMED
+    contracts:
+      verdict: extend-uniform
+      rationale: {transfer: transfers-comprehension-only,
+                  actual_purpose: "Contracts are the densest agent-consumed field semantics in the repository and are hand-amended (amendment logs, governance notes). Grain is already one-subject-per-file (Decision 86 collocation); the cap guards against amendment-log accretion turning a contract into a monolith an editing agent cannot hold."}
+      migration: {mode: one-time-grandfather, drain_owner: "human-planned; drain by compacting superseded amendment-log entries (valve 4) or deferring detail to an auxiliary file (valve 3) -- never by splitting one table's semantics across files", sequencing: "2 entries seeded (iam-simulate-fixture.yaml 584, ops_recommendations.yaml 556)"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "compact amendment history; defer detail (valve 3); loud cited raise; splitting a single subject is forbidden by collocation doctrine"
+      population_over_limit: 2
+      confidence: CONFIRMED
+    ci_workflows:
+      verdict: extend-calibrated
+      rationale: {transfer: needs-distinct-rationale,
+                  actual_purpose: "Two-unit risk: file size tracks job sprawl, but the unit that produced a real incident (rec-2923) is the inline run: body -- and Decision 162's R3 ratchet covers only .github/actions/**, leaving 15 inline bodies in reconcile.yml alone ungoverned. File cap at 500 eff plus extending R3-style body governance to workflow files covers what either alone cannot."}
+      migration: {mode: one-time-grandfather, drain_owner: "human-planned; drain by extracting inline bodies to scripts (the Decision 162 shape) and splitting reusable jobs", sequencing: "2 entries seeded (reconcile.yml 536, terraform-apply-sandbox.yml 529); R3 workflow extension is SGE-03's proposed change and seeds its own body baseline"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "extract inline bodies to delegate scripts; split jobs into reusable workflows; loud cited raise. Glob note: .github/agents/schedule.yaml lands here by glob though its role is agent scheduling -- immaterial at 60 eff, recorded for the role-vs-extension key discussion (DD-C)"
+      population_over_limit: 2
+      confidence: CONFIRMED
+    shell:
+      verdict: extend-uniform
+      rationale: {transfer: transfers-comprehension-only,
+                  actual_purpose: "Hooks and wrappers run at every session bootstrap and CI step; a mis-edit breaks the harness itself. Population is healthy (max 106 eff) -- extending now forecloses debt before it exists, at zero migration cost."}
+      migration: {mode: reject, drain_owner: "n/a -- zero over-limit population", sequencing: "none needed; the installing PR is green with an empty roster for this class"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "extract functions to sibling scripts; decompose"
+      population_over_limit: 0
+      confidence: CONFIRMED
+    lambda_manifests:
+      verdict: extend-uniform
+      rationale: {transfer: transfers-comprehension-only,
+                  actual_purpose: "Packaging descriptors drive deploy gating (compute_affected_artifacts); small by construction (max 67 eff). Implicit-500 costs nothing and prevents a manifest becoming a dumping ground for per-Lambda config."}
+      migration: {mode: reject, drain_owner: "n/a -- zero over-limit population", sequencing: "none needed"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "relocate payload config to config/lambda/<name>/ (the existing three-zone layout)"
+      population_over_limit: 0
+      confidence: CONFIRMED
+    roadmaps:
+      verdict: extend-calibrated
+      rationale: {transfer: needs-distinct-rationale,
+                  actual_purpose: "A monotonic work-list structurally cannot meet 500; its load problem is /plan-time read cost, governed by a per-file ceiling plus the PROVEN compaction lifecycle (Decision 147 reclaimed 2,667 lines in place). The principled boundary that lets ROADMAP-PLATFORM.yaml stand while the class is capped: PLATFORM's single-file 10,000-line treatment is a Decision 114/147 exception granted to how that roadmap currently exists -- decision-cited grandfathering, the same shape as every raise marker -- and explicitly NOT a precedent for future roadmap files, which enter under the class ceiling (requester position, recorded)."}
+      migration: {mode: one-time-grandfather, drain_owner: "compaction waves per Decision 147's durable norm (terminal content compacts); rec-2781 (open) owns the anti-regrowth guard", sequencing: "ROADMAP-PRODUCT.yaml (4,707 eff, currently NO ceiling despite being schema-validated in both tiers) gets a seeded ceiling of 6,000 effective lines; ROADMAP-SEMANTO.yaml (134) sits under the class ceiling; PLATFORM unchanged under Decision 114"}
+      unit: effective-lines
+      limit: 6000
+      relief_valve: "compact in place (valve 4, proven); archive terminal items (valve 5, named by Decision 147's own reversal conditions); loud cited raise; per-tier split is FORBIDDEN (Decision 110/114). population_over_limit counted vs the incumbent 500 rule for cross-class comparability: 2 (PLATFORM 8,195; PRODUCT 4,707); vs the proposed 6,000 ceiling: 1 (PLATFORM, which stands under its own Decision)"
+      population_over_limit: 2
+      confidence: CONFIRMED
+    workflow_outputs:
+      verdict: exempt-with-reason
+      rationale: {transfer: does-not-transfer,
+                  actual_purpose: "Exempt on PRODUCTION-PATTERN grounds, not consumer tier (NS-A quarantine respected). DD-D traced the lifecycle: plans are produced whole by /plan (with in-session critique revisions), then post-merge edits are narrow FIELD FLIPS -- /implement's graduate-to-waive disposition flip and closes_criteria bookkeeping -- whose working set is the target entry, located by search, never whole-file comprehension; audits are write-once; OVERSEER ledgers take per-slice status appends at runtime. No agent performs the whole-file comprehension edit NS-A protects. A cap would wedge /plan and /audit (their deliverables measure 500-2,105 eff; this audit's own YAML is 987) or force brief-fragmentation (NS-D). The honest controls: RS-07 archival lifecycle (docs/CLAUDE.md), schema validation on plans (validate_plan_documents -- which also blocks the dumping-ground evasion: a registry masquerading as a plan fails plan schema), and placement guards. Recorded residuals: audits/ has no schema gate, and the class contains the repository's most extreme byte/line divergence (OVERSEER report, 782 B/eff, 8,211-char lines) -- known costs of exemption, disclosed not gated."}
+      migration: {mode: class-exemption, drain_owner: "n/a", sequencing: "RS-07's lagged .yaml archival sweep proceeds on its own schedule; not this audit's work"}
+      unit: n/a
+      limit: n/a
+      relief_valve: "archival lifecycle (RS-07); population counted vs the incumbent 500 rule: 71 (docs/plans 49, audits 22) -- 82 percent of the whole affected population, which is why DD-D is the single most consequential determination in this audit"
+      population_over_limit: 71
+      confidence: CONFIRMED
+    test_fixtures:
+      verdict: exempt-with-reason
+      rationale: {transfer: does-not-transfer,
+                  actual_purpose: "Fixture content is captured data asserted against, sometimes byte-for-byte -- tests/fixtures/terraform_apply_guard/clean_create_real.json is one 1,141-char line of REAL terraform plan JSON. A size gate here fires on files carrying no editing-comprehension load (the test reads them selectively) and pressures trimming captured reality to satisfy a formatter -- the NS-B tax case. Population is 0 over anyway."}
+      migration: {mode: class-exemption, drain_owner: "n/a", sequencing: "none"}
+      unit: n/a
+      limit: n/a
+      relief_valve: "n/a; population vs incumbent 500 rule: 0 of 11"
+      population_over_limit: 0
+      confidence: CONFIRMED
+    data_query:
+      verdict: extend-uniform
+      rationale: {transfer: transfers-comprehension-only,
+                  actual_purpose: "Implicit-500 backstop over miscellaneous structured files (settings JSON, pyproject/toml, tracked jsonl journals). The hand-edited members (settings, toml) get the standard comprehension rationale; the tracked executor-era journals (logs/*.jsonl, max 330 eff) get the RIGHT pressure when they breach: rotation/archival per the warehouse invariant (rec-257 adjacent), not splitting."}
+      migration: {mode: reject, drain_owner: "n/a -- zero over-limit population", sequencing: "none needed; journal-breach relief documented as rotation, pre-empting a wedge"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "rotate/archive journals; relocate config detail; loud cited raise"
+      population_over_limit: 0
+      confidence: CONFIRMED
+    residual:
+      verdict: extend-uniform
+      rationale: {transfer: transfers-comprehension-only,
+                  actual_purpose: "The default row: any tracked file matching no named class is governed at implicit 500 effective lines. When a NEW file class appears after this Decision lands, it is governed by default at the Python limit until a Decision classifies it -- govern-by-default was chosen over block-until-classified because a wedge on unclassified files fails NS-C (no relief valve at introduction time), and over leave-ungoverned because that re-opens the day-one gap this table exists to close. Current residual population: 33 files, 1 over (docs/intent-migration/MANIFEST.yaml, 521 eff, a retiring artifact owned by T5.5)."}
+      migration: {mode: one-time-grandfather, drain_owner: "MANIFEST.yaml retires with the T5.5 intent-migration waves; no separate drain work", sequencing: "1 entry seeded with a marker"}
+      unit: effective-lines
+      limit: 500
+      relief_valve: "classify the new class properly (add a table row) or comply; MANIFEST.yaml drains by retirement"
+      population_over_limit: 1
+      confidence: CONFIRMED
+
+  per_surface_assessment:
+    - {surface: generated, maturity: strong, strengths: "Provenance-exempt with producer-side freshness/drift gates already live (decisions-index freshness, field-semantics drift check, lockfile sync)", top_gaps: []}
+    - {surface: terraform, maturity: solid, strengths: "Native multi-file decomposition makes compliance cheap; comment-excluded unit rewards keeping IAM rationale inline", top_gaps: [SGE-01]}
+    - {surface: config, maturity: solid, strengths: "Registry grain mostly per-subject already; append-only members have a designed retirement discipline (CD.29) awaiting exercise", top_gaps: [SGE-02]}
+    - {surface: contracts, maturity: strong, strengths: "Grain already one-subject-per-file with ratification ritual and drift gates; only amendment accretion threatens size", top_gaps: [SGE-04]}
+    - {surface: ci_workflows, maturity: strong, strengths: "The dangerous unit (inline shell body) already has a proven governance shape in Decision 162 -- extension, not invention", top_gaps: [SGE-03]}
+    - {surface: shell, maturity: strong, strengths: "Healthiest class in the census (max 106 eff); governance closes it at zero cost", top_gaps: []}
+    - {surface: lambda_manifests, maturity: strong, strengths: "Schema-validated, deploy-gating-consumed, small by construction", top_gaps: []}
+    - {surface: roadmaps, maturity: strong, strengths: "The only class with a PROVEN full governance loop: ceiling fired (9,996/10,000), compaction answered it (Decision 147), anti-regrowth guard owned (rec-2781)", top_gaps: [SGE-05]}
+    - {surface: workflow_outputs, maturity: strong, strengths: "Plan schema validation doubles as an anti-dumping control; archival lifecycle exists (RS-07); exemption grounded in traced edit patterns, not tier", top_gaps: []}
+    - {surface: test_fixtures, maturity: strong, strengths: "Zero over; fixture realism preserved by exemption", top_gaps: []}
+    - {surface: data_query, maturity: strong, strengths: "Zero over; journal-breach relief pre-named (rotation) so the gate cannot wedge", top_gaps: []}
+    - {surface: residual, maturity: strong, strengths: "Default-governed: future classes land covered, closing the closed-but-partial-table gap on day one", top_gaps: []}
+
+  rubric_ratings:
+    - {surface: generated, dimension: VD1, rating: n/a, evidence: "class_verdicts.generated", note: "no agent edits; comprehension-load fidelity has no subject"}
+    - {surface: generated, dimension: VD2, rating: strong, evidence: "config/lambda/ducklake/field_semantics.yaml:1-5", note: "relief is regeneration; producer documented in-banner"}
+    - {surface: generated, dimension: VD3, rating: adequate, evidence: "Q8 seed 1 answer", note: "banner prong is spoofable (a hand file claiming generated would dodge scans) -- narrowed do-not-edit semantics recommended"}
+    - {surface: generated, dimension: VD4, rating: strong, evidence: "n/a", note: "exemption costs zero machinery; freshness gates pre-exist"}
+    - {surface: generated, dimension: VD5, rating: adequate, evidence: "census generated membership", note: "banner test deterministic; regeneration-command prong needs a pinned membership list to stay reproducible"}
+    - {surface: generated, dimension: VD6, rating: adequate, evidence: "scripts/checks/decisions/validate_decisions_index_freshness.py", note: "freshness gates guard drift; no ratchet needed on projections"}
+    - {surface: generated, dimension: VD7, rating: n/a, evidence: "", note: "no migration -- exempt"}
+    - {surface: generated, dimension: VD8, rating: strong, evidence: "DD-C", note: "provenance-keyed exemption coheres with fix-the-producer doctrine"}
+    - {surface: terraform, dimension: VD1, rating: adequate, evidence: "census: .tf bpel median 62.1", note: "eff-lines tracks block density well; comment exclusion rewards inline rationale"}
+    - {surface: terraform, dimension: VD2, rating: strong, evidence: "terraform module semantics", note: "multi-file roots: decomposition is free of reassembly cost -- NS-D satisfied"}
+    - {surface: terraform, dimension: VD3, rating: adequate, evidence: "measured: 0 // lines, 0 block comments in tree", note: "prospective //-comment miscount; long-line companion closes join-evasion; heredoc edge needs lexer for perfection"}
+    - {surface: terraform, dimension: VD4, rating: strong, evidence: "measured walk cost 0.09s/778 files", note: "engine marginal cost ~0"}
+    - {surface: terraform, dimension: VD5, rating: strong, evidence: "pinned census rule", note: "no network, no deps, deterministic"}
+    - {surface: terraform, dimension: VD6, rating: strong, evidence: "Decision 128 marker grammar reused", note: "no auto-seed; downward-only"}
+    - {surface: terraform, dimension: VD7, rating: strong, evidence: "5-file roster", note: "bounded; cheapest drain in the audit; one producer-change candidate"}
+    - {surface: terraform, dimension: VD8, rating: strong, evidence: "Decision 126 infra intent", note: "coheres: PR-reviewed infra, agent-edited, one-concern files"}
+    - {surface: config, dimension: VD1, rating: adequate, evidence: "registry.yaml append grain", note: "per-edit load is append-bounded; whole-file load grows -- cap tracks the latter"}
+    - {surface: config, dimension: VD2, rating: adequate, evidence: "CD.29 mark-then-drop", note: "lifecycle valve designed but never exercised; needs a rec to become real"}
+    - {surface: config, dimension: VD3, rating: adequate, evidence: "DD-A config tail p90 349 B/eff", note: "long-line companion needed (829-char line in source_registry.yaml)"}
+    - {surface: config, dimension: VD4, rating: strong, evidence: "one engine row", note: ""}
+    - {surface: config, dimension: VD5, rating: strong, evidence: "pinned rule", note: ""}
+    - {surface: config, dimension: VD6, rating: strong, evidence: "Decision 128 grammar", note: ""}
+    - {surface: config, dimension: VD7, rating: adequate, evidence: "registry.yaml 3252 eff", note: "drain needs a designed archival lifecycle, currently unowned -- the one open-ended migration"}
+    - {surface: config, dimension: VD8, rating: adequate, evidence: "AGENTS.md collocation rule", note: "tension between cap and one-file-per-subject resolved by archival, not split"}
+    - {surface: contracts, dimension: VD1, rating: strong, evidence: "docs/contracts/ops_recommendations.yaml", note: "densest agent-read semantics; load fidelity direct"}
+    - {surface: contracts, dimension: VD2, rating: adequate, evidence: "amendment_log structure", note: "compact/defer valves work; split forbidden by collocation"}
+    - {surface: contracts, dimension: VD3, rating: adequate, evidence: "", note: "long-line companion applies"}
+    - {surface: contracts, dimension: VD4, rating: strong, evidence: "", note: ""}
+    - {surface: contracts, dimension: VD5, rating: strong, evidence: "", note: ""}
+    - {surface: contracts, dimension: VD6, rating: strong, evidence: "", note: ""}
+    - {surface: contracts, dimension: VD7, rating: strong, evidence: "2 files at 584/556", note: "near-limit; compacting amendment history suffices"}
+    - {surface: contracts, dimension: VD8, rating: strong, evidence: "Decision 86", note: "grain already correct"}
+    - {surface: ci_workflows, dimension: VD1, rating: adequate, evidence: "SGE-03", note: "file unit is a job-sprawl proxy; body unit is the risk carrier -- calibrated pair covers both"}
+    - {surface: ci_workflows, dimension: VD2, rating: adequate, evidence: "Decision 162 extraction shape", note: "extract-to-script proven; job splitting heavier"}
+    - {surface: ci_workflows, dimension: VD3, rating: adequate, evidence: "reconcile.yml 15 inline bodies", note: "R3 workflow extension closes the move-logic-into-bodies route"}
+    - {surface: ci_workflows, dimension: VD4, rating: adequate, evidence: "composite guard precedent", note: "R3 extension adds a baseline section; bounded"}
+    - {surface: ci_workflows, dimension: VD5, rating: strong, evidence: "", note: ""}
+    - {surface: ci_workflows, dimension: VD6, rating: strong, evidence: "composite_action_body_baseline.yaml r1/r3 split", note: "direction-correct precedent exists"}
+    - {surface: ci_workflows, dimension: VD7, rating: strong, evidence: "2 files", note: ""}
+    - {surface: ci_workflows, dimension: VD8, rating: adequate, evidence: ".github/agents/schedule.yaml glob mismatch", note: "extension key misfiles one role; immaterial today"}
+    - {surface: shell, dimension: VD1, rating: strong, evidence: "", note: ""}
+    - {surface: shell, dimension: VD2, rating: strong, evidence: "", note: "function extraction natural"}
+    - {surface: shell, dimension: VD3, rating: adequate, evidence: "", note: ""}
+    - {surface: shell, dimension: VD4, rating: strong, evidence: "", note: ""}
+    - {surface: shell, dimension: VD5, rating: strong, evidence: "shebang detection for bin/", note: "deterministic"}
+    - {surface: shell, dimension: VD6, rating: strong, evidence: "", note: ""}
+    - {surface: shell, dimension: VD7, rating: strong, evidence: "0 over, max 106", note: "empty roster"}
+    - {surface: shell, dimension: VD8, rating: strong, evidence: "", note: ""}
+    - {surface: lambda_manifests, dimension: VD1, rating: adequate, evidence: "", note: ""}
+    - {surface: lambda_manifests, dimension: VD2, rating: strong, evidence: "config/ three-zone layout", note: "payload config relocates to config/lambda/<name>/"}
+    - {surface: lambda_manifests, dimension: VD3, rating: n/a, evidence: "max 67 eff", note: "no evasion pressure at this size"}
+    - {surface: lambda_manifests, dimension: VD4, rating: strong, evidence: "", note: ""}
+    - {surface: lambda_manifests, dimension: VD5, rating: strong, evidence: "", note: ""}
+    - {surface: lambda_manifests, dimension: VD6, rating: strong, evidence: "", note: ""}
+    - {surface: lambda_manifests, dimension: VD7, rating: strong, evidence: "0 over", note: ""}
+    - {surface: lambda_manifests, dimension: VD8, rating: strong, evidence: "validate_lambda_manifests gates", note: ""}
+    - {surface: roadmaps, dimension: VD1, rating: adequate, evidence: "8,195 eff PLATFORM read every /plan", note: "eff-lines proxies /plan load; entity-count (tier_items) would be a defensible alternative unit -- noted, not required"}
+    - {surface: roadmaps, dimension: VD2, rating: strong, evidence: "Decision 147: 9,996 -> 7,329 lines compacted in place", note: "the only class whose relief valve has FIRED and worked"}
+    - {surface: roadmaps, dimension: VD3, rating: weak, evidence: "validate_platform_roadmap.py:18 counts splitlines() (raw); measured 4,606-char line in the file", note: "raw-line unit is satisfiable by line-joining with zero load reduction; no line-length companion -- SGE-05"}
+    - {surface: roadmaps, dimension: VD4, rating: strong, evidence: "stat-cheap ceiling checks", note: ""}
+    - {surface: roadmaps, dimension: VD5, rating: strong, evidence: "", note: ""}
+    - {surface: roadmaps, dimension: VD6, rating: adequate, evidence: "Decision 145 point 4", note: "ceiling constants carry no marker mechanism -- the durable record is the Decision plus inline comment; weaker than the registry pattern but Decision-cited"}
+    - {surface: roadmaps, dimension: VD7, rating: strong, evidence: "rec-2781 (anti-regrowth guard) open", note: "PRODUCT ceiling seeds cleanly; PLATFORM stands under its own Decision"}
+    - {surface: roadmaps, dimension: VD8, rating: strong, evidence: "Decisions 110/114/147", note: "single-file coherence preserved; split rejected twice with reasons"}
+    - {surface: workflow_outputs, dimension: VD1, rating: n/a, evidence: "DD-D trace", note: "exempt -- no measure proposed; edits are field flips, not comprehension edits"}
+    - {surface: workflow_outputs, dimension: VD2, rating: strong, evidence: "docs/CLAUDE.md RS-07", note: "archival lifecycle exists; .md sweep landed (195 files), .yaml sweep deliberately lagged"}
+    - {surface: workflow_outputs, dimension: VD3, rating: adequate, evidence: "scripts/checks/roadmap/validate_plan_documents.py", note: "plan schema validation blocks content-dumping into docs/plans; audits/ has no schema gate -- disclosed residual"}
+    - {surface: workflow_outputs, dimension: VD4, rating: strong, evidence: "", note: "exemption costs nothing"}
+    - {surface: workflow_outputs, dimension: VD5, rating: n/a, evidence: "", note: ""}
+    - {surface: workflow_outputs, dimension: VD6, rating: n/a, evidence: "", note: "no ratchet -- exempt"}
+    - {surface: workflow_outputs, dimension: VD7, rating: n/a, evidence: "", note: ""}
+    - {surface: workflow_outputs, dimension: VD8, rating: strong, evidence: "Decision 127 class (d)", note: "one-file-per-run role; exemption coheres with sanctioned-artefact taxonomy"}
+    - {surface: test_fixtures, dimension: VD1, rating: n/a, evidence: "clean_create_real.json (1 line, 1,141 B)", note: "captured data carries no editing-comprehension load"}
+    - {surface: test_fixtures, dimension: VD2, rating: n/a, evidence: "", note: ""}
+    - {surface: test_fixtures, dimension: VD3, rating: n/a, evidence: "", note: ""}
+    - {surface: test_fixtures, dimension: VD4, rating: strong, evidence: "", note: "zero machinery"}
+    - {surface: test_fixtures, dimension: VD5, rating: n/a, evidence: "", note: ""}
+    - {surface: test_fixtures, dimension: VD6, rating: n/a, evidence: "", note: ""}
+    - {surface: test_fixtures, dimension: VD7, rating: n/a, evidence: "0 over", note: ""}
+    - {surface: test_fixtures, dimension: VD8, rating: strong, evidence: "", note: "realism-over-uniformity is the coherent doctrine for asserted data"}
+    - {surface: data_query, dimension: VD1, rating: adequate, evidence: "", note: "hand-edited members small; journals excluded from comprehension story"}
+    - {surface: data_query, dimension: VD2, rating: adequate, evidence: "rec-257 (log pruning/archival)", note: "journal relief is rotation -- named so the gate cannot wedge"}
+    - {surface: data_query, dimension: VD3, rating: adequate, evidence: "jsonl one-object-per-line shape", note: "eff-lines undercounts jsonl load (538 B/eff median tail) -- long-line companion covers"}
+    - {surface: data_query, dimension: VD4, rating: strong, evidence: "", note: ""}
+    - {surface: data_query, dimension: VD5, rating: strong, evidence: "", note: ""}
+    - {surface: data_query, dimension: VD6, rating: strong, evidence: "", note: ""}
+    - {surface: data_query, dimension: VD7, rating: strong, evidence: "0 over", note: ""}
+    - {surface: data_query, dimension: VD8, rating: adequate, evidence: "Decision 84 local-cache model", note: "tracked executor-era journals sit oddly in git under warehouse doctrine; rotation pressure is coherent with it"}
+    - {surface: residual, dimension: VD1, rating: adequate, evidence: "", note: "default row inherits the Python rationale until classified"}
+    - {surface: residual, dimension: VD2, rating: adequate, evidence: "", note: "classify-or-comply; classification is the durable valve"}
+    - {surface: residual, dimension: VD3, rating: adequate, evidence: "", note: "a new ungoverned class can no longer appear silently"}
+    - {surface: residual, dimension: VD4, rating: strong, evidence: "", note: ""}
+    - {surface: residual, dimension: VD5, rating: strong, evidence: "", note: ""}
+    - {surface: residual, dimension: VD6, rating: strong, evidence: "", note: ""}
+    - {surface: residual, dimension: VD7, rating: strong, evidence: "MANIFEST.yaml owned by T5.5", note: "single grandfather, retirement-owned"}
+    - {surface: residual, dimension: VD8, rating: strong, evidence: "", note: "govern-by-default closes the day-one gap the deliverable's draft Decision would otherwise ship"}
+
+  draft_decision:
+    number: "NNN -- allocate at merge time, do not guess"
+    title: "Structural-size governance extends beyond Python: one parameterized ratchet engine over a classified file taxonomy (completes Decision 43's declared scope; builds on 102/128/130)"
+    status: Proposed
+    problem: >-
+      Decision 43 declared structural limits "across all repository code, prompts, and agents";
+      Decision 130 extended the scan "whole-repo" -- but only for Python (iter_gated_py_files
+      skips every non-.py file, and terraform's presence in _SLOC_EXCLUDE_DIRS excludes Python
+      under terraform/, not .tf files: no line gate has ever scanned them). Censused at 3dee4a5:
+      552 tracked non-Python non-markdown files, 87 over 500 effective lines -- 71 of them
+      workflow outputs, 12 of them hand-authored agent-edited surfaces (5 .tf including
+      iceberg_tables.tf at 1,491; config/agent/verification_registry/registry.yaml at 3,252; 2
+      contracts; 2 workflow files; docs/intent-migration/MANIFEST.yaml), plus ROADMAP-PRODUCT.yaml
+      at 4,707 with no ceiling at all. The motivating harm (lower-tier mis-edits scaling with file
+      size) is observed for Python (Decision 128; executor recs rec-242/rec-285) and UNOBSERVED in
+      non-Python classes -- this extension is preventive, and its migration is sized accordingly.
+    decision: >-
+      (1) One engine, one registry, one guard: config/structural_size_budgets.yaml carries a class
+      table (per class: include globs covering both .yaml/.yml spellings, provenance-override,
+      unit, limit, direction, relief valves, recorded actual_purpose) plus flat per-file budgets;
+      a new validate_structural_size_limits (both tiers, unscoped -- measured cost ~0.1s) enforces
+      it and ONE validate_structural_size_budget_raises (pre_globs: the registry path) gates the
+      permissive direction with Decision 128's marker grammar. Incumbent gates (SLOC, prose,
+      roadmap, decisions, composite bodies) are UNCHANGED; a convergence path is recorded, not
+      executed. (2) Classification is layered first-match-wins: exclusions (vendored dirs, .py,
+      .md), then a provenance test (do-not-edit banner in first 10 lines, or a checked-in
+      regeneration command, or a documented projection -- membership pinned in the table for known
+      hybrids like config/sloc_budgets.yaml), then directory+extension globs, then a mandatory
+      residual default row governing any unmatched tracked file at 500 effective lines
+      (govern-by-default for future classes). (3) Limits: 500 effective lines for terraform,
+      config, contracts, ci_workflows, shell, lambda_manifests, data_query, residual; roadmaps
+      instead carry per-file Decision-114-parity ceilings (ROADMAP-PRODUCT.yaml seeded at 6,000
+      effective lines; ROADMAP-PLATFORM.yaml continues unchanged under Decisions 114/147 -- an
+      exception granted to how that roadmap currently exists, not a precedent). (4) Exempt by
+      class, with recorded reasons: generated (no agent edits; govern the producer -- freshness
+      and drift gates), workflow_outputs (production-pattern: produced whole per run, post-merge
+      edits are narrow field flips; controls are RS-07 archival, plan schema validation, and
+      placement guards), test_fixtures (captured-data fidelity; a cap is an NS-B tax). (5)
+      Companion long-line guard: max line length 2,000 characters for governed classes (ruff
+      already binds Python at 127); a line-based gate without it is satisfiable by line-joining.
+      (6) One-time grandfather, Decision 130 clause 2 form: exactly 12 entries seeded at current
+      size with raise-approved markers citing this Decision; no auto-seed ever; downward-only
+      ratchet; drain via human-planned recs (terraform decomposition first -- multi-file roots are
+      semantic-free; the verification-registry archival lifecycle second, designed per CD.29
+      mark-then-drop, never file-splitting; iceberg_tables.tf prefers the producer change via
+      scripts/schema_to_iceberg.py). (7) Each class row's recorded actual_purpose is load-bearing:
+      when a purpose's referent dies (Decision 160 precedent), that row is retired or reshaped
+      rather than raised. (8) The ci_workflows row additionally extends Decision 162's R3
+      inline-body ratchet to .github/workflows/*.yml run: bodies, seeding a workflow-body baseline
+      section in composite_action_body_baseline.yaml (or a sibling), because the file cap does not
+      reach the incident-bearing unit (rec-2923's class). (9) Markdown remains wholly out of scope
+      here; a future markdown decision inherits this taxonomy's shape, not its unit. Decision 43's
+      .prompt.md row disposition (enforce at prose-regime parity or formally retire the row) is a
+      clause for that future decision -- population today is compliant (max 155 effective lines).
+    reversal_conditions: >-
+      (a) The engine false-positives against a genuinely-conformant shape more than once per
+      class-year: fix the classifier or the class row, never widen the marker escape. (b) A
+      measured fast-tier budget breach attributes materially to the census walk: move the engine
+      full-tier-only (the raise-guard stays fast-tier). (c) A class row's recorded actual_purpose
+      loses its referent (consumer rebuilt, workflow retired): retire that ROW, Decision-160
+      style -- the engine survives its classes. (d) The grandfather roster shows net growth over
+      any 90-day window (Decision 159/161 form): re-audit the gate design rather than raising
+      budgets. (e) If the assumed NS-A harm is ever OBSERVED in a governed class, revisit Q6's
+      calm sequencing toward active drain waves.
+    rationale: >-
+      The ratchet family is sound where it is shape-generic (registry, implicit default,
+      one-directional movement, marker-gated raises, bounded grandfathers -- proven end to end by
+      rec-2709 draining Decision 130's 24-file roster) and Python-specific exactly where the
+      relief valves live: the repository already operates six distinct valves, and each class is
+      assigned its honest one rather than inheriting decompose-into-a-facade. One parameterized
+      engine rather than per-class replication because the raise-guard is already quintuplicated
+      with three direction tokens (NS-F), and rather than folding in the incumbents because each
+      incumbent ceiling names its own consumer and retirement trigger and migrating them buys no
+      coverage. Exemptions key on provenance and production pattern -- never on which model reads
+      a file (NS-A fixed-floor constraint): the workflow_outputs exemption rests on the traced
+      edit pattern (field flips, not comprehension edits), the strongest single determination in
+      this audit because that class is 82 percent of the affected population.
+    related: >-
+      Decision 43 (scope declared), 102/128 (ratchet+markers), 130 (whole-repo intent + grandfather
+      form), 104 (registry pattern), 110/114/147 (roadmap single-file doctrine + compaction),
+      127 (sanctioned prose taxonomy; class (d) artefacts), 131 (mirror convention -- explicitly
+      no analogue created), 134/145/146/149/150/160 (size-governance family and its counter-
+      lessons), 135 (fast-tier cost model), 159/161/162 (sibling ratchets; R3 extension), 84
+      (warehouse invariants untouched), 67 (executor frozen -- drains are human-planned);
+      T3.14 (aggregate budget stays deferred, not duplicated), KG.11 (YAML split already
+      adjudicated toward ceiling+guard), rec-2928 (.yml stragglers), rec-2974 (marker
+      authorization gap), rec-2781 (roadmap anti-regrowth), rec-2709 (drain precedent, closed).
+
+  findings:
+    - id: SGE-01
+      surface: terraform
+      questions: [Q1, Q5, Q6, Q3]
+      dimensions: [VD1, VD2, VD7]
+      title: "Hand-authored infrastructure class has never been scanned by any size gate; 5 of 34 files over 500 effective lines, largest 3x the limit"
+      evidence: "scripts/checks/sloc/_shared.py:16,43 (walker excludes terraform/ and skips non-.py)|terraform/iceberg_tables.tf (1,491 eff)|terraform/bootstrap/github_ci_apply.tf (695)|terraform/personal/oidc.tf (682)|terraform/data_pipeline.tf (655)|terraform/personal/platform_roles.tf (587)"
+      evidence_kind: observed
+      current_behavior: "No line gate has ever scanned .tf files; the terraform entry in _SLOC_EXCLUDE_DIRS is a Python-walker artifact (READ FIRST 3, confirmed), so absence of coverage is absence of scanning, not a recorded exemption. Decision 43 declared 'all repository code' scope; Decision 130 stated 'no hand-authored directory is exempt' -- both scoped to Python by implementation."
+      ideal_behavior: "Terraform governed at 500 effective lines via the class engine, with the 5 files grandfathered at current size under Decision-cited markers and drained by native multi-file decomposition (or, for iceberg_tables.tf, by generating it from the Pydantic schemas scripts/schema_to_iceberg.py already converts)."
+      gap: "The class whose mis-edits carry production-security consequence (IAM trust, boundaries, grants) is the largest ungoverned hand-edited surface."
+      compensating_controls_considered: "terraform validate + plan review + the CD apply gates catch syntactic and many semantic errors, but none bounds comprehension load -- they property-match correctness, not the NS-A editing-accuracy property, and would pass an arbitrarily large file."
+      change_type: add
+      proposed_change: "Install the class engine (draft_decision clauses 1-3, 5-6) with terraform as an extend-uniform row; seed 5 grandfather entries; file the drain rec with iceberg_tables.tf's producer-change option recorded."
+      acceptance: "validate_structural_size_limits fails a new 501-eff .tf file with no registry entry; passes the tree with the 5 seeded entries; raise-guard blocks an unmarked budget increase."
+      severity: high
+      severity_rationale: "Materially reduces the declared guarantee (Decision 43/130 scope) on the highest-consequence hand-edited class; compensating controls do not property-match. Capped below critical because the harm is preventive/assumed -- zero observed non-Python instances (Q8 base rate)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["sloc", "file size", "terraform size", "line limit", "size budget", "oversize", "name/intent grep of tier_items", "candidate_decisions title/detail grep"], dedup_hit_count: 0, note: "T3.14 owns the AGGREGATE budget only (measurement, deferred); KG.11 adjudicated roadmap-YAML split-vs-ceiling; neither owns per-file non-Python expansion. 62 size-term rec hits reviewed; none proposes it."}
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "engine + roster in one PR; drain recs follow"}
+    - id: SGE-02
+      surface: config
+      questions: [Q1, Q5, Q6, Q8]
+      dimensions: [VD1, VD2, VD7, VD8]
+      title: "Machine-consumed config registries are ungoverned; the verification registry has accreted to 3,252 effective lines (6.5x limit) with a designed-but-unexercised retirement lifecycle"
+      evidence: "config/agent/verification_registry/registry.yaml (3,252 eff, 264 entries, appended per graduation by .claude/skills/implement/SKILL.md step 4)|config/agent/data_quality/decisions/ops_recommendations.yaml (522 eff)|CD.29 retirement discipline (mark-then-drop) in docs/ROADMAP-PLATFORM.yaml"
+      evidence_kind: observed
+      current_behavior: "Every graduated verification appends an entry; nothing has ever retired one; no gate measures the file. The dq decision manifests are hand-edited semantic surfaces just over the limit."
+      ideal_behavior: "Config governed at 500 eff; registry.yaml grandfathered with a marker and drained by a DESIGNED archival/retirement lifecycle rec (CD.29's mark-then-drop made real), never by file-splitting; growth pressure becomes a periodic reviewable lifecycle decision."
+      gap: "Unbounded silent accretion in a registry agents append to blindly -- the exact convergence_health shape (Decision 128) in YAML form."
+      compensating_controls_considered: "validate_verification_registry checks schema, not size; the append-at-tail edit grain bounds PER-EDIT load but not whole-file load for retirement sweeps or debugging reads -- partial match only, insufficient."
+      change_type: add
+      proposed_change: "Extend-uniform row for config; 2 grandfather entries; file the registry archival-lifecycle rec (design work: what retires an entry, where archived entries live)."
+      acceptance: "Gate red on unregistered new >500 config yaml; registry lifecycle rec filed and named as the drain owner in the roster marker."
+      severity: high
+      severity_rationale: "Same guarantee reduction as SGE-01 on a surface agents modify on every graduating plan; the drain path needs design (open-ended until the lifecycle rec lands), which is exactly what NS-C warns about. Below critical: assumed harm, and the append grain mitigates routine edits."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["verification registry size", "registry growth", "config size", "sloc", "archival lifecycle"], dedup_hit_count: 0, note: "CD.29 designs retirement semantics but no item owns exercising them against file growth."}
+      effort: S
+      depends_on: [SGE-01]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "roster entry rides the engine PR; lifecycle rec is separate M-effort design work"}
+    - id: SGE-03
+      surface: ci_workflows
+      questions: [Q1, Q3, Q5]
+      dimensions: [VD1, VD3, VD8]
+      title: "Workflow files are ungoverned at both units: no file-size gate, and Decision 162's inline-body ratchet stops at .github/actions/, leaving workflow run: bodies uncovered"
+      evidence: "scripts/checks/ci_guards/validate_composite_action_shell_bodies.py:113 (_iter_manifests walks .github/actions only)|.github/workflows/reconcile.yml (536 eff, 15 inline run bodies)|.github/workflows/terraform-apply-sandbox.yml (529 eff)"
+      evidence_kind: observed
+      current_behavior: "The incident-bearing unit (inline shell body, rec-2923's class) is ratcheted inside composite actions and unmeasured inside workflows; the two workflow files over 500 eff carry the largest inline-body populations."
+      ideal_behavior: "ci_workflows governed as extend-calibrated: 500-eff file cap (2 grandfathers) plus the R3 body ratchet extended over .github/workflows/*.yml bodies with its own seeded baseline section."
+      gap: "A future rec-2923-shaped defect can be authored in a workflow body today without touching any governed surface."
+      compensating_controls_considered: "validate_ci_workflow_guards and actions-evidence checks assert specific behaviors, not body size/shape; Decision 162's R1 thin-adapter rule does not apply to workflow steps at all -- no property match."
+      change_type: rescope
+      proposed_change: "Extend _iter_manifests-equivalent scanning to workflow files for R3 (body eff-line baseline; R1/R2 remain composite-only where outputs.<id>.value semantics live); add the class-engine file row."
+      acceptance: "A new 30-eff inline workflow body with no baseline entry fails; existing bodies seeded; file cap green with 2 grandfathers."
+      severity: medium
+      severity_rationale: "Real coverage gap with a proven incident class, but bounded: workflows are PR-reviewed, and the R1 output-contract shape (the actual rec-2923 mechanism) is composite-specific. Clear fix."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["workflow body", "inline shell", "composite action", "rec-2923", "R3 baseline"], dedup_hit_count: 0, note: "Decision 162 is the adjacent owner and deliberately scoped itself to composite actions; workflow bodies are unowned territory."}
+      effort: M
+      depends_on: [SGE-01]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: SGE-04
+      surface: contracts
+      questions: [Q1, Q5, Q6]
+      dimensions: [VD1, VD7]
+      title: "Agent-consumed contracts are ungoverned; two exceed the limit via fixture/amendment accretion"
+      evidence: "docs/contracts/iam-simulate-fixture.yaml (584 eff, incident-driven verb rows)|docs/contracts/ops_recommendations.yaml (556 eff, 26-column Class A contract)"
+      evidence_kind: observed
+      current_behavior: "The densest agent-read-and-amended semantic surfaces have no size pressure; growth vectors are amendment logs and per-incident row accretion."
+      ideal_behavior: "Extend-uniform with 2 grandfathers; drain by compacting superseded amendment entries or deferring detail to auxiliary files -- never splitting one subject's semantics (Decision 86 collocation)."
+      gap: "Slow accretion on the surfaces lower-tier agents most need to hold whole."
+      compensating_controls_considered: "validate_contract_drift checks ritual conformance, not size; no match."
+      change_type: add
+      proposed_change: "Class-engine row + 2 roster entries; relief-valve text names compact-amendments and defer-detail, forbids subject-splitting."
+      acceptance: "Gate green with roster; red on unregistered new >500 contract."
+      severity: medium
+      severity_rationale: "Same gap shape as SGE-01/02 at materially smaller magnitude (17 percent over vs 3-6.5x) with cheap, honest valves available."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["contract size", "amendment log", "docs/contracts size"], dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: [SGE-01]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "rides the engine PR"}
+    - id: SGE-05
+      surface: roadmaps
+      questions: [Q2, Q1, Q8]
+      dimensions: [VD3, VD1, VD6]
+      title: "Roadmap size governance is one-third coverage and unit-gameable: PRODUCT (4,707 eff) has no ceiling, and PLATFORM's ceiling counts raw lines with no line-length companion"
+      evidence: "scripts/checks/roadmap/validate_platform_roadmap.py:13,18 (10,000 RAW-line ceiling, PLATFORM only)|docs/ROADMAP-PRODUCT.yaml (4,707 eff, schema-validated both tiers, zero size governance)|measured 4,606-char max line in docs/ROADMAP-PLATFORM.yaml"
+      evidence_kind: observed
+      current_behavior: "validate_product_roadmap validates schema only; the PLATFORM ceiling's splitlines() unit means comment/blank growth consumes ceiling and line-JOINING relieves it -- compliance achievable with zero load reduction (the VD3 counterfactual fails)."
+      ideal_behavior: "Class ceilings per draft_decision clause 3: PRODUCT seeded at 6,000 effective lines; a 2,000-char line-length companion on governed roadmap files; PLATFORM's constant untouched (Decision 114/147 fixed) but its unit's gameability recorded for the next ceiling revisit."
+      gap: "The second-largest hand-maintained YAML in the repository is size-ungoverned while its sibling is governed by a unit that measures formatting, not load."
+      compensating_controls_considered: "Schema validation constrains structure, not volume; Decision 147's compaction norm is behavioural, with the mechanical guard still open (rec-2781) -- partial, insufficient for PRODUCT which has no ceiling to enforce a norm against."
+      change_type: retune_gate
+      proposed_change: "Seed a PRODUCT effective-line ceiling in the class engine; add the line-length companion; leave PLATFORM's Decision-114 constant unchanged."
+      acceptance: "Engine red if PRODUCT exceeds 6,000 eff; red on a >2,000-char line in a governed roadmap file; PLATFORM behavior unchanged."
+      severity: medium
+      severity_rationale: "A gate that can report compliance while load is unchanged is the VD3 defect class, but the population is 2 files with strong behavioural norms and an owned anti-regrowth guard -- inconsistency with a clear fix."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: ["rec-2781"], dedup_search_terms: ["roadmap ceiling", "product roadmap size", "line length", "compaction guard"], dedup_hit_count: 1, note: "rec-2781 owns compaction anti-regrowth for PLATFORM terminal content only; neither PRODUCT's missing ceiling nor the raw-line unit is owned."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "can land with or before the engine"}
+    - id: SGE-06
+      surface: shared
+      questions: [Q8, Q4]
+      dimensions: [VD6, VD8]
+      title: "Decision 43's .prompt.md 3,000-line row is live (12 tracked files) and enforced by nothing"
+      evidence: "docs/DECISIONS.md:5134 (.prompt.md row)|scripts/checks/prompts/validate_prompt_files.py:12-43 (structure only, scheduled dir only)|config/prose_budgets.yaml (no .prompt.md entries)|config/agent_governance.yaml + config/agent_tool_tiers.yaml: absent from disk (Decision 43's named enforcement configs)"
+      evidence_kind: observed
+      current_behavior: "12 .prompt.md files tracked (7 scheduled, 5 executor Layer-5); largest 155 effective lines; the Decision row that governs them cites enforcement machinery that was deleted. The .agent.md row (1,500) is by contrast a dead letter (0 files)."
+      ideal_behavior: "The row is either enforced (a 5-line size assertion in validate_prompt_files, or prose-regime entries) or formally retired by the expansion Decision's markdown clause -- a live governance row must have a live gate or a recorded retirement."
+      gap: "A live-but-unenforced limit invites silent divergence between declared and actual governance -- the exact drift shape Decision 146 corrected for the decisions file."
+      compensating_controls_considered: "Population is compliant by 19x margin, so no current harm; but compliance-by-coincidence is not a control (nothing fails if a prompt hits 3,001 lines)."
+      change_type: enforce
+      proposed_change: "Draft_decision clause 9 routes disposition to the future markdown decision; interim: add the trivial size assertion to validate_prompt_files (covering BOTH prompt directories) or record the row's retirement."
+      acceptance: "Either a check fails a 3,001-line .prompt.md, or a Decision clause records the row retired."
+      severity: medium
+      severity_rationale: "Declared-vs-actual governance divergence on a live surface; zero current violation, trivial fix. This is the audit's single permitted markdown finding (READ FIRST 5), surface: shared."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["prompt.md", "token budget", "3000", "agent.md", "prompt file size"], dedup_hit_count: 0, note: "rec-431 (80-net-line rule for planning.prompt.md content guidance) is adjacent but does not own the Decision 43 row's enforcement."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: SGE-07
+      surface: shared
+      questions: [Q4, Q3]
+      dimensions: [VD6]
+      title: "All five marker guards validate that the cited Decision EXISTS, not that it authorizes the edit -- a marker naming any real Decision passes"
+      evidence: "scripts/checks/sloc/validate_sloc_budget_raises.py:74-76 (_decision_header_exists: header regex only)|identical logic in prose_budget_raises.py:90-92, coverage_baseline.py:203-205, mypy_baseline.py:78-80, validate_composite_action_shell_bodies.py:240-242|rec-2974 (open): a live tests/test_checks_registry.py marker cites dec-161, which never authorized that raise"
+      evidence_kind: static
+      current_behavior: "The loud-and-cited property degrades to loud-and-name-dropping: any of ~120 live Decision numbers authorizes any raise in any registry. rec-2974 is the observed instance."
+      ideal_behavior: "The guard additionally requires the cited Decision's body to mention the governed path (or a declared covering glob) -- still deterministic, still text-only; plus the five copies converge on one shared marker-guard module when the class engine lands (its guard becomes the sixth copy otherwise)."
+      gap: "Ratchet integrity (VD6/NS-E) rests on reviewer diligence the mechanism was built to not depend on."
+      compensating_controls_considered: "PR review sees the diff line; but the guard exists precisely because review missed three convergence_health raises (Decision 128's problem statement) -- review does not property-match."
+      change_type: unify
+      proposed_change: "Add a path-mention assertion to the shared header-check helper; consolidate the five copies (and the new engine's guard) onto one module with per-registry direction tokens."
+      acceptance: "A marker citing a Decision whose text nowhere mentions the file (or covering glob) fails; rec-2974's instance is caught retroactively."
+      severity: medium
+      severity_rationale: "Weakens the family's core integrity property, but exploitation requires an agent already choosing to game review, and the marker still leaves a durable audit trail -- ambiguity with a clear fix."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-insufficient, item_ids: ["rec-2974"], dedup_search_terms: ["raise-approved", "marker", "baseline-raised", "dec-161", "authorization"], dedup_hit_count: 1, note: "rec-2974 owns the single bad marker instance; the mechanism-level existence-vs-authorization gap and the five-way duplication are unowned -- remedy insufficient for the class."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "natural companion to the engine PR, which otherwise mints copy number six"}
+
+  rejected_candidates:
+    - {candidate: "READ FIRST 1: 'SLOC' ambiguity (concrete Python measure vs governance concept) causes mis-scoped work", why_dismissed: "Adjudicated true-and-fine: the two senses are cleanly separable in practice (the measure at sloc_limits.py:91; the concept in AGENTS.md/Decision 128), and this audit's Q2 keeps the measure while expanding the concept. No defect.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "READ FIRST 2: agent-instruction markdown is an ungoverned gap / should get the decompose valve", why_dismissed: "Confirmed governed-by-bytes with the OPPOSITE relief valve, deliberately (prose_limits.py:13-20 argues fragmentation does not reduce ambient load). Two regimes, two units, both argued -- evidence for Q2/Q8, not a defect.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: "Decision 127"}
+    - {candidate: "READ FIRST 4: docs/plans/*.yaml and audits/*.yaml classification (extension vs role) is unresolvable", why_dismissed: "Resolved by the layered key (DD-C): role-bearing directories classify by directory row; Decision 127 class (d) sanctions the artefacts; the engine's exemption is recorded per class row. A question, answered -- not a defect.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: "Decision 127"}
+    - {candidate: "READ FIRST 6: a generalized engine will assume one ratchet direction and break coverage_baseline", why_dismissed: "Verified: coverage ratchets UP (floor), sloc/prose/mypy ratchet DOWN (ceilings), and the direction tokens differ per registry by design. The draft engine parameterizes direction per class row, so the hazard is designed out rather than present.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "Decision 43's .agent.md row (1,500 lines) is dead governance text needing action", why_dismissed: "Confirmed dead letter: zero tracked .agent.md files (surface deleted at T-1.13). Dead text in a superseded-in-part Decision is corpus-hygiene territory (Decision 149 compaction lifecycle), not a size-governance defect; recorded in the Q8 markdown observation.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: "Decision 149"}
+    - {candidate: "docs/decisions-index.json (2,245 eff, read in full every /plan) has no guard of its own", why_dismissed: "Compensated: the index derives 1:1 from the corpus, whose growth IS guarded -- 120 live-header ceiling (rows) and 700,000-byte combined ceiling (bytes), both enforced in validate_decisions_size; Decision 160 point 9 discloses the indirect bound and names a future reassessment owner.", compensating_control: "validate_decisions_size ceilings bounding the index's source corpus", control_property_match: "The harm is index growth taxing /plan; index rows track corpus headers 1:1 and index bytes track corpus bytes, so a corpus ceiling breach fires BEFORE unbounded index growth -- the control fails exactly when the defect would be real.", decision_or_item_id: "Decision 160"}
+    - {candidate: "GROUNDING MAP: 86 non-.py non-.md files exceed 500 effective lines", why_dismissed: "Re-derived: 87 at 3dee4a5 (one new plan landed since composition). Expected tree drift, not a stale anchor; the map's own text anticipates small movement.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "GROUNDING MAP: 48 under docs/plans + 22 under audits, ~81 percent of affected population", why_dismissed: "Re-derived: 49 + 22 = 71 of 87 = 82 percent. Confirmed within drift; DD-D's centrality stands.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "GROUNDING MAP: two largest oversized outside workflow_outputs are ROADMAP-PRODUCT.yaml (~4,707) and decisions-index.json (~2,245)", why_dismissed: "Re-derived exactly: 4,707 and 2,245. Both numbers reproduce; the verdicts they decide (roadmaps calibrated; generated exempt) are in class_verdicts.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "GROUNDING MAP: 5 .tf over 500, largest iceberg_tables.tf; 2 workflows over; 2 contracts over; no .sh over (largest ~106, 13 tracked)", why_dismissed: "All re-derived exactly (shell: 13 .sh plus bin/venv-python via shebang = 14 class members, max 106). Facts, confirmed.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "GROUNDING MAP: 3 files under config/ exceed 500, largest verification_registry/registry.yaml", why_dismissed: "Re-derived with a classification nuance: 3 files UNDER config/ by location, but config/lambda/ducklake/field_semantics.yaml carries a GENERATED -- DO NOT EDIT banner and a named regenerator, so first-match-wins files it under generated (row 1 outranks location, as the SCOPE table itself specifies). Class config over-500 = 2; location config/ over-500 = 3. Both true; the map's phrasing was location-based.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "GROUNDING MAP: per-extension bytes-per-effective-line medians/percentiles", why_dismissed: "Re-derived with the pinned percentile method; every figure reproduces to the decimal (.py 53.6 [44.3, 64.3] n=823; .yaml 72.4 [55.4, 113.9] n=423 vs map's 422 -- one file drift; .yml 66.0 n=27; .tf 60.8 n=33; .sh 92.2 n=13; .md 105.3 n=314).", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "GROUNDING MAP: OVERSEER-terraform-deploy-redesign.yaml measures 326 eff / 255,039 B / 8,211-char longest line", why_dismissed: "Re-derived exactly; class workflow_outputs confirmed (docs/plans/** recursive match). The DD-D reconciliation the map demands: the most extreme unit-divergence file sits in the EXEMPT class, so it is disclosed as a recorded cost of exemption (class verdict + Q8 seed 6), not left to pass silently between sections.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: ""}
+    - {candidate: "GROUNDING MAP: config/sloc_budgets.yaml holds far fewer entries than its 24-entry header describes", why_dismissed: "Re-derived: 3 entries, 1 under tests/, header still describing the 24-entry Decision 130 grandfather. On the DO-NOT-FLAG list as known-and-trivial; used as Q4 evidence (the drain WORKED -- rec-2709 closed), not filed.", compensating_control: "n/a", control_property_match: "n/a", decision_or_item_id: "rec-2709"}
+
+  summary:
+    total_findings: 7
+    novel_count: 6
+    planned_insufficient_count: 1
+    planned_unbuilt_count: 0
+    top_improvements: [SGE-01, SGE-02, SGE-05, SGE-03, SGE-04]
+    highest_leverage_change: SGE-01
+    maturity_overall: solid
