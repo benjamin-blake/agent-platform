@@ -2,6 +2,90 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 164: Executor agentic personas route to LiteLLM tiers, not `claude -p`; reopening that split collapses the viable persona substrate set to the CLI-hosting class (amends Decision 122 and Decision 116) (Decided)
+
+**Status:** Decided
+**Date:** 2026-08-03
+**Warehouse ID:** dec-164 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** Decision 122 ratifies the executor steady state as LiteLLM tiers (Tier 1 DeepSeek-direct,
+Tier 2 Anthropic-direct) and confines Decision 116's `claude -p` split to scheduled agents. But Decision
+116's own criterion for that split is agentic-vs-non-agentic tool use, and T4.2's personas are agentic
+tool-using loops by exactly that criterion -- so 116's principle reaches the personas on its face while 122
+routes them the other way, and no recorded statement addresses the conflict. A rationale does exist, but
+only distributed across three surfaces, none of which states it as a principle:
+`cost_projection.current_scale.breakdown.deepseek_executor_inference` in docs/ROADMAP-PLATFORM.yaml prices
+executor volume at ~$0.05/rec on DeepSeek-direct; Decision 116's own reversal condition names executor
+Tier-2 and scheduled `claude -p` as competing draws on one shared Max pool; and Decision 122 cites Decision
+47's lock-in lesson. Separately, nothing anywhere records the CONSEQUENCE of reopening the question. Filed
+against audits/executor-substrate-and-billing-shape-ad02653.yaml ESB-03 (medium, CONFIRMED).
+
+**Intent:** T4.2's Lambda personas are agentic tool-using loops, so Decision 116's agentic criterion reaches them on its face; they route to LiteLLM tiers anyway. Reopening that toward `claude -p` collapses the viable persona substrate set to the CLI-hosting class, eliminating the CD.27 incumbent and its named fallback at once.
+
+**Decision:** Executor agent personas (T4.2) route to the Decision 122 LiteLLM tiers. Decision 116's
+agentic/non-agentic split governs SCHEDULED AGENTS ONLY and does not extend to the executor personas,
+notwithstanding that those personas satisfy 116's agentic criterion. The same criterion yields a different
+answer on each side because the two sides differ in DRAW SHAPE, not in agenticity:
+
+- Volume and unit price. Scheduled-agent traffic is a handful of invocations per agent per day; executor
+  traffic is per-rec and per-turn, priced at ~$0.05/rec on DeepSeek-direct. A `claude -p` route bills
+  against the fixed, non-rollover Max x5 programmatic pool, so at executor volume it converts a metered
+  marginal cost into contention for a fixed monthly allowance -- exactly the contention Decision 116's own
+  reversal condition already names.
+- Substrate freedom. An HTTP transport (LiteLLM) is runtime-agnostic; a CLI transport requires a
+  CLI-hosting runtime. Routing therefore constrains substrate, and the executor is the side of the split
+  whose substrate question CD.27 layer 2 still owns.
+- Escape-hatch preservation. Decision 47's lock-in lesson is answered on the executor side by keeping
+  Anthropic-direct warm as Tier 2 behind the same LiteLLM surface -- a provider swap, not a process-shape
+  swap. A `claude -p` route would reintroduce that coupling at the process layer.
+
+Reopening this to route personas via `claude -p` is not a transport-level change: it eliminates most of the
+candidate substrate set. Of the five candidates assessed in
+audits/executor-substrate-and-billing-shape-ad02653.yaml Q2a `cli_hosting`, only `long_running_container`
+and `hosted_cli_runner` can host a session-shaped CLI outright. The other three are `can_host_cli:
+conditional` and degenerate under it -- including the CD.27 incumbent `durable_functions` (checkpoint
+granularity collapses to the whole CLI run) and the CD.27 fallback specified under ESB-02
+(`self_checkpointed_lambda_dynamodb`, same per-invocation ceiling). A reopen would therefore retire the
+incumbent substrate and its own contingency in one move. Any future proposal to reopen persona routing MUST
+price that collapse explicitly; a reopen that does not is incomplete on its face.
+
+This is a governance-record change only: it moves no traffic, changes no tier, provider or substrate, and edits
+no code. Its shape follows Decision 133 -- the conversion of a cited-as-given premise into a conscious,
+reversal-conditioned choice -- and it discharges Decision 75's requirement that carrying an existing frame
+forward be a conscious choice rather than an inherited one, which is exactly the condition Decision 122's
+persona routing was in: decided, but only implicitly against Decision 116's principle.
+
+**Reversal conditions:** revisit persona routing if (a) Decision 116's own reversal condition fires --
+shared Max-pool contention between executor Tier-2 and scheduled `claude -p` -- AND the resolution under
+consideration moves personas rather than scheduled agents; or (b) CD.27 layer 2 ratifies onto
+`long_running_container` or `hosted_cli_runner`, which removes the substrate-collapse cost above and makes
+the routing question genuinely open again; or (c) DeepSeek-direct unit pricing moves enough to void the
+volume argument (Decision 122's own >5x pricing trigger). Each of these reopens the QUESTION; none of them
+pre-decides the answer.
+
+**Related:** Decision 122 (amended -- the executor-tier ratification this rationale is addressed to),
+Decision 116 (amended -- its agentic/non-agentic principle is scoped to scheduled agents explicitly here
+rather than by implication), Decision 47 (lock-in lesson; archived and superseded, cited for the reasoning
+Decision 122 inherits from it, not as an active decision), Decision 84 (DECISIONS.md canonical + portal
+backfill), Decision 86 (rationale routes to a numbered Decision, never a new prose doc), Decision 55
+(RCA-first), Decision 150 (clause 1 -- the significance bar this entry is adjudicated against; clause 2's
+batch-wave form does not apply, since this is not a CD state-flip), Decision 160 (the bounded
+decision-scout retrieval model that makes a numbered entry findable where an in-body amendment is not;
+points 9 and 11's index pin and header runway are the budget this entry spends), Decision 151 (the
+Intent marker used above -- its Problem -> Intent -> Decision placement, and clause 3(ii)'s rule that
+after merge this Intent is never rewritten but accretes dated, source-cited annotations inside itself,
+under clause 3(iv)'s ~3-clarification / ~120-150-word cap), Decision 163 (a
+universal, exceptionless obligation is enforced structurally, not gated -- the reopen obligation stated
+above is a completeness standard on a future argument, not a gated step in a mechanized flow: it has no
+diff-detectable trigger, so this entry deliberately claims no structural carrier for it), Decision 75 (frame-lock
+anti-pattern -- its Constraints clause is the standing authority for carrying a frame forward
+consciously), Decision 133 (the in-corpus precedent for a governance-record-only entry that converts a
+cited-as-given premise into a conscious, reversal-conditioned choice). CD.27 layer 2 (the substrate set a
+reopen would collapse), CD.28 (ratified as Decision 122), tier_items T4.2 and T4.12 (the executor and
+scheduled sides of the split).
+
+---
+
 ## Decision 163: A universal, exceptionless obligation is enforced structurally, not gated -- the pre-handoff full-tier run is now a checked verification-plan step, not declared metadata alone (Decided)
 
 **Status:** Decided
@@ -2451,6 +2535,11 @@ escape hatch), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 
 ratification lane). Supersedes: CD.7 (LLM-on-Bedrock primary), Decision 40 (Copilot SDK + Bedrock
 planning).
 
+[Amendment 2026-08-03: Decision 164 records the rationale this entry's executor/scheduled routing
+split rests on -- why T4.2's agentic personas route to these LiteLLM tiers even though Decision
+116's agentic criterion reaches them on its face -- and records the substrate-set collapse a reopen
+would cause. Audit finding ESB-03. No tier, provider, or reversal condition in this entry changes.]
+
 ---
 
 ## Decision 121: Retire docs/contracts/cli-json-output.md rather than convert it -- T-1.17 exempted from the CD.25 conversion wave (Decided)
@@ -2721,6 +2810,12 @@ PLAN-resolve-scheduled-agent-provider inventory entry, T4.3 intent line all upda
 this session), Decision 52 (gemini BYOK deprecation, now fully retired rather than merely
 deprecated), Decision 117 (companion decision in the same session), audits/unclosed-loops-44ef5c6.yaml
 ULF-05.
+
+[Amendment 2026-08-03: Decision 164 scopes this entry's agentic/non-agentic split explicitly to
+scheduled agents. T4.2's executor personas are agentic tool-using loops by this entry's own
+criterion but route to the Decision 122 LiteLLM tiers; Decision 164 records why, and records the
+substrate-set collapse a reopen would cause. Audit finding ESB-03. No scheduled-agent routing in
+this entry changes.]
 
 ---
 
