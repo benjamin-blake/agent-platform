@@ -138,7 +138,7 @@ NOT a slug and never appears in `class_verdicts`, `rubric_ratings` or `per_surfa
 | 2 | `terraform` | `terraform/**/*.tf`, `terraform/**/*.hcl`, `*.hcl` | hand-authored infrastructure |
 | 3 | `config` | `config/**/*.yaml`, `config/**/*.yml` | machine-consumed configuration and registries |
 | 4 | `contracts` | `docs/contracts/**/*.yaml` | agent-consumed field/procedure semantics |
-| 5 | `ci_workflows` | `.github/**/*.yml`, `.github/**/*.yaml` | CI/CD definitions |
+| 5 | `ci_workflows` | `.github/**/*.yml`, `.github/**/*.yaml` | CI/CD definitions (note `.github/agents/schedule.yaml` lands here by glob though its role is agent scheduling -- flag the mismatch if it matters to your verdict) |
 | 6 | `shell` | `**/*.sh`, plus extensionless files under `bin/` whose first line is a shell shebang | setup, hooks, wrappers |
 | 7 | `lambda_manifests` | `src/lambdas/*/manifest.yaml` | packaging descriptors |
 | 8 | `roadmaps` | `docs/ROADMAP-*.yaml` (there are THREE, not two -- enumerate them) | monotonically growing work-lists |
@@ -203,9 +203,16 @@ re-litigate: every agent-instruction markdown surface is ALREADY compliant (`.cl
 max 119 effective lines, `**/*.prompt.md` max 155, `**/*.instructions.md` max 127,
 `docs/contracts/**/*.md` max 193, `audits/**/*.md` max 141 -- zero over 500 in any of them), and
 the one markdown class with real violations, `docs/audit-prompts/**` (13 of 23 over 500, largest
-3368), is executed only by frontier-tier models, which is precisely the population the limit does
-not exist to protect. Governing markdown would mean 8+ carve-outs for a population with almost no
-real violations, layered on top of an existing byte-based regime.
+3368), is executed only by frontier-tier models. Governing markdown would mean 8+ carve-outs for a
+population with almost no real violations, layered on top of an existing byte-based regime.
+
+**QUARANTINE -- read this before you reuse the reasoning above.** The frontier-consumed argument is
+the requester's SCOPING INPUT for excluding markdown. It is NOT a rationale available to you for any
+in-scope class verdict, and NS-A forbids it: "exempt because only a frontier model reads it" is
+precisely the tier-keyed answer the fixed-floor constraint rules out. This matters because
+`workflow_outputs` (`audits/**/*.yaml`, `docs/plans/**/*.yaml`) is also frontier-consumed and is
+81 percent of the affected population -- if DD-D concludes that class should be exempt, the reason
+must be that no agent surgically EDITS those files, never that a capable model reads them.
 
 Do NOT census markdown, do not classify it, and do not issue class verdicts on it. Record exactly one
 observation carrying these two facts, so a future decision can pick them up. "Observation" has a
@@ -214,9 +221,12 @@ concrete home: an entry in `question_answers[Q8].answers[]`, with `question` nam
 observation" -- there is no separate observations block; it folds into the relevant Q8 answer.
   (a) Decision 43's `.prompt.md` row (3000 lines) is LIVE and governs 12 tracked files, and no
       check appears to enforce it -- verify that claim before recording it.
-  (b) `docs/ROADMAP-PRODUCT.md` and `docs/ROADMAP-PRODUCT.yaml` are the same artifact in two
-      formats under opposite treatment: the `.yaml` is class `roadmaps` and in scope, the `.md` is
-      excluded purely by extension.
+  (b) `docs/ROADMAP-PRODUCT.yaml` carries a header stating it SUPERSEDES
+      `docs/ROADMAP-PRODUCT.md`, with the markdown "retained for one transition cycle as a recovery
+      artefact". So this is a superseded transitional artifact, not a live peer -- verify the header
+      before recording it. The observation worth keeping is narrower than a format-twin
+      inconsistency: a retiring duplicate is governed differently from its successor purely by
+      extension, which is a question about how governance handles transition windows.
 That observation is the whole of markdown's presence in this audit. Do not expand it.
 
 **Exclusion outranks classification.** The exclusion list below is applied FIRST, before
@@ -607,7 +617,11 @@ non-resolving anchors in `meta.stale_anchors` and continue.
   by the limit check, the regenerator, and the CC check.
 - `scripts/checks/sloc/_shared.py:43` -- the scan skips any file named `__init__.py` and any file
   not ending in `.py`.
-- `scripts/checks/sloc/sloc_limits.py:80` -- `validate_sloc_limits`. Its effective-line count is
+- `scripts/checks/sloc/sloc_limits.py:80` -- `validate_sloc_limits`. ANCHOR CONVENTION: where this
+  map cites a registered check by name, the line is its `@registry.register(...)` decorator, with
+  the `def` on the following line. The same holds for `validate_sloc_budget_raises.py:79` and
+  `prose_limits.py:86`. An off-by-one against the `def` line is this convention, not a stale
+  anchor. Its effective-line count is
   `[ln for ln in lines if ln.strip() and not ln.strip().startswith("#")]`.
 - `scripts/checks/sloc/sloc_limits.py:20` -- `def _update_sloc_budgets`, downward-only, documented
   as never seeding a newly-oversized unregistered file.
@@ -877,16 +891,13 @@ Each of these is a decided position, not an oversight. Flagging one as a defect 
 positive.
 
 - **Decision 114 as amended by Decision 147** -- the single-file-preserved treatment of
-  `ROADMAP-PLATFORM.yaml` is FIXED and not reopenable: do not recommend splitting it. Be precise
-  about the state, because it is easy to get wrong: Decision 114's reversal trigger has ALREADY
-  FIRED (the file reached 9,996 of 10,000 lines) and was answered by Decision 147 with in-place
-  compaction, not with a raise and not with a split. So "the ceiling has never been tested" would
-  be a false statement. What remains fixed is the one-coherent-file outcome, not an
-  untouchable number. You MUST state the principled boundary that lets this file stand while other
-  files in the same class are capped, so the resulting rule is coherent rather than arbitrary. The
-  requester's position, which you should record and may build on: this file is an exception granted
-  to how the roadmap currently exists, and explicitly NOT a precedent for how future roadmaps are
-  built.
+  `ROADMAP-PLATFORM.yaml` is FIXED: do not recommend splitting it. See the GROUNDING MAP entry for
+  the state (the trigger fired; compaction answered it) -- "the ceiling has never been tested"
+  would be false. What is fixed is the one-coherent-file outcome, not an untouchable number. You
+  MUST state the principled boundary that lets this file stand while other files in its class are
+  capped, so the rule reads as coherent rather than arbitrary. The requester's position, which you
+  should record and may build on: this file is an exception granted to how the roadmap currently
+  exists, and explicitly NOT a precedent for how future roadmaps are built.
 - **Decision 130 clause 2** -- the one-time `tests/` grandfather was deliberate and bounded.
 - **Decision 128 clause 3** -- raise markers are not required to persist after merge.
 - **Decision 127** -- the prose taxonomy.
@@ -933,8 +944,10 @@ audit:
          deliverable_size: {yaml_effective_lines: 0, md_words: 0,
                             breaches_own_recommendation: true|false, note: ""}}
   question_answers:
-    # Q1/Q5/Q6 `verdict` is the ROLL-UP over class_verdicts: the shared enum value if every class
-    # agrees, otherwise the literal `mixed`. Q2/Q3/Q4/Q7 are single repo-wide verdicts.
+    # Roll-up rule for Q1/Q5/Q6 is pinned under THE QUESTIONS; do not restate it here.
+    # `basis` accepts finding ids AND direct evidence citations ("file:line", a rec id, a Decision
+    # id, a census number) -- a well-grounded verdict resting on a Decision rather than on a defect
+    # must still be citable, and an empty findings[] is a legitimate outcome.
     - {q: Q1, verdict: extend-uniform|extend-calibrated|exempt-with-reason|defer|mixed,
        basis: [<finding ids>], prose: ""}
     - {q: Q2, verdict: keep-effective-lines|unify-on-bytes|per-class-unit|tokens|composite,
@@ -971,8 +984,7 @@ audit:
   # `population_over_limit` is ALWAYS counted in effective lines under the pinned CENSUS RULE,
   # even when your recommended unit is bytes or tokens, so the number stays comparable across
   # classes; if your unit differs, add the count in that unit parenthetically in `relief_valve`.
-  # `unit` is the literal n/a for an exempt-with-reason or defer class. For an
-  # exempt-with-reason or defer class there is no recommended limit: set limit: n/a, record
+  # For an exempt-with-reason or defer class there is no recommended limit: set limit: n/a, count
   # population_over_limit against the incumbent 500-effective-line rule, and say so in
   # `relief_valve` so the number is never read as a breach of a rule you did not propose.
   class_verdicts:
