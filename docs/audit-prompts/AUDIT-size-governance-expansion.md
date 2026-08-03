@@ -31,6 +31,11 @@ ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT.
 
 A run that merely confirms the candidates below has failed.
 
+**Where the candidates are.** This prompt does not carry a separate numbered candidate list. The
+candidates you must adjudicate are, exactly: the six items under READ FIRST (each asserts a state
+of the world you must confirm or refute), the eight Q8 seeds, and every "observed fact" in the
+GROUNDING MAP. Treat that set as the candidate list wherever this prompt says "the candidates".
+
 Adjudicate each candidate to exactly one disposition, and map it to the output contract as
 follows:
 
@@ -49,7 +54,9 @@ follows:
 Six hazards. Each invites a specific misread that would waste most of a session.
 
 1. **"SLOC" names two things.** It is (a) the concrete Python-specific measure in
-   `scripts/checks/sloc/_shared.py` -- non-blank, non-`#`-prefixed lines -- and (b) the
+   `scripts/checks/sloc/sloc_limits.py` (the counting expression at lines 38 and 91; the limit
+   CONSTANT and the file walker live separately in `_shared.py`) -- non-blank, non-`#`-prefixed
+   lines -- and (b) the
    colloquial name for "the 500-line file rule" as a governance concept. This audit is about
    expanding (b). Whether (a) remains the right measurement for an expanded (b) is Q2 and is
    genuinely open.
@@ -80,11 +87,11 @@ Six hazards. Each invites a specific misread that would waste most of a session.
    tracked and live, under `.github/prompts/scheduled/` and
    `config/agent/executor/prompts/` (the latter is Layer 5 of the instruction architecture). Only
    the legacy top-level `.github/prompts/*.prompt.md` set was deleted at T-1.13. Verify both counts
-   yourself. Note the consequence: a live Decision 43 row governs a live surface at a limit
-   (3000 lines) six times the Python limit, and whether that row is enforced by any check at all is
-   worth establishing -- but `.prompt.md` is markdown and therefore falls under the prose regime as
-   an audit target, so treat this as evidence about the coherence of the existing rule set, not as
-   a class to issue a verdict on.
+   yourself. The consequence is the reason `.prompt.md` is an in-scope class (`instruction_prompts`,
+   row 12) despite being markdown: a live Decision 43 row governs 12 live files at a limit six
+   times the Python limit, and you should establish whether ANY check enforces it. Do not assume
+   the prose regime covers it -- verify against `config/prose_budgets.yaml` and against what
+   `scripts/checks/prompts/validate_prompt_files.py` actually asserts.
 
 6. **Ratchet direction is per-registry, not universal.** `config/coverage_baseline.yaml` ratchets
    UP (a minimum that may only rise). `config/sloc_budgets.yaml`, `config/prose_budgets.yaml` and
@@ -106,9 +113,11 @@ lower down: `docs/decisions-index.json` would match row 11's `**/*.json` but is 
 first. This ordering is a compose-time convenience so your census is reproducible; whether
 provenance SHOULD outrank location is exactly Q8 seed 1 and DD-C, and you may recommend otherwise.
 
-The `slug` column is the PINNED identifier. Use it verbatim as the key in `class_verdicts`, as
-`findings[].surface`, and as `rubric_ratings[].surface`, so the four blocks cross-reference
-mechanically. Do not invent or prettify these strings.
+The `slug` column is the PINNED identifier. Use it verbatim as the key in `class_verdicts` and as
+the `surface` value in `rubric_ratings`, `per_surface_assessment` and `findings`, so those four
+blocks cross-reference mechanically. Do not invent or prettify these strings. `findings[].surface`
+additionally accepts the literal `shared` for a defect belonging to no single class; `shared` is
+NOT a slug and never appears in `class_verdicts`, `rubric_ratings` or `per_surface_assessment`.
 
 | # | slug | Locations (repo-root-relative) | Role |
 |---|---|---|---|
@@ -123,7 +132,8 @@ mechanically. Do not invent or prettify these strings.
 | 9 | `workflow_outputs` | `docs/plans/**/*.yaml`, `audits/**/*.yaml` | one file per workflow run |
 | 10 | `test_fixtures` | `tests/fixtures/**/*.yaml`, `tests/fixtures/**/*.yml`, `tests/fixtures/**/*.json` | inputs asserted against by tests |
 | 11 | `data_query` | `**/*.sql`, `**/*.json`, `**/*.toml`, `**/*.jsonl` | miscellaneous structured |
-| 12 | `residual` | every tracked, non-excluded file matching no row above | see the residual rule |
+| 12 | `instruction_prompts` | `.github/prompts/**/*.prompt.md`, `config/agent/executor/prompts/**/*.prompt.md` | executor and scheduled-agent role prompts (see trap 5) |
+| 13 | `residual` | every tracked, non-excluded file matching no row above | see the residual rule |
 
 **Generated provenance test (row 1).** A file is generated if ANY holds: it carries a do-not-edit
 or generated-by banner in its first 10 lines; a checked-in command or check regenerates it (search
@@ -131,16 +141,20 @@ the path in `scripts/` and `.github/workflows/` -- there is no Makefile in this 
 is a documented projection of a named source of truth. Known members you should expect the test to
 catch, and should verify rather than assume: `docs/decisions-index.json`, both
 `.terraform.lock.hcl` files, and the `config/*baseline*.yaml` registries. Note the interesting
-edge: `config/sloc_budgets.yaml` and `config/prose_budgets.yaml` are BOTH machine-regenerated (by
-`--update-sloc-budgets`) AND hand-edited (to add raise markers). Decide which row they belong to
-and say why -- that hybrid is itself a finding candidate about whether provenance is a clean key.
+edge: `config/sloc_budgets.yaml` is BOTH machine-regenerated (by `--update-sloc-budgets`) AND
+hand-edited (to add raise markers), so its provenance is genuinely hybrid. `config/prose_budgets.yaml`
+has NO regeneration command at all despite mirroring the same registry shape -- verify that
+asymmetry and decide what it means for Q3. Decide which row the hybrid file belongs to and say why;
+it is a finding candidate about whether provenance is a clean key.
 If provenance is genuinely undeterminable for a file, classify it by extension and record the
 ambiguity as a DD-C observation.
 
-**Residual class (row 12) -- MANDATORY.** `git ls-files` tracks files that match no row above.
+**Residual class (row 13) -- MANDATORY.** `git ls-files` tracks files that match no row above.
 Composition observed these unmatched extensions: `.txt` (12, including requirements files), `.log`
 (3), `.gitignore` (2), `.example` (2), `.gitkeep` (2), `.lock`, `.tfrc`, `.importlinter`,
-`.gitattributes`, `.python-version`, `.baseline` (1 each), and 4 extensionless files. It also
+`.gitattributes`, `.python-version`, `.baseline` (1 each), and 3 extensionless files
+(`bin/venv-python` is a fourth extensionless file but carries a bash shebang, so row 6 `shell`
+claims it before residual can). It also
 observed unmatched `.yaml` files, which matter more because YAML is where the oversized population
 lives: at least `.pre-commit-config.yaml`, `EVALUATION-PROMPTS.yaml`, and
 `docs/intent-migration/MANIFEST.yaml` (which exceeds 500 effective lines). Enumerate the real set
@@ -148,18 +162,40 @@ yourself; do not trust this list.
 
 `class_verdicts` MUST carry a `residual` entry giving the DEFAULT verdict for any file matching no
 named class -- because the deliverable is draft Decision text, and a rule built from a
-closed-but-partial table ships a gap on day one. State whether the default is govern, exempt, or
-fail-closed-pending-classification, and say what happens when a NEW file class appears in the
-repository after the Decision lands. A residual verdict of "exempt" is a decision to leave future
-classes ungoverned by default; a verdict of "fail-closed" is a decision to block the PR that
-introduces an unclassified file. Both are defensible; pick one and own the consequence.
+closed-but-partial table ships a gap on day one. Its `verdict` uses the SAME pinned Q1 enum as every other
+class -- map your intent onto it so no coercion is needed: govern-by-default -> `extend-uniform`
+(or `extend-calibrated` if the default limit differs); leave-ungoverned -> `exempt-with-reason`;
+block-the-PR-until-classified -> `defer`, naming the missing precondition as "a classification
+decision for the new file class". Then say in `rationale.actual_purpose` what happens when a NEW
+file class appears after the Decision lands. Leaving future classes ungoverned by default and
+blocking on an unclassified file are both defensible; pick one and own it.
 
 **Excluded from all classes** (do not census, do not verdict):
 - anything under `.git/`, `.venv/`, `node_modules/`, `pip/`, `lambda-packages/`, `docker/`,
   `personal_scripts/`, and any path not tracked by `git ls-files`;
 - **`**/*.py`** -- Python is already governed and is context-only for this audit (see "Context-only"
   below). It is NOT a residual member; do not census it and do not issue a class verdict for it;
-- **`**/*.md`** -- prose, governed by the separate regime described in trap 2.
+- **`**/*.md`, EXCEPT the carve-in below** -- prose is out of scope by the requester's explicit
+  framing ("everything except prose and documentation"). Be precise about WHY, because the obvious
+  reason is false: markdown is NOT already fully governed. `validate_prose_limits` covers only four
+  surface classes (the root ambient set, per-directory `CLAUDE.md`, `SKILL.md`, and
+  `PROJECT_CONTEXT.md`), and `validate_decisions_size` covers the decision corpus. Composition
+  counted roughly 28 tracked `.md` files over 500 effective lines, of which a substantial number
+  are governed by neither -- `docs/CHANGELOG.md`, the `INTENT-*.md` set, oversized audit prompts,
+  and `docs/plans/reports/REPORT-*.md` among them. Measure this yourself. Markdown is excluded
+  because the requester scoped it out, NOT because it is covered; say so plainly if you reference
+  the boundary, and record the ungoverned-markdown population as a one-line Q8 observation so the
+  requester can see what the boundary costs. Do not expand into auditing it.
+
+**MARKDOWN CARVE-IN.** Two markdown cases ARE in scope, because in each the extension boundary
+demonstrably breaks the rule set rather than merely bounding it:
+  1. `instruction_prompts` (row 12) -- the `.prompt.md` files, per trap 5.
+  2. **Format twins.** Where the SAME artifact, with the same role, author and consumer, exists in
+     both a governed and an ungoverned format, the pair is in scope as a coherence question --
+     `docs/ROADMAP-PRODUCT.yaml` (class `roadmaps`) versus `docs/ROADMAP-PRODUCT.md`, which the
+     `docs/` root allowlist sanctions as a peer governance surface. Enumerate any other twins.
+     File findings on twins under `surface: shared`; the question is whether keying governance on
+     extension is defensible when role is identical, which is the same question DD-C asks.
 
 ### Context-only, not audit targets
 
@@ -300,8 +336,10 @@ Answer all eight. Each gets its own entry in `question_answers[]`.
 **Per-class questions and the scalar `verdict` field -- pinned convention.** Q1, Q5 and Q6 are
 answered PER CLASS. The per-class answers live in `class_verdicts[<class>]`, which has a field for
 each: `verdict` (Q1), `rationale` (Q5), and `migration` (Q6). The scalar `verdict` in each of those
-three `question_answers[]` entries is a ROLL-UP, computed by this rule and not by your judgment:
-if every class shares one enum value, use it; otherwise use the literal string `mixed` and let the
+three `question_answers[]` entries is a ROLL-UP, computed by this rule and not by your judgment.
+Roll up over the relevant field: Q1 over `class_verdicts[*].verdict`, Q5 over
+`class_verdicts[*].rationale.transfer`, Q6 over `class_verdicts[*].migration.mode`. If every class
+shares one value for that field, use it; otherwise use the literal string `mixed` and let the
 `prose` field summarize the split. `mixed` is a legitimate and expected answer for all three. Do
 not invent a different convention, and do not omit a class from `class_verdicts` because its
 answer felt obvious.
@@ -381,7 +419,8 @@ Each checklist property has two halves: does THIS repository have the property (
 repository, cite `file:line` or a mechanism name), and does mainstream practice have it (answer
 from outside). For the outside half you MAY use web search if it is available to you, and you MAY
 answer from your own model knowledge if it is not. Populate `evidence` as
-`"<repo side: file:line or mechanism> | <external side: tool or source name>"`, and suffix the
+`"<repo side: file:line or mechanism> || <external side: tool or source name>"` -- a DOUBLE pipe,
+so it is not confused with the single-pipe alternation used elsewhere in the schema. Suffix the
 external side with `(model knowledge, unverified)` whenever you did not verify it against a live
 source. An unverified external claim is acceptable here and must be labelled; a silently
 unverified one is not. The `rating` reflects the REPOSITORY's standing on the property, not
@@ -430,6 +469,15 @@ Answer each seed below AND extend the list with anything recon surfaces. Use the
   of scope?
 - Is there a class where the right answer is to change how the file is PRODUCED rather than to
   cap it?
+- **What is the base rate of the harm?** Every recommendation here traces to NS-A -- lower-tier
+  models mis-editing large files. Establish whether that harm has ever been OBSERVED in this
+  repository's non-Python classes, or whether it is assumed. Look for evidence in CI-RCA
+  recommendations, in `logs/.recommendations-log.jsonl`, and in the Decisions that motivated the
+  existing gates (Decision 128's account of `convergence_health.py` is the clearest recorded case,
+  and it is Python). If no non-Python instance exists, say so plainly -- recommending gates on an
+  assumed harm is a defensible engineering choice, but it should be a stated one, and it bears
+  directly on how aggressive Q6's migration should be. This question can lower the severity of
+  your own recommendations; let it.
 
 ## RUBRIC
 
@@ -466,8 +514,9 @@ while being extreme on bytes, or the converse -- and reason concretely about whe
 lower-tier model editing it would struggle. Conclude with what each candidate unit would and would
 not have caught. Do not answer Q2 from first principles alone; ground it in this measurement.
 
-**DD-B -- The mechanism, costed.** Feeds Q3, Q4. Read all four existing size gates and both
-raise-guards. Establish precisely what is shared, what is duplicated, and what is genuinely
+**DD-B -- The mechanism, costed.** Feeds Q3, Q4. Read the four existing size gates and all four
+raise-guards (the two budget-raise guards plus the two baseline-edit guards named in the
+GROUNDING MAP). Establish precisely what is shared, what is duplicated, and what is genuinely
 class-specific. Then cost your recommended design: how many new modules, how many new config
 files, how many new registry entries, and whether the resulting modules would themselves pass the
 500-line rule. A design whose enforcement code breaches the rule it enforces is a finding.
@@ -560,8 +609,8 @@ non-resolving anchors in `meta.stale_anchors` and continue.
   (a diff-vs-base check is meaningless post-merge) or accidental is yours to judge, and it bears
   directly on Q3 and Q4.
 - `scripts/checks/registry.py:205-206` -- in the full tier: `validate_sloc_limits` and
-  `validate_prose_limits`. Determine for yourself whether the two raise-guards appear in the full
-  tier and whether their absence or presence is coherent with their design.
+  `validate_prose_limits`. (Nearby line numbers in this region have drifted before; re-derive the
+  exact lines and record any miss in `meta.stale_anchors`.)
 
 ### Classification surfaces
 
@@ -575,7 +624,8 @@ non-resolving anchors in `meta.stale_anchors` and continue.
 Read each in `docs/DECISIONS.md`; do not rely on these one-line characterizations.
 
 - **Decision 43** -- original structural limits; declares scope as "all repository code, prompts,
-  and agents"; the `.prompt.md` and `.agent.md` rows refer to deleted surfaces.
+  and agents". Its `.agent.md` row refers to a deleted surface (0 tracked files); its `.prompt.md`
+  row does NOT (12 tracked files). See trap 5.
 - **Decision 102** -- replaced the binary waiver with the budget registry and the downward ratchet.
 - **Decision 104** -- the owner-tagged check registry.
 - **Decision 110** -- ratifies `ROADMAP-PLATFORM.yaml` as the agent-first structured-data exemplar.
@@ -631,8 +681,8 @@ Composition measured the following, applying the pinned CENSUS RULE over `git ls
 as a claim to verify, not as input. Where a number below is qualified with "about", the exact value
 is expected to move slightly with tree state; the counts are expected to reproduce exactly.
 
-- 85 files that are neither `.py` nor `.md` exceed 500 effective lines.
-- Of those, 47 are under `docs/plans/` and 22 under `audits/` -- roughly 81 percent of the affected
+- 86 files that are neither `.py` nor `.md` exceed 500 effective lines.
+- Of those, 48 are under `docs/plans/` and 22 under `audits/` -- roughly 81 percent of the affected
   population is workflow output. This is the single most consequential number in this map; DD-D
   exists because of it.
 - 5 `.tf` files exceed 500, the largest being `terraform/iceberg_tables.tf`.
@@ -644,13 +694,16 @@ is expected to move slightly with tree state; the counts are expected to reprodu
   where adoption is free today.
 - Median bytes per effective line, with 10th and 90th percentiles, over ALL tracked files of each
   extension. Percentile method, stated so you can reproduce it exactly: sort the per-file ratios
-  ascending and take the value at nearest-rank index `floor(q*(n-1)+0.5)`. Files with zero
-  effective lines are dropped from the ratio set (the ratio is undefined); this rule applies to
-  every ranking in this prompt, including the DD-A outlier selection.
-  Python 53.6 (44.3 to 64.3, n=823); `.yaml` 72.4 (55.4 to 113.9, n=421); `.yml` 66.0 (46.5 to
+  ascending and take the value at nearest-rank index `floor(q*(n-1)+0.5)`. Median is the middle
+  value for odd n and the MEAN OF THE TWO MIDDLE VALUES for even n. Files with zero effective
+  lines are dropped from the ratio set (the ratio is undefined); this rule applies to every
+  ranking in this prompt, including the DD-A outlier selection.
+  Python 53.6 (44.3 to 64.3, n=823); `.yaml` 72.4 (55.4 to 113.9, n=422); `.yml` 66.0 (46.5 to
   98.5, n=27); Terraform `.tf` 60.8 (35.8 to 125.6, n=33); shell `.sh` 92.2 (46.4 to 130.5, n=13);
   markdown 105.3 (69.9 to 241.1, n=314). Weigh the within-class spread against the between-class
-  spread before concluding anything about unit substitutability -- and note that the small-n
+  spread before concluding anything about unit substitutability. These were measured at a
+  specific tree; your base sha may differ by a few files, which is expected and is not a stale
+  anchor -- re-derive and use YOUR numbers. Note that the small-n
   classes (`.sh` at 13, `.yml` and `.tf` at 27 and 33) carry wide percentile uncertainty, so do not
   over-read their tails.
 - `docs/plans/reports/OVERSEER-terraform-deploy-redesign.yaml` measures 326 effective lines,
@@ -673,15 +726,27 @@ Bounded sampling. Do NOT exceed these caps.
 2. **At most 12 oversized files**, chosen to span classes, read closely enough to judge whether a
    lower-tier model editing them would struggle, and whether a relief valve exists. Tag findings
    from this pass `evidence_kind: observed`.
-3. **At most 8 unit-divergence outliers.** Defined concretely, so you do not have to invent a
-   threshold: rank every tracked in-scope file by bytes-per-effective-line, and take the files
-   whose ratio is at least 2x their class median (from your own census). Break ties by absolute
-   byte size, largest first. Take at most 8. These are the files where a line-based gate and a
-   byte-based gate would most disagree. Feeds DD-A.
+3. **At most 8 unit-divergence outliers, split across BOTH directions.** DD-A needs files where a
+   line gate and a byte gate disagree, and disagreement runs both ways, so take up to 5 from the
+   high side and up to 3 from the low side:
+   - HIGH side (byte-heavy; passes a line gate while carrying large load): ratio >= 2x the class
+     median. Rank descending by ratio; break ties by total bytes, largest first. Take up to 5.
+   - LOW side (line-heavy; would fail a line gate while carrying little load per line): ratio
+     <= 0.5x the class median. Rank ascending by ratio; break ties by effective lines, largest
+     first. Take up to 3.
+   If a side has no qualifiers, take fewer and say so -- do not backfill from the other side. If a
+   side has more qualifiers than its cap, the ranking decides; do not exceed the cap. Feeds DD-A.
 4. **At most 6 workflow-output files**, plus the workflow definitions that produce and consume
    them, to settle DD-D.
 5. **At most 10 commits** touching any budget registry, IF and ONLY IF the clone is not shallow.
    If it is shallow, skip this entirely and mark every history-dependent claim HYPOTHESIS.
+
+**`evidence_kind`, defined once for all five passes.** `observed` = the finding rests on a
+specific artifact you opened and measured during the empirical pass (a named file, a named commit,
+a named workflow definition). `static` = the finding rests on reading a gate, a config, or a
+Decision and reasoning about what it would do. Passes 2, 3 and 4 yield `observed`; pass 5 yields
+`observed` only when the clone is not shallow; reading the GROUNDING MAP or the check modules
+yields `static`. When a finding rests on both, tag it `observed`.
 
 Counterfactual test, applied to every proposed gate: **would this gate still fire if the file's
 content were reformatted to satisfy it without any reduction in what an agent must comprehend?**
@@ -694,7 +759,7 @@ severity. This affects ordering only; it never changes a severity or a confidenc
 
 ## METHOD
 
-- **P1 Read.** The four size gates, both raise-guards, the two sibling ratchets, the registry
+- **P1 Read.** The four size gates, all four raise-guards, the registry
   tiers, the classification surfaces, and every governing decision above.
 - **P2 Census.** Measure the whole tree per class, per unit. Produce the population table.
 - **P3 Trace.** For each class: who authors it, who edits it, who consumes it, and what a
@@ -767,8 +832,12 @@ audit:
   #   deliverable_size   -> read by the self-referential check under GUARDRAILS.
   meta: {audited_commit: <base short sha>, base_branch: main,
          model: <your self-reported model name, free text>,
+         # methodology_version: bumped only if a future audit changes this prompt's method;
+         #   read by anyone comparing two runs of this audit. Emit 1.
+         # scope_surfaces: the slugs you actually assessed; read as the cross-check that
+         #   class_verdicts is complete. Should list all 13.
          methodology_version: 1,
-         scope_surfaces: [<the classes you assessed>],
+         scope_surfaces: [<the slugs you assessed>],
          degraded_dedup: false,
          # contract_notes: a single string. If several degraded paths fire, concatenate them
          # separated by "; " -- it records EVERY degraded path taken, not just the last.
@@ -794,21 +863,26 @@ audit:
     - {q: Q6, verdict: one-time-grandfather|class-exemption|staged-waves|reject|mixed,
        basis: [], prose: ""}
     - {q: Q7, verdict: ahead-justified|ahead-unjustified|at-parity|behind, basis: [], prose: "",
-       # evidence: "<repo side: file:line or mechanism> | <external side: tool or source name>"
+       # evidence here is a two-part string using " || " as the separator (double pipe, to avoid
+       # colliding with the single-pipe alternation used in other schema fields):
+       #   "<repo side: file:line or mechanism> || <external side: tool or source name>"
        # suffix the external side with "(model knowledge, unverified)" when not live-verified
        external_checklist: [{property: "", rating: met|partial|missed, evidence: ""}]}
     - {q: Q8, answers: [{question: "", answer: "", basis: []}]}
-  # One entry per SCOPE-table slug, rows 1-12, including `residual`. None may be omitted.
+  # One entry per SCOPE-table slug, rows 1-13, including `residual`. None may be omitted.
   # Key is the pinned slug verbatim (generated, terraform, config, contracts, ci_workflows,
-  # shell, lambda_manifests, roadmaps, workflow_outputs, test_fixtures, data_query, residual).
+  # shell, lambda_manifests, roadmaps, workflow_outputs, test_fixtures, data_query,
+  # instruction_prompts, residual).
   # `confidence` here follows the same degraded-run rule as findings: if meta.degraded_dedup is
   # true, every class verdict is HYPOTHESIS. This matters more than the findings case, because
   # draft_decision is built from these verdicts.
-  # `unit` must be one of the Q2 enum values, or a concrete named measure if Q2 returned
-  # per-class-unit or composite; never free prose.
+  # `unit` is a CONCRETE MEASURE NAME, never a Q2 verdict label -- one of: effective-lines,
+  # raw-lines, bytes, tokens, entries, or a named composite like "effective-lines+max-line-length".
+  # `limit` is an integer, or the literal n/a for an exempt-with-reason class.
   # `population_over_limit` counts files breaching YOUR recommended limit for that class. For an
-  # exempt-with-reason or reject class there is no recommended limit: record the count against the
-  # incumbent 500-effective-line rule instead, and note that in `relief_valve`.
+  # exempt-with-reason class there is no recommended limit: set limit: n/a, record
+  # population_over_limit against the incumbent 500-effective-line rule, and note that in
+  # `relief_valve` so the number is never read as a breach of a rule you did not propose.
   class_verdicts:
     <slug>: {verdict: extend-uniform|extend-calibrated|exempt-with-reason|defer,  # Q1
                    rationale: {transfer: transfers-fully|transfers-comprehension-only|
@@ -818,11 +892,11 @@ audit:
                                drain_owner: "", sequencing: ""},                        # Q6
                    unit: "", limit: "", relief_valve: "",
                    population_over_limit: 0, confidence: CONFIRMED|HYPOTHESIS}
-  # One entry per class. `frontier` is NOT legal here -- it exists only on summary.maturity_overall.
+  # One entry per class slug.
   per_surface_assessment:
     - {surface: <class>, maturity: strong|solid|nascent, strengths: "", top_gaps: [<finding ids>]}
   # Read by: per_surface_assessment (a class's weak/absent cells are its top_gaps) and by the
-  # human comparing classes on one dimension. 12 slugs x 8 dimensions = 96 cells; `n/a` is
+  # human comparing classes on one dimension. 13 slugs x 8 dimensions = 104 cells; `n/a` is
   # expected to be common and is costless.
   rubric_ratings:
     - {surface: <slug>, dimension: VD1..VD8, rating: strong|adequate|weak|absent|n/a,
@@ -873,13 +947,19 @@ design, in one paragraph. Then the per-class verdict table. Do not restate the Y
   findings. `rubric_ratings`, `question_answers`, `class_verdicts` and `draft_decision` are
   systems of record referenced FROM findings, never re-counted. `top_improvements` and
   `highest_leverage_change` MUST be finding ids.
+- `summary.highest_leverage_change` is a finding id, or `null` if `findings[]` is empty. An empty
+  findings list is a legitimate outcome; do not invent a finding to fill this field.
+- Two schema fields exist for the human triaging this audit into work, and have no other consumer:
+  `findings[].effort` and `findings[].depends_on`. `findings[].sequencing.blocked_behind` serves
+  the same reader. Note that `sequencing.safe_to_queue_now` refers to human-led `/plan` work only
+  -- the autonomous executor is frozen (Decision 67), so it never means "queue for the executor".
 - `control_property_match` is REQUIRED whenever a compensating control is the reason for
   dismissal. Name the property the control exercises, cite where it operates, and state why the
   control would FAIL if the defect were real.
 - `CONFIRMED` requires the behavior traced to a file:line or to an observed sampled artifact.
   Anything less is `HYPOTHESIS`.
-- Every SCOPE-table slug, rows 1-12, must appear in `class_verdicts`, including classes you
-  exempt and including `residual`. Twelve entries, keyed by the pinned slug, no omissions.
+- Every SCOPE-table slug, rows 1-13, must appear in `class_verdicts`, including classes you
+  exempt and including `residual`. Thirteen entries, keyed by the pinned slug, no omissions.
 - `findings[].questions` and `findings[].dimensions` are lists; every value must come from the
   pinned Q1..Q8 and VD1..VD8 sets.
 - `draft_decision.number` is a placeholder. Do not guess a number; the human allocates it.
@@ -923,7 +1003,7 @@ repo-wide checklist):
 - **nascent** -- otherwise.
 
 Write per-class values into `per_surface_assessment[].maturity` and the overall value into
-`summary.maturity_overall`. `frontier` is not a legal value for a per-class rating.
+`summary.maturity_overall`.
 
 The top rating remains reachable if you argued a property-matched compensating control. This
 framing does not foreclose it.
