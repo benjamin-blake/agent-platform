@@ -1,0 +1,441 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "coverage-gate-handoff-integrity"
+intent: >-
+  Turn main genuinely green by paying the coverage debt rec-2965 surfaced, and close the structural
+  gap that let it land: a handoff policy that was declared in plan metadata and mandated in skill
+  prose but never expressed as an executable step anything checked. Records the governance principle
+  the session converged on and opens three tier_items for the direction-setting work.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-coverage-gate-handoff-integrity.yaml
+phase: >-
+  Platform hygiene / CI-RCA remediation. Resolves ci-rca rec-2965 (Critical, open). Opens three new
+  tier_items under the governance-integrity theme; no product-roadmap phase dependency.
+
+scope:
+  - file: tests/checks/roadmap/test_validate_candidate_decision_ratification.py
+    action: Modify
+    purpose: >-
+      Add four tests covering the four uncovered defensive arms of the ratification guard
+      (_dec_number falsy-pointer return, _load_roadmap except-Exception arm, roadmap-not-found
+      guard, doc-is-None early return), taking the checker from 92.1% to 100% and clearing the
+      post-merge failure. Prototyped this session: 114 statements, 0 missed, 30 tests pass.
+  - file: scripts/checks/roadmap/validate_plan_documents.py
+    action: Modify
+    purpose: >-
+      Add a diff-scoped handoff-policy consistency leg: a plan that declares
+      handoff_policy.full_validation_required_before_commit true must carry at least one
+      verification_plan step invoking the full tier. Scoped to diff-added/diff-modified plans only
+      (stock grandfathered, flow zero-tolerance) so the 8 non-compliant historical plans of 306 do
+      not fail. Existing schema-validation leg is unchanged.
+  - file: tests/checks/roadmap/test_validate_plan_documents.py
+    action: Create
+    purpose: >-
+      Mirror test file, currently absent -- map_source_to_test resolves the source here and
+      check_test_file_exists fails without it, so editing the source requires creating it. Covers
+      the existing schema leg and the new consistency leg in both directions (a declaring plan
+      without a full-tier step FAILS; a declaring plan with one PASSES; a non-declaring plan is a
+      no-op; an out-of-diff plan is untouched), to 100%.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Correct the two-tier presubmit table: the full-tier row's "When" column reads "Post-merge on
+      main", which drops the pre-handoff obligation the implement skill mandates and licenses the
+      cheaper reading that the full tier is CI's job. Add the pre-handoff obligation and the
+      CC-web-vs-executor cost rationale.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append Decision 163 recording the autonomy/enforcement-shape principle, the declared-vs-
+      executed failure mode, and the pre-handoff full-tier obligation. Append-only; no existing
+      entry body is edited (forward-direction amend-only convention, Decision 126/143).
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: Regenerate the derived index so validate_decisions_index_freshness passes.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add three tier_items for the direction-setting work (clause-to-check traceability, exception-
+      grammar removal with a shrink-only baseline, and the normative/contract/ADR layering). Forward
+      intent routes to tier_items per Decision 86; no implementation in this plan.
+
+bundled_recommendations:
+  - rec-2965
+
+infrastructure_dependencies: []
+
+acceptance_criteria:
+  - scripts/checks/roadmap/validate_candidate_decision_ratification.py measures 100% line coverage
+    against the CI-scoped file set, with no config/coverage_baseline.yaml entry added.
+  - The four previously-uncovered arms are each exercised by a named test that fails if the arm is
+    removed -- not merely reached incidentally.
+  - validate_plan_documents fails a diff-added plan that declares
+    handoff_policy.full_validation_required_before_commit true and carries no full-tier
+    verification_plan step, and passes the same plan once such a step is added.
+  - The new leg is diff-scoped -- the 8 historical plans that declare the policy without a full-tier
+    step do not fail, and a full run over all 306 plans stays green.
+  - scripts/checks/roadmap/validate_plan_documents.py measures 100% line coverage with its mirror
+    test file present.
+  - AGENTS.md's two-tier table states the pre-handoff full-tier obligation explicitly.
+  - Decision 163 exists as a live '## Decision 163:' header carrying a Significance line and
+    reversal conditions, and docs/decisions-index.json is fresh against it.
+  - Three new tier_items validate against the platform-roadmap schema with satisfied referential
+    integrity.
+  - bin/venv-python -m scripts.validate exits 0 (full tier) before commit.
+  - rec-2965 is closed via the Resolves trailer after merge.
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Measure the ratification guard against the exact file set CI scopes on a push that changes it,
+      reproducing the failing configuration rather than a local vacuous pass.
+    command: >-
+      bin/venv-python -c "import importlib.util,sys;from pathlib import
+      Path;R=Path('.').resolve();s=importlib.util.spec_from_file_location('t',R/'scripts'/'test_coverage_checker.py');m=importlib.util.module_from_spec(s);sys.path.insert(0,str(R));s.loader.exec_module(m);e=m.check_per_file_coverage([R/'scripts/checks/roadmap/validate_candidate_decision_ratification.py']);print('ERRORS:',e);sys.exit(1
+      if e else 0)"
+    expected: "ERRORS: [] and exit 0. Before the change this prints the 92.1% error string."
+    fix_if: >-
+      Any non-empty error list means an arm is still unreached. Re-run the pytest coverage report
+      below to identify which line numbers remain, and add the missing test rather than registering
+      a baseline entry.
+    graduation: graduate
+    graduation_check_id: ratification-guard-coverage-100
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm zero missed statements and that the four target arms specifically are covered, by
+      line number.
+    command: >-
+      _COVERAGE_SUBPROCESS=1 bin/venv-python -m pytest
+      tests/checks/roadmap/test_validate_candidate_decision_ratification.py
+      --cov=scripts/checks/roadmap/validate_candidate_decision_ratification --cov-report=term-missing
+      -q
+    expected: >-
+      The coverage row for validate_candidate_decision_ratification.py reads 114 statements, 0 miss,
+      100%, with an empty Missing column. Lines 131, 216-219, 232-234 and 238 no longer appear.
+    fix_if: >-
+      A non-empty Missing column names the unreached arm directly. If the count of statements has
+      drifted from 114 the source changed -- re-derive rather than assuming the prototype still holds.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates step 1's assertion through a second measurement path whose output format (a
+      term-missing table) is not one of the six canonical primitive slots; step 1 is the graduated
+      regression guard and this step exists for diagnostic line-level attribution during
+      implementation.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the new consistency leg FAILS a declaring plan with no full-tier step (negative
+      direction -- the direction that catches the PR #836 defect).
+    command: >-
+      bin/venv-python -m pytest tests/checks/roadmap/test_validate_plan_documents.py -q -k
+      "declares_full_validation_without_full_tier_step_fails"
+    expected: The test passes, asserting the check appended a failure for the fixture plan.
+    fix_if: >-
+      If the test passes trivially, confirm the fixture actually declares the policy and genuinely
+      omits a full-tier step, and that a --pre-only command is not being matched as full-tier.
+    graduation: graduate
+    graduation_check_id: handoff-policy-consistency-negative-proof
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the leg PASSES a compliant plan and is a no-op for a plan that does not declare the
+      policy -- so the gate has teeth in one direction only and cannot block ordinary plans.
+    command: >-
+      bin/venv-python -m pytest tests/checks/roadmap/test_validate_plan_documents.py -q -k
+      "compliant_plan_passes or non_declaring_plan_is_noop"
+    expected: Both tests pass; no failures appended in either case.
+    fix_if: >-
+      A failure here means the full-tier-step matcher is too strict (e.g. rejecting a valid
+      invocation form). Widen the matcher to accept any scripts.validate invocation lacking --pre.
+    graduation: graduate
+    graduation_check_id: handoff-policy-consistency-positive-proof
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm the leg is diff-scoped: a full run over all 306 committed plans stays green despite 8
+      of them declaring the policy without a full-tier step.
+    command: >-
+      bin/venv-python -c "import sys;sys.path.insert(0,'.');from
+      scripts.checks.roadmap.validate_plan_documents import validate_plan_documents as
+      v;f=[];v(f);print('FAILED:',f);sys.exit(1 if f else 0)"
+    expected: "FAILED: [] and exit 0 -- the historical stock is untouched."
+    fix_if: >-
+      Any failure naming a historical plan means the leg is scanning all plans instead of the diff.
+      Restrict it to _common.plan_paths_from_changed against origin/main, mirroring
+      validate_graduation_completeness's plan-PR leg.
+    graduation: graduate
+    graduation_check_id: handoff-policy-leg-diff-scoped
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the edited check file measures 100% with its newly created mirror test present.
+    command: >-
+      bin/venv-python -c "import importlib.util,sys;from pathlib import
+      Path;R=Path('.').resolve();s=importlib.util.spec_from_file_location('t',R/'scripts'/'test_coverage_checker.py');m=importlib.util.module_from_spec(s);sys.path.insert(0,str(R));s.loader.exec_module(m);p=R/'scripts/checks/roadmap/validate_plan_documents.py';ok,msg=m.check_test_file_exists(p);e=m.check_per_file_coverage([p]);print('test_file_ok:',ok,'|
+      ERRORS:',e);sys.exit(0 if ok and not e else 1)"
+    expected: "test_file_ok: True | ERRORS: [] and exit 0."
+    fix_if: >-
+      test_file_ok False means the mirror path is wrong -- resolve it with
+      map_source_to_test rather than guessing. A non-empty error list means the new leg has
+      unreached branches; cover them.
+    graduation: graduate
+    graduation_check_id: plan-documents-check-coverage-100
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm AGENTS.md's two-tier table no longer presents the full tier as post-merge-only.
+    command: >-
+      bin/venv-python -c "import sys,re;from pathlib import
+      Path;t=Path('AGENTS.md').read_text(encoding='utf-8');rows=[l for l in t.splitlines() if
+      l.startswith('| Full ')];print(rows);sys.exit(0 if rows and
+      re.search(r'pre-handoff|before handoff',rows[0],re.I) else 1)"
+    expected: The full-tier row prints and names the pre-handoff obligation; exit 0.
+    fix_if: >-
+      Exit 1 means the row was not updated or its leading cell text changed. Read the table and
+      amend the Full row's When column.
+    graduation: graduate
+    graduation_check_id: agents-md-full-tier-pre-handoff-stated
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Confirm Decision 163 landed as a live header with the required conformance markers, and that
+      the derived index is fresh.
+    command: >-
+      bin/venv-python -c "import sys,re;from pathlib import
+      Path;t=Path('docs/DECISIONS.md').read_text(encoding='utf-8');m=re.search(r'^##
+      Decision 163:.*?(?=^## Decision |\\Z)',t,re.M|re.S);print('found:',bool(m));print('significance:',bool(m)
+      and 'Significance:' in m.group(0));print('reversal:',bool(m) and 'Reversal' in
+      m.group(0));sys.exit(0 if m and 'Significance:' in m.group(0) and 'Reversal' in m.group(0) else
+      1)" && bin/venv-python -m scripts.decisions_index --check
+    expected: All three flags True, exit 0, and the index --check reports no drift.
+    fix_if: >-
+      A missing Significance or Reversal section fails validate_decision_entry_conformance /
+      validate_reversal_stanzas. Index drift is fixed with `--write`. If 163 was claimed by a
+      concurrent merge, shift to the next free number consistently across the header, the Warehouse
+      ID line, and any roadmap references.
+    graduation: graduate
+    graduation_check_id: dec-163-conformance-and-index-fresh
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm the three new tier_items validate against the roadmap schema with referential
+      integrity intact.
+    command: >-
+      bin/venv-python -c "import sys;sys.path.insert(0,'.');from
+      scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap as
+      v;f=[];v(f);print('FAILED:',f);sys.exit(1 if f else 0)"
+    expected: "FAILED: [] and exit 0."
+    fix_if: >-
+      Referential failures name the offending id -- a depends_on or related_decisions reference to a
+      nonexistent item or Decision. Correct the reference; do not delete the criterion to pass.
+    graduation: graduate
+    graduation_check_id: platform-roadmap-valid-after-tier-items
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Run the full tier to completion before any commit -- the obligation this plan makes
+      enforceable, applied to itself.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0 with a final 'Validation Summary (scope: all)' PASS. This plan declares
+      full_validation_required_before_commit, so the new leg will itself require this step to exist.
+    fix_if: >-
+      Any failure blocks commit per handoff_policy.timeout_disposition. Fix and rerun the full tier
+      from the start; child output, --pre output, or CI results cannot substitute.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The full-tier invocation is the handoff gate itself and cannot be graduated into the
+      verification registry without recursion -- validate_vp_replay would re-invoke scripts/validate
+      from inside a validate run. The obligation is instead enforced structurally by the new
+      consistency leg (steps 3-5), which is graduated.
+  - step: 11
+    phase: post-deploy
+    action: >-
+      After merge, confirm rec-2965 closed via the Resolves trailer rather than assuming the
+      autoclose workflow ran.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import
+      json,sys;rows=[json.loads(l) for l in
+      open('logs/.recommendations-log.jsonl') if l.strip()];r=next((x for x in rows if
+      x.get('id')=='rec-2965'),None);print(r and r.get('status'));sys.exit(0 if r and
+      r.get('status')=='closed' else 1)"
+    expected: Prints 'closed' and exits 0.
+    fix_if: >-
+      If still open, the rec-autoclose workflow did not fire -- close manually with
+      `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2965 --status closed
+      --resolution "..."` per Decision 70.
+
+constraints:
+  - Only files listed in Scope may be modified.
+  - >-
+    Pay the coverage debt; do NOT add a config/coverage_baseline.yaml entry for
+    validate_candidate_decision_ratification.py. Decision 159 cl.2 frames that roster as a one-time
+    grandfather, explicitly not a precedent for future debt.
+  - >-
+    Do NOT raise any config/sloc_budgets.yaml entry. Scope deliberately avoids
+    tests/test_checks_registry.py (643 SLOC against a 643 budget, zero headroom) by adding the new
+    rule as a leg on an existing registered check rather than a new check, which would have required
+    editing that file's per-tier membership floors.
+  - >-
+    The new consistency leg must be diff-scoped to added/modified plans. A retroactive rule fails 8
+    of 306 committed plans; stock is grandfathered, flow is zero-tolerance.
+  - >-
+    docs/DECISIONS.md is append-only here. State the amendment in the new entry only; do not edit
+    Decision 73's or Decision 159's bodies (forward-direction amend-only convention, Decision
+    126/143, reused by 145 pt 2, 153 and 160 pt 3).
+  - >-
+    Decision numbers are not reserved at draft time. Re-check the max live '## Decision NNN:' header
+    at implement time; 163 was free at authoring (max live 162, 115 live headers against Decision
+    160's 120 ceiling).
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable failure, stop and RCA.
+  - >-
+    Tier_items in this plan are forward intent only -- declare them, implement nothing. Decision 86
+    routes forward intent to tier_items, rationale to Decisions.
+
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: 48, 73, 104, 128,
+    130, 131, 132, 134, 135, 150, 151, 153, 159, 160, 161. Decisions triaged: 115 of 115."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Root cause of rec-2965, established by direct measurement this session and correcting the rec's
+    own text: the four uncovered arms are NOT new code from PR #836. The pre-836 file measured 87%
+    (63 statements, 8 missed at lines 53, 65-67, 77-80 -- the identical four arms). PR #836 extracted
+    them into _load_roadmap and raised the ratio to 92.1%. The file's only prior commit is a
+    1646-file history graft, so it had never faced a real per-file coverage gate.
+  - >-
+    The gate is diff-scoped and therefore transient. Feeding wave 4's six-file docs-only list to
+    get_changed_source_files returns [], so merging any docs-only commit prints 'No source file
+    changes to check.' and main-validate reports green while the gap persists. This plan must
+    therefore land BEFORE the paused wave 4, or the red signal self-clears unfixed.
+  - >-
+    Why rec-2970 is not bundled: its stated acceptance names two specific routes (promote the check
+    to the pre tier under a costed policy, or make the vacuous-pass path print a no-op warning). This
+    plan takes a third -- making the already-mandated pre-handoff full-tier run structurally
+    enforceable. Measured marginal cost of the pre-tier route is 3.4-10.2s per changed source file
+    (38.5s for a 3-file set) against a hard 300s fast-tier budget with no waiver under Decision 153
+    cl.2, and Decision 161 declined fast-tier placement for a cheaper ~57s measurement on those same
+    grounds three days earlier. Update rec-2970 with this context; do not close it.
+  - >-
+    Decision 73 [WARN] from the scout was raised against an earlier draft that promoted
+    validate_test_coverage into pre_sequence. That promotion is NOT in this plan's scope, so the
+    fast-tier budget is untouched. Recorded here so the flag is not silently dropped.
+  - >-
+    Decision 128 [SPIRIT WARN] from the scout was raised against an earlier draft that took a third
+    marked SLOC raise on tests/test_checks_registry.py. Resolved by removing that file from scope
+    entirely rather than by justifying the raise.
+  - >-
+    Governance finding surfaced en route, deliberately NOT fixed here: the 641->643 raise on
+    tests/test_checks_registry.py carries '# raise-approved: dec-161', but Decision 161's body never
+    names that file or authorises a SLOC raise on it, and Decision 159 cl.5 granted exactly ONE raise
+    for it. validate_sloc_budget_raises is a shape check -- it verifies the marker cites a real
+    header, not that the cited Decision authorises that file's raise. An audit of every marker across
+    sloc_budgets.yaml, coverage_baseline.yaml and mypy_baseline.yaml found this is currently the only
+    unbacked one. File as a rec; resolution is the owner's call.
+  - >-
+    scripts/checks/misc/validate_test_coverage.py itself measures 72.4% (58 statements, 16 missed at
+    lines 11-27 and 41-42) with no baseline entry, so the gate module would fail its own gate the
+    moment anyone edits it. Left out of scope as a separate paydown; file as a rec. This is the
+    'cliff' instance -- the first toucher pays the whole backlog.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (b96a2c5); no Main Divergence
+    Assessment overlap. Wave 4 is paused and its ROADMAP-PLATFORM.yaml conflict is accepted as a
+    straightforward manual fix per owner direction.
+
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Max live '## Decision NNN:' header re-checked; 163 still free, else shift consistently
+
+execution_steps:
+  - >-
+    tests/checks/roadmap/test_validate_candidate_decision_ratification.py -- add four tests. (a)
+    _dec_number(None) and _dec_number("") both return None. (b) the roadmap-not-found guard: patch
+    scripts.checks._common.ROOT to a tmp_path containing an empty docs/ and assert exactly one
+    failure is appended. (c) the _load_roadmap except arm reached through the public entry point:
+    write a genuinely malformed ROADMAP-PLATFORM.yaml into tmp_path (not a mock) plus stub
+    DECISIONS.md / DECISIONS_ARCHIVE.md, and assert exactly one failure -- this covers the except arm
+    and the doc-is-None early return together. (d) _load_roadmap called directly returns None and
+    appends one failure. Prototyped: 114 statements, 0 missed, all 30 tests pass.
+  - >-
+    scripts/checks/roadmap/validate_plan_documents.py -- add the handoff-policy consistency leg after
+    the existing schema leg. Derive the changed-plan set with _common.plan_paths_from_changed against
+    origin/main, mirroring scripts/checks/verification/validate_graduation_completeness.py's plan-PR
+    leg (including its advisory SKIP when origin/main is unreachable, so a detached clone does not
+    hard-fail). For each diff-added or diff-modified plan whose
+    handoff_policy.full_validation_required_before_commit is true, require at least one
+    verification_plan step whose command invokes scripts.validate WITHOUT --pre; append a failure
+    naming the plan otherwise. Keep the existing all-plans schema leg untouched.
+  - >-
+    tests/checks/roadmap/test_validate_plan_documents.py -- create the mirror test file. Cover the
+    existing schema leg and all four consistency-leg branches (declaring plan without a full-tier
+    step FAILS; declaring plan with one PASSES; non-declaring plan is a no-op; plan outside the diff
+    is untouched), plus the origin/main-unreachable SKIP. Use a throwaway git repo with a
+    refs/remotes/origin/main ref for the diff-scoped predicates, per the pattern in
+    tests/test_verification_graduation.py. Target 100% on the source file.
+  - >-
+    AGENTS.md -- amend the two-tier presubmit table's Full row so its When column states the
+    pre-handoff obligation alongside post-merge-on-main, and add one line recording why: ephemeral
+    CC-web containers make a full local run affordable per implementation, while the same cost is
+    unacceptable for the automated executor. Do not restate the rule elsewhere; this table is the
+    ambient projection.
+  - >-
+    docs/DECISIONS.md -- append '## Decision 163'. Record (i) the enforcement-shape principle: autonomy
+    is lost to judgment-required checkpoints, not to hard walls -- a deterministic, exceptionless rule
+    requires no human ever, while a discretionary gate requires one every time, so for a rule whose
+    owner would never grant an exception the correct instrument is removing the exception path, not
+    gating it; (ii) the declared-vs-executed failure mode: a policy expressed only as metadata plus
+    prose, with no executable step, is skipped silently -- PR #836's plan declared
+    full_validation_required_before_commit true while its verification plan ran only the fast tier;
+    (iii) the pre-handoff full-tier obligation and its CC-web-vs-executor cost basis, amending
+    Decision 73's CI-scoped two-tier split in the forward direction only. Include a Significance line
+    per Decision 150, reversal conditions, a Warehouse ID line, and a Related list citing 48, 73, 128,
+    150, 159, 161. Do not edit Decision 73 or 159.
+  - "Regenerate the index: bin/venv-python -m scripts.decisions_index --write"
+  - >-
+    docs/ROADMAP-PLATFORM.yaml -- add three tier_items, forward intent only, each with id, tier,
+    name, intent, depends_on, files_in_scope, exit_criteria, effort, strategic false, status
+    not_started, and related_decisions including 163. (1) Bidirectional clause-to-check traceability:
+    every normative clause names its enforcing check and every check names its clause, with a
+    validator failing orphans on either side -- the general form of the defect in this plan's own
+    root cause. (2) Exception-grammar removal: retire the raise-approved / baseline-lowered marker
+    paths for the SLOC and coverage rules, convert the existing registries to frozen shrink-only
+    baselines with an owned burn-down, stock grandfathered and flow zero-tolerance. (3) Normative /
+    contract / ADR layering: shrink the ambient layer to machine-enforced norms plus pointers, move
+    field semantics to contracts carrying a rationale pointer, and demote DECISIONS.md to a
+    retrieved-by-id ADR log -- which retires Decision 160's live-header ceiling and index byte pin,
+    since both exist only because Decisions currently do normative work in ambient context.
+  - >-
+    File recommendations for the deliberately-deferred items, calling get_rec_write_guidance() before
+    each file_rec(): (a) the unbacked '# raise-approved: dec-161' marker on
+    tests/test_checks_registry.py and the shape-only nature of validate_sloc_budget_raises; (b) the
+    72.4% coverage cliff on scripts/checks/misc/validate_test_coverage.py; (c) a governance-edit
+    banner that stamps PRs touching scripts/checks/**, the budget/baseline registries,
+    .github/workflows/** or .claude/hooks/** so a governance diff cannot pass unnoticed; (d)
+    governance evals -- scripted temptation scenarios asserting an agent takes the correct path when
+    a cheap exception is available.
+  - "Update rec-2970 with the third-route context recorded above; do NOT close it."
+  - >-
+    Execute the Verification Plan -- run each step, loop until pass. Step 10 (full tier, exit 0) must
+    complete before any commit per handoff_policy. On unrecoverable failure stop and RCA (Decision 55).
+  - >-
+    Commit with a Resolves trailer so rec-autoclose fires -- 'Resolves: rec-2965' in the squash-merge
+    commit body.
+  - "Report: what was implemented, verification results, and the rec ids filed."
+
+work_areas: []
+
+rollback: >-
+  Every change is additive and independently revertable. Reverting the test-only commit restores the
+  92.1% state (main goes red again on the next push that touches the file). Reverting the
+  validate_plan_documents leg restores the prior schema-only behaviour with no historical-plan
+  impact, since the leg is diff-scoped. Decision 163 is append-only and would be retired by a
+  superseding entry rather than deletion, per the repo's amend-only convention.
