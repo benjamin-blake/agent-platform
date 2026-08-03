@@ -240,6 +240,7 @@ from scripts.checks.verification.validate_differential_gate_baseline import (  #
 from scripts.checks.verification.validate_graduation_completeness import (  # noqa: F401,E402
     validate_graduation_completeness,
 )
+from scripts.checks.verification.validate_handoff_full_tier import validate_handoff_full_tier  # noqa: F401,E402
 from scripts.checks.verification.validate_hermeticity_flags import (  # noqa: E402
     _UNIT_TEST_HERMETICITY_FLAGS,  # noqa: F401
     validate_hermeticity_flags,  # noqa: F401

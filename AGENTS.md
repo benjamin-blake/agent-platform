@@ -183,7 +183,7 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 | Tier | When | Command | Gate |
 |---|---|---|---|
 | Fast (`--pre`) | PR / edit loop | `bin/venv-python -m scripts.validate --pre` | Authoritative pre-merge gate when run by PR CI (Decision 73); advisory only when run outside CI |
-| Full | Post-merge on `main` | `bin/venv-python -m scripts.validate` | A failure spawns a `source=ci_rca`, `priority=critical` rec (forward-fix, never auto-revert); see CI-failure / RCA-first protocol in `## Merge protocol` |
+| Full | Pre-handoff (local) + post-merge on `main` | `bin/venv-python -m scripts.validate` | A failure spawns a `source=ci_rca`, `priority=critical` rec (forward-fix, never auto-revert); see CI-failure / RCA-first protocol in `## Merge protocol` |
 
 `validate.py` is the single source of truth -- never add a check to `.github/workflows/ci.yml` without adding it to `validate.py` first.
 
