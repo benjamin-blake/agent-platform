@@ -34,6 +34,22 @@ scope:
       recompute it -- tests/test_checks_registry.py::TestNoLocalRootRecomputation dynamically
       enumerates every scripts/checks/**/*.py and forbids `Path(__file__).parent.parent.parent`.
       Must stay under 500 SLOC.
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      Promote `_iter_decision_sections` to a public name (retaining a private alias so existing
+      internal callers keep working) so _marker_guard.py consumes the shared parser instead of
+      hand-rolling a sixth header regex. ALSO promote `_extract_superseded_by` to a public name,
+      for symmetry and because the Decision 149 supersession hop calls it from another module --
+      reaching across a module boundary for a private symbol is the coupling this promotion exists
+      to avoid. Without this scope row the plan would force the implementer to choose between
+      violating "only files in the Scope table may be modified" and failing verification step 8.
+  - file: tests/test_decisions_md.py
+    action: Modify
+    purpose: >-
+      Cover the two newly-public names. Required by the test_coverage_checker rule that every
+      modified source file carries a corresponding test file at its coverage threshold; 30,869
+      bytes today, and the byte-reconstruction invariant it already asserts must keep passing.
   - file: scripts/checks/sloc/validate_sloc_budget_raises.py
     action: Modify
     purpose: >-
@@ -135,10 +151,10 @@ scope:
     purpose: >-
       Ratchet the S1 root_ambient_load_set entry DOWN to the AGENTS.md post-edit measured size.
       A decrease, always unrestricted (Decision 102) -- never a raise, and never a raise-approved
-      marker on this entry. Edit ONLY the S1 line by hand: validate_prose_limits emits nine
-      ratchet-down advisories at plan time (S1 plus src/data/handlers/CLAUDE.md and several
-      SKILL.md entries), and a wholesale reseed would silently pull all those out-of-scope entries
-      into the diff.
+      marker on this entry. Edit ONLY the S1 line by hand: validate_prose_limits emits NINE
+      ratchet-down advisories at plan time (S1, src/data/handlers/CLAUDE.md, terraform/CLAUDE.md,
+      tests/CLAUDE.md, and the implement / plan-critique / planning SKILL.md entries among them),
+      and a wholesale reseed would silently pull all those out-of-scope entries into the diff.
   - file: AGENTS.md
     action: Modify
     purpose: >-
@@ -199,7 +215,10 @@ scope:
       exists; under the same-diff proof :306 must be rewritten to supply a base map where
       scripts/old.py is present. Then add thin binding assertions: spec token baseline-raised, and
       moved_from_relief enabled on this spec alone. Behavioural moved-from cases live in
-      tests/checks/test__marker_guard.py. Current 423 SLOC; deletions free headroom.
+      tests/checks/test__marker_guard.py. Current 423 SLOC; deletions free headroom. NOTE :356
+      (`test_default_base_reader_used_when_omitted`) patches `scripts.checks._common.run` and
+      `scripts.checks._common.ROOT` -- it survives the move ONLY if the shared default_base_reader
+      also routes through `_common.run`, as all five incumbents do. Keep that wiring.
   - file: tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py
     action: Modify
     purpose: >-
@@ -258,9 +277,13 @@ acceptance_criteria:
   - >-
     Decision 149 compact-in-place coupling is closed: when a cited Decision's body carries the
     `**Superseded by: Decision N**` marker, Decision N's body is ALSO consulted for authorization
-    (one hop, no chains). A compaction stub keeps its header and a one-line `**Decision:**` body,
-    so without this hop a future compaction would silently un-authorize every live marker citing
-    that number and -- because the scan is retroactive -- red every subsequent PR.
+    (ONE hop). A compaction stub keeps its header and a one-line `**Decision:**` body, so without
+    this hop a future compaction would silently un-authorize every live marker citing that number
+    and -- because the scan is retroactive -- red every subsequent PR. The one-hop bound is
+    deliberate, not a claim that chains are always length 1: a two-generation A->B(stub)->C chain is
+    structurally reachable because Decision 149 evaluates direction-consistency per compaction event
+    and never re-points inbound stubs. What holds instead is FAIL-LOUD -- the guards run
+    unconditionally in `--pre`, so the compacting PR itself goes red, never a later innocent one.
   - >-
     Every marker line bearing a guard's own token, across all five registries, is
     authorization-clean against the real corpus. The install-state population is asserted as an
@@ -397,9 +420,11 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -q -k "composite_key or mention_candidates"
     expected: >-
-      Passes for a key like `.github/actions/deterministic-guard::guard`: the full key and the
-      action-relative directory are both offered as candidates, and a Decision naming
-      `.github/actions/deterministic-guard` authorizes it while one naming only `.github/`
+      Passes for a REAL r3 key -- use `.github/actions/materialise-tfvars::#0` (every live r3 key
+      uses the `#N` positional fallback; `.github/actions/deterministic-guard::guard` is an r1 key
+      and must never appear in an authorization example, since R1 has no marker escape at all).
+      The full key and the action-relative directory are both offered as candidates, so a Decision
+      naming `.github/actions/materialise-tfvars` authorizes it while one naming only `.github/`
       does not.
     fix_if: >-
       mention_candidates is unset for the composite spec, so every R3 marker fails or passes
@@ -473,9 +498,15 @@ verification_plan:
       names the key, and still fails when neither body names it. One hop only -- a stub pointing at
       a stub is not chased.
     fix_if: >-
-      The hop is missing. Use scripts/decisions_md._extract_superseded_by on the cited body; if it
-      returns a target, also consult that target's body. Decision 149 clause 1's eligibility rule
-      (the superseder restates every live clause) is what makes one hop sufficient.
+      The hop is missing. Use the newly-public superseded-by extractor from scripts/decisions_md.py
+      on the cited body; if it returns a target, also consult that target's body. ONE hop is
+      deliberate and covers the single-generation case; it is NOT a claim that chains cannot exceed
+      length 1. Decision 149 evaluates direction-consistency per compaction EVENT, and its stub
+      grammar has no rule re-pointing an inbound A->B stub to C, so a two-generation A->B(stub)->C
+      chain is structurally reachable. The real bound is fail-loud: the five guards are registered
+      unconditionally in `--pre` with no diff-gating, so the PR that compacts B re-runs the
+      retroactive scan against the freshly-stubbed corpus and reds THERE, not on a later innocent
+      PR. Remediation in that PR: retarget the marker, or add the key to the frozen grandfather hook.
     hermetic: true
     graduation: graduate
     graduation_check_id: marker-guard-supersession-hop
@@ -542,7 +573,10 @@ verification_plan:
       bin/venv-python -m mypy scripts/ src/ > /tmp/mypy-out.txt 2>&1 || true
       grep -qE "Found [0-9]+ errors?|Success: no issues found" /tmp/mypy-out.txt
       test "$(grep -c '^scripts/checks/_marker_guard\.py:.*error:' /tmp/mypy-out.txt)" -eq 0
-      ! grep -q "_marker_guard" config/mypy_baseline.yaml
+      if grep -q "_marker_guard" config/mypy_baseline.yaml; then
+        echo "FAIL: scripts/checks/_marker_guard.py is registered in config/mypy_baseline.yaml"
+        exit 1
+      fi
       echo "marker_guard: 0 attributed mypy errors, unbaselined"
     expected: "Prints `marker_guard: 0 attributed mypy errors, unbaselined`; exit 0."
     fix_if: >-
@@ -551,7 +585,10 @@ verification_plan:
       config/mypy_baseline.yaml; that is the pressure this step exists to resist. Errors attributed
       to OTHER files (notably _common.py) are pre-existing and out of scope. The
       `Found N errors|Success` grep is the proof-of-execution guard -- without it a crashed mypy
-      would report zero attributed errors and pass vacuously.
+      would report zero attributed errors and pass vacuously. The baseline assertion is written as
+      an `if ... exit 1` block, NOT `! grep -q ...`: POSIX specifies that `set -e` is ignored when
+      a command's return value is inverted with `!`, so the negated form silently exits 0 even when
+      the module IS baselined (reproduced).
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -669,14 +706,31 @@ verification_plan:
     action: >-
       Confirm the governance artefacts landed and conform: the new Decision with its five
       amendments, the regenerated index, the non-ritual contract, and its file-router route.
-    command: >-
-      bash -c 'bin/venv-python -m scripts.decisions_index --check &&
-      test -f docs/contracts/marker-grammar.yaml &&
-      ! grep -qE "^(contract|class):" docs/contracts/marker-grammar.yaml &&
-      grep -q "marker-grammar.yaml" docs/contracts/file-router.yaml &&
-      grep -q "marker-grammar.yaml" docs/DECISIONS.md &&
-      grep -q "Decision 149" docs/DECISIONS.md && echo "governance artefacts OK"'
-    expected: "Prints `governance artefacts OK`; exit 0."
+    command: |-
+      set -e
+      bin/venv-python -m scripts.decisions_index --check
+      test -f docs/contracts/marker-grammar.yaml
+      if grep -qE "^(contract|class):" docs/contracts/marker-grammar.yaml; then
+        echo "FAIL: marker-grammar.yaml became a ritual contract"; exit 1
+      fi
+      grep -q "marker-grammar.yaml" docs/contracts/file-router.yaml
+      bin/venv-python - <<'PYEOF'
+      from scripts.decisions_md import _iter_decision_sections
+      from scripts.checks import _common
+      text = (_common.ROOT / "docs/DECISIONS.md").read_text(encoding="utf-8")
+      hits = [(m.group(1), blk) for m, blk in _iter_decision_sections(text) if "marker-grammar.yaml" in blk]
+      assert len(hits) == 1, f"expected exactly one Decision pointing at the contract, got {[n for n, _ in hits]}"
+      num, body = hits[0]
+      missing = [d for d in ("128", "149", "159", "161", "162") if f"Decision {d}" not in body]
+      assert not missing, f"Decision {num} omits amendments for: {missing}"
+      print(f"Decision {num}: contract pointer + all five amendments present")
+      PYEOF
+      echo "governance artefacts OK"
+    expected: >-
+      Prints `Decision NNN: contract pointer + all five amendments present` then
+      `governance artefacts OK`; exit 0. The amendment assertion is anchored INSIDE the new
+      Decision's own section -- a bare `grep "Decision 149" docs/DECISIONS.md` passes vacuously on
+      the unmodified tree (16 pre-existing occurrences) and so proves nothing.
     fix_if: >-
       The index drifted -- run `bin/venv-python -m scripts.decisions_index --write`. If the contract
       grew a top-level `contract:`/`class:` block it became a ritual contract and inherits the CD.25
@@ -775,7 +829,14 @@ constraints:
     the pre-existing baselined scripts/checks/_common.py:147.
   - >-
     scripts/checks/_marker_guard.py must import ROOT from scripts.checks._common and never
-    recompute it (tests/test_checks_registry.py::TestNoLocalRootRecomputation).
+    recompute it (tests/test_checks_registry.py::TestNoLocalRootRecomputation), and its
+    default_base_reader must shell out via `_common.run` -- existing consumer tests patch
+    `scripts.checks._common.run` / `.ROOT` and break silently if the shared reader bypasses them.
+  - >-
+    Never write `! grep -q ...` under `set -e` in a VP command: POSIX specifies that `set -e` is
+    IGNORED for a command whose return value is inverted with `!`, so the assertion silently
+    passes. Use an `if ...; then echo FAIL; exit 1; fi` block. (A `!` inside an explicit
+    `A && ! B && C` chain is fine -- there the chain's own exit status carries the result.)
   - >-
     The composite guard must remain subprocess-free and filesystem-only (Decision 153 fast-tier
     budget) -- never call the git-based base reader from that path.
