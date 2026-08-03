@@ -100,8 +100,11 @@ Six hazards. Each invites a specific misread that would waste most of a session.
    markdown) while its Decision 43 row is live -- so the row is easy to cite as dead coverage when
    it is not. Establish whether any check enforces it (verify against `config/prose_budgets.yaml`
    and against what `scripts/checks/prompts/validate_prompt_files.py` actually asserts), then
-   record the result as markdown observation (a) per THE MARKDOWN RULE. Do not issue a class
-   verdict on it.
+   record the result as markdown observation (a) per THE MARKDOWN RULE. If you CONFIRM the row is
+   live and unenforced, that is a real defect and it may also be filed as a finding with
+   `surface: shared` -- `shared` is the legal home for a defect belonging to no class, and it is
+   what keeps this candidate adjudicable without reopening markdown. What you must NOT do is issue
+   a `class_verdicts` entry for markdown or census the markdown corpus.
 
 6. **Ratchet direction is per-registry, not universal.** `config/coverage_baseline.yaml` ratchets
    UP (a minimum that may only rise). `config/sloc_budgets.yaml`, `config/prose_budgets.yaml` and
@@ -204,8 +207,11 @@ the one markdown class with real violations, `docs/audit-prompts/**` (13 of 23 o
 not exist to protect. Governing markdown would mean 8+ carve-outs for a population with almost no
 real violations, layered on top of an existing byte-based regime.
 
-Do NOT census markdown, do not classify it, and do not issue class verdicts on it. Record exactly
-one Q8 observation carrying these two facts, so a future decision can pick them up:
+Do NOT census markdown, do not classify it, and do not issue class verdicts on it. Record exactly one
+observation carrying these two facts, so a future decision can pick them up. "Observation" has a
+concrete home: an entry in `question_answers[Q8].answers[]`, with `question` naming the topic and
+`answer` carrying the facts. The same applies anywhere this prompt says "record as a DD-C
+observation" -- there is no separate observations block; it folds into the relevant Q8 answer.
   (a) Decision 43's `.prompt.md` row (3000 lines) is LIVE and governs 12 tracked files, and no
       check appears to enforce it -- verify that claim before recording it.
   (b) `docs/ROADMAP-PRODUCT.md` and `docs/ROADMAP-PRODUCT.yaml` are the same artifact in two
@@ -765,18 +771,6 @@ is expected to move slightly with tree state; the counts are expected to reprodu
   matches it recursively), so it is a workflow output -- which means the most extreme
   unit-divergence case in the repository sits in the class DD-D may conclude should be exempt.
   Reconcile those two conclusions explicitly rather than letting them pass in separate sections.
-- **Markdown population, by the classes rows 12-13 define.** Handed over because the requester's
-  scoping turns on it and it is otherwise invisible next to the non-markdown table above. Counts are
-  files / files over 500 effective lines / largest:
-  `.claude/commands/**` 6 / 0 / 119 -- `**/*.prompt.md` 12 / 0 / 155 --
-  `**/*.instructions.md` 6 / 0 / 127 -- `docs/contracts/**/*.md` 2 / 0 / 193 --
-  `audits/**/*.md` 19 / 0 / 141 -- `docs/plans/**/*.md` (excluding reports) 195 / 3 / 1274 (all
-  three under `archive/`) -- `docs/audit-prompts/**/*.md` 23 / **13** / 3368
-  (`AUDIT-PROMPT-product-roadmap-yaml.md`). Across ALL tracked `.md`, 28 exceed 500 effective
-  lines. Two consequences to weigh rather than assume: every agent-instruction surface the
-  requester named is already comfortably compliant, so a limit there is preventive rather than
-  corrective; and `docs/audit-prompts/` is the single oversized agent-markdown class, which
-  includes THIS prompt -- see the self-referential check under GUARDRAILS.
 - `config/sloc_budgets.yaml` currently holds far fewer entries than the 24 its header comment
   describes -- composition counted 3 entries, 1 of them under `tests/`. Count both and compare. The
   drain was performed by the decomposition program the header names; the header text was not
@@ -806,15 +800,17 @@ Bounded sampling. Do NOT exceed these caps.
    side has more qualifiers than its cap, the ranking decides; do not exceed the cap. Feeds DD-A.
 4. **At most 6 workflow-output files**, plus the workflow definitions that produce and consume
    them, to settle DD-D.
+   A file may qualify for more than one pass; it counts against each pass's cap independently, and
+   you read it once. The caps bound effort per pass, not the number of distinct files.
 5. **At most 10 commits** touching any budget registry, IF and ONLY IF the clone is not shallow.
    If it is shallow, skip this entirely and mark every history-dependent claim HYPOTHESIS.
 
 **`evidence_kind`, defined once for all five passes.** `observed` = the finding rests on a
 specific artifact you opened and measured during the empirical pass (a named file, a named commit,
 a named workflow definition). `static` = the finding rests on reading a gate, a config, or a
-Decision and reasoning about what it would do. Passes 2, 3 and 4 yield `observed`; pass 5 yields
-`observed` only when the clone is not shallow; reading the GROUNDING MAP or the check modules
-yields `static`. When a finding rests on both, tag it `observed`.
+Decision and reasoning about what it would do. Passes 1, 2, 3 and 4 yield `observed` (pass 1 is a
+measurement of real files, not a reading of a gate); pass 5 yields `observed` only when the clone
+is not shallow; reading the GROUNDING MAP or the check modules yields `static`. When a finding rests on both, tag it `observed`.
 
 Counterfactual test, applied to every proposed gate: **would this gate still fire if the file's
 content were reformatted to satisfy it without any reduction in what an agent must comprehend?**
@@ -968,7 +964,8 @@ audit:
   # true, every class verdict is HYPOTHESIS. This matters more than the findings case, because
   # draft_decision is built from these verdicts.
   # `unit` is a CONCRETE MEASURE NAME, never a Q2 verdict label -- one of: effective-lines,
-  # raw-lines, bytes, tokens, entries, or a named composite like "effective-lines+max-line-length".
+  # raw-lines, bytes, tokens, entries, a named composite like "effective-lines+max-line-length",
+  # or the literal n/a for an exempt-with-reason or defer class (which has no unit yet).
   # `limit` is an integer for extend-uniform / extend-calibrated, and the literal n/a for
   # exempt-with-reason and for defer (a deferred class has no limit yet, by definition).
   # `population_over_limit` is ALWAYS counted in effective lines under the pinned CENSUS RULE,
