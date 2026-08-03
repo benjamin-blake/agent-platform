@@ -89,18 +89,47 @@ Six hazards. Each invites a specific misread that would waste most of a session.
 
 Every class below is BUILT and present on disk. Enumerate the current population of each yourself.
 
-| Class | Locations | Role |
-|---|---|---|
-| Terraform | `terraform/**/*.tf`, `*.hcl`, `*.tfvars` | hand-authored infrastructure |
-| Hand-authored config | `config/**/*.yaml` | machine-consumed configuration and registries |
-| Machine-readable contracts | `docs/contracts/**/*.yaml` | agent-consumed field/procedure semantics |
-| CI workflows and actions | `.github/**/*.yml`, `.github/**/*.yaml` | CI/CD definitions |
-| Shell | `**/*.sh`, `bin/*` | setup, hooks, wrappers |
-| Lambda manifests | `src/lambdas/*/manifest.yaml` | packaging descriptors |
-| Append-only registries | `docs/ROADMAP-PLATFORM.yaml`, `docs/ROADMAP-PRODUCT.yaml` | monotonically growing work-lists |
-| Workflow output artifacts | `docs/plans/**/*.yaml`, `audits/**/*.yaml`, `docs/plans/reports/*.yaml` | one file per workflow run |
-| Generated / derived | `docs/decisions-index.json`, any file regenerated from a source of truth | projections |
-| Data / query | `**/*.sql`, `**/*.json`, `**/*.toml` | miscellaneous structured |
+All globs are repo-root-relative. **Classification is FIRST MATCH WINS, in the table order given
+below** -- a file matching several rows belongs to the first row it matches, so
+`docs/decisions-index.json` is Generated/derived (row 9) and never Data/query (row 10), and
+`docs/contracts/*.yaml` is Contracts (row 3) and never Config (row 2). This precedence is a
+compose-time convenience so your census is reproducible; whether it is the RIGHT keying is Q1/DD-C
+and you may recommend a different one.
+
+| # | Class | Locations (repo-root-relative) | Role |
+|---|---|---|---|
+| 1 | Terraform | `terraform/**/*.tf`, `terraform/**/*.tfvars`, `terraform/**/*.hcl`, `*.hcl` | hand-authored infrastructure |
+| 2 | Hand-authored config | `config/**/*.yaml`, `config/**/*.yml` | machine-consumed configuration and registries |
+| 3 | Machine-readable contracts | `docs/contracts/**/*.yaml` | agent-consumed field/procedure semantics |
+| 4 | CI workflows and actions | `.github/**/*.yml`, `.github/**/*.yaml` | CI/CD definitions |
+| 5 | Shell | `**/*.sh`, plus extensionless files under `bin/` whose first line is a shell shebang | setup, hooks, wrappers |
+| 6 | Lambda manifests | `src/lambdas/*/manifest.yaml` | packaging descriptors |
+| 7 | Append-only registries | `docs/ROADMAP-PLATFORM.yaml`, `docs/ROADMAP-PRODUCT.yaml` | monotonically growing work-lists |
+| 8 | Workflow output artifacts | `docs/plans/**/*.yaml`, `audits/**/*.yaml` | one file per workflow run |
+| 9 | Generated / derived | any file meeting the provenance test below | projections of a source of truth |
+| 10 | Data / query | `**/*.sql`, `**/*.json`, `**/*.toml`, `**/*.jsonl` | miscellaneous structured |
+| 11 | **Residual** | every tracked file matching no row above and not excluded below | see the residual rule |
+
+**Generated/derived provenance test (row 9).** A file is generated if ANY holds: it carries a
+do-not-edit or generated-by banner in its first 10 lines; a checked-in command or check
+regenerates it (search for the path in `scripts/`, `.github/workflows/`, and the `Makefile` if
+present); or it is a documented projection of a named source of truth. Apply the test; if
+provenance is genuinely undeterminable for a file, classify it by extension into row 10 and record
+the ambiguity as a Q8/DD-C observation. Whether provenance SHOULD be the keying at all is Q8 seed
+1 -- the test here exists so your census is reproducible, not to pre-answer that question.
+
+**Residual class (row 11) -- MANDATORY.** `git ls-files` tracks classes none of rows 1-10 name:
+`.txt` (including requirements files), `.jsonl` outside row 10's glob, `.log`, `.lock`, `.tfrc`,
+`.importlinter`, `.gitattributes`, `.gitignore`, `.example`, `.python-version`, `.baseline`, and
+extensionless files. Enumerate them yourself; do not trust that list. `class_verdicts` MUST carry a
+`residual` entry giving the DEFAULT verdict for any file class not explicitly named -- because the
+deliverable is draft Decision text, and a rule built from a closed-but-partial table ships a gap on
+day one. State whether the default is govern, exempt, or fail-closed-pending-classification, and
+say what happens when a NEW file class appears in the repository after the Decision lands.
+
+**Excluded from all classes** (do not census, do not verdict): anything under `.git/`, `.venv/`,
+`node_modules/`, `pip/`, `lambda-packages/`, `docker/`, `personal_scripts/`, and any path not
+tracked by `git ls-files`. Prose classes (`**/*.md`) are excluded as audit targets per below.
 
 ### Context-only, not audit targets
 
@@ -125,6 +154,19 @@ settled.
   what the current Python gate counts. Comment syntax differs by language -- `.tf` uses `#`,
   `//` and `/* */`; JSON has no comments -- so this definition does not port cleanly. That
   non-portability is evidence for Q2, not an incidental detail.
+
+- **CENSUS RULE -- pinned, not your judgment.** For the P2 census and for every population number
+  you report, apply the Python definition of effective lines VERBATIM to every class: non-blank,
+  first non-whitespace character not `#`. Do NOT strip `//` or `/* */` in `.tf`, and do not apply
+  per-language comment rules. This is deliberate: it makes your census reproducible, it matches
+  how the numbers in the GROUNDING MAP were derived so you can compare like with like, and it
+  keeps the census independent of the Q2 verdict you have not reached yet.
+  Then, SEPARATELY, as part of answering Q2, report how much the population would change for the
+  classes where the rule is wrong -- at minimum `.tf` (where `//` and `/* */` comments are
+  miscounted as code) and `.json` (which has no comments, so every line counts). If that delta
+  changes any Q1 or Q6 verdict, that fact is itself a finding. Never silently substitute a
+  different counting rule; if you believe another rule is better, say so in Q2 and show both
+  numbers.
 - **ratchet**: a registry of per-file budgets plus a gate, where movement in the tolerant
   direction is unrestricted and movement in the permissive direction requires a marker citing a
   real Decision.
@@ -156,9 +198,10 @@ Permitted setup, in order:
 Degraded paths. Never abort; set the flag, downgrade confidence, proceed.
 
 - IF the preflight cache-generation fails (credentials or egress down): do NOT abort -- set
-  `meta.degraded_dedup: true`, mark every `roadmap_crossref` `confidence: HYPOTHESIS` and
-  `dedup_hit_count: null`, and proceed using `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md`
-  on disk as the dedup surfaces.
+  `meta.degraded_dedup: true`, set every FINDING's top-level `confidence` to `HYPOTHESIS` (there is
+  no `confidence` key inside `roadmap_crossref`), set every `roadmap_crossref.dedup_hit_count` to
+  `null`, and proceed using `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md` on disk as the
+  dedup surfaces.
 - **This clone may be shallow.** Check with `git rev-parse --is-shallow-repository`. IF it
   returns `true`, every claim that depends on repository history -- how often budgets were
   raised, how a registry drained over time, whether a decomposition program actually completed --
@@ -169,6 +212,17 @@ Degraded paths. Never abort; set the flag, downgrade confidence, proceed.
 - IF `bin/venv-python` is unavailable, use `python3`; note it in `meta.contract_notes`.
 - IF a repository-wide validation run fails for reasons unrelated to this audit, record it in
   `meta.contract_notes` and do NOT fix it. That would breach the write boundary.
+- IF `git fetch origin main` fails (network or auth): do NOT abort and do NOT skip the sha. Fall
+  back to `git rev-parse --short HEAD`, use THAT sha everywhere the base sha is called for, branch
+  from `HEAD` instead of `origin/main`, and record
+  `meta.contract_notes: "origin unreachable; audited tree is local HEAD <sha>, not origin/main"`.
+  The audit is still valid against the tree you actually read.
+- IF web access is unavailable when answering Q7, do not abort: answer from model knowledge, mark
+  those `external_checklist` entries `evidence: "model knowledge, unverified"`, and set
+  `meta.contract_notes` accordingly. Q7 is never a reason to stop.
+- IF the PR creation call fails at the end: the deliverables are already committed and pushed,
+  which is the substantive result. Report the failure and the branch name in your final message
+  and STOP. Do not retry more than twice, and do not fall back to any other publication route.
 
 ## NORTH STAR
 
@@ -199,9 +253,18 @@ with them where a class warrants it -- a well-argued departure is a better resul
 
 Answer all eight. Each gets its own entry in `question_answers[]`.
 
+**Per-class questions and the scalar `verdict` field -- pinned convention.** Q1, Q5 and Q6 are
+answered PER CLASS. The per-class answers live in `class_verdicts[<class>]`, which has a field for
+each: `verdict` (Q1), `rationale` (Q5), and `migration` (Q6). The scalar `verdict` in each of those
+three `question_answers[]` entries is a ROLL-UP, computed by this rule and not by your judgment:
+if every class shares one enum value, use it; otherwise use the literal string `mixed` and let the
+`prose` field summarize the split. `mixed` is a legitimate and expected answer for all three. Do
+not invent a different convention, and do not omit a class from `class_verdicts` because its
+answer felt obvious.
+
 **Q1 -- Should the rule extend, and to which classes?**
-Reach a verdict for EVERY class in the SCOPE table. Verdict enum:
-`extend-uniform | extend-calibrated | exempt-with-reason | defer`.
+Reach a verdict for EVERY class in the SCOPE table, including `residual`. Verdict enum:
+`extend-uniform | extend-calibrated | exempt-with-reason | defer` (roll-up may also be `mixed`).
 `extend-uniform` = same limit and same unit as the Python gate. `extend-calibrated` = governed,
 but with a class-specific limit or unit you must specify. `exempt-with-reason` = deliberately
 ungoverned, with the reason recorded so it is not re-litigated. `defer` = should be governed but
@@ -237,8 +300,8 @@ write-once files.
 
 **Q5 -- Does the stated rationale transfer to every class?**
 Verdict enum:
-`transfers-fully | transfers-comprehension-only | needs-distinct-rationale | does-not-transfer`,
-answered per class or per class-group.
+`transfers-fully | transfers-comprehension-only | needs-distinct-rationale | does-not-transfer`
+(roll-up may also be `mixed`). Answered per class, recorded in `class_verdicts[<class>].rationale`.
 The owner gives two reasons for the 500-line rule: lower-tier models make fewer mistakes on small
 files, and small files make 100 percent test coverage tractable. The second reason has no referent
 for `.tf`, `.yaml`, or `.json` -- there is no per-file coverage concept for them. State, for each
@@ -246,7 +309,8 @@ class you recommend governing, the ACTUAL purpose the limit serves there. A clas
 reason nobody has articulated will be argued away the first time it is inconvenient.
 
 **Q6 -- Migration and grandfathering.**
-Verdict enum: `one-time-grandfather | class-exemption | staged-waves | reject`.
+Verdict enum: `one-time-grandfather | class-exemption | staged-waves | reject` (roll-up may also be
+`mixed`). Answered per class, recorded in `class_verdicts[<class>].migration`.
 Count the files that would breach your recommended limits. Assess: does the installing PR fail its
 own new rule; is the grandfather roster bounded and drainable or open-ended; who or what drains it
 given the executor is frozen; what is the sequencing. If your recommendation would strand a
@@ -259,6 +323,17 @@ constraint is designed for autonomous agents, so precedent is thin. Test that po
 accepting it. Assess property-by-property against this checklist, recording each in
 `external_checklist` as `met | partial | missed` with evidence. `partial` requires an argued,
 property-matched compensating control.
+
+**Where Q7's evidence comes from -- this is the one question not answerable from the repository.**
+Each checklist property has two halves: does THIS repository have the property (answer from the
+repository, cite `file:line` or a mechanism name), and does mainstream practice have it (answer
+from outside). For the outside half you MAY use web search if it is available to you, and you MAY
+answer from your own model knowledge if it is not. Populate `evidence` as
+`"<repo side: file:line or mechanism> | <external side: tool or source name>"`, and suffix the
+external side with `(model knowledge, unverified)` whenever you did not verify it against a live
+source. An unverified external claim is acceptable here and must be labelled; a silently
+unverified one is not. The `rating` reflects the REPOSITORY's standing on the property, not
+mainstream's.
 
 - Per-file size lint exists at all (ESLint `max-lines`, Checkstyle `FileLength`, SonarQube
   file-size rules, Pylint `too-many-lines`)
@@ -275,7 +350,8 @@ property-matched compensating control.
   motivate a file-size limit for LLM editors, versus the limit being a human-ergonomics
   convention transplanted without re-derivation
 
-The maturity computation reads this field and no other.
+`external_checklist` is the SOLE source for the checklist half of the `frontier` maturity gate.
+No other field feeds that half. (The finding-count half is defined under SEVERITY AND MATURITY.)
 
 **Q8 -- Questions the requester did not think to ask.**
 Answer each seed below AND extend the list with anything recon surfaces. Use the
@@ -374,8 +450,8 @@ non-resolving anchors in `meta.stale_anchors` and continue.
   not ending in `.py`.
 - `scripts/checks/sloc/sloc_limits.py:80` -- `validate_sloc_limits`. Its effective-line count is
   `[ln for ln in lines if ln.strip() and not ln.strip().startswith("#")]`.
-- `scripts/checks/sloc/sloc_limits.py:21` -- `_update_sloc_budgets`, downward-only, documented as
-  never seeding a newly-oversized unregistered file.
+- `scripts/checks/sloc/sloc_limits.py:20` -- `def _update_sloc_budgets`, downward-only, documented
+  as never seeding a newly-oversized unregistered file.
 - `scripts/checks/sloc/validate_sloc_budget_raises.py:79` -- the raise-guard. Parses raw YAML text
   rather than `yaml.safe_load` so the inline marker survives. SKIPs non-failing when `origin/main`
   is unreachable.
@@ -418,8 +494,13 @@ non-resolving anchors in `meta.stale_anchors` and continue.
 ### Registration and tiers
 
 - `scripts/checks/registry.py:96` -- `pre_sequence()`.
-- `scripts/checks/registry.py:117-122` -- in the `--pre` tier: `validate_sloc_limits`,
-  `validate_prose_limits`, `validate_sloc_budget_raises`, `validate_prose_budget_raises`.
+- `scripts/checks/registry.py:117-122` -- a contiguous block of SIX checks in the `--pre` tier, in
+  this order: `validate_sloc_limits` (117), `validate_prose_limits` (118),
+  `validate_sloc_budget_raises` (119), `validate_coverage_baseline_edits` (120),
+  `validate_mypy_baseline_edits` (121), `validate_prose_budget_raises` (122). The four
+  size-and-prose checks are interleaved with the two sibling-ratchet raise-guards, which is
+  directly relevant to Q3 and Q4 -- the raise-guard shape is already applied to four different
+  registries side by side in one block.
 - `scripts/checks/registry.py:173` -- `full_sequence()`.
 - `scripts/checks/registry.py:205-206` -- in the full tier: `validate_sloc_limits` and
   `validate_prose_limits`. Determine for yourself whether the two raise-guards appear in the full
@@ -455,23 +536,35 @@ Read each in `docs/DECISIONS.md`; do not rely on these one-line characterization
 
 ### Observed population facts -- re-derive every one
 
-Composition measured the following. Treat each as a claim to verify, not as input.
+Composition measured the following, applying the pinned CENSUS RULE over `git ls-files`. Treat each
+as a claim to verify, not as input. Where a number below is qualified with "about", the exact value
+is expected to move slightly with tree state; the counts are expected to reproduce exactly.
 
 - 85 files that are neither `.py` nor `.md` exceed 500 effective lines.
-- Of those, roughly 47 are under `docs/plans/` and 22 under `audits/`.
+- Of those, 47 are under `docs/plans/` and 22 under `audits/` -- roughly 81 percent of the affected
+  population is workflow output. This is the single most consequential number in this map; DD-D
+  exists because of it.
 - 5 `.tf` files exceed 500, the largest being `terraform/iceberg_tables.tf`.
 - 3 files under `config/` exceed 500, the largest being
   `config/agent/verification_registry/registry.yaml`.
 - 2 files under `.github/workflows/` exceed 500.
 - 2 files under `docs/contracts/` exceed 500.
-- No `.sh` file exceeds 500.
-- Median bytes per effective line, with 10th and 90th percentiles: Python about 53 (44 to 63),
-  YAML about 72 (55 to 109), Terraform about 58 (34 to 126), shell about 81 (46 to 152), markdown
-  about 106 (71 to 239).
-- `docs/plans/reports/OVERSEER-terraform-deploy-redesign.yaml` measures roughly 326 effective
-  lines, 255,039 bytes, longest line roughly 8,211 characters.
+- No `.sh` file exceeds 500; the largest measures about 106 effective lines. Shell is the one class
+  where adoption is free today.
+- Median bytes per effective line, with 10th and 90th percentiles, over ALL tracked files of each
+  extension (n in parentheses): Python about 53.6 (44.3 to 64.3, n=823); YAML about 72.4 (55.4 to
+  113.9, n=421); `.yml` about 66.0 (34.6 to 105.1, n=27); Terraform `.tf` about 60.8 (35.8 to
+  125.6, n=33); shell `.sh` about 92.2 (46.4 to 130.5, n=13); markdown about 105.3 (69.9 to 241.1,
+  n=314). Note the within-class spread against the between-class spread before concluding anything
+  about unit substitutability -- and note that the small-n classes (`.sh` at 13, `.tf` at 33) carry
+  wide percentile uncertainty, so do not over-read their tails.
+- `docs/plans/reports/OVERSEER-terraform-deploy-redesign.yaml` measures 326 effective lines,
+  255,039 bytes, longest line 8,211 characters. It falls under row 8 (`docs/plans/**/*.yaml`
+  matches it recursively), so it is a workflow output -- which means the most extreme
+  unit-divergence case in the repository sits in the class DD-D may conclude should be exempt.
+  Reconcile those two conclusions explicitly rather than letting them pass in separate sections.
 - `config/sloc_budgets.yaml` currently holds far fewer entries than the 24 its header comment
-  describes.
+  describes. Count both and compare.
 
 ## EMPIRICAL PASS
 
@@ -482,8 +575,11 @@ Bounded sampling. Do NOT exceed these caps.
 2. **At most 12 oversized files**, chosen to span classes, read closely enough to judge whether a
    lower-tier model editing them would struggle, and whether a relief valve exists. Tag findings
    from this pass `evidence_kind: observed`.
-3. **At most 8 files that pass a line gate but are extreme on another unit**, or the converse.
-   Feeds DD-A.
+3. **At most 8 unit-divergence outliers.** Defined concretely, so you do not have to invent a
+   threshold: rank every tracked in-scope file by bytes-per-effective-line, and take the files
+   whose ratio is at least 2x their class median (from your own census). Break ties by absolute
+   byte size, largest first. Take at most 8. These are the files where a line-based gate and a
+   byte-based gate would most disagree. Feeds DD-A.
 4. **At most 6 workflow-output files**, plus the workflow definitions that produce and consume
    them, to settle DD-D.
 5. **At most 10 commits** touching any budget registry, IF and ONLY IF the clone is not shallow.
@@ -493,7 +589,10 @@ Counterfactual test, applied to every proposed gate: **would this gate still fir
 content were reformatted to satisfy it without any reduction in what an agent must comprehend?**
 If yes, the gate is measuring load. If no, it is measuring formatting, and that is a VD3 finding.
 
-Observed findings outrank static ones at equal severity.
+Observed findings outrank static ones at equal severity. Operationally: when ordering
+`summary.top_improvements` and when choosing `summary.highest_leverage_change`, an
+`evidence_kind: observed` finding is ranked above an `evidence_kind: static` finding of the same
+severity. This affects ordering only; it never changes a severity or a confidence.
 
 ## METHOD
 
@@ -554,27 +653,55 @@ Write exactly two files.
 
 ```
 audit:
-  meta: {audited_commit: <origin/main short sha>, base_branch: main,
+  # meta flag readers, so none of these is write-only:
+  #   degraded_dedup     -> read by the human triaging findings: true means every
+  #                         roadmap_crossref is HYPOTHESIS and dedup must be redone before
+  #                         any finding is queued as work.
+  #   stale_anchors      -> read by whoever re-runs or extends this audit: each entry is a
+  #                         GROUNDING MAP anchor that must be re-derived before reuse.
+  #   contract_notes     -> read by the human disposing of the PR: records every degraded
+  #                         path taken, so a caveated result is never mistaken for a clean one.
+  #   deliverable_size   -> read by the self-referential check under GUARDRAILS.
+  meta: {audited_commit: <base short sha>, base_branch: main,
          model: <your self-reported model name, free text>,
          methodology_version: 1,
          scope_surfaces: [<the classes you assessed>],
-         degraded_dedup: false, contract_notes: "", stale_anchors: []}
+         degraded_dedup: false, contract_notes: "", stale_anchors: [],
+         deliverable_size: {yaml_effective_lines: 0, md_words: 0,
+                            breaches_own_recommendation: true|false, note: ""}}
   question_answers:
-    - {q: Q1, verdict: <enum>, basis: [<finding ids>], prose: ""}
-    - {q: Q2, verdict: <enum>, basis: [], prose: ""}
-    - {q: Q3, verdict: <enum>, basis: [], prose: ""}
-    - {q: Q4, verdict: <enum>, basis: [], prose: ""}
-    - {q: Q5, verdict: <enum>, basis: [], prose: ""}
-    - {q: Q6, verdict: <enum>, basis: [], prose: ""}
-    - {q: Q7, verdict: <enum>, basis: [], prose: "",
+    # Q1/Q5/Q6 `verdict` is the ROLL-UP over class_verdicts: the shared enum value if every class
+    # agrees, otherwise the literal `mixed`. Q2/Q3/Q4/Q7 are single repo-wide verdicts.
+    - {q: Q1, verdict: extend-uniform|extend-calibrated|exempt-with-reason|defer|mixed,
+       basis: [<finding ids>], prose: ""}
+    - {q: Q2, verdict: keep-effective-lines|unify-on-bytes|per-class-unit|tokens|composite,
+       basis: [], prose: ""}
+    - {q: Q3, verdict: generalize-engine|replicate-per-domain|hybrid, basis: [], prose: ""}
+    - {q: Q4, verdict: sound-reusable|sound-needs-generalization|unsound-in-this-direction,
+       basis: [], prose: ""}
+    - {q: Q5, verdict: transfers-fully|transfers-comprehension-only|needs-distinct-rationale|
+                       does-not-transfer|mixed,
+       basis: [], prose: ""}
+    - {q: Q6, verdict: one-time-grandfather|class-exemption|staged-waves|reject|mixed,
+       basis: [], prose: ""}
+    - {q: Q7, verdict: ahead-justified|ahead-unjustified|at-parity|behind, basis: [], prose: "",
+       # evidence: "<repo side: file:line or mechanism> | <external side: tool or source name>"
+       # suffix the external side with "(model knowledge, unverified)" when not live-verified
        external_checklist: [{property: "", rating: met|partial|missed, evidence: ""}]}
     - {q: Q8, answers: [{question: "", answer: "", basis: []}]}
+  # One entry per SCOPE-table row 1-11, including `residual`. None may be omitted.
   class_verdicts:
-    <class name>: {verdict: extend-uniform|extend-calibrated|exempt-with-reason|defer,
-                   unit: "", limit: "", relief_valve: "", rationale: "",
+    <class name>: {verdict: extend-uniform|extend-calibrated|exempt-with-reason|defer,  # Q1
+                   rationale: {transfer: transfers-fully|transfers-comprehension-only|
+                                         needs-distinct-rationale|does-not-transfer,    # Q5
+                               actual_purpose: ""},
+                   migration: {mode: one-time-grandfather|class-exemption|staged-waves|reject,
+                               drain_owner: "", sequencing: ""},                        # Q6
+                   unit: "", limit: "", relief_valve: "",
                    population_over_limit: 0, confidence: CONFIRMED|HYPOTHESIS}
+  # One entry per class. `frontier` is NOT legal here -- it exists only on summary.maturity_overall.
   per_surface_assessment:
-    - {surface: <class>, maturity: <derived>, strengths: "", top_gaps: [<finding ids>]}
+    - {surface: <class>, maturity: strong|solid|nascent, strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
     - {surface: <class>, dimension: VD1..VD8, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
@@ -588,7 +715,9 @@ audit:
     rationale: ""
     related: ""
   findings:
-    - {id: SGE-01, surface: <class|shared>, question: Q1..Q8, dimension: VD1..VD8,
+    # `questions` and `dimensions` are LISTS -- a finding may serve several of each.
+    # Put the primary one first; ordering carries no other meaning.
+    - {id: SGE-01, surface: <class|shared>, questions: [Q1..Q8], dimensions: [VD1..VD8],
        title: "", evidence: "file:line|item-id", evidence_kind: static|observed,
        current_behavior: "", ideal_behavior: "", gap: "",
        compensating_controls_considered: "",
@@ -596,6 +725,7 @@ audit:
        proposed_change: "", acceptance: "",
        severity: critical|high|medium|low, severity_rationale: "",
        confidence: CONFIRMED|HYPOTHESIS,
+       # dedup_hit_count is an integer normally, and null only when meta.degraded_dedup is true.
        roadmap_crossref: {classification: novel|planned-insufficient|planned-unbuilt,
                           item_ids: [], dedup_search_terms: [], dedup_hit_count: 0, note: ""},
        effort: XS|S|M|L, depends_on: [],
@@ -605,7 +735,7 @@ audit:
        control_property_match: "", decision_or_item_id: ""}
   summary: {total_findings: 0, novel_count: 0, planned_insufficient_count: 0,
             planned_unbuilt_count: 0, top_improvements: [], highest_leverage_change: <id>,
-            maturity_overall: <value>}
+            maturity_overall: frontier|strong|solid|nascent}
 ```
 
 `audits/size-governance-expansion-<sha>.md` -- prose companion, at most 1500 words, the executive
@@ -625,7 +755,10 @@ paragraph. Do not restate the YAML.
   control would FAIL if the defect were real.
 - `CONFIRMED` requires the behavior traced to a file:line or to an observed sampled artifact.
   Anything less is `HYPOTHESIS`.
-- Every class in the SCOPE table must appear in `class_verdicts`, including those you exempt.
+- Every SCOPE-table row 1-11 must appear in `class_verdicts`, including classes you exempt and
+  including `residual`. Eleven entries, no omissions.
+- `findings[].questions` and `findings[].dimensions` are lists; every value must come from the
+  pinned Q1..Q8 and VD1..VD8 sets.
 - `draft_decision.number` is a placeholder. Do not guess a number; the human allocates it.
 
 ## SEVERITY AND MATURITY
@@ -644,13 +777,30 @@ A compensating control lowers severity only if it PROPERTY-MATCHES: it must exer
 property AND fail if the defect were real. Apply the counterfactual to the control itself. A
 control that cannot catch the break neither lowers severity nor justifies dismissal.
 
-Maturity is computed LAST, per class plus one overall, top-down, first match wins:
+Maturity is computed LAST, per class plus one overall, top-down, first match wins.
 
-- **frontier** -- 0 open critical and 0 open high findings for that class, AND every property in
-  Q7's `external_checklist` rated `met` or `partial`, never `missed`.
-- **strong** -- 0 critical and at most 1 high.
-- **solid** -- at most 1 critical.
+**Finding attribution -- pinned.** A finding with `surface: <class>` counts against THAT class
+only. A finding with `surface: shared` counts against the OVERALL rating only, never against any
+individual class. This is deliberate: a shared defect should not mark down ten classes at once.
+
+**Per-class maturity** (uses finding counts only -- `external_checklist` is repo-wide and does not
+project onto a single class):
+
+- **strong** -- 0 open critical and 0 open high findings attributed to that class.
+- **solid** -- 0 critical and at most 1 high.
 - **nascent** -- otherwise.
+
+**Overall maturity** (the only rating with a `frontier` tier, because only it can read the
+repo-wide checklist):
+
+- **frontier** -- 0 open critical and 0 open high findings anywhere (all classes plus `shared`),
+  AND every property in Q7's `external_checklist` rated `met` or `partial`, never `missed`.
+- **strong** -- 0 critical and at most 1 high, anywhere.
+- **solid** -- at most 1 critical, anywhere.
+- **nascent** -- otherwise.
+
+Write per-class values into `per_surface_assessment[].maturity` and the overall value into
+`summary.maturity_overall`. `frontier` is not a legal value for a per-class rating.
 
 The top rating remains reachable if you argued a property-matched compensating control. This
 framing does not foreclose it.
@@ -662,12 +812,21 @@ framing does not foreclose it.
 2. `git switch -c audit/size-governance-expansion-<sha> origin/main` so the PR diff contains only
    the two deliverables. This is a deliberate, documented exception to the repository's
    `claude/*` session-branch rule: this session needs a clean two-file diff off the audited base.
+   Consequence you should NOT try to compensate for: this repository's two automated wake signals
+   (the CI-green comment and the merge-conflict poller) only watch `claude/*` PRs, so an `audit/*`
+   PR wakes no one. That is correct and intended here, because step 7 ends your turn and the human
+   disposes of the PR. Do not rename the branch, do not add a polling loop, and do not schedule a
+   self check-in to compensate.
 3. Repository-wide validation is advisory outside CI here. A clean YAML parse of both deliverables
    is the real pre-push gate:
    `bin/venv-python -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" audits/size-governance-expansion-<sha>.yaml`.
    An unrelated `validate --pre` failure is recorded in `meta.contract_notes`, never fixed.
-4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, and `--no-gpg-sign` if
-   signing is unavailable.
+4. Commit both deliverables in ONE commit with `user.name=Claude`,
+   `user.email=noreply@anthropic.com`, and `--no-gpg-sign` if signing is unavailable. Commit
+   message subject, verbatim:
+   `audit(size-governance-expansion): structural-size governance expansion assessment`
+   Body: one line naming the audited sha. Commits land unsigned in this harness; that is expected
+   and is not something to fix -- do not amend or reset-author to chase a signature flag.
 5. `git push -u origin HEAD`.
 6. Open the PR via `mcp__github__create_pull_request`, base `main`, ready for review, title
    `audit: structural-size governance expansion beyond Python (terraform, yaml, workflows, shell, generated)`,
@@ -683,6 +842,17 @@ The write boundary is a closed list. You create or modify exactly:
 
 Nothing else. Not a config file, not a check module, not a decision entry, not a fix for an
 unrelated failing gate. If you believe something needs changing, that belief belongs in a finding.
+
+**The self-referential check -- REQUIRED, not optional.** Your own YAML deliverable lands in
+`audits/`, which is an in-scope class (SCOPE row 8). Before you push, measure it under the pinned
+CENSUS RULE and fill `meta.deliverable_size`. If it breaches the limit YOUR OWN Q1/Q6 verdicts
+would impose on row 8, set `breaches_own_recommendation: true` and address it explicitly in the
+companion report: either the workflow-output class should be exempt (and your verdict should say
+so), or your recommended limit is not survivable by the tooling that must live under it, or the
+right answer is to change what these workflows emit. Do NOT resolve this by trimming the audit to
+fit, and do NOT split the deliverable across more files to dodge it -- either move is exactly the
+evasion your own VD3 dimension exists to catch. A recommendation whose first violation is the
+document making it is a finding about the recommendation.
 
 Honesty clauses:
 
