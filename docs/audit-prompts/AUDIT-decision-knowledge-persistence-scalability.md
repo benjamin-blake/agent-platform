@@ -689,7 +689,7 @@ reachable when a `partial` is supported by a property-matched compensating contr
    audits/decision-knowledge-persistence-scalability-$BASE_SHA.yaml
    audits/decision-knowledge-persistence-scalability-$BASE_SHA.md`. Confirm
    `git diff --cached --name-only` returns exactly those paths. Commit using
-   `git -c user.name=Claude -c user.email=noreply@anthropic.com commit --no-gpg-sign
+   `git -c user.name=Claude -c user.email=noreply@anthropic.com commit
    -m "audit: decision knowledge persistence scalability"`. Never use `git commit -a`. Push with
    `git push -u origin HEAD`.
 4. Open a ready-for-review PR against `main` with title

@@ -362,11 +362,11 @@ audits/terraform-deployment-strategy-<sha>.md
 
 4. Validate the YAML parses. If repo-wide validation fails for files outside your two deliverables, for pre-existing repository state, or after writing only allowed gitignored caches/logs, record it in `audit.meta.contract_notes`; do not fix unrelated files.
 
-5. Commit without GPG signing if signing is unavailable:
+5. Commit and push:
 
 ```bash
 git add audits/terraform-deployment-strategy-<sha>.yaml audits/terraform-deployment-strategy-<sha>.md
-git -c user.name=Claude -c user.email=noreply@anthropic.com commit --no-gpg-sign -m "audit: terraform deployment strategy (<sha>)"
+git -c user.name=Claude -c user.email=noreply@anthropic.com commit -m "audit: terraform deployment strategy (<sha>)"
 git push -u origin HEAD
 ```
 

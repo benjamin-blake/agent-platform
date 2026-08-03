@@ -196,15 +196,16 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 | `scope({slug}):` | STRATEGIC plan scoping (currently suspended, Decision 67) |
 | `audit({slug}):` | Audit-prompt artifact commits (/audit workflow) |
 
-### Commit signing (CC-web: unsigned is expected)
-- CC-web commits land unsigned (`git log --format=%G?` -> `N`); signing is unavailable in this
-  harness and not required -- expected, not a defect.
-- Non-blocking: `main-protection` carries no `required_signatures` rule (Decision 83; see
-  `terraform/github/repo.tf`), and GitHub creates/verifies the squash-merge commit server-side
-  (Decision 76).
-- Attribution (`Claude <noreply@anthropic.com>`) is git identity, separate from cryptographic
-  signature -- already correct regardless of the `N` flag.
-- Do NOT reset-author or `git commit --amend -S` to chase the `N` -- it only churns SHAs.
+### Commit signing (CC-web: SSH-signed via harness signer)
+- CC-web commits ARE SSH-signed (commit.gpgsign=true, gpg.format=ssh, host-held key); GitHub
+  reports them Verified.
+- Local `git log --format=%G?` reads `N`/`B` only because this container cannot verify SSH
+  signatures locally (no ssh-keygen) -- not evidence of a missing signature.
+- `session_start_commit_signing.py` sets `gpg.ssh.allowedSignersFile` so the harness Stop hook's
+  signature check stops false-positiving. If it still fires, check which half: the committer-email
+  half (`%ce != noreply@anthropic.com`) is a real trigger whose remediation is correct.
+- Do NOT reset-author or `git commit --amend -S` to chase the signature flag alone -- it only
+  churns SHAs.
 
 ### Rebase phase distinction
 - **Assessment time (planning)**: do NOT auto-rebase. When main has diverged and scope files overlap, surface to the human with options (rebase now and re-enter `/plan` / proceed / abort); record any deferral in the plan's Context field. Rebasing mid-plan can silently invalidate scoping decisions.
