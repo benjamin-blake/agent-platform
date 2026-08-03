@@ -96,11 +96,12 @@ Six hazards. Each invites a specific misread that would waste most of a session.
    tracked and live, under `.github/prompts/scheduled/` and
    `config/agent/executor/prompts/` (the latter is Layer 5 of the instruction architecture). Only
    the legacy top-level `.github/prompts/*.prompt.md` set was deleted at T-1.13. Verify both counts
-   yourself. The consequence is the reason `.prompt.md` is an in-scope class (`agent_instructions_md`, row 12) despite being markdown: a live Decision 43 row governs 12 live
-   files at a limit six
-   times the Python limit, and you should establish whether ANY check enforces it. Do not assume
-   the prose regime covers it -- verify against `config/prose_budgets.yaml` and against what
-   `scripts/checks/prompts/validate_prompt_files.py` actually asserts.
+   yourself. This trap exists because `.prompt.md` is OUT of scope as an audit target (it is
+   markdown) while its Decision 43 row is live -- so the row is easy to cite as dead coverage when
+   it is not. Establish whether any check enforces it (verify against `config/prose_budgets.yaml`
+   and against what `scripts/checks/prompts/validate_prompt_files.py` actually asserts), then
+   record the result as markdown observation (a) per THE MARKDOWN RULE. Do not issue a class
+   verdict on it.
 
 6. **Ratchet direction is per-registry, not universal.** `config/coverage_baseline.yaml` ratchets
    UP (a minimum that may only rise). `config/sloc_budgets.yaml`, `config/prose_budgets.yaml` and
@@ -141,9 +142,7 @@ NOT a slug and never appears in `class_verdicts`, `rubric_ratings` or `per_surfa
 | 9 | `workflow_outputs` | `docs/plans/**/*.yaml`, `audits/**/*.yaml` | one file per workflow run |
 | 10 | `test_fixtures` | `tests/fixtures/**/*.yaml`, `tests/fixtures/**/*.yml`, `tests/fixtures/**/*.json` | inputs asserted against by tests |
 | 11 | `data_query` | `**/*.sql`, `**/*.json`, `**/*.toml`, `**/*.jsonl` | miscellaneous structured |
-| 12 | `agent_instructions_md` | `.claude/commands/**/*.md`, `**/*.prompt.md`, `**/*.instructions.md`, `.claude/agents/**/*.md`, `docs/contracts/**/*.md` | markdown an agent loads in order to ACT |
-| 13 | `workflow_artifacts_md` | `docs/audit-prompts/**/*.md`, `docs/plans/**/*.md`, `audits/**/*.md` | markdown siblings of `workflow_outputs` |
-| 14 | `residual` | every tracked, non-excluded file matching no row above | see the residual rule |
+| 12 | `residual` | every tracked, non-excluded file matching no row above | see the residual rule |
 
 **Generated provenance test (row 1).** A file is generated if ANY holds: it carries a do-not-edit
 or generated-by banner in its first 10 lines; a checked-in command or check regenerates it (search
@@ -169,7 +168,7 @@ and that belongs in DD-C and Q8 seed 1, not in a reclassification.
 If provenance is genuinely undeterminable for a file, classify it by extension and record the
 ambiguity as a DD-C observation.
 
-**Residual class (row 14) -- MANDATORY.** `git ls-files` tracks files that match no row above.
+**Residual class (row 12) -- MANDATORY.** `git ls-files` tracks files that match no row above.
 Composition observed these unmatched extensions: `.txt` (12, including requirements files), `.log`
 (3), `.gitignore` (2), `.example` (2), `.gitkeep` (2), `.lock`, `.tfrc`, `.importlinter`,
 `.gitattributes`, `.python-version`, `.baseline` (1 each), and 3 extensionless files
@@ -190,35 +189,29 @@ decision for the new file class". Then say in `rationale.actual_purpose` what ha
 file class appears after the Decision lands. Leaving future classes ungoverned by default and
 blocking on an unclassified file are both defensible; pick one and own it.
 
-**THE MARKDOWN RULE.** Markdown is NOT excluded wholesale. The governing split is by
-audience-of-record, not by extension:
+**THE MARKDOWN RULE -- markdown is entirely OUT OF SCOPE.** Be precise about why, because the
+obvious reason is false and you should not repeat it: markdown is NOT already fully governed.
+`validate_prose_limits` covers only four surface classes (root ambient set, per-directory
+`CLAUDE.md`, `**/SKILL.md`, `PROJECT_CONTEXT.md`) and `validate_decisions_size` covers the decision
+corpus; roughly 28 tracked `.md` files exceed 500 effective lines and many are governed by neither.
 
-- **Agent-audience markdown is IN SCOPE** and is what rows 12 and 13 cover. The requester's
-  position: markdown in this repository exists to instruct agents -- including the `/plan`,
-  `/implement` and `/audit` interactive session surfaces -- and those need limits like anything
-  else an agent must comprehend.
-- **Human-audience markdown is EXEMPT**: the root `README.md` and `docs/plans/reports/**`. The
-  requester believes that is the complete human-audience set. Test that belief against the tree
-  rather than assuming it, and if you find another genuinely human-audience file, say so -- but do
-  not verdict on it; report it as a Q8 observation so the requester can rule.
-- **Already-governed agent markdown is CONTEXT-ONLY, not a class.** `validate_prose_limits` covers
-  four surface classes (root ambient set, per-directory `CLAUDE.md`, `**/SKILL.md`,
-  `PROJECT_CONTEXT.md`) and `validate_decisions_size` covers the decision corpus. Those files are
-  already gated; do not re-audit them or issue class verdicts for them. Note the deliberate hole
-  worth understanding: `.claude/commands/*.md` (Decision 127's S3) is MEASURED-ONLY and carries no
-  budget entry, which is exactly the `/plan`, `/implement`, `/audit` surface the requester named.
-  Establish whether that is still the right call -- that is a Q1 question for
-  `agent_instructions_md`, not a defect to assume.
-- **Transitional sets are NOT a licence to ignore them.** `docs/INTENT-*.md` is a grandfathered,
-  retiring class under an active migration, and other documents are being migrated or deleted. A
-  retiring file still needs a verdict on whether it should be gated WHILE it exists; say which of
-  your recommendations should simply wait for the migration instead.
-- Anything markdown that fits none of the above lands in `residual` (row 14) and gets the residual
-  default -- notably `docs/CHANGELOG.md`, `docs/SESSION_LOG*.md`, `docs/ROADMAP-PRODUCT.md`, and
-  `docs/runbooks/`. `docs/ROADMAP-PRODUCT.md` is a FORMAT TWIN of `docs/ROADMAP-PRODUCT.yaml`
-  (class `roadmaps`): same role, same consumers, different extension. Twins are the sharpest test
-  of whether keying governance on extension is defensible; enumerate any others and treat the
-  question under DD-C.
+Markdown is excluded because the requester scoped it out, on evidence you should record but not
+re-litigate: every agent-instruction markdown surface is ALREADY compliant (`.claude/commands/**`
+max 119 effective lines, `**/*.prompt.md` max 155, `**/*.instructions.md` max 127,
+`docs/contracts/**/*.md` max 193, `audits/**/*.md` max 141 -- zero over 500 in any of them), and
+the one markdown class with real violations, `docs/audit-prompts/**` (13 of 23 over 500, largest
+3368), is executed only by frontier-tier models, which is precisely the population the limit does
+not exist to protect. Governing markdown would mean 8+ carve-outs for a population with almost no
+real violations, layered on top of an existing byte-based regime.
+
+Do NOT census markdown, do not classify it, and do not issue class verdicts on it. Record exactly
+one Q8 observation carrying these two facts, so a future decision can pick them up:
+  (a) Decision 43's `.prompt.md` row (3000 lines) is LIVE and governs 12 tracked files, and no
+      check appears to enforce it -- verify that claim before recording it.
+  (b) `docs/ROADMAP-PRODUCT.md` and `docs/ROADMAP-PRODUCT.yaml` are the same artifact in two
+      formats under opposite treatment: the `.yaml` is class `roadmaps` and in scope, the `.md` is
+      excluded purely by extension.
+That observation is the whole of markdown's presence in this audit. Do not expand it.
 
 **Exclusion outranks classification.** The exclusion list below is applied FIRST, before
 first-match-wins runs. A generated `.py` file is excluded (Python is out of scope), not row 1
@@ -229,17 +222,11 @@ first-match-wins runs. A generated `.py` file is excluded (Python is out of scop
   `personal_scripts/`, and any path not tracked by `git ls-files`;
 - **`**/*.py`** -- Python is already governed and is context-only for this audit (see "Context-only"
   below). It is NOT a residual member; do not census it and do not issue a class verdict for it;
-- **human-audience markdown ONLY** -- `README.md` at the repository root and
-  `docs/plans/reports/**/*.md` (the REPORT-* deliverables and spike notes). Human
-  audience-of-record, deliberately exempt: do not census them, do not verdict on them. The glob is
-  `.md`-scoped on purpose -- NON-markdown files under `docs/plans/reports/` are NOT exempt, and one
-  of them (`OVERSEER-terraform-deploy-redesign.yaml`) is class `workflow_outputs` and is DD-A's
-  centrepiece.
-- **already-governed agent prose** -- every path that is a budget key in
-  `config/prose_budgets.yaml` (the root ambient set, each non-root `**/CLAUDE.md`, each
-  `.claude/skills/*/SKILL.md`, `docs/PROJECT_CONTEXT.md`), plus `docs/DECISIONS.md` and
-  `docs/DECISIONS_ARCHIVE.md`. These are context-only. Excluding them explicitly is what stops
-  `residual` from sweeping them back in and forcing a verdict on settled Decision 127 territory.
+- **`**/*.md`, without exception** -- see THE MARKDOWN RULE above. This is an extension-level
+  exclusion applied before classification, so no markdown file reaches `residual`. Note it is
+  `.md`-scoped, not path-scoped: NON-markdown files under `docs/plans/reports/` are NOT excluded,
+  and one of them (`OVERSEER-terraform-deploy-redesign.yaml`) is class `workflow_outputs` and is
+  DD-A's centrepiece.
 
 ### Context-only, not audit targets
 
@@ -351,11 +338,20 @@ Degraded paths. Never abort; set the flag, downgrade confidence, proceed.
 Six principles. These are bars you judge each class against, not rules you pattern-match. Argue
 with them where a class warrants it -- a well-argued departure is a better result than compliance.
 
-- **NS-A Model portability is the point.** The limit exists so that a lower-tier model
-  (Sonnet-class, Gemini-class, Deepseek-class) can hold an entire file it is EDITING in working
-  comprehension and change it without collateral error. It is not an aesthetic preference and not
-  a proxy for code quality. Any expansion must trace back to this, or name a different and
-  explicitly stated purpose for that class.
+- **NS-A Model portability is the point, against a FIXED lowest common denominator.** The limit
+  exists so that a lower-tier model can hold an entire file it is EDITING in working comprehension
+  and change it without collateral error. It is not an aesthetic preference and not a proxy for
+  code quality. Any expansion must trace back to this, or name a different and explicitly stated
+  purpose for that class.
+
+  The design target is a fixed floor, roughly a DeepSeek-V4-Flash-class model: if the system works
+  for that, it works for anything above it. This is a REQUESTER CONSTRAINT, not your judgment call
+  (see the do-not-flag list). It rules out an entire family of otherwise-plausible answers, so do
+  not propose any of them: no limit that varies by which model consumes the file, no per-model or
+  per-tier budget, no exemption granted because a surface happens to be read only by a frontier
+  model today, and no governance input that has to be revised when the model roster changes. Model
+  identities move constantly; a rule keyed to them would need continuous renegotiation, and the
+  engineering cost of that is the reason the floor is fixed instead.
 - **NS-B The gate measures load, not lines.** The count is a proxy for comprehension load. A
   proxy that can be satisfied while the underlying load is unchanged is a broken proxy, and a
   proxy that fires on files carrying no load is a tax.
@@ -512,12 +508,17 @@ Answer each seed below AND extend the list with anything recon surfaces. Use the
   of scope?
 - Is there a class where the right answer is to change how the file is PRODUCED rather than to
   cap it?
-- **What happens at the `commands` -> `skills` boundary?** `.claude/commands/*.md` is in scope
-  (`agent_instructions_md`), but the `.claude/skills/*/SKILL.md` files those commands invoke are
-  byte-governed by `validate_prose_limits` and are context-only here -- and they carry most of the
-  instruction load a session actually reads. Can a line-governed surface and a byte-governed
-  surface coexist coherently across one invocation chain, and would a file ever need to sit under
-  both? If your Q2 answer unifies the unit, say what that does to the prose regime.
+- **If Q2 unifies the unit, what happens to the prose regime?** The markdown corpus is governed in
+  BYTES by `validate_prose_limits` and is out of scope here. But if your Q2 answer moves the
+  in-scope classes to bytes, tokens, or a composite, the two regimes either converge on one unit or
+  diverge further. Say which, and say whether a future markdown decision would inherit your unit or
+  keep its own. One short paragraph -- do not audit the prose regime.
+- **What does the fixed-floor choice cost?** NS-A pins governance to a fixed
+  lowest-common-denominator model rather than to which model actually consumes a file. That is
+  settled and not yours to overturn -- but name what it costs: which files end up governed more
+  tightly than their real consumers require, and whether any class is so exclusively
+  frontier-consumed that a uniform floor is measurably wasteful there. Answer in one short
+  paragraph; this is a cost disclosure, not a reopening.
 - **What is the base rate of the harm?** Every recommendation here traces to NS-A -- lower-tier
   models mis-editing large files. Establish whether that harm has ever been OBSERVED in this
   repository's non-Python classes, or whether it is assumed. Look for evidence in CI-RCA
@@ -896,6 +897,9 @@ positive.
 - **Decision 84** -- warehouse and portal invariants.
 - **Decision 67** -- the executor is frozen. Do not propose executor-consumed work.
 - **Decisions 60 and 73** -- the two-tier presubmit structure.
+- **Model-agnostic design against a fixed floor** (NS-A). The requester has decided that
+  consuming-model tier must NOT be a variable in the rule. Do not flag the absence of tier-aware
+  governance as a gap, and do not recommend introducing it. You MAY note in Q8 what this costs.
 - Commits from this harness land unsigned. Expected, not a defect.
 
 ## OUTPUT
@@ -920,7 +924,7 @@ audit:
          # methodology_version: bumped only if a future audit changes this prompt's method;
          #   read by anyone comparing two runs of this audit. Emit 1.
          # scope_surfaces: the slugs you actually assessed; read as the cross-check that
-         #   class_verdicts is complete. Should list all 14.
+         #   class_verdicts is complete. Should list all 12.
          methodology_version: 1,
          scope_surfaces: [<the slugs you assessed>],
          degraded_dedup: false,
@@ -956,10 +960,10 @@ audit:
     # Q8 basis: finding ids where the answer produced one, otherwise evidence citations
     # ("file:line", a rec id, or a Decision id). Mixing the two in one list is fine.
     - {q: Q8, answers: [{question: "", answer: "", basis: []}]}
-  # One entry per SCOPE-table slug, rows 1-14, including `residual`. None may be omitted.
+  # One entry per SCOPE-table slug, rows 1-12, including `residual`. None may be omitted.
   # Key is the pinned slug verbatim (generated, terraform, config, contracts, ci_workflows,
   # shell, lambda_manifests, roadmaps, workflow_outputs, test_fixtures, data_query,
-  # agent_instructions_md, workflow_artifacts_md, residual).
+  # residual).
   # `confidence` here follows the same degraded-run rule as findings: if meta.degraded_dedup is
   # true, every class verdict is HYPOTHESIS. This matters more than the findings case, because
   # draft_decision is built from these verdicts.
@@ -990,7 +994,7 @@ audit:
   # finding, whose id goes in that class's top_gaps -- top_gaps holds FINDING IDS, never rubric
   # cells; a weak cell with no finding behind it means either the finding is missing or the rating
   # is too harsh, so reconcile rather than leaving it dangling) and by the
-  # human comparing classes on one dimension. 14 slugs x 8 dimensions = 112 cells; `n/a` is
+  # human comparing classes on one dimension. 12 slugs x 8 dimensions = 96 cells; `n/a` is
   # expected to be common and is costless.
   rubric_ratings:
     - {surface: <slug>, dimension: VD1..VD8, rating: strong|adequate|weak|absent|n/a,
@@ -1054,8 +1058,8 @@ design, in one paragraph. Then the per-class verdict table. Do not restate the Y
   control would FAIL if the defect were real.
 - `CONFIRMED` requires the behavior traced to a file:line or to an observed sampled artifact.
   Anything less is `HYPOTHESIS`.
-- Every SCOPE-table slug, rows 1-14, must appear in `class_verdicts`, including classes you
-  exempt and including `residual`. Fourteen entries, keyed by the pinned slug, no omissions.
+- Every SCOPE-table slug, rows 1-12, must appear in `class_verdicts`, including classes you
+  exempt and including `residual`. Twelve entries, keyed by the pinned slug, no omissions.
 - `findings[].questions` and `findings[].dimensions` are lists; every value must come from the
   pinned Q1..Q8 and VD1..VD8 sets.
 - `draft_decision.number` is a placeholder. Do not guess a number; the human allocates it.
