@@ -6,7 +6,7 @@ slug: "commit-signing-false-positive"
 intent: >-
   Eliminate a recurring per-session token sink in which the CC-web harness Stop hook falsely reports
   every local commit as "Unverified (missing signature)", by configuring the git setting whose
-  absence causes the false positive and correcting the two repo surfaces that record the wrong
+  absence causes the false positive and correcting the three repo surfaces that record the wrong
   root cause. Reduces per-session friction on the primary agent development surface.
 plan_type: IMPLEMENTATION
 verification_tier: V2
@@ -19,9 +19,11 @@ scope:
   - file: .claude/hooks/session_start_commit_signing.py
     action: Create
     purpose: >-
-      SessionStart hook. Probe-signs a temp file with the configured gpg.ssh.program; ONLY on a
-      structurally valid SSHSIG does it derive the signing public key, write an allowed-signers
-      file under $HOME, and set gpg.ssh.allowedSignersFile. Fail-soft, idempotent, always exit 0.
+      SessionStart hook. When commit.gpgsign is true AND gpg.format is ssh, ensure an
+      allowed-signers file exists under $HOME and point gpg.ssh.allowedSignersFile at it, so git
+      stops short-circuiting its SSH-signature verdict to N. Contents-agnostic (the N->B transition
+      depends only on the setting naming a file), idempotent, no-op on non-signing surfaces,
+      always exit 0.
   - file: .claude/settings.json
     action: Modify
     purpose: Register the new hook in the SessionStart hooks array.
@@ -30,25 +32,34 @@ scope:
     purpose: >-
       Replace the "### Commit signing (CC-web: unsigned is expected)" subsection, whose premise
       ("commits land unsigned", "signing is unavailable in this harness") is factually wrong, with
-      the verified mechanism. Retain the do-not-amend / do-not-reset-author directive.
+      the verified mechanism. Retain the do-not-amend / do-not-reset-author directive and the
+      committer-email distinction.
   - file: .claude/commands/plan.md
     action: Modify
     purpose: >-
-      Push immediately after the Step 8 plan commit so no unpushed commit spans the Step 9/10
-      critique-gate turn boundaries; change Step 11's push to --force-with-lease, which the
-      post-rebase push then requires.
+      Push immediately after the Step 8 plan commit AND after every Step 9/10 critique-revision
+      commit, so no unpushed commit spans a gate turn boundary; change Step 11's push to
+      --force-with-lease, which the post-rebase push then requires.
   - file: terraform/github/repo.tf
     action: Modify
     purpose: >-
       Comment-only. Re-ground the required_signatures omission on Decision 83's deliberate
-      non-wedging ruleset design; remove the false "0-byte placeholder / signing broken"
-      justification. Keeps the "intentional -- do not add" directive verbatim.
+      non-wedging ruleset design, remove the false "0-byte placeholder / signing broken"
+      justification, and repoint the AGENTS.md cross-reference at the retitled subsection. Keeps
+      the "intentional -- do not add" directive verbatim.
+  - file: docs/audit-prompts/AUDIT-platform-roadmap-mvp-triage.md
+    action: Modify
+    purpose: >-
+      Correct line ~435, which asserts "Unsigned CC-web commits (git log %G? = N) -- expected, per
+      AGENTS.md" under a "Deliberate constraints -- DO NOT flag these as defects" heading. It is a
+      live instruction surface consumed by fresh audit sessions and would otherwise instruct an
+      auditor to treat the corrected belief as ground truth.
   - file: tests/hooks/test_session_start_commit_signing.py
     action: Create
     purpose: >-
-      Unit coverage for the hook: the fail-safe branches (must NOT configure when signing is
-      absent or the probe output is not a valid SSHSIG), the SSHSIG public-key parser, the
-      happy path, and idempotency.
+      Unit coverage for the hook: the two no-op guards (gpgsign disabled, gpg.format not ssh), the
+      happy path, idempotency, and the already-configured no-op. All under an isolated HOME and
+      GIT_CONFIG_GLOBAL.
 bundled_recommendations: []
 infrastructure_dependencies:
   - >-
@@ -58,47 +69,54 @@ infrastructure_dependencies:
   - >-
     terraform is NOT installed in this container and terraform/github/ uses the github.com-hosted
     integrations/github provider, so local init/validate/plan is egress-blocked (Decision 119).
-    Verification is grep-only locally; the required terraform-validate CI check is the authoritative
-    verifier.
+    Verified: _TERRAFORM_ROOTS in scripts/checks/_terraform.py includes terraform/github, and the
+    terraform-validate CI job runs unconditionally on every PR with no paths filter -- it is the
+    authoritative verifier and including this file adds no CI cost.
 acceptance_criteria:
   - >-
-    Running .claude/hooks/session_start_commit_signing.py in the CC-web container sets
-    gpg.ssh.allowedSignersFile to an existing file containing the harness signing public key.
+    Running .claude/hooks/session_start_commit_signing.py in the CC-web container leaves
+    gpg.ssh.allowedSignersFile set to a path that exists.
   - >-
     After the hook runs, the harness Stop hook's own signature predicate
     (git log --format='%h %G? %ce' <upstream>..HEAD piped through awk '$2 == "N" || $3 !=
     "noreply@anthropic.com"') returns EMPTY for this branch's commits, where before the change it
     returned every commit.
   - >-
-    The hook does NOT set gpg.ssh.allowedSignersFile when commit.gpgsign is not true, when
-    gpg.format is not ssh, when the probe-sign fails, or when the probe output is not a
-    structurally valid SSHSIG -- so a genuinely unsigned commit is still reported by the Stop hook.
+    The hook makes NO git-config change when commit.gpgsign is not true or gpg.format is not ssh,
+    so it is inert on surfaces that do not sign (notably CI runners).
   - The hook is idempotent and exits 0 on every path, including every failure path.
   - .claude/settings.json registers the hook in SessionStart and remains valid JSON.
   - >-
     AGENTS.md no longer asserts that CC-web commits are unsigned or that signing is unavailable,
-    and still forbids reset-author / --amend -S churn.
+    still forbids reset-author / --amend -S churn, and still distinguishes the harness predicate's
+    two independent triggers (missing signature vs committer email != noreply@anthropic.com).
   - >-
     The AGENTS.md rewrite keeps the S1 root_ambient_load_set prose budget satisfied
-    (current bytes <= 33215) with NO budget raise and no raise-approved marker.
+    (current bytes <= 33215) with NO budget raise and no edit to config/prose_budgets.yaml.
   - >-
     terraform/github/repo.tf still carries an explicit "do not add required_signatures" directive,
-    grounded on Decision 83 rather than on the false 0-byte-key premise.
+    grounded on Decision 83, and its AGENTS.md cross-reference names the retitled subsection.
   - >-
-    .claude/commands/plan.md pushes after the Step 8 commit and uses --force-with-lease at Step 11.
+    docs/audit-prompts/AUDIT-platform-roadmap-mvp-triage.md no longer instructs auditors that
+    unsigned CC-web commits are an expected deliberate constraint.
   - >-
-    A recommendation is filed recording the upstream harness Stop-hook defect (the hook treats
-    %G? == N as proof of a missing signature, which is false for gpg.format=ssh when
-    gpg.ssh.allowedSignersFile is unset), so the diagnosis outlives this session (Decision 55).
+    .claude/commands/plan.md pushes after the Step 8 commit and after each Step 9/10 revision
+    commit, and uses --force-with-lease at Step 11.
+  - >-
+    A recommendation is filed recording the upstream harness Stop-hook defect AND the coupling
+    fragility (the repo-side mitigation depends on the harness predicate testing $2 == "N"; if
+    upstream tightens it to != "G" the mitigation silently stops working, because local
+    verification can never reach G in this container).
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
       Prove the hook flips the harness Stop hook's signature predicate from firing to clean on this
-      branch's real, signed commits. This is the end-to-end behavioural proof, run against the live
-      harness signer rather than a mock.
+      branch's real, signed commits. End-to-end behavioural proof against the live harness signer.
+      Note this mutates --global gpg.ssh.allowedSignersFile -- the same mutation the hook performs
+      at every SessionStart, so it introduces no side effect the session would not already have.
     command: >-
-      bin/venv-python .claude/hooks/session_start_commit_signing.py >/dev/null 2>&1; test -n "$(git
+      bin/venv-python .claude/hooks/session_start_commit_signing.py >/dev/null 2>&1; test -f "$(git
       config --get gpg.ssh.allowedSignersFile)" && test -z "$(git log --format='%h %G? %ce'
       origin/main..HEAD | awk '$2 == "N" || $3 != "noreply@anthropic.com"')" && echo PREDICATE_CLEAN
     expected: >-
@@ -106,77 +124,80 @@ verification_plan:
       (each with %G? == N), which is exactly the text the harness Stop hook echoes when it exits 2.
     fix_if: >-
       Non-empty awk output means %G? is still N -- check that gpg.ssh.allowedSignersFile is set and
-      the file exists. Empty allowedSignersFile means the hook took a fail-safe exit; run it without
+      that the path exists. An unset value means the hook took a guard exit; rerun without
       redirecting stderr to see which guard tripped.
     hermetic: false
     graduation: not-applicable
   - step: 2
     phase: pre-deploy
     action: >-
-      Prove the Decision 55 fail-safe: the hook must not configure allowedSignersFile when signing
-      is genuinely unavailable, so a real unsigned commit is still caught by the Stop hook.
-      Exercises the disabled-gpgsign, failing-signer, and non-SSHSIG-output branches.
+      Prove the hook's guard and idempotency behaviour via the unit suite (no-op when gpgsign is
+      false, no-op when gpg.format is not ssh, happy path, repeat-run no-op, already-configured
+      no-op), all under an isolated HOME and GIT_CONFIG_GLOBAL.
     command: bin/venv-python -m pytest tests/hooks/test_session_start_commit_signing.py -q
-    expected: All tests pass, including the three fail-safe branches and the SSHSIG parser tests.
+    expected: All tests pass.
     fix_if: >-
-      A failing fail-safe test means the hook sets allowedSignersFile unconditionally, which would
-      mask genuinely unsigned commits -- gate the config write behind a validated SSHSIG probe.
+      A failing guard test means the hook writes git config on a non-signing surface; a failing
+      isolation test means the suite is leaking into the real global git config.
     hermetic: false
-    graduation: waive
-    graduation_waiver_reason: >-
-      The suite spans four distinct guard branches plus a binary-parser unit; the canonical
-      test_selector slot admits one selector, and graduating only one branch would register a
-      standing guard that silently stops covering the other three as the file evolves. Step 5's
-      grep-count guard is the graduated regression anchor for this file instead.
+    graduation: graduate
+    graduation_check_id: cc-web-signing-hook-unit-suite
   - step: 3
     phase: pre-deploy
     action: >-
-      Prove the hook is idempotent and exits 0 on repeat invocation (it runs on every SessionStart
-      and must never wedge session startup).
+      Independent adversarial probe of the guards, outside the agent-authored test file: run the
+      hook twice against a throwaway HOME and GIT_CONFIG_GLOBAL with commit.gpgsign=false, and
+      assert it wrote nothing and exited 0 both times.
     command: >-
-      bin/venv-python .claude/hooks/session_start_commit_signing.py >/dev/null 2>&1 &&
-      bin/venv-python .claude/hooks/session_start_commit_signing.py >/dev/null 2>&1 && echo
-      IDEMPOTENT_EXIT0
-    expected: Prints IDEMPOTENT_EXIT0; both invocations exit 0 and the second makes no change.
+      bash -c 'D=$(mktemp -d); export HOME="$D" GIT_CONFIG_GLOBAL="$D/gc"; git config --global
+      commit.gpgsign false; bin/venv-python .claude/hooks/session_start_commit_signing.py
+      >/dev/null 2>&1 || exit 1; bin/venv-python .claude/hooks/session_start_commit_signing.py
+      >/dev/null 2>&1 || exit 1; test -z "$(git config --global --get
+      gpg.ssh.allowedSignersFile)" && echo GUARD_HELD_EXIT0'
+    expected: >-
+      Prints GUARD_HELD_EXIT0 -- both runs exited 0 and neither set gpg.ssh.allowedSignersFile.
     fix_if: >-
-      A non-zero exit means an unguarded raise -- wrap the body so every path returns 0, per
-      AGENTS.md "Never raise exceptions during module import" and SessionStart-hook safety.
-    hermetic: false
-    graduation: not-applicable
+      Empty output with a non-zero exit means the hook raised instead of exiting 0 (it runs on
+      every SessionStart and must never wedge startup). A non-empty config value means the guard
+      is missing and the hook writes config on surfaces that do not sign.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: cc-web-signing-hook-guard-holds
   - step: 4
     phase: pre-deploy
     action: >-
-      Prove the stale premise is gone from both surfaces that carried it, and that the replacement
-      guidance retains the anti-churn directive.
+      Prove the stale premise is gone from all three surfaces that carried it, that the replacement
+      guidance retains both anti-churn directives, and that repo.tf's cross-reference points at the
+      retitled AGENTS.md subsection rather than dangling on the old heading.
     command: >-
-      ! grep -qiE "signing is unavailable|commits land unsigned|0-byte placeholder" AGENTS.md
-      terraform/github/repo.tf && grep -q "do not add" terraform/github/repo.tf && grep -qiE
-      "reset-author" AGENTS.md && echo PREMISE_CORRECTED
+      bash -c '! grep -rqiE "signing is unavailable|commits land unsigned|0-byte placeholder"
+      AGENTS.md terraform/github/repo.tf docs/audit-prompts/AUDIT-platform-roadmap-mvp-triage.md &&
+      grep -q "do not add" terraform/github/repo.tf && grep -qi "reset-author" AGENTS.md && H=$(grep
+      -o "### Commit signing[^\"]*" AGENTS.md | head -1) && grep -qF "$H" terraform/github/repo.tf
+      && echo PREMISE_CORRECTED'
     expected: >-
-      Prints PREMISE_CORRECTED. The false-premise phrases are absent from both files, repo.tf still
-      forbids adding required_signatures, and AGENTS.md still forbids reset-author churn.
+      Prints PREMISE_CORRECTED. No false-premise phrase survives in any of the three files, repo.tf
+      still forbids adding required_signatures, AGENTS.md still forbids reset-author churn, and
+      repo.tf quotes the current AGENTS.md heading.
     fix_if: >-
-      A match on the false-premise pattern means stale text survived a partial edit; a missing
-      "do not add" means the repo.tf rewrite dropped the directive Decision 83 depends on.
+      A false-premise match means stale text survived a partial edit. A heading mismatch means the
+      retitle left repo.tf pointing at a subsection that no longer exists.
     hermetic: true
     graduation: graduate
     graduation_check_id: cc-web-signing-premise-corrected
   - step: 5
     phase: pre-deploy
     action: >-
-      Prove the hook is registered in SessionStart, that settings.json is still valid JSON, and
-      that the hook file carries its fail-safe guards (regression anchor for step 2's suite).
+      Prove the hook is registered in SessionStart and that settings.json is still valid JSON --
+      a malformed edit would disable every hook, including never_on_main.py (Decision 138).
     command: >-
       bin/venv-python -c "import json,sys;d=json.load(open('.claude/settings.json'));g=[k.get('command','')
       for b in d['hooks']['SessionStart'] for k in b['hooks']];sys.exit(0 if
-      any('session_start_commit_signing' in c for c in g) else 1)" && echo REGISTERED && test
-      "$(grep -cE 'commit.gpgsign|SSHSIG' .claude/hooks/session_start_commit_signing.py)" -ge 2 &&
-      echo GUARDS_PRESENT
-    expected: Prints REGISTERED then GUARDS_PRESENT.
+      any('session_start_commit_signing' in c for c in g) else 1)" && echo REGISTERED
+    expected: Prints REGISTERED.
     fix_if: >-
-      A JSON error means the settings.json edit broke the file (this would disable every hook,
-      including never_on_main.py -- Decision 138). A missing registration means the hook exists but
-      never runs at session start.
+      A JSON decode error means the settings.json edit broke the file. A non-zero exit with valid
+      JSON means the hook exists but is not wired into SessionStart, so it never runs.
     hermetic: true
     graduation: graduate
     graduation_check_id: cc-web-signing-hook-registered
@@ -184,33 +205,43 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Prove the AGENTS.md rewrite stays inside the S1 ambient prose ratchet without a budget raise.
-      Headroom at planning time was 115 bytes (33100 measured against a 33215 budget).
+      Headroom at planning time was 115 bytes (33100 measured against a 33215 budget); the existing
+      subsection is 645 bytes, so the replacement ceiling is about 760 bytes.
     command: >-
       bin/venv-python -c "from scripts.checks.prose import prose_limits;f=[];prose_limits.validate_prose_limits(f);raise
       SystemExit(1 if f else 0)" && echo PROSE_OK && git diff --quiet origin/main --
       config/prose_budgets.yaml && echo BUDGET_UNRAISED
     expected: >-
-      Prints PROSE_OK then BUDGET_UNRAISED -- the surface is within budget and
+      Prints PROSE_OK then BUDGET_UNRAISED -- the ambient surface is within budget and
       config/prose_budgets.yaml was not modified at all.
     fix_if: >-
-      An over-budget failure means the rewrite grew AGENTS.md past the ceiling: tighten the wording
-      or move procedural detail into .claude/commands/plan.md (class S3, measured-only, unbudgeted).
-      Do NOT take a Decision-cited budget raise for this change.
+      An over-budget failure means the rewrite grew AGENTS.md past the ceiling. Cut lower-value
+      bullets in the ranked order given in execution step 5 (the Decision 83 back-reference goes
+      first -- repo.tf already points here, so the reverse pointer is the least load-bearing). Do
+      NOT relocate ambient git-ops guidance into .claude/commands/plan.md to dodge the budget: this
+      guidance is needed by every session, not just /plan. Do NOT take a Decision-cited raise.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: cc-web-signing-prose-budget-unraised
+    graduation: waive
+    graduation_waiver_reason: >-
+      Not admissible under VF-06's differential gate: the asserted property (ambient set within
+      budget, budgets file unmodified) already holds on origin/main, so run_differential would find
+      the check passing on the reverted tree and reject the row as tautological. It is a
+      regression guard on a pre-existing invariant, not evidence of this change.
   - step: 7
     phase: pre-deploy
     action: >-
-      Prove the /plan command now pushes before the critique gates and force-pushes with lease
-      after the Step 11 rebase -- the git-ops half of the fix.
+      Prove the /plan command pushes before the critique gates, pushes each revision commit, and
+      force-pushes with lease after the Step 11 rebase.
     command: >-
-      grep -q -- "--force-with-lease" .claude/commands/plan.md && test "$(grep -c 'git push'
-      .claude/commands/plan.md)" -ge 2 && echo PUSH_EARLY_WIRED
-    expected: Prints PUSH_EARLY_WIRED; plan.md contains a Step 8 push and a leased Step 11 push.
+      bash -c 'grep -q -- "--force-with-lease" .claude/commands/plan.md && test "$(grep -c "git
+      push" .claude/commands/plan.md)" -ge 3 && echo PUSH_EARLY_WIRED'
+    expected: >-
+      Prints PUSH_EARLY_WIRED; plan.md contains a Step 8 push, a Step 9/10 revision-commit push,
+      and a leased Step 11 push.
     fix_if: >-
-      Fewer than two push sites means the Step 8 push was not added; a missing --force-with-lease
-      means Step 11 will fail once the branch is already pushed before its rebase.
+      Fewer than three push sites means a commit site was missed -- an unpushed revision commit
+      re-strands the next turn boundary, which is the exact friction this change removes. A missing
+      --force-with-lease means Step 11 fails once the branch is already pushed before its rebase.
     hermetic: true
     graduation: graduate
     graduation_check_id: cc-web-plan-push-early-wired
@@ -224,9 +255,20 @@ verification_plan:
     graduation: not-applicable
 constraints:
   - >-
-    The hook must NEVER set gpg.ssh.allowedSignersFile unless a probe-sign returned a structurally
-    valid SSHSIG. Setting it unconditionally would make a genuinely unsigned commit read as signed
-    to the Stop hook, converting a false positive into a false negative (Decision 55 spirit flag).
+    Do NOT reintroduce a probe-sign / SSHSIG key-derivation step. Verified empirically: the N->B
+    transition depends only on gpg.ssh.allowedSignersFile naming a file -- an empty file, an
+    unrelated key, and a nonexistent path all yield B. Deriving the real key cannot change the
+    outcome (local verification can never run: ssh-keygen is absent and the harness signer accepts
+    only -Y sign), and writing a derived key would assert a principal-to-key trust binding this
+    container never authenticated. An empty, comment-headed file is the more honest artefact
+    (Decision 100: do not substitute custom tooling for native behaviour).
+  - >-
+    Do NOT justify the hook's guards as preventing a masked unsigned commit. Verified empirically:
+    a commit with no signature reports %G? = N whether or not allowedSignersFile is set, so the
+    harness predicate still catches it; and with commit.gpgsign true a broken signer makes git
+    commit FAIL outright rather than emit an unsigned commit. The guards exist so the hook is inert
+    on non-signing surfaces, not as a safety interlock. State that honestly -- an unverified
+    mechanism claim is exactly what this plan exists to delete from the repo.
   - >-
     Do NOT delete, edit, or otherwise disable /root/.claude/launcher-settings.json or
     /root/.claude/stop-hook-git-check.sh. They are harness-owned, outside the repo, regenerated per
@@ -237,12 +279,12 @@ constraints:
     exiting 0 cannot neutralise the harness hook's exit 2. Verified this session: the harness
     SessionStart hook and the repo's six SessionStart hooks all ran in the same session.
   - >-
-    The derived signing public key and the allowed-signers file live under $HOME and are NEVER
-    committed, echoed into a repo-tracked file, or printed into CI logs (Decision 101).
+    The allowed-signers file lives under $HOME and is NEVER committed, echoed into a repo-tracked
+    file, or printed into CI logs (Decision 101).
   - >-
-    Do not embed a real or realistic SSH key literal in the test file -- detect-secrets and the
-    shape-based never-commit pre-commit hook scan for high-entropy strings. Build SSHSIG fixtures
-    programmatically with struct/base64 from synthetic bytes.
+    Tests MUST isolate both HOME and GIT_CONFIG_GLOBAL (GIT_CONFIG_GLOBAL is the reliable lever --
+    HOME alone does not redirect git's global config in every invocation). A test that writes the
+    real --global config is a defect.
   - >-
     AGENTS.md must stay within the S1 prose ratchet (<= 33215 bytes for the ambient load set) with
     no raise-approved marker and no edit to config/prose_budgets.yaml. Wording is flexible; the
@@ -257,6 +299,10 @@ constraints:
     Both commit-safety layers stay intact: never_on_main.py (PreToolUse) and the pre-commit hook
     (Decision 138 / CD.5). The new SessionStart hook augments them and must not reorder or weaken
     either.
+  - >-
+    docs/plans/PLAN-commit-signing-cc-web.yaml is deliberately NOT edited. A merged plan document
+    is an immutable historical record of what was decided at the time, not a live instruction
+    surface; this plan's context section records the supersession instead.
   - No new numbered Decision -- an operational-fact correction routes to a rec (Decision 150).
   - No new standing prose-architecture doc under docs/ (Decision 86).
   - No emojis; ASCII hyphens only. Python 3.12+ with type hints; ruff line length 127.
@@ -272,41 +318,70 @@ context:
   - >-
     git log --format=%G? returns N NOT because a signature is missing but because
     gpg.ssh.allowedSignersFile is unset -- git 2.43 short-circuits SSH-signature verification to N
-    before inspecting the commit. Setting the key to ANY existing path (empty file, unrelated key,
-    or the real key) yields B instead of N. Local verification can never reach G in this container:
-    ssh-keygen is not installed, and the harness signer rejects everything except -Y sign
-    ("unsupported code-sign operation: currently only SSH-style signing (-Y sign) is supported").
-    That check was run before choosing the custom SSHSIG parse, per the scout's Decision 100 note.
+    before inspecting the commit. Setting the key to ANY existing path yields B instead of N. Local
+    verification can never reach G in this container: ssh-keygen is not installed, and the harness
+    signer rejects everything except -Y sign ("unsupported code-sign operation: currently only
+    SSH-style signing (-Y sign) is supported").
+  - >-
+    Two claims from the first draft of this plan were tested and FALSIFIED, and the design was
+    reduced accordingly. (1) Setting allowedSignersFile cannot mask a genuinely unsigned commit: a
+    commit with no gpgsig header reports %G? = N with the setting pointed at an existing empty file,
+    identical to the unset case, because the setting only affects verification of a signature that
+    exists. (2) With commit.gpgsign true and a deliberately failing signer, git commit aborts with
+    "fatal: failed to write commit object" and creates no commit at all. The first draft's
+    probe-sign, SSHSIG parser, and four-branch "fail-safe" therefore defended a failure mode git's
+    own semantics preclude, and were deleted.
   - >-
     The defect is in the harness Stop hook /root/.claude/stop-hook-git-check.sh (registered by
     /root/.claude/launcher-settings.json). Its inline comment asserts "signed-but-locally-
     unverifiable commits report B/U/E, so this is a reliable presence check" -- empirically false
     for gpg.format=ssh. Its check is gated on commit.gpgsign==true and scoped to <upstream>..HEAD,
     so it fires only on UNPUSHED commits; a push clears it. That is why the push-early change to
-    .claude/commands/plan.md is the second half of the fix.
+    .claude/commands/plan.md is the second half of the fix -- it targets the hook's LEGITIMATE
+    unpushed-commit branch (lines 63-71), which is separate from the false-positive signature
+    branch the hook file addresses.
+  - >-
+    Upstream-coupling fragility (record this in the filed rec too). The mitigation works by turning
+    "no signature" (N) into "bad signature" (B) and relying on the harness predicate testing
+    $2 == "N". If upstream tightens that predicate to != "G", the repo-side hook silently stops
+    working, because G is unreachable in this container. The failure mode is a return to today's
+    noise, not a correctness regression, but it is unrecorded anywhere upstream can see it.
   - >-
     End-to-end simulation against the real harness hook script, on a scratch repo with one unpushed
     signed commit: WITHOUT allowedSignersFile it exits 2 with the "Unverified (missing signature)"
     text and the amend/reset-author remediation; WITH it set, the signature branch passes and the
     hook falls through to its legitimate "1 unpushed commit(s)" message; after git push it exits 0.
   - >-
+    The harness predicate has TWO independent triggers: awk '$2 == "N" || $3 !=
+    "noreply@anthropic.com"'. Only the signature half is a false positive. The committer-email half
+    is a real check for which the hook's amend/reset-author remediation is CORRECT. The AGENTS.md
+    rewrite must keep that distinction, folded into the "if it still fires" bullet, so the blanket
+    do-not-amend directive does not train agents to ignore a legitimate trigger.
+  - >-
     The human confirmed (2026-08-03) that GitHub reports commits from this surface as Verified for
     both the human and the agent. So the harness signing key IS registered account-side, the local
-    N/B flag is purely a local-verification artefact, and the corrected repo.tf comment must ground
-    the required_signatures omission on Decision 83's deliberate non-wedging ruleset design rather
-    than on any claim that GitHub cannot verify these commits.
+    N/B flag is purely a local-verification artefact, and the corrected repo.tf comment grounds the
+    required_signatures omission on Decision 83's deliberate non-wedging ruleset design rather than
+    on any claim that GitHub cannot verify these commits.
   - >-
     Prior art and why it was wrong. docs/plans/PLAN-commit-signing-cc-web.yaml (merged) diagnosed
-    the 0-byte key as "signing fails silently" and wrote that premise into both AGENTS.md and
-    terraform/github/repo.tf. This plan supersedes that diagnosis. No ratified Decision ever
-    asserted it -- the decision-scout verified by full-corpus grep of DECISIONS.md and
-    DECISIONS_ARCHIVE.md that no active decision claims CC-web commits are unsigned, so correcting
-    the premise contradicts nothing ratified.
+    the 0-byte key as "signing fails silently" and wrote that premise into AGENTS.md,
+    terraform/github/repo.tf, and (transitively) the MVP-triage audit prompt. This plan supersedes
+    that diagnosis. No ratified Decision ever asserted it -- the decision-scout verified by
+    full-corpus grep of DECISIONS.md and DECISIONS_ARCHIVE.md that no active decision claims CC-web
+    commits are unsigned, so correcting the premise contradicts nothing ratified.
+  - >-
+    Graduation implementation note: CommandExitZeroCheck.command is a list[str] passed to
+    subprocess.run WITHOUT a shell, so the graduated compound commands in steps 3, 4 and 7 must be
+    registered as ["bash", "-c", "<command>"] rows (or decomposed into grep_count rows). Step 2
+    graduates as a file-level test_selector node_id, for which the live registry already has
+    precedent (full-validation-result-evidence -> tests/checks/test_validation_result.py).
   - >-
     Scope-file byte ceilings measured at planning time: S1 root_ambient_load_set 33100/33215 (115
-    bytes of headroom, over-budget blocks and under-budget is advisory only);
-    .claude/commands/plan.md is class S3, measured-only with no budget entry, so procedural detail
-    belongs there. terraform is not installed in this container.
+    bytes of headroom; over-budget blocks, under-budget is advisory only); the existing signing
+    subsection is 645 bytes, so the replacement ceiling is about 760 bytes.
+    .claude/commands/plan.md is class S3, measured-only with no budget entry. terraform is not
+    installed in this container.
   - >-
     Decision-scout verdict + CITE list. Verdict FLAGS_FOUND (115 of 115 decisions triaged). CITE:
     Decision 119 (terraform CI-delegation for egress-blocked third-party providers), Decision 48
@@ -315,88 +390,91 @@ context:
     (graduation disposition required on every pre-deploy VP step), Decision 127 (AGENTS.md and
     .claude/commands/plan.md are permanently sanctioned prose surfaces), Decision 150 (operational-
     fact correction routes to a rec, not a numbered Decision), Decision 101 (public-content
-    boundary; key stays under $HOME), Decisions 128 and 130 (SLOC governance covers .claude/ and
-    tests/), Decision 138 (CD.5 -- both commit-safety layers retained). NOTE flags: Decision 83
-    (correcting the repo.tf justification must not imply required_signatures is now safe to add --
-    resolved by keeping the "do not add" directive and re-grounding it on Decision 83's non-wedging
-    design), Decision 100 (prefer a native primitive over a custom SSHSIG parse -- resolved: the
-    native primitives were checked first and are unavailable, so the parse is a conscious
-    fallback), Decision 55 (the true root cause is an out-of-repo harness defect -- resolved by
-    filing a rec and by the fail-safe constraint that the hook never configures allowedSignersFile
-    when signing is genuinely absent). RELATED: Decision 89 (premise reversed by 83; awareness
-    only), Decision 76 and Decision 90 (the git-ops flow plan.md Step 8/11 implements), Decision
-    148 (hermetic default), Decision 131 (tests/hooks/ colocation precedent), Decision 75
+    boundary; allowed-signers file stays under $HOME), Decisions 128 and 130 (SLOC governance
+    covers .claude/ and tests/), Decision 138 (CD.5 -- both commit-safety layers retained). NOTE
+    flags: Decision 83 (correcting the repo.tf justification must not imply required_signatures is
+    now safe to add -- resolved by keeping the "do not add" directive and re-grounding it on
+    Decision 83's non-wedging design), Decision 100 (prefer native behaviour over custom tooling --
+    resolved by DELETING the key-derivation entirely, not by justifying it as a fallback), Decision
+    55 (the true root cause is an out-of-repo harness defect -- resolved by filing a rec carrying
+    both the defect and the coupling fragility). RELATED: Decision 89 (premise reversed by 83;
+    awareness only), Decision 76 and Decision 90 (the git-ops flow plan.md Step 8/11 implements),
+    Decision 148 (hermetic default), Decision 131 (tests/hooks/ colocation precedent), Decision 75
     (frame-lock -- this plan answers "what assumption have we carried that the world moved past").
-  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=REVISE then PROCEED after 2 rounds"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/git-commit-signing-hook-s7dg4s)
   - docs/PROJECT_CONTEXT.md read
   - Decision alignment checked via decision-scout gate (FLAGS_FOUND, 115/115, all NOTEs resolved above)
-  - All six scope files located and readable
+  - All seven scope files located and readable
   - >-
     Re-confirm the live signing state before editing (git config --get commit.gpgsign, gpg.format,
     gpg.ssh.program; git cat-file -p HEAD | grep "BEGIN SSH SIGNATURE") -- the harness may change
   - Acceptance criteria understood and verifiable
 execution_steps:
   - >-
-    Create .claude/hooks/session_start_commit_signing.py. Read commit.gpgsign, gpg.format,
-    gpg.ssh.program (default ssh-keygen), user.signingkey and user.email via git config. Exit 0
-    immediately unless commit.gpgsign is true AND gpg.format is ssh. Probe-sign a temp file with
-    "<program> -Y sign -n git -f <signingkey> <tmpfile>"; require exit 0 and a <tmpfile>.sig whose
-    armour decodes to a blob beginning with the 6-byte SSHSIG magic. On ANY failure, log one line
-    and exit 0 WITHOUT touching git config -- this is the fail-safe that keeps genuinely unsigned
-    commits detectable.
-  - >-
-    In the same file, parse the SSHSIG blob to recover the signer public key: skip the 6-byte magic
-    and 4-byte version, read the length-prefixed publickey string, and emit "<keytype>
-    <base64(publickey_blob)>" where keytype is the blob's own first length-prefixed field. Write
-    "<user.email> <pubkey>" to $HOME/.config/git/ccweb_allowed_signers with mode 0600, creating
-    parent dirs, then set it via "git config --global gpg.ssh.allowedSignersFile <path>". Use
-    --global (not --local) because the signing identity is a container-level fact, the harness
-    configures signing globally, and the Stop hook may run from any worktree or cwd. Make it
-    idempotent: if the config already points at a file whose contents match, make no writes. Type
-    hints throughout; never raise; always exit 0; print one status line.
+    Create .claude/hooks/session_start_commit_signing.py. Read commit.gpgsign and gpg.format via
+    git config. Exit 0 immediately, writing nothing, unless commit.gpgsign is true AND gpg.format is
+    ssh -- this keeps the hook inert on non-signing surfaces such as CI runners. Otherwise resolve
+    the allowed-signers path as $HOME/.config/git/ccweb_allowed_signers, create parent dirs, and
+    create the file if absent containing only a short "#" header comment explaining that it exists
+    so git does not short-circuit its SSH-signature verdict to N, and that it is deliberately empty
+    because this container cannot verify signatures. Then set
+    "git config --global gpg.ssh.allowedSignersFile <path>". Use --global (not --local) because the
+    signing identity is a container-level fact, the harness configures signing globally, and the
+    Stop hook may run from any worktree or cwd. Make it idempotent: if the config already names an
+    existing file, make no writes. Type hints throughout; never raise; always exit 0; print one
+    status line.
   - >-
     Register the hook in .claude/settings.json under hooks.SessionStart, invoked as
     "bin/venv-python .claude/hooks/session_start_commit_signing.py". Do not reorder or remove any
     existing hook (Decision 138).
   - >-
     Create tests/hooks/test_session_start_commit_signing.py covering: (a) commit.gpgsign false ->
-    config NOT set; (b) gpg.format not ssh -> config NOT set; (c) probe-sign exits non-zero ->
-    config NOT set; (d) probe output is not a valid SSHSIG -> config NOT set; (e) happy path ->
-    allowed-signers file written with the parsed key and config set; (f) second invocation is a
-    no-op; (g) the SSHSIG parser returns the expected keytype and base64 for a synthetic blob.
-    Build fixtures programmatically with struct/base64 and a stub signer script in tmp_path;
-    monkeypatch HOME and the git config surface. Never embed a realistic key literal.
+    no config written; (b) gpg.format not ssh -> no config written; (c) happy path -> file created
+    with its header comment and gpg.ssh.allowedSignersFile set to it; (d) second invocation is a
+    no-op; (e) config already naming an existing file -> no rewrite. Every test sets both HOME and
+    GIT_CONFIG_GLOBAL to tmp_path (GIT_CONFIG_GLOBAL is the lever that actually redirects
+    --global). Follow tests/hooks/test_fresh_branch_base.py for shape (Decision 131).
   - >-
-    Rewrite the AGENTS.md "### Commit signing" subsection. State that CC-web commits ARE SSH-signed
-    by the harness and that GitHub reports them Verified; that local %G? is N/B only because
-    in-container verification is unavailable and is therefore not evidence about the signature;
-    that the SessionStart hook configures allowedSignersFile so the Stop hook's presence check
-    stops false-positiving; and that if it ever fires, the commit may genuinely be unsigned, so
-    investigate rather than amend blindly. Keep the do-NOT-reset-author / do-NOT --amend -S
-    directive. Retitle away from "unsigned is expected". Keep the whole file within the S1 ceiling
-    (VP step 6) -- trim wording rather than raising the budget.
+    Rewrite the AGENTS.md "### Commit signing" subsection. Rank content by load-bearingness and
+    keep as much as fits under the ~760-byte ceiling, cutting from the bottom: (1) CC-web commits
+    ARE SSH-signed by the harness and GitHub reports them Verified; (2) local %G? is N/B only
+    because in-container verification is unavailable, so it is not evidence about the signature;
+    (3) the SessionStart hook configures allowedSignersFile so the Stop hook's signature check
+    stops false-positiving -- and if the hook still fires, read WHICH half fired, because the
+    committer-email half (%ce != noreply@anthropic.com) is a real trigger whose amend/reset-author
+    remediation is correct; (4) do NOT reset-author or --amend -S to chase the SIGNATURE flag --
+    it only churns SHAs; (5) the Decision 83 back-reference. Retitle away from "unsigned is
+    expected". Verify the byte ceiling with VP step 6 before committing.
   - >-
     Edit the terraform/github/repo.tf comment above the ruleset's closing brace: keep "No
     required_signatures: intentional -- do not add", replace the "0-byte placeholder" justification
-    with Decision 83's deliberate non-wedging ruleset design, and keep the AGENTS.md cross-
-    reference pointed at the retitled subsection. Change no resource attribute. Do not run
-    terraform (not installed; Decision 119) -- the terraform-validate CI check is the verifier.
+    with Decision 83's deliberate non-wedging ruleset design, and update the AGENTS.md cross-
+    reference to quote the NEW subsection heading exactly (VP step 4 greps for this). Change no
+    resource attribute. Do not run terraform (not installed; Decision 119).
+  - >-
+    Edit docs/audit-prompts/AUDIT-platform-roadmap-mvp-triage.md line ~435: the entry currently
+    reads "Unsigned CC-web commits (`git log %G? = N`) -- expected, per AGENTS.md" under a
+    "Deliberate constraints -- DO NOT flag these as defects" heading. Replace it so it states that
+    CC-web commits are signed and that a local %G? of N or B is a verification artefact, not a
+    defect -- preserving the do-not-flag intent while removing the false premise.
   - >-
     Edit .claude/commands/plan.md: add "git push -u origin HEAD" immediately after the Step 8
-    "plan({slug}): initial plan" commit, with a one-line note that this keeps the critique-gate
-    turns free of unpushed commits; and change Step 11's push to
-    "git push --force-with-lease -u origin HEAD" since the branch is now already pushed before the
-    Step 11 rebase. Keep the existing Step 11 ordering otherwise.
+    "plan({slug}): initial plan" commit; add a one-line instruction in the Step 9 and Step 10
+    iteration loops to push each revision commit immediately (a plain push fast-forwards, since
+    revision commits are additive); and change Step 11's push to
+    "git push --force-with-lease -u origin HEAD", which the post-rebase push requires once the
+    branch is already pushed. Keep the existing Step 11 ordering otherwise.
   - >-
-    File a recommendation recording the upstream harness defect via the ops portal (call
-    get_rec_write_guidance() before file_rec()). Content: /root/.claude/stop-hook-git-check.sh
-    treats "%G? == N" as proof of a missing signature, but git returns N for ANY ssh-signed commit
-    when gpg.ssh.allowedSignersFile is unset, so the check false-positives on every correctly
-    signed CC-web commit; the hook's own comment asserts B/U/E for unverifiable signatures, which
-    does not hold for gpg.format=ssh. Note the repo-side mitigation and that the real fix belongs
-    upstream. source=planning, automatable=false (harness-owned file, outside the repo).
+    File a recommendation via the ops portal (call get_rec_write_guidance() before file_rec()).
+    Content: /root/.claude/stop-hook-git-check.sh treats "%G? == N" as proof of a missing
+    signature, but git returns N for ANY ssh-signed commit when gpg.ssh.allowedSignersFile is
+    unset, so the check false-positives on every correctly signed CC-web commit; the hook's own
+    comment asserts B/U/E for unverifiable signatures, which does not hold for gpg.format=ssh.
+    Include the coupling fragility: the repo-side mitigation depends on the predicate testing
+    == "N", and an upstream tightening to != "G" would silently disable it. source=planning,
+    automatable=false (harness-owned file, outside the repo).
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
     and RCA rather than patching around it (Decision 55).
@@ -406,7 +484,7 @@ rollback: >-
   and delete .claude/hooks/session_start_commit_signing.py plus its test; run
   "git config --global --unset gpg.ssh.allowedSignersFile" and delete
   $HOME/.config/git/ccweb_allowed_signers to restore the prior %G? == N behaviour. The AGENTS.md,
-  repo.tf, and plan.md edits are independently revertible by git revert of the squash-merge commit.
-  No infrastructure is applied and no data is written, so nothing outside the repo and the
-  container-local git config needs undoing. The filed rec is closed via the ops portal if the
-  diagnosis is ever superseded.
+  repo.tf, audit-prompt, and plan.md edits are independently revertible by git revert of the
+  squash-merge commit. No infrastructure is applied and no data is written, so nothing outside the
+  repo and the container-local git config needs undoing. The filed rec is closed via the ops portal
+  if the diagnosis is ever superseded.
