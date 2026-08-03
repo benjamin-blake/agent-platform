@@ -387,16 +387,21 @@ verification_plan:
       assert callable(getattr(v, name, None)), f'{name} is not a module-level global of scripts/validate.py -- dispatch will KeyError'
       import pathlib, yaml
       LB = r'(?<![\w.])'
+      LA = r'(?![\w])'
       src = pathlib.Path('scripts/checks/roadmap/validate_fallback_reevaluation.py').read_text(encoding='utf-8')
       assert LB in src, 'the carrier module does not use the boundary-aware lookbehind on its phase leg -- a bare substring match makes gate T4.1 swallow T4.10/T4.12/T4.13'
+      assert LA in src, 'the carrier module does not use the boundary-aware lookahead on its phase leg -- round 2 history: a lookahead that also excludes \".\" silently drops a legitimate sentence-final \"T4.4.\"'
       rows = yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries']
       row = [r for r in rows if r['check_id'] == 'cd27-fallback-spec-and-carrier-binding']
       if row:
-          assert LB in yaml.safe_dump(row[0]['check_spec']), 'the graduated row and the carrier module have DIVERGED on the boundary-aware match'
-      print('OK registered in both tiers, reachable from validate.py, boundary-aware match enforced at', 1 + len(row), 'site(s); pre_globs', globs)
+          dumped = yaml.safe_dump(row[0]['check_spec'])
+          assert LB in dumped, 'the graduated row and the carrier module have DIVERGED on the boundary-aware lookbehind'
+          assert LA in dumped, 'the graduated row and the carrier module have DIVERGED on the boundary-aware lookahead'
+      print('OK registered in both tiers, reachable from validate.py, boundary-aware match (both halves) enforced at', 1 + len(row), 'site(s); pre_globs', globs)
       "
     expected: >-
-      Exit 0, printing `boundary-aware match enforced at` then the site count and the pre_globs tuple. Proven failing-first this session with the executed diagnostic
+      Exit 0, printing `boundary-aware match (both halves) enforced at` then the site count and the pre_globs
+      tuple. Proven failing-first this session with the executed diagnostic
       "validate_fallback_reevaluation is not in the ['pre', 'full'] tier sequence(s)".
     fix_if: >-
       "not in the ['pre'] tier sequence" means the name was added to full_sequence() only. "not a
@@ -636,19 +641,19 @@ verification_plan:
       import pathlib, yaml
       pkg = pathlib.Path('tests/esb_text_fix')
       blob = ''.join(p.read_text(encoding='utf-8') for p in sorted(pkg.glob('*.py')))
-      assert 'append_only_vs_origin_main' not in blob, 'the retired guard is still present in tests/esb_text_fix/'
+      assert 'test_cd27_string_discipline_points_are_append_only_vs_origin_main' not in blob, 'the retired guard is still present in tests/esb_text_fix/'
       assert '_WAVE3_PROTECTED_STALE_QUOTES' not in blob, 'the wave-3 stale-quote exemption survives its own discharge -- the quote it exempts is gone, so the entry is dead and its wave-3-ownership comment is now false'
       reg = yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries']
-      hits = [r['check_id'] for r in reg if 'append_only_vs_origin_main' in yaml.safe_dump(r)]
+      hits = [r['check_id'] for r in reg if 'test_cd27_string_discipline_points_are_append_only_vs_origin_main' in yaml.safe_dump(r)]
       assert not hits, f'the retired guard has a standing registry row: {hits}'
       succ = (pkg / 'test_fallback_spec.py').read_text(encoding='utf-8')
       for tok in ('recorded as an INTENT Open Question', 'checkpoint-replay verified', 'fallback_spec', 'validate_fallback_reevaluation'):
           assert tok in succ, f'successor module does not assert on {tok}'
       d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
       cd = [c for c in d['candidate_decisions'] if c['id'] == 'CD.27'][0]
-      pts = [q for q in cd['discipline_points'] if isinstance(q, str)]
+      dp_blob = yaml.safe_dump(cd['discipline_points'], sort_keys=False)
       anchors = ('S3 pointer pattern', 'retry policies are deterministic-only', 'T4.x atomic-plan template', 'EXR-07')
-      absent = [a for a in anchors if not any(a in q for q in pts)]
+      absent = [a for a in anchors if a not in dp_blob]
       assert not absent, f'incidentally-protected CD.27 string(s) lost: {absent}'
       for a in anchors:
           assert a in succ, f'the anchor-phrase floor does not cover {a}'
@@ -929,16 +934,25 @@ context:
     on three shapes: no discharge FAILS, partial coverage FAILS naming the specific missing id, full
     discharge PASSES. VP step 5 owns the no-op paths and VP step 12 exercises the repo-wide surface.
   - >-
-    CARRIER LIFECYCLE, recorded verbatim in three places (the check docstring, CD.27's
-    fallback_spec.reevaluation_carrier, and here) so the control's own lifecycle is never undefined.
-    The carrier PERSISTS against the ratified CD: all 24 ratified CDs retain their candidate_decisions
-    entry and gates list, so the CD.27-sourced trigger set survives ratification unchanged. This is
-    correct rather than incidental -- CD.27 scopes the maturity hedge to the first 12 months AFTER
-    ratification, so the obligation's live window BEGINS at ratification and the check is a no-op in
-    practice before it. Exit is IN-BAND via the obligation_lapsed verdict with the ratification date as
-    basis; the check requires a RECORDED verdict, never a particular one. The control therefore retires
-    by leaving an audit trail rather than by someone remembering to delete a check -- which is the exact
-    failure that would make it a cousin of the phantom control it replaces.
+    CARRIER LIFECYCLE -- CANONICAL SITE CORRECTED (code review round 3 / High). This entry
+    originally claimed the lifecycle (persistence past ratification, the in-band obligation_lapsed
+    exit) was "recorded verbatim in three places" -- the check docstring, CD.27's
+    fallback_spec.reevaluation_carrier, and here. A three-copy verbatim replication with nothing
+    enforcing sync is itself a NEW unenforced claim minted inside the phantom-control remediation,
+    and contradicts AGENTS.md directly ("collocate semantic definitions with their enforcement
+    counterparts in a single file"; a companion restating a machine-readable source "is drift by
+    design"). Corrected: the lifecycle now lives ONLY in scripts/checks/roadmap/
+    validate_fallback_reevaluation.py's module docstring -- the enforcement-collocated site, the
+    one actually read at enforcement time, and the only one carrying all three disclosed residuals
+    (this entry previously carried none of them; the docstring previously carried only one). Both
+    CD.27's fallback_spec.reevaluation_carrier and this entry now carry a one-line POINTER to that
+    docstring, never a restatement. This entry's own summary, for a reader who does not want to
+    open the module: the carrier persists against a ratified CD (the trigger set survives
+    ratification unchanged, correct rather than incidental -- CD.27 scopes the maturity hedge to
+    the first 12 months after ratification); exit is in-band via a recorded `obligation_lapsed`
+    verdict, never a particular one; three residuals are disclosed (modified-not-added plans
+    escape; unreachable origin/main advisory-SKIPs; a T4.x plan naming no gated item in either
+    `phase` or `closes_criteria` escapes entirely). Full text: see the module docstring.
   - >-
     TRIGGER INSTANTIABILITY (critique round 1 item 4) -- the facts the "first live firing" claim depends on,
     now stated rather than assumed. A closes_criteria-only trigger would be UNINSTANTIABLE today:
@@ -1117,6 +1131,220 @@ context:
     untouched by #834 (still 8421 lines, CD.27's maturity clause still at :893, the ESB-01 precondition
     still at :932), all replay literals re-audited, and the full VP re-run. No Main Divergence deferral
     applies.
+  - >-
+    IMPLEMENT-TIME PLAN AMENDMENT (2026-08-03, VP step 9). Two narrower-in-effect-than-intent
+    matches were found in VP step 9's `command` at replay time (validate --pre's vp-replay leg,
+    executed against the real post-edit tree, is what surfaced both -- neither was visible from
+    static reading). (1) `'append_only_vs_origin_main' not in blob` and the sibling registry-scan
+    `'append_only_vs_origin_main' in yaml.safe_dump(r)` used the retired guard's TRUNCATED
+    identifier fragment rather than its full name
+    (`test_cd27_string_discipline_points_are_append_only_vs_origin_main`); this fragment is ALSO
+    a substring of a pre-existing, unrelated, still-live guard in the same package --
+    `test_decision_bodies_unchanged_append_only_vs_origin_main`
+    (tests/esb_text_fix/test_decision_scope_notes.py, a Decision 39/75 DECISIONS.md body-integrity
+    check predating this wave, checking something entirely different from CD.27 discipline_points)
+    -- so the retirement step failed permanently regardless of correct retirement, exactly the
+    T4.1-vs-T4.10 prefix-collision shape one level up. Both occurrences widened to the retired
+    guard's full name. (2) The anchor-phrase floor (`pts = [q for q in cd['discipline_points'] if
+    isinstance(q, str)]` then membership-testing the four anchors against `pts`) missed
+    "T4.x atomic-plan template" because that anchor lives inside a PRE-EXISTING, out-of-this-wave's
+    -scope colon-hazard dict entry in CD.27's discipline_points (untouched, unrelated accidental
+    YAML mapping predating this wave) -- the str-only filter is narrower than the check's own
+    stated intent ("the anchor-phrase floor covering the four incidentally-protected strings").
+    Fixed by scanning `yaml.safe_dump(cd['discipline_points'], sort_keys=False)` as a whole
+    (mirrors the identical fix already applied in tests/esb_text_fix/test_fallback_spec.py's own
+    anchor-floor test, authored earlier in this same implementation session against the same
+    discovery). Neither fix weakens the check; both strengthen it (narrower selector -> exact
+    intended target; wider scan -> catches what the str-only filter missed). Ruled by the
+    /overseer orchestrator under the same authority that approved this plan, extended to a class
+    sweep across all VP steps, authored guard modules, and graduated check_specs for the same
+    defect shape (Decision-scout Flag pattern: "a match narrower in intent than in effect") --
+    no further instance found. Precedent: PLAN-esb-text-fix-bundle.yaml's `-U0` amendment to its
+    own VP step 9 (same family: a mid-implementation plan-document correction to a VP `command`,
+    authorised by explicit orchestrator ruling, not by a standing mechanism -- extended here from
+    a diff-tooling-artifact fix to an identifier-precision + scan-completeness fix). Edited on the
+    implementing session's branch; validate_vp_replay's implement-PR leg resolves and replays
+    PLAN-esb-fallback-spec-carrier.yaml from this branch's own working tree, so the amended
+    command is what CI actually replays.
+  - >-
+    UNDOCUMENTED HAZARD FOUND DURING IMPLEMENTATION (not in this plan's original hazard list):
+    PyYAML's `yaml.safe_dump()` silently switches a multi-line string to DOUBLE-QUOTED style
+    (doubling every backslash) the moment the string contains ANY indented line (e.g. a for/if
+    block body) -- independent of total length. Verified by bisection down to a minimal 4-line
+    repro (`"a = 1\nfor i in range(3):\n    b = 2\ntok = r'x'\n"` dumps double-quoted;
+    the same content with the `for` line removed dumps single-quoted). This silently breaks any
+    single-backslash literal search (e.g. VP step 3's regex-identity ratchet,
+    `LB in yaml.safe_dump(row['check_spec'])`) against a graduated registry row's check_spec, even
+    though the SOURCE text is byte-identical in meaning. Cost of discovery: the differential
+    admission gate re-run flagged check_id `cd27-fallback-spec-and-carrier-binding` as REJECTED
+    ("check does not pass on HEAD") only after the row round-tripped through a plain
+    `yaml.safe_dump` in VP step 3's own script -- not visible from the row's on-disk `|` block-style
+    text, which reads correctly. Fixed by reimplementing that one check_spec's script using list
+    comprehensions instead of `for`/`if` blocks (zero indented lines; same assertions), verified
+    still admitted by the real differential gate before writing it to the registry. Any future wave
+    graduating a regex-bearing multi-line script into `config/agent/verification_registry/
+    registry.yaml` will hit this; the general rule is: a graduated `check_spec.command` script that
+    must survive a literal-substring check against its OWN re-dumped text should avoid indented
+    Python blocks (comprehensions/ternaries over for/if bodies), not merely avoid length.
+  - >-
+    R4 BLAST RADIUS, REALIZED FORM (not predicted in the original R4 BLAST RADIUS context entry
+    above, which anticipated repo-wide ratification-gating exposure but not this). Adding the R4
+    leg to validate_candidate_decision_ratification pushed the function to 24 cyclomatic-complexity
+    branches against the Decision 43 limit of 20 -- a standing-guard-reuse cost nobody predicted at
+    plan time, distinct from the repo-wide-failure-surface cost already documented. Fixed by
+    extracting `_check_r2_pending` / `_check_r1_ratified` / `_check_r4_precondition_discharge` /
+    `_load_roadmap` as a behaviour-preserving refactor (all 20 tests in
+    tests/checks/roadmap/test_validate_candidate_decision_ratification.py, including the 7 new R4
+    cases, still pass; "All functions within CC limits or waivered" confirmed post-fix). Recorded
+    as the real price of "ride an existing guard" (R4's chosen re-homing, Decision 150 routing) vs.
+    "stand up a new check": the existing guard's own complexity budget is a shared, finite resource
+    a re-homing wave can silently exhaust. A future wave weighing the same trade-off should budget
+    for this, not assume a same-object addition is complexity-free.
+  - >-
+    CODE-REVIEW ROUND 1 (gate_run_id esb-fallback-spec-carrier-code-review-r1-c5d8e947): REVISE, 0
+    Critical / 1 High / 3 Medium / 5 Low, all addressed same-session. HIGH: `plans_dir` in
+    validate_fallback_reevaluation.py was an asserted-but-inert seam (accepted, handed to
+    `_net_new_plan_paths()`, never read) -- exactly the class of defect this wave exists to remove,
+    one level down, inside the carrier itself. Dropped the parameter entirely; `_common.ROOT` is
+    now the sole, explicitly-documented root. MEDIUM: (1) the regex-identity ratchet (VP step 3)
+    pinned only the lookbehind `(?<![\w.])`, but round 2's own documented historical defect was the
+    LOOKAHEAD (`(?![0-9a-zA-Z.])` silently dropping a legitimate sentence-final "T4.4.") -- now
+    pins both halves, in the carrier module, in VP step 3's script, and in the
+    fallback-reevaluation-check-registered registered row (all three kept in lockstep). (2) R4's
+    contract text required "exactly one precondition_discharge mapping" without naming
+    discipline_points, so a misplaced top-level CD key would fail with a misleading "carries 0
+    blocks" -- named discipline_points explicitly and stated a top-level key does NOT satisfy the
+    rule. (3) Inserting TestFallbackReevaluation split TestGraduationDisposition's own trailing 3
+    methods (test_graduate_with_stray_waiver_reason_rejected /
+    test_waive_with_stray_check_id_rejected / test_historical_plans_all_validate) into the wrong
+    class -- moved back; TestGraduationDisposition now has its original 12 methods again. LOW (4
+    fixed, 1 filed): a dead `_GATE_TOKEN_TEMPLATE` constant duplicating `_gate_pattern`'s own
+    literal was removed in favour of one definition (`_GATE_LOOKBEHIND` / `_GATE_LOOKAHEAD`,
+    consumed once); `_check_r1_ratified`'s docstring was corrected to match its actual (intentional)
+    return behaviour and the behaviour is now pinned by
+    `test_r4_still_runs_when_r1_header_unresolved`; `FallbackReevaluation.reevaluated_on` and
+    `.substrate_status` gained the same non-blank guard `.basis` already had, plus
+    `reevaluated_on` gained an ISO-date format check (`date.fromisoformat`); the SKILL.md
+    `work_areas` continuation comment that budget-compaction had de-indented to column 0 was
+    re-indented (prose budget re-confirmed: 55774/55816). Filed rec-2961 (not fixed, per the
+    reviewer's own framing): TestFallbackReevaluation's historical-validity test walks the live
+    docs/plans/ directory (305 files), duplicating validate_plan_documents and coupling a unit test
+    to repo state -- a genuine trade-off (the live walk is also the strongest available proof
+    against Decision 85), not a plain error. ALSO CLOSED (reviewer's "worth closing while you are
+    in there"): added unit coverage for the carrier's two silent-`continue` branches
+    (added-but-absent-on-disk, added-but-fails-to-load -- both exercised by patching the private
+    `_net_new_plan_paths` helper, since `_common.get_status_aware_diff()` existence-filters "A"/"M"
+    entries before the carrier ever sees them, so neither branch is reachable through real git
+    state) and R4's not-a-mapping / >1-block branches. Full re-run after all fixes: `validate --pre`
+    exit 0 ("All checks passed."), VP replay leg green on all 7 hermetic steps including step 9, all
+    8 graduated rows still ADMITTED by the real differential gate, 214 tests green across
+    tests/checks/roadmap/, tests/esb_text_fix/ and tests/test_plan_document.py.
+  - >-
+    CODE-REVIEW ROUND 2: REVISE, 0 Critical / 1 High / 3 Medium / 4 Low, all addressed same-session
+    (orchestrator verified the High at source before relaying). HIGH: R4's discharge predicate,
+    `not str(discharge.get(pid, "")).strip()`, was defeated by Python's own str() coercion --
+    str(None)=='None', str({})=='{}', str(False)=='False' are all truthy, so a bare-key discharge
+    entry (`ESB-04:`, parsing to YAML null / Python None) silently PASSED, contradicting both this
+    module's own docstring (:13-15) and R4's ratified contract text, which both promise a
+    present-but-empty entry FAILS. A failing-first unit case
+    (`test_precondition_discharge_null_valued_entry_fails`) was written and CONFIRMED FAILING
+    against the unfixed predicate before the line changed, per the entry criterion. Fixed to
+    `not isinstance(discharge.get(pid), str) or not discharge[pid].strip()` -- requires a genuine
+    non-blank string, no coercion. CC re-checked post-fix: still within the Decision 43 limit of 20
+    (unchanged branch count; the fix only replaced one predicate expression). MEDIUM: (1)
+    test_fallback_spec.py's gate-match test now imports `_gate_pattern` from the carrier itself
+    instead of rebuilding the boundary-aware regex by hand -- the fourth copy the REGEX-IDENTITY
+    RATCHET's own argument (a frozen copy silently diverges from source) applied to but did not
+    cover. (2) test_validate_fallback_reevaluation.py's docstring claimed a "malformed roadmap"
+    case that did not exist as a test, leaving the `_cd27_gates` exception branch (:160-165)
+    uncovered -- added `test_malformed_roadmap_fails_loud` (unparseable YAML through the
+    `roadmap_path` seam) rather than deleting the docstring's claim. LOW (orchestrator ruled
+    directly on the reviewer's open question rather than passing it back): the `if not gates:`
+    branch silently PASSed on an emptied CD.27.gates list -- the identical "no trigger set"
+    condition its sibling branches (missing roadmap, unparseable roadmap, absent CD.27) all fail
+    loud on, two of them citing Decision 55 explicitly. Now fails loud, naming CD.27 and the
+    roadmap path, covered by `test_cd27_empty_gates_fails_loud`. LOW: `reevaluated_on` tightened
+    from `date.fromisoformat()` (which accepts the dash-free basic ISO form "20260802" on Python
+    3.11+) to an explicit `datetime.strptime(v, "%Y-%m-%d")` match, pinned by tests rejecting both
+    "20260802" and "2026-08-02T00:00:00" (a datetime-with-time string) -- the error message already
+    promised YYYY-MM-DD specifically. LOW: the three near-identical non-blank validators
+    (reevaluated_on/substrate_status/basis) collapsed to one `@field_validator(...)` covering all
+    three, using `ValidationInfo.field_name` to reproduce each field's original message
+    byte-for-byte (verified: all pre-existing `match=` assertions in tests/test_plan_document.py
+    still pass unchanged) -- used pydantic's native multi-field `@field_validator` rather than an
+    `Annotated[str, AfterValidator(...)]` alias (equivalent collapse, less machinery); the
+    reevaluated_on-specific ISO-date check stays a separate, second validator on that one field,
+    running after the shared non-blank check in declaration order (a blank reevaluated_on still
+    raises the non-blank message first, matching pre-collapse behaviour exactly). FILED, NOT FIXED
+    (per explicit instruction): rec-2962 (a third hand-rolled sys.path-injecting
+    scripts.roadmap.platform_roadmap loader duplicate in validate_candidate_decision_supersession.py
+    -- extracting a shared scripts.checks._common.load_platform_roadmap primitive touches two files
+    outside this plan's 15-file scope and deserves its own differential, not a scope-creeping ride);
+    rec-2963 (inline PASS/SKIP vs end-buffered FAIL is a package-wide scripts/checks/ convention
+    question, not a local defect -- fixing this module alone would make it inconsistent with its
+    own siblings). Full re-run after all fixes: `validate --pre` exit 0, VP replay green including
+    step 9, all 8 graduated rows re-admitted by the real differential gate (the R4 predicate change
+    touches cd-precondition-discharge-r4-unit-guards's subject matter -- re-verified, not assumed),
+    219 tests green.
+  - >-
+    CODE-REVIEW ROUND 3 (CONVERGENCE CAP -- no round 4; a zero-context verifier checks these deltas
+    against a closed checklist next): REVISE, 1 High. The orchestrator escalated to a Fable consult
+    before framing the disposition, which changed two calls from what the reviewer or the
+    orchestrator's own first pass proposed. HIGH, fixed via option (c) -- neither the reviewer's
+    (a) replicate-at-all-three-sites nor (b) retract-the-claim, both rejected as wrong: (a) mints a
+    THREE-copy verbatim replication with nothing enforcing sync, itself a new unenforced claim
+    inside the phantom-control remediation, and contradicts AGENTS.md directly ("collocate semantic
+    definitions with their enforcement counterparts in a single file"; a companion restating a
+    machine-readable source "is drift by design"). The lifecycle paragraph (persistence past
+    ratification, the in-band obligation_lapsed exit, ALL THREE disclosed residuals -- the
+    docstring previously carried only one of three) now lives CANONICALLY in
+    validate_fallback_reevaluation.py's module docstring, the enforcement-collocated site actually
+    read at enforcement time. CD.27's fallback_spec.reevaluation_carrier and this plan's own CARRIER
+    LIFECYCLE context entry (the one directly above the TRIGGER INSTANTIABILITY entry) each carry a
+    one-line POINTER to that docstring now, never a restatement -- the "recorded verbatim in three
+    places" claim is deleted. MEDIUM 1, PROMOTED TO BLOCKING (the orchestrator had it non-blocking;
+    Fable overruled, reasoning a fail-open silent under-enforcement bug in a live repo-wide
+    governance guard categorically outranks a documentation-fidelity defect -- accepted): R4's
+    `_precondition_ids` scanned only `isinstance(pt, str)` discipline_points, silently hiding a
+    declared precondition id inside a colon-hazard accidental dict mapping (CD.27's own pre-existing
+    "T4.x atomic-plan template" entry is exactly this shape) -- partial enforcement presenting as
+    full, the fifth class-versus-site instance of this run (the implement session fixed this exact
+    defect in the test anchor floor earlier and walked past the production guard). Fable's proposed
+    mechanism ("fail loudly on any non-string entry") was WRONG ON THE FACTS -- indices 4
+    (fallback_spec, this wave's own block), 8 (resume_properties) and 11 (stability_definition_14d)
+    are DELIBERATE structured dicts that would have broken; only index 6 was the accident. Fixed
+    instead by scanning the SERIALIZED TEXT of discipline_points (yaml.safe_dump) for the
+    precondition-id pattern -- no discriminator between prose-keyed and field-keyed dicts needed,
+    since the anchored pattern cannot legitimately appear inside a structured field-keyed dict.
+    Applied the same fix symmetrically to the discharge side (`_precondition_discharge_near_miss_keys`,
+    scoped to DICT keys only, never string prose, so this CD's own discharge-rule point --
+    which legitimately mentions the word "precondition_discharge" in prose -- is never
+    mistaken for a near-miss; an earlier whole-blob-substring-count draft of this companion check
+    was tried, found to misfire on exactly that prose on the LIVE CD.27 data during self-verification,
+    and replaced before landing). BOTH negative tests written failing-first and CONFIRMED FAILING
+    against the unfixed code before either fix landed. Proved the guard fix works against the LIVE
+    roadmap with index 6 STILL broken (unchanged precondition_ids={ESB-01,ESB-04,ESB-06},
+    near_misses=[], guard passes) before fixing index 6 as pure cleanup (colon -> "--", the same
+    shape as this wave's own maturity-point rewrite). MEDIUM 2, FILED NOT FIXED (rec-2964, opposite
+    polarity to Medium 1 -- fails CLOSED: R4's contract text doesn't pin the discharge entry's value
+    type as strictly as the code's `isinstance(..., str)` check does, so a compliant author writing
+    a structured entry loses time to a misleading message rather than anyone's governance being
+    silently weakened; resolving it means deciding which side carries the intended semantics, real
+    judgment deferred deliberately). LOWS: fixed the type-hint gap across all R1/R2/R4 helpers and
+    `_load_roadmap` (CandidateDecision / RoadmapDocument / Path imported at module level, no
+    circularity) -- AGENTS.md requires hints and the function these were extracted from was fully
+    annotated; strengthened the not-net-new test to assert `_net_new_plan_paths()` directly rather
+    than relying solely on the end-to-end `failed == []` symptom; named the duplicated 40-char
+    fallback_spec-key-content threshold as a module constant in test_fallback_spec.py (the two other
+    occurrences -- VP step 1's command and its registered check_spec -- are standalone
+    `bin/venv-python -c` scripts embedded in YAML and cannot import a shared constant; true
+    cross-file dedup isn't achievable here, noted rather than left silently unaddressed).
+    `_load_roadmap`'s mixed load/report concerns judged NOT genuinely trivial (matches the same
+    load-and-report shape used elsewhere in this package) -- left alone. Did NOT re-file the fourth
+    platform_roadmap loader instance (rec-2962 already covers it), per explicit instruction. Full
+    re-run after all fixes: `validate --pre` exit 0, VP replay green including step 9, all 8
+    graduated rows re-admitted by the real differential gate (re-verified after the R4 predicate
+    changed a second time, not assumed), 221 tests green.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read

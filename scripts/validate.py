@@ -212,6 +212,7 @@ from scripts.checks.roadmap.validate_candidate_decision_ratification import (  #
 from scripts.checks.roadmap.validate_candidate_decision_supersession import (  # noqa: F401,E402
     validate_candidate_decision_supersession,
 )
+from scripts.checks.roadmap.validate_fallback_reevaluation import validate_fallback_reevaluation  # noqa: F401,E402
 from scripts.checks.roadmap.validate_plan_documents import validate_plan_documents  # noqa: F401,E402
 from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap  # noqa: F401,E402
 from scripts.checks.roadmap.validate_product_roadmap import validate_product_roadmap  # noqa: F401,E402

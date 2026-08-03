@@ -3073,3 +3073,253 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/verify_ci_workflow/test_apply_and_terraform.py::TestReconcileStarvedFilingJobShape
+  - check_id: cd27-fallback-spec-and-carrier-binding
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |2
+
+        import re, yaml
+        d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+        cd = [c for c in d['candidate_decisions'] if c['id'] == 'CD.27'][0]
+        specs = [q for q in cd['discipline_points'] if isinstance(q, dict) and 'fallback_spec' in q]
+        assert len(specs) == 1, f'fallback_spec must appear exactly once in CD.27, found {len(specs)}'
+        s = specs[0]['fallback_spec']
+        required = {'trigger', 'substrate', 'state_schema', 'checkpoint_granularity', 'driver', 'cutover', 'effort', 'reevaluation_carrier', 'lapse_condition'}
+        assert required <= set(s), f'fallback_spec missing {sorted(required - set(s))}'
+        thin = [k for k, v in s.items() if isinstance(v, str) and len(v.strip()) < 40]
+        assert not thin, f'fallback_spec key(s) present but contentless: {thin}'
+        sch = s['state_schema']
+        sreq = {'grain', 'identity', 'partition_key', 'sort_key', 'attributes', 'write_mode'}
+        assert sreq <= set(sch), f'state_schema missing {sorted(sreq - set(sch))}'
+        assert 'one item per' in sch['grain'].lower(), f"grain must be one-item-per: {sch['grain']!r}"
+        assert sch['write_mode'].startswith('append_only'), f"write_mode must be append_only: {sch['write_mode']!r}"
+        assert 'ULID' in sch['identity'], 'identity must mint a ULID at the write boundary'
+        assert 'validate_fallback_reevaluation' in s['reevaluation_carrier'], 'carrier key must name the registered check'
+        lapse = s['lapse_condition']
+        assert 'LAPSE' in lapse.upper(), f'lapse_condition must state a lapse: {lapse!r}'
+        assert any(t in lapse for t in ('ESB-04', 'ESB-06', 'spike')), 'lapse_condition must bind to the layer-2 selection'
+        mat = [q for q in cd['discipline_points'] if isinstance(q, str) and q.startswith('Lambda Durable Functions maturity monitoring')]
+        assert len(mat) == 1, f'expected exactly 1 maturity-monitoring point, found {len(mat)}'
+        m = mat[0]
+        phantoms = [p for p in ('recorded as an INTENT Open Question', 'checkpoint-replay verified') if p in m]
+        assert not phantoms, f'maturity point still carries the phantom/stale clause: {phantoms}'
+        missing_live = [t for t in ('fallback_spec', 'validate_fallback_reevaluation') if t not in m]
+        assert not missing_live, f'maturity point does not name: {missing_live}'
+        gates = cd['gates']
+        tok = re.compile(r'(?<![\w.])(' + '|'.join(re.escape(g) for g in gates) + r')(?![\w])')
+        named = sorted(set(tok.findall(m)))
+        assert set(named) == set(gates), f'DOC-SAYS-X / CONTROL-DOES-Y: control triggers on {gates} but text names only {named}'
+        blob = yaml.safe_dump(specs[0], sort_keys=False)
+        assert 'arn:' not in blob.lower(), 'fallback_spec contains an ARN (PUBLIC repository)'
+        assert not re.search(r'(?<!\d)\d{12}(?!\d)', blob), 'fallback_spec contains a 12-digit account-id-shaped token'
+        print('OK fallback_spec specified;', len(s), 'keys;', len(sch), 'state_schema keys; maturity point phantom-free, carrier-bound, trigger-agreed over', gates)
+  - check_id: cd27-precondition-discharge-rule-recorded
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |2
+
+        import re, yaml
+        d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+        cd = [c for c in d['candidate_decisions'] if c['id'] == 'CD.27'][0]
+        pts = [q for q in cd['discipline_points'] if isinstance(q, str)]
+        pat = re.compile(r'ratification precondition \((\w+-\d+)\)')
+        ids = [m for q in pts for m in pat.findall(q)]
+        assert len(ids) == len(set(ids)), f'a precondition id is now claimed twice: {ids}'
+        assert {'ESB-01','ESB-04','ESB-06'} <= set(ids), f'precondition floor broken: {sorted(set(ids))}'
+        rule = [q for q in pts if 'precondition_discharge' in q]
+        assert len(rule) == 1, f'expected exactly 1 discharge-rule point, found {len(rule)}'
+        assert 'validate_candidate_decision_ratification' in rule[0], 'the discharge rule must name its enforcing guard'
+        assert not pat.findall(rule[0]), 'the discharge-rule point must not itself declare a precondition id'
+        c = yaml.safe_load(open('docs/contracts/candidate-decision-ratification.yaml'))
+        rules = c['referential_guard']['rules']
+        assert 'R4' in rules, f'contract carries no R4: {sorted(rules)}'
+        r4 = yaml.safe_dump(rules['R4'])
+        assert 'precondition_discharge' in r4, 'R4 does not name the block it requires'
+        assert 'ratified' in r4, 'R4 does not state the state it applies to'
+        print('OK discharge rule recorded at both sites; precondition ids', sorted(set(ids)))
+  - check_id: fallback-reevaluation-check-registered
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: validate_fallback_reevaluation
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |2
+
+        from scripts.checks import registry
+        import scripts.validate as v
+        name = 'validate_fallback_reevaluation'
+        pre = {s.name: s for s in registry.pre_sequence() if s.kind == 'check'}
+        full = [s.name for s in registry.full_sequence() if s.kind == 'check']
+        missing = [t for t, seq in (('pre', pre), ('full', full)) if name not in seq]
+        assert not missing, f'{name} is not in the {missing} tier sequence(s)'
+        assert name in registry.all_checks(), f'{name} was never registered via the register decorator'
+        globs = pre[name].pre_globs
+        assert globs, f'{name} runs ungated in --pre; it parses the whole plans directory and must carry pre_globs'
+        assert any('docs/plans' in g for g in globs) and any('ROADMAP' in g for g in globs), f'pre_globs misses a trigger surface: {globs}'
+        assert callable(getattr(v, name, None)), f'{name} is not a module-level global of scripts/validate.py -- dispatch will KeyError'
+        import pathlib, yaml
+        LB = r'(?<![\w.])'
+        LA = r'(?![\w])'
+        src = pathlib.Path('scripts/checks/roadmap/validate_fallback_reevaluation.py').read_text(encoding='utf-8')
+        assert LB in src, 'the carrier module does not use the boundary-aware lookbehind on its phase leg -- a bare substring match makes gate T4.1 swallow T4.10/T4.12/T4.13'
+        assert LA in src, 'the carrier module does not use the boundary-aware lookahead on its phase leg -- round 2 history: a lookahead that also excludes "." silently drops a legitimate sentence-final "T4.4."'
+        rows = yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries']
+        row = [r for r in rows if r['check_id'] == 'cd27-fallback-spec-and-carrier-binding']
+        if row:
+            dumped = yaml.safe_dump(row[0]['check_spec'])
+            assert LB in dumped, 'the graduated row and the carrier module have DIVERGED on the boundary-aware lookbehind'
+            assert LA in dumped, 'the graduated row and the carrier module have DIVERGED on the boundary-aware lookahead'
+        print('OK registered in both tiers, reachable from validate.py, boundary-aware match (both halves) enforced at', 1 + len(row), 'site(s); pre_globs', globs)
+  - check_id: fallback-reevaluation-unit-guards
+    primitive_slot: test_selector
+    guard_target: scripts/checks/roadmap/validate_fallback_reevaluation.py
+    guard_symbol: null
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/roadmap/test_validate_fallback_reevaluation.py
+  - check_id: cd-precondition-discharge-r4-unit-guards
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/roadmap/validate_candidate_decision_ratification.py
+    guard_symbol: null
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |2
+
+        import pathlib, subprocess
+        mod = 'tests/checks/roadmap/test_validate_candidate_decision_ratification.py'
+        names = [l.strip() for l in pathlib.Path(mod).read_text(encoding='utf-8').splitlines() if l.strip().startswith('def test_') and 'precondition_discharge' in l]
+        assert len(names) >= 4, f'expected at least 4 R4 precondition_discharge cases, found {len(names)} -- R4 has no unit coverage'
+        for shape in ('partial', 'no_op', 'lapse'):
+            assert any(shape in n for n in names), f'R4 unit coverage has no {shape} case: {names}'
+        r = subprocess.run(['bin/venv-python', '-m', 'pytest', mod, '-q'], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-800:]
+        print('OK', len(names), 'R4 cases named (partial, no_op, lapse present); module passes')
+  - check_id: plan-document-fallback-reevaluation-schema
+    primitive_slot: command_exit_zero
+    guard_target: scripts/roadmap/plan_document.py
+    guard_symbol: FallbackReevaluation
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |2
+
+        import pathlib, yaml
+        from pydantic import ValidationError
+        from scripts.roadmap.plan_document import PlanDocument, validate_paths
+        paths = sorted(pathlib.Path('docs/plans').glob('PLAN-*.yaml'))
+        fails = validate_paths(paths)
+        assert not fails, f'historical plan(s) invalidated by the new field: {[(p.name, e[:60]) for p, e in fails[:3]]}'
+        base = yaml.safe_load(open('docs/plans/PLAN-esb-fallback-spec-carrier.yaml'))
+        block = {'reevaluated_on': '2026-08-02', 'substrate_status': 'no API-semantics regression observed at filing', 'verdict': 'continue_on_current_substrate', 'basis': 'reviewed against the CD.27 fallback_spec trigger; substrate semantics unchanged'}
+        good = dict(base); good['fallback_reevaluation'] = block
+        try:
+            PlanDocument.model_validate(good)
+        except ValidationError as exc:
+            raise AssertionError(f'PlanDocument REJECTED a well-formed fallback_reevaluation block -- the field is absent from the schema or misnamed: {exc}') from None
+        rejects = {}
+        rejects['unknown verdict'] = {**block, 'verdict': 'looks_fine'}
+        rejects['empty basis'] = {**block, 'basis': '   '}
+        rejects['extra key'] = {**block, 'note': 'x'}
+        missing = dict(block); missing.pop('basis'); rejects['missing basis'] = missing
+        for why, blk in rejects.items():
+            bad = dict(base); bad['fallback_reevaluation'] = blk
+            try:
+                PlanDocument.model_validate(bad)
+                raise AssertionError(f'schema accepted a malformed block: {why}')
+            except ValidationError:
+                pass
+        PlanDocument.model_validate(base)
+        print('OK', len(paths), 'historical plans valid; block accepted;', len(rejects), 'malformed shapes rejected; field remains optional')
+  - check_id: planning-skill-surfaces-fallback-reevaluation
+    primitive_slot: command_exit_zero
+    guard_target: .claude/skills/planning/SKILL.md
+    guard_symbol: null
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |2
+
+        import pathlib, re
+        p = pathlib.Path('.claude/skills/planning/SKILL.md')
+        raw = pathlib.Path('config/prose_budgets.yaml').read_text(encoding='utf-8')
+        m = re.search(r'^\s*\.claude/skills/planning/SKILL\.md:\s*(\d+)', raw, re.M)
+        assert m, 'planning SKILL.md has no prose budget entry to check against'
+        budget = int(m.group(1)); size = len(p.read_bytes())
+        assert size <= budget, f'planning SKILL.md is {size} bytes, over its {budget}-byte prose budget -- compact, do not raise'
+        text = p.read_text(encoding='utf-8')
+        heads = [i for i, l in enumerate(text.splitlines()) if l.startswith('## ')]
+        lines = text.splitlines()
+        starts = [i for i in heads if 'Template' in lines[i] and 'PLAN-' in lines[i]]
+        assert len(starts) == 1, f'expected exactly 1 PLAN template section heading, found {len(starts)}'
+        s = starts[0]
+        nxt = [i for i in heads if i > s]
+        body = '\n'.join(lines[s:(nxt[0] if nxt else len(lines))])
+        assert 'verification_plan:' in body and 'plan_path:' in body, 'the template section no longer contains the template'
+        required = ('schema_version','slug','intent','plan_type','verification_tier','plan_path','phase','scope','bundled_recommendations','acceptance_criteria','verification_plan','constraints','context','execution_steps','fallback_reevaluation')
+        absent = [k for k in required if k + ':' not in body]
+        assert not absent, f'the PLAN template section no longer surfaces field(s): {absent}'
+        print('OK planning SKILL.md', size, 'bytes <= budget', budget, ';', len(required), 'fields surfaced INSIDE the template section')
+  - check_id: audit-7d57a0d-c7-annotated
+    primitive_slot: command_exit_zero
+    guard_target: audits/executor-roadmap-review-7d57a0d.yaml
+    guard_symbol: null
+    plan_slug: esb-fallback-spec-carrier
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |2
+
+        import yaml
+        d = yaml.safe_load(open('audits/executor-roadmap-review-7d57a0d.yaml'))
+        cands = [c for c in d['audit']['rejected_candidates'] if str(c.get('candidate','')).startswith('C7')]
+        assert len(cands) == 1, f'expected exactly 1 C7 rejected candidate, found {len(cands)}'
+        c = cands[0]
+        a = c.get('annotation')
+        assert a, 'the C7 dismissal carries no annotation -- its compensating control was shown phantom by ESB-02'
+        low = str(a).lower()
+        for tok in ('esb-02', 'phantom', 'validate_fallback_reevaluation'):
+            assert tok in low, f'the C7 annotation does not name {tok}'
+        for tok in ('resume_properties', 'unplanned_resume_rate', 'fallback_spec'):
+            assert tok in low or tok in str(a), f'the C7 annotation leaves a hedge layer unaddressed: {tok}'
+        assert c.get('why_dismissed'), 'the original dismissal text must be retained, not replaced by the annotation'
+        assert c.get('compensating_control'), 'the original compensating_control record must be retained'
+        print('OK C7 annotated; original dismissal record intact')

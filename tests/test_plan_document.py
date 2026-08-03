@@ -420,3 +420,93 @@ class TestGraduationDisposition:
         from scripts.roadmap.plan_document import main as _main
 
         assert _main([]) == 0
+
+
+class TestFallbackReevaluation:
+    """ESB-02 remediation (PLAN-esb-fallback-spec-carrier): the optional fallback_reevaluation
+    block a plan carries when it names a CD.27-gated tier item (scripts/checks/roadmap/
+    validate_fallback_reevaluation.py). The obligation to attach it lives in that check, not in
+    this schema -- so absence must stay valid on every historical plan."""
+
+    def _block(self, **overrides) -> dict:
+        base = {
+            "reevaluated_on": "2026-08-02",
+            "substrate_status": "no API-semantics regression observed at filing",
+            "verdict": "continue_on_current_substrate",
+            "basis": "reviewed against the CD.27 fallback_spec trigger; substrate semantics unchanged",
+        }
+        base.update(overrides)
+        return base
+
+    def test_well_formed_block_validates(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block())
+        doc = PlanDocument.model_validate(d)
+        assert doc.fallback_reevaluation is not None
+        assert doc.fallback_reevaluation.verdict == "continue_on_current_substrate"
+
+    def test_field_absent_is_valid_backward_compatible(self) -> None:
+        doc = PlanDocument.model_validate(_base())
+        assert doc.fallback_reevaluation is None
+
+    def test_unknown_verdict_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(verdict="looks_fine"))
+        with pytest.raises(ValidationError):
+            PlanDocument.model_validate(d)
+
+    def test_empty_basis_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(basis="   "))
+        with pytest.raises(ValidationError, match="basis must be non-blank"):
+            PlanDocument.model_validate(d)
+
+    def test_whitespace_only_reevaluated_on_rejected(self) -> None:
+        """Symmetry with basis (code review round 1): all three free-text fields reject blank."""
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="   "))
+        with pytest.raises(ValidationError, match="reevaluated_on must be non-blank"):
+            PlanDocument.model_validate(d)
+
+    def test_whitespace_only_substrate_status_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(substrate_status="   "))
+        with pytest.raises(ValidationError, match="substrate_status must be non-blank"):
+            PlanDocument.model_validate(d)
+
+    def test_non_iso_reevaluated_on_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="August 2, 2026"))
+        with pytest.raises(ValidationError, match="must be an ISO date"):
+            PlanDocument.model_validate(d)
+
+    def test_iso_reevaluated_on_accepted(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="2026-01-05"))
+        doc = PlanDocument.model_validate(d)
+        assert doc.fallback_reevaluation.reevaluated_on == "2026-01-05"
+
+    def test_basic_format_reevaluated_on_rejected(self) -> None:
+        """Code review round 2 (Low): date.fromisoformat() alone accepts the dash-free basic
+        ISO format on Python 3.11+ ('20260802'); the validator must reject it -- this is a date
+        stamp in a governance document, and the error message promises YYYY-MM-DD specifically."""
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="20260802"))
+        with pytest.raises(ValidationError, match="must be an ISO date"):
+            PlanDocument.model_validate(d)
+
+    def test_datetime_with_time_component_reevaluated_on_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="2026-08-02T00:00:00"))
+        with pytest.raises(ValidationError, match="must be an ISO date"):
+            PlanDocument.model_validate(d)
+
+    def test_missing_basis_rejected(self) -> None:
+        block = self._block()
+        block.pop("basis")
+        d = _mutate(fallback_reevaluation=block)
+        with pytest.raises(ValidationError):
+            PlanDocument.model_validate(d)
+
+    def test_extra_key_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(note="x"))
+        with pytest.raises(ValidationError):
+            PlanDocument.model_validate(d)
+
+    def test_all_historical_plans_still_valid_with_field_absent(self) -> None:
+        """Decision 85: validate_plan_documents re-validates the whole plans directory against
+        an extra='forbid' model, so an added optional field is a repo-wide event."""
+        paths = sorted((Path(__file__).parent.parent / "docs" / "plans").glob("PLAN-*.yaml"))
+        failures = validate_paths(paths)
+        assert not failures, f"historical plan(s) invalidated by the new field: {[(p.name, e[:80]) for p, e in failures[:3]]}"

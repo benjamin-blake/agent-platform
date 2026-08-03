@@ -474,31 +474,31 @@ Derive the plan slug from the task, not the branch. Author only `docs/plans/PLAN
 ## PLAN-{slug}.yaml Template (Workflow Step 8)
 The plan is a YAML document validated against the `PlanDocument` Pydantic schema (`scripts/roadmap/plan_document.py`, enforced by `validate.py` in both tiers). Unknown keys FAIL validation (`extra="forbid"`). Use exactly this structure -- comments document field semantics:
 ```yaml
-schema_version: 3                  # new plans; historical schema versions 1 and 2 remain valid
+schema_version: 3 # new plans; historical schema versions 1 and 2 remain valid
 handoff_policy:
-  full_validation_required_before_commit: true  # exact literal; commit/PR waits for completed full exit 0
-  timeout_disposition: blocked                   # exact literal; resume later and rerun full from the start
-slug: "{slug}"                     # must match the filename PLAN-{slug}.yaml
-intent: >-                         # 1-2 sentences: how this work contributes toward the North Star
+  full_validation_required_before_commit: true # exact literal; commit/PR waits for completed full exit 0
+  timeout_disposition: blocked # exact literal; resume later and rerun full from the start
+slug: "{slug}" # must match the filename PLAN-{slug}.yaml
+intent: >- # 1-2 sentences: how this work contributes toward the North Star
   ...
-plan_type: IMPLEMENTATION          # IMPLEMENTATION | STRATEGIC | REPORT-ONLY
-verification_tier: V2              # V1 | V2 | V3
-plan_path: docs/plans/PLAN-{slug}.yaml   # must equal docs/plans/PLAN-{slug}.yaml (slug consistency)
-phase: >-                          # product phase from docs/ROADMAP-PRODUCT.yaml and/or platform tier_item id
+plan_type: IMPLEMENTATION # IMPLEMENTATION | STRATEGIC | REPORT-ONLY
+verification_tier: V2 # V1 | V2 | V3
+plan_path: docs/plans/PLAN-{slug}.yaml # must equal docs/plans/PLAN-{slug}.yaml (slug consistency)
+phase: >- # product phase from docs/ROADMAP-PRODUCT.yaml and/or platform tier_item id
   ...
-scope:                             # min 1 entry; only files listed here may be modified
+scope: # min 1 entry; only files listed here may be modified
   - file: path/to/file.py
-    action: Create                 # Create | Modify | Delete
+    action: Create # Create | Modify | Delete
     purpose: why this file changes
-bundled_recommendations: []        # included open recs (list of str), or []
-infrastructure_dependencies: []    # list of str; populate when .tf files appear in scope
-acceptance_criteria:               # min 1; each independently verifiable
+bundled_recommendations: [] # included open recs (list of str), or []
+infrastructure_dependencies: [] # list of str; populate when .tf files appear in scope
+acceptance_criteria: # min 1; each independently verifiable
   - verifiable condition 1
-verification_plan:                 # min 1 step; step ids must be unique
+verification_plan: # min 1 step; step ids must be unique
   - step: 1
-    phase: pre-deploy              # pre-deploy | post-deploy
+    phase: pre-deploy # pre-deploy | post-deploy
     action: exercise the feature
-    command: executable shell command   # REQUIRED non-empty -- prose-only VP steps fail the schema
+    command: executable shell command # REQUIRED non-empty -- prose-only VP steps fail the schema
     expected: specific expected result
     fix_if: what failure looks like
 constraints:
@@ -506,7 +506,7 @@ constraints:
   - No rescue agents or workaround loops (Decision 55)
 context:
   - Relevant decisions, phase dependencies, known gotchas
-  - "Decision-scout verdict + CITE list (verbatim decision ids)"                  # REQUIRED ITEM (WF-04a)
+  - "Decision-scout verdict + CITE list (verbatim decision ids)" # REQUIRED ITEM (WF-04a)
   - "gates: decision-scout=<verdict>; plan-critique=<verdict> after <N> round(s)" # REQUIRED ITEM (WF-08)
 pre_implementation_checklist:
   - Branch confirmed not on main
@@ -514,13 +514,16 @@ pre_implementation_checklist:
   - only the plan-cited decision sections
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
-execution_steps:                   # REQUIRED non-empty for IMPLEMENTATION plans
+execution_steps: # REQUIRED non-empty for IMPLEMENTATION plans
   - Specific file to create/modify -- what it must do
   - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
   - 'Report: what was implemented, verification results'
-work_areas: []                     # STRATEGIC plans only (required there, forbidden otherwise);
-                                   # entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
-rollback: optional rollback note   # optional str; omit if not applicable
+work_areas: [] # STRATEGIC plans only (required there, forbidden otherwise);
+  # entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
+rollback: optional rollback note # optional str; omit if not applicable
+# fallback_reevaluation: OPTIONAL -- fill only if this plan names a CD.27-gated tier item
+# (validate_fallback_reevaluation). Never fill on an ordinary plan (extra=forbid, 4 fields required):
+# {reevaluated_on, substrate_status, verdict: continue_on_current_substrate|fallback_triggered|obligation_lapsed, basis}
 ```
 
 After writing, validate before committing:

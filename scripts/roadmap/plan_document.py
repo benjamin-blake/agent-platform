@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 _SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2, 3})
 _V2_PHASE_ENUM: frozenset[str] = frozenset({"pre-deploy", "post-deploy"})
@@ -18,6 +19,7 @@ VerificationTier = Literal["V1", "V2", "V3"]
 ScopeAction = Literal["Create", "Modify", "Delete"]
 Complexity = Literal["XS", "S", "M", "L", "XL"]
 GraduationDisposition = Literal["graduate", "waive", "not-applicable"]
+FallbackVerdict = Literal["continue_on_current_substrate", "fallback_triggered", "obligation_lapsed"]
 
 
 class HandoffPolicy(BaseModel):
@@ -91,6 +93,49 @@ class WorkArea(BaseModel):
     complexity: Complexity
 
 
+class FallbackReevaluation(BaseModel):
+    """CD.27 fallback_spec re-evaluation record (ESB-02 remediation).
+
+    Carried by a plan naming a CD.27-gated tier item, per
+    scripts/checks/roadmap/validate_fallback_reevaluation.py. Shape only -- the
+    obligation to attach this block lives in that check, not in this schema.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reevaluated_on: str = Field(min_length=1)
+    substrate_status: str = Field(min_length=1)
+    verdict: FallbackVerdict
+    basis: str = Field(min_length=1)
+
+    # One shared validator for all three free-text fields (code review round 2, Low) -- collapsed
+    # ONLY because `info.field_name` reproduces each field's original message byte-for-byte
+    # ("fallback_reevaluation.<field> must be non-blank"); a collapse that cost message fidelity
+    # would not be worth it and was rejected as an option for exactly that reason. Runs in
+    # definition order before `_reevaluated_on_is_iso_date` below, so a blank `reevaluated_on`
+    # still raises the non-blank message first, matching the pre-collapse behaviour exactly.
+    @field_validator("reevaluated_on", "substrate_status", "basis")
+    @classmethod
+    def _non_blank(cls, v: str, info: ValidationInfo) -> str:
+        if not v.strip():
+            raise ValueError(f"fallback_reevaluation.{info.field_name} must be non-blank")
+        return v
+
+    @field_validator("reevaluated_on")
+    @classmethod
+    def _reevaluated_on_is_iso_date(cls, v: str) -> str:
+        # Explicit %Y-%m-%d match (code review round 2, Low) -- date.fromisoformat() alone is
+        # too permissive on Python 3.11+, which also accepts the basic-format "YYYYMMDD" (no
+        # dashes). strptime with an exact format string rejects both that and a datetime-with-
+        # time string like "2026-08-02T00:00:00" ("unconverted data remains"), matching what the
+        # error message promises: a date stamp, not a timestamp.
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"fallback_reevaluation.reevaluated_on must be an ISO date (YYYY-MM-DD): {v!r}") from None
+        return v
+
+
 class PlanDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +160,7 @@ class PlanDocument(BaseModel):
     rollback: str | None = None
     tier_waiver: str | None = None
     handoff_policy: HandoffPolicy | None = None
+    fallback_reevaluation: FallbackReevaluation | None = None
 
     @field_validator("schema_version")
     @classmethod
