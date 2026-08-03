@@ -3460,3 +3460,69 @@ entries:
       - import sys,yaml;sys.path.insert(0,'.');from pathlib import Path;d=yaml.safe_load(Path('docs/ROADMAP-PLATFORM.yaml').read_text(encoding='utf-8'));ids={i['id']
         for i in (d.get('tier_items') or [])};want={'T2.54','T2.55','T2.56'};print('missing:',sorted(want-ids));from scripts.checks.roadmap.validate_platform_roadmap
         import validate_platform_roadmap as v;f=[];v(f);print('FAILED:',f);sys.exit(0 if not (want-ids) and not f else 1)
+  - check_id: cc-web-signing-hook-unit-suite
+    primitive_slot: test_selector
+    guard_target: .claude/hooks/session_start_commit_signing.py
+    guard_symbol: null
+    plan_slug: commit-signing-false-positive
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/hooks/test_session_start_commit_signing.py
+  - check_id: cc-web-signing-hook-guard-holds
+    primitive_slot: command_exit_zero
+    guard_target: .claude/hooks/session_start_commit_signing.py
+    guard_symbol: null
+    plan_slug: commit-signing-false-positive
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - D=$(mktemp -d); export HOME="$D" GIT_CONFIG_GLOBAL="$D/gc"; git config --global commit.gpgsign false; bin/venv-python
+        .claude/hooks/session_start_commit_signing.py >/dev/null 2>&1 || exit 1; bin/venv-python .claude/hooks/session_start_commit_signing.py
+        >/dev/null 2>&1 || exit 1; test -z "$(git config --global --get gpg.ssh.allowedSignersFile)" && echo GUARD_HELD_EXIT0
+  - check_id: cc-web-signing-premise-corrected
+    primitive_slot: command_exit_zero
+    guard_target: AGENTS.md
+    guard_symbol: null
+    plan_slug: commit-signing-false-positive
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - K=.claude/skills/audit-prompt/SKILL.md; L1=docs/audit-prompts/AUDIT-decision-knowledge-persistence-scalability.md;
+        L2=docs/audit-prompts/AUDIT-terraform-deployment-strategy.md; ! grep -rqiE "signing is unavailable|commits land unsigned|0-byte
+        placeholder" AGENTS.md terraform/github/repo.tf "$K" "$L1" "$L2" && ! grep -q -- "--no-gpg-sign" "$K" "$L1" "$L2"
+        && grep -qi "SSH-signed" AGENTS.md && grep -q "do not add" terraform/github/repo.tf && grep -qi "reset-author" AGENTS.md
+        && H=$(grep -o "### Commit signing[^\"]*" AGENTS.md | head -1) && test -n "$H" && grep -qF "$H" terraform/github/repo.tf
+        && echo PREMISE_CORRECTED
+  - check_id: cc-web-signing-hook-registered
+    primitive_slot: command_exit_zero
+    guard_target: .claude/settings.json
+    guard_symbol: null
+    plan_slug: commit-signing-false-positive
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - bin/venv-python -c "import json,sys;d=json.load(open('.claude/settings.json'));g=[k.get('command','') for b in d['hooks']['SessionStart']
+        for k in b['hooks']];sys.exit(0 if any('session_start_commit_signing' in c for c in g) else 1)" && echo REGISTERED
+  - check_id: cc-web-plan-push-early-wired
+    primitive_slot: command_exit_zero
+    guard_target: .claude/commands/plan.md
+    guard_symbol: null
+    plan_slug: commit-signing-false-positive
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - grep -q -- "git push --force-with-lease" .claude/commands/plan.md && grep -q "git push -u origin HEAD" .claude/commands/plan.md
+        && test "$(grep -c "git push" .claude/commands/plan.md)" -ge 3 && echo PUSH_EARLY_WIRED
