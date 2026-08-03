@@ -204,8 +204,8 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 - `session_start_commit_signing.py` sets `gpg.ssh.allowedSignersFile` so the harness Stop hook's
   signature check stops false-positiving. If it still fires, check which half: the committer-email
   half (`%ce != noreply@anthropic.com`) is a real trigger whose remediation is correct.
-- Do NOT reset-author or `git commit --amend -S` to chase the signature flag alone -- it only
-  churns SHAs.
+- Do NOT reset-author or `git commit --amend -S` to chase the signature flag -- it only churns
+  SHAs.
 
 ### Rebase phase distinction
 - **Assessment time (planning)**: do NOT auto-rebase. When main has diverged and scope files overlap, surface to the human with options (rebase now and re-enter `/plan` / proceed / abort); record any deferral in the plan's Context field. Rebasing mid-plan can silently invalidate scoping decisions.
