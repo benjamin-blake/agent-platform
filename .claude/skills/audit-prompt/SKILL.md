@@ -214,8 +214,7 @@ The generated prompt instructs the executor, concretely:
 3. Note that repo-wide validation is advisory outside CI in this repo: a clean YAML parse of the
    two deliverables is the real pre-push gate; an unrelated `validate --pre` failure is recorded
    in `meta.contract_notes`, never fixed (write boundary).
-4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign` if signing
-   is unavailable. `git push -u origin HEAD`.
+4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`. `git push -u origin HEAD`.
 5. Open the PR via `mcp__github__create_pull_request` (base=main, ready for review, title
    `audit: <audit topic in plain words> (<scope surfaces>)`, body = the summary block in a
    yaml fence + a 2-3 sentence

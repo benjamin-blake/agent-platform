@@ -86,15 +86,16 @@ Write the file `docs/plans/PLAN-{slug}.yaml` using the exact structure and templ
 
 **If Plan Type is REPORT-ONLY:** Additionally write the report deliverable file(s) referenced in the PLAN's Scope table (e.g. `docs/INTENT-{slug}.md`, `docs/REPORT-{slug}.md`). The deliverable IS the substantive output of a REPORT-ONLY plan; the PLAN file itself is just the planning artefact that points at it. Both files land in the same initial commit.
 
-After writing, commit to the branch:
+After writing, commit to the branch and push immediately, so no unpushed commit spans a gate turn boundary:
 ```bash
 git add docs/plans/PLAN-{slug}.yaml   # plus any REPORT-ONLY deliverable file(s)
 git commit -m "plan({slug}): initial plan"
+git push -u origin HEAD
 ```
 
 ## Step 9: Plan Critique Gate (MANDATORY)
 **DO NOT output the completion message until this step completes.**
-Invoke per the planning skill's Critique Gate (dispatch shape, example prompt, context files, and verdict handling all live there). Substitute `{slug}` with the actual branch slug. Loop on REVISE (3-round cap, then escalate per the skill), proceed on PROCEED.
+Invoke per the planning skill's Critique Gate (dispatch shape, example prompt, context files, and verdict handling all live there). Substitute `{slug}` with the actual branch slug. Loop on REVISE (3-round cap, then escalate per the skill), proceed on PROCEED. Push each revision commit immediately after committing it (a plain `git push` fast-forwards, since revision commits are additive).
 
 Note: this gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY plans, the deliverable gets its own critique in Step 10.
 
@@ -103,7 +104,7 @@ Note: this gate reviews the PLAN artefact, not the report deliverable. For REPOR
 
 For REPORT-ONLY plans, the Step 9 plan-critique gate reviewed the planning artefact (PLAN-{slug}.yaml) but NOT the report deliverable itself, which needs its own independent zero-context critique.
 
-Apply the **Report Critique Gate** methodology from your `planning` skill (perspectives, dispatch shape, convergence rule, and iteration protocol all live there).
+Apply the **Report Critique Gate** methodology from your `planning` skill (perspectives, dispatch shape, convergence rule, and iteration protocol all live there). Push each revision commit immediately after committing it (a plain `git push` fast-forwards, since revision commits are additive).
 
 ## Step 11: Commit approved PLAN-{slug}.yaml and merge to main
 After all critique gates have approved the work, commit any uncommitted changes to the branch:
@@ -115,7 +116,7 @@ If revisions were committed incrementally during Step 10's iteration loop, this 
 
 Then push and merge the plan to `main` via GitHub MCP so the next `/implement` session can read it by explicit path. Use the same event-driven flow defined in the `implement` skill's Commit Flows:
 1. `git fetch origin main && git rebase origin/main` (STOP on conflict)
-2. `git push -u origin HEAD`
+2. `git push --force-with-lease -u origin HEAD` (the branch was already pushed in Step 8/9/10, so the post-rebase push requires the lease)
 3. `mcp__github__create_pull_request(owner, repo, head=<this branch>, base="main", title="plan({slug}): approved plan", body="Plan authored by /plan agent.")`
 4. `mcp__github__subscribe_pr_activity(...)` and end the turn -- CI completion arrives as a webhook event.
 5. On green CI wake: `mcp__github__merge_pull_request(..., merge_method="squash")` + `mcp__github__unsubscribe_pr_activity(...)`.
