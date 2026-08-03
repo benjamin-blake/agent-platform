@@ -360,9 +360,15 @@ with them where a class warrants it -- a well-argued departure is a better resul
   code quality. Any expansion must trace back to this, or name a different and explicitly stated
   purpose for that class.
 
-  The design target is a fixed floor, roughly a DeepSeek-V4-Flash-class model: if the system works
-  for that, it works for anything above it. This is a REQUESTER CONSTRAINT, not your judgment call
-  (see the do-not-flag list). It rules out an entire family of otherwise-plausible answers, so do
+  The design target is a fixed floor set at the LOWEST-CAPABILITY TIER the platform routes work to
+  -- repo-grounded as the DeepSeek-class executor default (`scripts/llm/utils.py`, the
+  `MODEL_PLANNING` / `MODEL_EXECUTION` values) and described in `AGENTS.md` as the
+  Sonnet/Gemini/Deepseek tier that "degrade[s] on comprehension". If the system works at that
+  floor, it works for anything above it. The requester's forward reference point is a
+  next-generation DeepSeek-Flash-class model; treat that as ILLUSTRATIVE of the tier, not as a
+  version to resolve against this tree -- deliberately so, because a floor pinned to a named
+  version would itself be the kind of roster-dependent input this constraint exists to forbid.
+  This is a REQUESTER CONSTRAINT, not your judgment call (see the do-not-flag list). It rules out an entire family of otherwise-plausible answers, so do
   not propose any of them: no limit that varies by which model consumes the file, no per-model or
   per-tier budget, no exemption granted because a surface happens to be read only by a frontier
   model today, and no governance input that has to be revised when the model roster changes. Model
@@ -890,7 +896,9 @@ rec-2896, rec-431. CD.29 and CD.30 are adjacent candidate decisions.
 Each of these is a decided position, not an oversight. Flagging one as a defect is a false
 positive.
 
-- **Decision 114 as amended by Decision 147** -- the single-file-preserved treatment of
+- **Decision 114, with Decision 147 answering its reversal trigger** (147 RESPONDS to 114; it does
+  not amend it -- this repository annotates real amendments with an explicit "amends Decision NNN"
+  in the header, and 147 carries none) -- the single-file-preserved treatment of
   `ROADMAP-PLATFORM.yaml` is FIXED: do not recommend splitting it. See the GROUNDING MAP entry for
   the state (the trigger fired; compaction answered it) -- "the ceiling has never been tested"
   would be false. What is fixed is the one-coherent-file outcome, not an untouchable number. You
