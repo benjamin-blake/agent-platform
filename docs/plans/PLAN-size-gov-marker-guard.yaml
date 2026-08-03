@@ -26,10 +26,14 @@ scope:
     purpose: >-
       The single shared marker-guard module the five incumbent guards (and Slice B's future sixth
       consumer) bind to. Carries RegistrySpec, the two extractor factories, the base reader, the
-      memoized Decision-body loader built on the SHARED parser, the authorization rule, and the two
-      entry points check_diff / check_present_markers. Top-level placement per Decision 104
-      (_common.py is reserved for its five named primitives; a domain _shared.py may not span
-      domains, and this module spans sloc/prose/misc/typing/ci_guards). Must stay under 500 SLOC.
+      memoized Decision-body loader built on the SHARED parser, the authorization rule (including
+      the Decision 149 supersession hop), and the two entry points check_diff /
+      check_present_markers. Top-level placement per Decision 104 (_common.py is reserved for its
+      five named primitives; a domain _shared.py may not span domains, and this module spans
+      sloc/prose/misc/typing/ci_guards). MUST import ROOT from scripts.checks._common and never
+      recompute it -- tests/test_checks_registry.py::TestNoLocalRootRecomputation dynamically
+      enumerates every scripts/checks/**/*.py and forbids `Path(__file__).parent.parent.parent`.
+      Must stay under 500 SLOC.
   - file: scripts/checks/sloc/validate_sloc_budget_raises.py
     action: Modify
     purpose: >-
@@ -55,13 +59,15 @@ scope:
     purpose: >-
       Bind validate_mypy_baseline_edits (token baseline-raised, direction up, int values,
       new-entry predicate `value > 0`) with moved_from_relief enabled -- the ONLY spec that
-      enables it, because Decision 161 clause 4 is the only Decision sanctioning the form.
-      validate_mypy_ratchet, _run_mypy, --seed and --update are untouched.
+      enables it, because Decision 161 clause 4 is the only Decision naming the form.
+      validate_mypy_ratchet, _run_mypy, --seed and --update are untouched. Its
+      _parse_error_counts stays and is REUSED by verification step 13's per-file mypy attribution.
   - file: scripts/checks/ci_guards/validate_composite_action_shell_bodies.py
     action: Modify
     purpose: >-
       Replace _parse_raw_r3_markers with make_section_extractor("r3") and _decision_header_exists
-      with authorization_failure, for the R3 marker path ONLY. R1's frozen _R1_KNOWN_VIOLATORS
+      with authorization_failure, for the R3 marker path ONLY, supplying a mention_candidates
+      function for its `"<action-rel-dir>::<step-id>"` key form. R1's frozen _R1_KNOWN_VIOLATORS
       no-marker-escape branch and R2 stay entirely off the shared authorization path. Must remain
       subprocess-free (Decision 153): the shared module's base reader is never called from here.
   - file: docs/contracts/marker-grammar.yaml
@@ -71,30 +77,41 @@ scope:
       docs/contracts/decision-entry.yaml significance.routing.field_semantics ("the meaning or
       constraints of a data field or config key -> a governance/semantics note in the OWNING
       contract; never a numbered Decision") and Decision 86/127 routing. Carries the three tokens
-      and their per-registry directions, the authorization mechanics (verbatim-key match, the
-      two-segment ancestor rule, the no-glob-matching rule and its `**bold**` rationale), the
-      moved-from same-diff proof and its mypy-only opt-in, the retroactive-scan token-scoping rule,
-      the DECISIONS_ARCHIVE.md-counts-as-authorizing rule, the day-one-empty grandfather hook's
-      shape, and Slice B's binding surface documented as a stable contract. Non-ritual (no
-      top-level `contract:`/`class:` block) so validate_contract_drift skips it -- same class as
-      decision-entry.yaml / file-router.yaml / deploy-paths.yaml per Decision 118.
+      and their per-registry directions; the authorization mechanics stated EXPLICITLY as key-side
+      prefix generation plus substring containment against the Decision body (never body-side
+      token extraction); the >=2-segment ancestor rule with its measured band width; the Decision
+      149 compact-in-place interaction and the supersession hop; the composite mention_candidates
+      rule; the moved-from same-diff proof and its mypy-only opt-in; the retroactive-scan
+      token-scoping rule; the DECISIONS_ARCHIVE.md-counts-as-authorizing rule; the day-one-empty
+      grandfather hook's shape; and Slice B's binding surface documented as a stable contract.
+      Non-ritual (no top-level `contract:`/`class:` block) so validate_contract_drift skips it --
+      same class as decision-entry.yaml / file-router.yaml / deploy-paths.yaml per Decision 118.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
       One new minimal numbered Decision (drafted as 164; re-check the max header at implement time
       per the numbering-race rule) carrying ONLY what a contract structurally cannot: the durable
       commitment that marker validation narrows from existence to authorization and that the scan
-      is retroactive over present markers; the four amendments (Decision 128 clause 3 explicitly,
-      Decision 159, Decision 161 clause 4, Decision 162 R3); the Decision 151 forward-conformance
-      justification for retroactive scope bounded by the day-one-empty hook; and a pointer to
-      docs/contracts/marker-grammar.yaml as the owning contract. Mechanics go in the contract, NOT
-      here.
+      is retroactive over present markers; the FIVE amendments (Decision 128 clause 3 explicitly,
+      Decision 159, Decision 161 clause 4, Decision 162 R3, and Decision 149's compaction
+      lifecycle); the retroactive-scope justification led by SGE-07's own acceptance clause and
+      bounded by the day-one-empty hook; and a pointer to docs/contracts/marker-grammar.yaml as the
+      owning contract. Mechanics go in the contract, NOT here.
   - file: docs/decisions-index.json
     action: Modify
     purpose: >-
       Regenerate via `bin/venv-python -m scripts.decisions_index --write` so
       validate_decisions_index_freshness stays green (required committed artifact; absence or drift
       is itself a failure).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Land one new row per `graduate`-disposition VP step (12 rows, check_ids listed in the
+      acceptance criteria). validate_graduation_completeness's implement-PR leg fails any graduate
+      step lacking a NEW-IN-DIFF row whose `check_id` AND `plan_slug` both match, so omitting this
+      file would make the plan unable to discharge its own graduation obligation. Row shape:
+      check_id / primitive_slot / guard_target / guard_symbol / plan_slug (= size-gov-marker-guard)
+      / graduated_at / graduated_by / check_spec.
   - file: config/sloc_budgets.yaml
     action: Modify
     purpose: >-
@@ -112,16 +129,16 @@ scope:
       prose_budget_raises.py 1, validate_sloc_budget_raises.py 1). Removals are always
       unrestricted. If any guard still measures >=1 error after the refactor, LEAVE its entry --
       an over-eager removal fails validate_mypy_ratchet, while a stale entry is only a non-blocking
-      advisory.
+      advisory. Do NOT touch the pre-existing scripts/checks/_common.py entry.
   - file: config/prose_budgets.yaml
     action: Modify
     purpose: >-
       Ratchet the S1 root_ambient_load_set entry DOWN to the AGENTS.md post-edit measured size.
       A decrease, always unrestricted (Decision 102) -- never a raise, and never a raise-approved
-      marker on this entry. Edit ONLY the S1 line by hand: validate_prose_limits also emits a
-      pre-existing ratchet-down advisory for S2 src/data/handlers/CLAUDE.md (4302 of 4307), which is
-      NOT this plan's business -- a wholesale reseed of the file would silently pull that
-      out-of-scope entry into the diff.
+      marker on this entry. Edit ONLY the S1 line by hand: validate_prose_limits emits nine
+      ratchet-down advisories at plan time (S1 plus src/data/handlers/CLAUDE.md and several
+      SKILL.md entries), and a wholesale reseed would silently pull all those out-of-scope entries
+      into the diff.
   - file: AGENTS.md
     action: Modify
     purpose: >-
@@ -146,36 +163,53 @@ scope:
     purpose: >-
       Home for the BULK of new tests (mirror rule per Decision 131 resolves
       scripts/checks/_marker_guard.py to exactly this path; precedent
-      tests/checks/test__budget_recs.py). Deliberately absorbs the volume so the two nearly-full
-      consumer test files are not pushed over 500 SLOC.
+      tests/checks/test__budget_recs.py). Deliberately absorbs the volume so the consumer test
+      files stay well under 500 SLOC.
   - file: tests/checks/sloc/test_validate_sloc_budget_raises.py
     action: Modify
     purpose: >-
-      Thin binding assertions only (current 85 SLOC, ample headroom): the guard delegates to the
-      shared module, its spec carries token raise-approved / direction up, and an unauthorized
-      marker fails.
+      ADDITIONS ONLY -- the only one of the five consumer test files that imports no symbol this
+      plan removes (verified). Add thin binding assertions: the guard delegates to the shared
+      module, its spec carries token raise-approved / direction up, and an unauthorized marker
+      fails. Current 85 SLOC.
   - file: tests/checks/prose/test_prose_budget_raises.py
     action: Modify
     purpose: >-
-      Thin binding assertions only (current 135 SLOC): spec token/direction, and the distinct
-      relief-valve text still appears in the violation message.
+      DELETIONS/REPOINTS REQUIRED, not additions only. Line 12 imports `_default_base_reader` at
+      MODULE level -- removing that symbol is a hard pytest COLLECTION failure for the whole file.
+      Repoint the import and the two assertions at :175 and :180 to the shared module's
+      default_base_reader (or delete them as now-covered in tests/checks/test__marker_guard.py).
+      Then add thin binding assertions: spec token/direction, and the distinct relief-valve text
+      still appears in the violation message. Current 135 SLOC.
   - file: tests/checks/misc/test_coverage_baseline.py
     action: Modify
     purpose: >-
-      Thin binding assertions only (current 335 SLOC): direction DOWN, float values, and the
-      `< 100.0` new-entry predicate still gates only sub-100 registrations.
+      DELETIONS/REPOINTS REQUIRED. `coverage_baseline._default_base_reader` is referenced at :282
+      and :289 (attribute access, so a runtime AttributeError rather than a collection failure).
+      Repoint or delete, then add thin binding assertions: direction DOWN, float values, and the
+      `< 100.0` new-entry predicate still gates only sub-100 registrations. Current 335 SLOC.
   - file: tests/checks/typing/test_mypy_baseline.py
     action: Modify
     purpose: >-
-      Thin binding assertions only (current 423 SLOC, 77 headroom -- keep additions minimal): spec
-      token baseline-raised, and moved_from_relief enabled on this spec alone. The moved-from
-      behavioural cases live in tests/checks/test__marker_guard.py.
+      DELETIONS/REPOINTS REQUIRED -- the heaviest of the five. `mypy_baseline._parse_entry_lines`
+      at :38,42,46,50,54; `_decision_header_exists` at :59,62; `_default_base_reader` at :140,148.
+      All attribute access (runtime AttributeError). ALSO: :37 and :306 are the repo's ONLY
+      `moved from` fixtures and both change meaning under the new conditional rule -- :37 currently
+      asserts the marker parses, :306 currently passes incidentally because dec-161's HEADER
+      exists; under the same-diff proof :306 must be rewritten to supply a base map where
+      scripts/old.py is present. Then add thin binding assertions: spec token baseline-raised, and
+      moved_from_relief enabled on this spec alone. Behavioural moved-from cases live in
+      tests/checks/test__marker_guard.py. Current 423 SLOC; deletions free headroom.
   - file: tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py
     action: Modify
     purpose: >-
-      Thin binding assertions only (current 454 SLOC, only 46 headroom -- STRICTLY minimal): R3
-      uses the shared section extractor and authorization rule, and R1 remains entirely off the
-      shared authorization path. All extractor-shape cases live in tests/checks/test__marker_guard.py.
+      DELETIONS/REPOINTS REQUIRED. Line 11 imports `_decision_header_exists` at MODULE level --
+      a hard pytest COLLECTION failure for the whole 454-SLOC file if the symbol vanishes.
+      Repoint the import and the assertions at :105 and :108, then add thin binding assertions:
+      R3 uses the shared section extractor, authorization works on a real `"<dir>::<step-id>"` key,
+      and R1 remains entirely off the shared authorization path. Deletions free headroom, so the
+      earlier "only 46 SLOC spare, keep strictly minimal" framing no longer binds -- but keep
+      extractor-shape cases in tests/checks/test__marker_guard.py regardless.
 
 bundled_recommendations:
   - rec-2974
@@ -184,9 +218,10 @@ infrastructure_dependencies: []
 
 acceptance_criteria:
   - >-
-    scripts/checks/_marker_guard.py exists and exports the exact Slice B binding surface:
-    RegistrySpec, make_flat_extractor, make_section_extractor, default_base_reader,
-    load_decision_bodies, authorization_failure, check_diff, check_present_markers.
+    scripts/checks/_marker_guard.py exists, imports ROOT from scripts.checks._common (never
+    recomputes it), and exports the exact Slice B binding surface: RegistrySpec,
+    make_flat_extractor, make_section_extractor, default_base_reader, load_decision_bodies,
+    authorization_failure, check_diff, check_present_markers.
   - >-
     A marker citing a Decision whose body nowhere names the governed entry key FAILS, in both the
     diff shape (check_diff) and the retroactive shape (check_present_markers).
@@ -199,12 +234,19 @@ acceptance_criteria:
     The section-anchored extractor does NOT lose entries after a column-0 COMMENT line inside its
     section (the defect rec-2954 finding 3 records in the incumbent _parse_raw_r3_markers).
   - >-
-    A bare single-segment root mention (`scripts/`, `tests/`) does NOT authorize a file beneath it;
-    authorization requires a verbatim key match or an ancestor prefix of at least two path
-    segments. Negative test: Decision 161 does not authorize an arbitrary `scripts/foo.py` entry.
+    Authorization is computed KEY-SIDE: the key's own >=2-segment ancestor prefixes are generated
+    and substring-matched against the Decision body. The body is NEVER tokenized -- that is what
+    makes markdown `**bold**` (which yields `**`, `**Date`, `**Decision`, ... on Decision 161's
+    body) a non-issue rather than a universal wildcard.
   - >-
-    No glob-literal matching exists anywhere in the authorization path (markdown `**bold**` emits
-    `**` tokens that would otherwise authorize every path).
+    A bare single-segment root mention (`scripts/`, `tests/`) does NOT authorize a file beneath it.
+    Negative test: Decision 161 does not authorize an arbitrary `scripts/foo.py` entry. Positive
+    band test: Decision 161 DOES authorize `scripts/checks/foo.py`, because its body contains
+    `scripts/checks/`.
+  - >-
+    Composite R3 authorization works on a real `"<action-rel-dir>::<step-id>"` key via a specified
+    mention_candidates function: the candidates are the full key and the action-relative directory,
+    with the >=2-segment ancestor rule then applied to that directory.
   - >-
     load_decision_bodies is built on scripts/decisions_md.py's shared parser (a public name promoted
     from _iter_decision_sections in this PR) and scripts/checks/_marker_guard.py contains NO
@@ -214,9 +256,15 @@ acceptance_criteria:
     _DECISIONS_MD_PATHS convention, so archiving a cited Decision cannot retroactively red an
     unrelated PR.
   - >-
+    Decision 149 compact-in-place coupling is closed: when a cited Decision's body carries the
+    `**Superseded by: Decision N**` marker, Decision N's body is ALSO consulted for authorization
+    (one hop, no chains). A compaction stub keeps its header and a one-line `**Decision:**` body,
+    so without this hop a future compaction would silently un-authorize every live marker citing
+    that number and -- because the scan is retroactive -- red every subsequent PR.
+  - >-
     Every marker line bearing a guard's own token, across all five registries, is
-    authorization-clean against the real corpus; and the install-state population measures exactly
-    3 (config/sloc_budgets.yaml x1, config/prose_budgets.yaml x2).
+    authorization-clean against the real corpus. The install-state population is asserted as an
+    UPPER BOUND (<= 3), not an equality, so a future legitimate marker addition does not red CI.
   - >-
     Coverage's 9 `# grandfathered dec-159` comments are NOT treated as markers -- the retroactive
     scan is scoped to lines bearing the guard's own token.
@@ -231,13 +279,18 @@ acceptance_criteria:
     Composite R1's no-marker-escape branch is preserved: no marker of any kind can admit an R1
     violation, and R1 never calls authorization_failure.
   - >-
-    The day-one-empty retroactive-scan grandfather hook exists, is frozen, and is EMPTY at install.
+    The day-one-empty retroactive-scan grandfather hook exists, is a frozenset, and is EMPTY at
+    install -- pinned by its own verification step, since it is the entire bound on the Decision
+    151 forward-conformance departure.
   - >-
-    scripts/checks/_marker_guard.py measures ZERO mypy errors and is absent from
-    config/mypy_baseline.yaml.
+    scripts/checks/_marker_guard.py measures ZERO mypy errors ATTRIBUTED TO ITSELF and is absent
+    from config/mypy_baseline.yaml. (Whole-file `Success: no issues found` is unattainable and must
+    not be asserted: mypy follows imports and scripts/checks/_common.py:147 carries a pre-existing
+    baselined error.)
   - >-
-    Every created or modified file is under 500 SLOC and the diff adds no config/sloc_budgets.yaml
-    entry and raises no budget (Decision 128 decompose-by-default).
+    Every created or modified file is under 500 SLOC, and every config/sloc_budgets.yaml budget
+    VALUE is unchanged between origin/main and HEAD (marker-comment text may change -- the rec-2974
+    fix does exactly that).
   - >-
     validate_prose_limits passes with the S1 root_ambient_load_set entry ratcheted DOWN to the
     AGENTS.md post-edit size; the net byte delta on the S1 aggregate is <= 0.
@@ -245,28 +298,42 @@ acceptance_criteria:
     docs/contracts/marker-grammar.yaml exists, is non-ritual (no top-level `contract:`/`class:`
     block), and is routed from docs/contracts/file-router.yaml.
   - >-
-    The new Decision carries the commitment plus the four amendments and POINTS AT
-    docs/contracts/marker-grammar.yaml; it does not restate the grammar mechanics.
+    The new Decision carries the commitment plus the FIVE amendments (128 cl.3, 159, 161 cl.4,
+    162 R3, 149) and POINTS AT docs/contracts/marker-grammar.yaml; it does not restate the grammar
+    mechanics.
+  - >-
+    config/agent/verification_registry/registry.yaml gains exactly one new row per graduate step,
+    each with plan_slug `size-gov-marker-guard`, for these 12 check_ids:
+    marker-guard-public-surface-complete, marker-guard-section-extractor-excludes-class-table,
+    marker-guard-section-extractor-comment-immune, marker-guard-bare-root-not-authorizing,
+    marker-guard-composite-key-authorization, marker-guard-live-markers-authorized,
+    sloc-budget-marker-dec159-retarget, marker-guard-uses-shared-decisions-parser,
+    marker-guard-supersession-hop, composite-r1-no-marker-escape,
+    mypy-moved-from-same-diff-proof, marker-guard-grandfather-hook-empty.
   - >-
     The five registered check names, scripts/checks/registry.py, scripts/validate.py and
     tests/test_checks_registry.py are all UNCHANGED.
   - >-
-    The five guards' combined elapsed time stays at or below 250 ms (plan-time baseline: 50.3 ms).
+    The five guards' combined elapsed time stays at or below 250 ms (plan-time band: 49.6-82.3 ms).
 
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
       Confirm the shared module exposes the exact eight-name binding surface Slice B will import,
-      so Slice B can bind without reading the implementation.
+      and that it takes ROOT from _common rather than recomputing it.
     command: >-
-      bin/venv-python -c "import scripts.checks._marker_guard as m;
+      bin/venv-python -c "import scripts.checks._marker_guard as m, pathlib;
       names=['RegistrySpec','make_flat_extractor','make_section_extractor','default_base_reader','load_decision_bodies','authorization_failure','check_diff','check_present_markers'];
-      missing=[n for n in names if not hasattr(m,n)]; assert not missing, missing; print('surface OK')"
+      missing=[n for n in names if not hasattr(m,n)]; assert not missing, missing;
+      src=pathlib.Path('scripts/checks/_marker_guard.py').read_text(encoding='utf-8');
+      assert 'Path(__file__).parent.parent.parent' not in src, 'recomputes ROOT'; print('surface OK')"
     expected: "Prints `surface OK`; exit 0."
     fix_if: >-
-      A name is missing or renamed. Add it under the contracted name -- Slice B and
-      docs/contracts/marker-grammar.yaml both bind to these exact spellings.
+      A name is missing or renamed -- add it under the contracted name (Slice B and
+      docs/contracts/marker-grammar.yaml both bind to these exact spellings). If the ROOT assertion
+      trips, import ROOT from scripts.checks._common;
+      tests/test_checks_registry.py::TestNoLocalRootRecomputation enforces this repo-wide.
     hermetic: true
     graduation: graduate
     graduation_check_id: marker-guard-public-surface-complete
@@ -285,7 +352,7 @@ verification_plan:
       The section extractor leaks class-table scalars. Anchor on the top-level section key and end
       the section at the next column-0 NON-COMMENT line; do not reuse the flattened
       indentation-blind _BUDGET_LINE_RE scan.
-    hermetic: false
+    hermetic: true
     graduation: graduate
     graduation_check_id: marker-guard-section-extractor-excludes-class-table
   - step: 3
@@ -299,46 +366,68 @@ verification_plan:
     fix_if: >-
       The in-section flag clears on comments. Clear it only on a column-0 line that is neither blank
       nor a comment.
-    hermetic: false
+    hermetic: true
     graduation: graduate
     graduation_check_id: marker-guard-section-extractor-comment-immune
   - step: 4
     phase: pre-deploy
     action: >-
-      Prove the authorization rule: verbatim key or >=2-segment ancestor authorizes; a bare
-      single-segment root does not. Includes the scout-mandated negative test that Decision 161 does
-      not authorize an arbitrary `scripts/foo.py`, and the accepted-band positive that its real
-      `scripts/checks/` mention does authorize `scripts/checks/foo.py`.
+      Prove the authorization rule is key-side: verbatim key or >=2-segment ancestor prefix
+      substring-matched against the body. Includes the bare-root negative (dec-161 does not
+      authorize `scripts/foo.py`), the band positive (dec-161 DOES authorize `scripts/checks/foo.py`
+      via its real `scripts/checks/` mention), and the no-body-tokenization assertion.
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "authorization or ancestor or bare_root or no_glob"
     expected: >-
-      All pass, including: bare `scripts/` does not authorize `scripts/foo.py`; no glob-literal
-      matching (a body containing `**Date` authorizes nothing); dec-161 does not authorize
-      tests/test_checks_registry.py.
+      All pass, including: bare `scripts/` does not authorize `scripts/foo.py`; a body containing
+      only `**Date` authorizes nothing; dec-161 does not authorize tests/test_checks_registry.py.
     fix_if: >-
-      A bare root authorizes, or a `**` token matches. Require >=2 segments on ancestor prefixes and
-      delete any glob matching -- markdown bold makes glob literals unusable here.
-    hermetic: false
+      A bare root authorizes -- require >=2 segments on generated ancestor prefixes. If you find
+      yourself extracting path-like tokens FROM the body, stop: that is the rejected design, and it
+      is what makes `**` dangerous.
+    hermetic: true
     graduation: graduate
     graduation_check_id: marker-guard-bare-root-not-authorizing
   - step: 5
     phase: pre-deploy
     action: >-
+      Prove composite R3 authorization works on a real `"<action-rel-dir>::<step-id>"` key -- the
+      one bound registry whose keys are not file paths, and therefore the one where neither
+      verbatim nor ancestor matching applies without a mention_candidates function.
+    command: >-
+      bin/venv-python -m pytest tests/checks/test__marker_guard.py tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -q -k "composite_key or mention_candidates"
+    expected: >-
+      Passes for a key like `.github/actions/deterministic-guard::guard`: the full key and the
+      action-relative directory are both offered as candidates, and a Decision naming
+      `.github/actions/deterministic-guard` authorizes it while one naming only `.github/`
+      does not.
+    fix_if: >-
+      mention_candidates is unset for the composite spec, so every R3 marker fails or passes
+      vacuously. Specify it: [full key, action-rel-dir], then apply the >=2-segment ancestor rule
+      to the directory.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: marker-guard-composite-key-authorization
+  - step: 6
+    phase: pre-deploy
+    action: >-
       Convert the retroactive-scope justification from an asserted premise into a checked
       measurement: every token-bearing marker across all five real registries is
-      authorization-clean, and the install-state population is exactly 3.
+      authorization-clean, and the install-state population is bounded above by 3.
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "live_markers or install_population"
     expected: >-
-      Both pass: the cross-registry invariant reports zero unauthorized markers, and the
-      install-state test pins the population at 3 (sloc_budgets x1 dec-159, prose_budgets x2 dec-150).
+      Both pass: the cross-registry invariant reports zero unauthorized markers, and the population
+      test asserts `<= 3`, not `== 3`.
     fix_if: >-
       An unauthorized marker is found. Do NOT weaken the rule -- retarget the marker to the Decision
-      that actually authorizes it (the rec-2974 pattern), or drop the marker line.
-    hermetic: false
+      that actually authorizes it (the rec-2974 pattern), or drop the marker line. If the count
+      assertion is an equality, change it to an upper bound: an equality pin becomes a standing
+      tripwire that reds CI on the next legitimate marker.
+    hermetic: true
     graduation: graduate
     graduation_check_id: marker-guard-live-markers-authorized
-  - step: 6
+  - step: 7
     phase: pre-deploy
     action: "Confirm rec-2974's own acceptance command passes and the budget value is untouched."
     command: >-
@@ -351,7 +440,7 @@ verification_plan:
     hermetic: true
     graduation: graduate
     graduation_check_id: sloc-budget-marker-dec159-retarget
-  - step: 7
+  - step: 8
     phase: pre-deploy
     action: >-
       Prove no sixth hand-rolled DECISIONS.md parser was introduced (Decision 134 clause 3 / DAF-03)
@@ -371,7 +460,26 @@ verification_plan:
     hermetic: true
     graduation: graduate
     graduation_check_id: marker-guard-uses-shared-decisions-parser
-  - step: 8
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Prove the Decision 149 compact-in-place coupling is closed by the supersession hop -- the
+      finding the decision-scout missed and the plan-critique caught.
+    command: >-
+      bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "supersession or compaction"
+    expected: >-
+      A marker citing a Decision whose body is a compaction stub (header + one-line `**Decision:**`
+      + `**Superseded by: Decision N**`, no path mentions) is authorized when Decision N's body
+      names the key, and still fails when neither body names it. One hop only -- a stub pointing at
+      a stub is not chased.
+    fix_if: >-
+      The hop is missing. Use scripts/decisions_md._extract_superseded_by on the cited body; if it
+      returns a target, also consult that target's body. Decision 149 clause 1's eligibility rule
+      (the superseder restates every live clause) is what makes one hop sufficient.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: marker-guard-supersession-hop
+  - step: 10
     phase: pre-deploy
     action: >-
       Prove composite R1's no-marker-escape branch survives consolidation: no marker admits an R1
@@ -379,53 +487,84 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -q
     expected: >-
-      Suite green, including a case where an R1 violation carrying a valid `# raise-approved:`
-      marker STILL fails.
+      Suite green (including collection -- the module-level `_decision_header_exists` import at
+      line 11 must have been repointed), with a case where an R1 violation carrying a valid
+      `# raise-approved:` marker STILL fails.
     fix_if: >-
-      A marker rescues an R1 violation. Route only the R3 branch through authorization_failure;
-      leave _R1_KNOWN_VIOLATORS handling untouched.
-    hermetic: false
+      A marker rescues an R1 violation -- route only the R3 branch through authorization_failure.
+      If the file fails to COLLECT, the module-level import of a deleted symbol was not repointed.
+    hermetic: true
     graduation: graduate
     graduation_check_id: composite-r1-no-marker-escape
-  - step: 9
-    phase: pre-deploy
-    action: >-
-      Prove the Decision 161 clause 4 `moved from <old-path>` form is REPLACED by a same-diff proof,
-      not exempted, and that it is enabled on the mypy spec alone.
-    command: >-
-      bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "moved_from"
-    expected: >-
-      Passes when <old-path> is in the base map and gone from the current map; FAILS when <old-path>
-      never existed or still exists; is skipped by check_present_markers; and is off by default on
-      every non-mypy spec.
-    fix_if: >-
-      The form is treated as a blanket exemption, or leaks onto another spec. Gate it behind
-      RegistrySpec.moved_from_relief, default False.
-    hermetic: false
-    graduation: graduate
-    graduation_check_id: mypy-moved-from-same-diff-proof
-  - step: 10
-    phase: pre-deploy
-    action: >-
-      Confirm the shared module is mypy-clean and unbaselined -- baselining it would require a
-      `# baseline-raised: dec-NNN` marker whose Decision must name it under the very rule this plan
-      installs.
-    command: >-
-      bash -c 'bin/venv-python -m mypy scripts/checks/_marker_guard.py 2>&1 | tee /dev/stderr |
-      grep -q "Success: no issues found" && ! grep -q "_marker_guard" config/mypy_baseline.yaml &&
-      echo "mypy clean + unbaselined"'
-    expected: "Prints `mypy clean + unbaselined`; exit 0."
-    fix_if: >-
-      Errors remain. Narrow `base_entry` explicitly before indexing (that IS the defect being moved
-      out of the three incumbents) -- never register the module in the baseline.
-    hermetic: false
-    graduation: graduate
-    graduation_check_id: marker-guard-mypy-clean
   - step: 11
     phase: pre-deploy
     action: >-
-      Enforce the plan's own rule against itself: no file crosses 500 SLOC and the diff neither adds
-      a config/sloc_budgets.yaml entry nor raises a budget.
+      Prove the Decision 161 clause 4 `moved from <old-path>` form is implemented as a same-diff
+      proof, and that it is enabled on the mypy spec alone.
+    command: >-
+      bin/venv-python -m pytest tests/checks/test__marker_guard.py tests/checks/typing/test_mypy_baseline.py -q -k "moved_from"
+    expected: >-
+      Passes when <old-path> is in the base map and gone from the current map; FAILS when <old-path>
+      never existed or still exists; is skipped by check_present_markers; and is off by default on
+      every non-mypy spec. The two existing fixtures at test_mypy_baseline.py:37 and :306 have been
+      updated to supply a base map.
+    fix_if: >-
+      The form is treated as a blanket exemption, or leaks onto another spec. Gate it behind
+      RegistrySpec.moved_from_relief, default False.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: mypy-moved-from-same-diff-proof
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Pin the grandfather hook -- the entire bound on the Decision 151 forward-conformance
+      departure, and the one acceptance criterion the previous draft left unverified.
+    command: >-
+      bin/venv-python -c "from scripts.checks._marker_guard import RETRO_SCAN_GRANDFATHER as g;
+      assert isinstance(g, frozenset), type(g); assert len(g) == 0, sorted(g);
+      print('grandfather hook frozen and empty')"
+    expected: "Prints `grandfather hook frozen and empty`; exit 0."
+    fix_if: >-
+      Non-empty at install, or not a frozenset. It MUST ship empty -- the measured population is
+      already authorization-clean, so any entry would be unjustified. Growing it later is a
+      reviewed code edit by design (the _R1_KNOWN_VIOLATORS shape), never a config edit.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: marker-guard-grandfather-hook-empty
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Confirm the shared module is mypy-clean BY PER-FILE ATTRIBUTION and unbaselined. Whole-run
+      `Success: no issues found` is unattainable -- mypy follows imports and
+      scripts/checks/_common.py:147 carries a pre-existing baselined error.
+    command: |-
+      set -e
+      bin/venv-python -m mypy scripts/ src/ > /tmp/mypy-out.txt 2>&1 || true
+      grep -qE "Found [0-9]+ errors?|Success: no issues found" /tmp/mypy-out.txt
+      test "$(grep -c '^scripts/checks/_marker_guard\.py:.*error:' /tmp/mypy-out.txt)" -eq 0
+      ! grep -q "_marker_guard" config/mypy_baseline.yaml
+      echo "marker_guard: 0 attributed mypy errors, unbaselined"
+    expected: "Prints `marker_guard: 0 attributed mypy errors, unbaselined`; exit 0."
+    fix_if: >-
+      Errors attributed to _marker_guard.py remain -- narrow `base_entry` explicitly before indexing
+      (that IS the defect being moved out of the three incumbents). NEVER register the module in
+      config/mypy_baseline.yaml; that is the pressure this step exists to resist. Errors attributed
+      to OTHER files (notably _common.py) are pre-existing and out of scope. The
+      `Found N errors|Success` grep is the proof-of-execution guard -- without it a crashed mypy
+      would report zero attributed errors and pass vacuously.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates validate_mypy_ratchet, already a registered full-tier check that enforces the
+      implicit-zero rule on every unregistered file -- including this one. A graduated copy would be
+      a second registry row asserting the same property, and it invokes a multi-minute whole-tree
+      mypy run that is unsuitable as a standing fast guard.
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Enforce the plan's own rule against itself: no file crosses 500 SLOC, and no
+      config/sloc_budgets.yaml budget VALUE changes. Value comparison, not a line count -- the
+      mandatory rec-2974 fix rewrites one entry line, so an added-line count is guaranteed to be 1.
     command: |-
       set -e
       for f in scripts/checks/_marker_guard.py tests/checks/test__marker_guard.py \
@@ -436,16 +575,30 @@ verification_plan:
         echo "$f: $n SLOC"
         test "$n" -le 500 || { echo "OVER 500: $f ($n)"; exit 1; }
       done
-      test "$(git diff origin/main -- config/sloc_budgets.yaml | grep -c '^+  ')" -eq 0
+      git show origin/main:config/sloc_budgets.yaml > /tmp/sloc-base.yaml
+      bin/venv-python - <<'PYEOF'
+      import yaml
+      base = yaml.safe_load(open("/tmp/sloc-base.yaml", encoding="utf-8"))["budgets"]
+      head = yaml.safe_load(open("config/sloc_budgets.yaml", encoding="utf-8"))["budgets"]
+      assert base == head, f"budget VALUES changed: base={base} head={head}"
+      print("budget values identical (marker text may differ)")
+      PYEOF
       echo "all under 500 SLOC; no budget raise"
-    expected: "Prints `all under 500 SLOC` then `no budget raise`; exit 0."
+    expected: >-
+      Prints each file's SLOC, then `budget values identical (marker text may differ)`, then
+      `all under 500 SLOC; no budget raise`; exit 0.
     fix_if: >-
-      A test file crossed 500. Move the cases into tests/checks/test__marker_guard.py -- decompose,
-      never raise (Decision 128). Headroom at plan time: composite 46, mypy 77, coverage 165.
+      A test file crossed 500 -- move cases into tests/checks/test__marker_guard.py; decompose,
+      never raise (Decision 128). If the value comparison trips, a budget was actually changed:
+      that needs its own authorization and is out of this plan's scope.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: size-gov-marker-guard-no-budget-raise
-  - step: 12
+    graduation: waive
+    graduation_waiver_reason: >-
+      Both halves duplicate registered checks -- validate_sloc_limits already enforces the 500-SLOC
+      ceiling repo-wide, and validate_sloc_budget_raises already gates budget-value increases with
+      strictly better diagnostics. This step exists to catch the violation locally before CI does,
+      not to add a standing guard; graduating it would add a redundant registry row.
+  - step: 15
     phase: pre-deploy
     action: >-
       Confirm the AGENTS.md correction cost <= 0 bytes on the S1 aggregate and that prose budgets
@@ -467,7 +620,7 @@ verification_plan:
       it would duplicate an existing registry row. The other half (net byte delta <= 0 versus
       origin/main) is a one-time property of THIS diff, not a standing invariant -- once merged
       there is no delta left to measure.
-  - step: 13
+  - step: 16
     phase: pre-deploy
     action: >-
       Confirm the fast-tier cost did not regress. All five guards already read the 540 KB
@@ -492,31 +645,37 @@ verification_plan:
           with contextlib.redirect_stdout(io.StringIO()):
               fn([])
       ms = (time.perf_counter() - t0) * 1000
-      print(f"five guards: {ms:.1f} ms (plan-time baseline 50.3 ms)")
+      print(f"five guards: {ms:.1f} ms (plan-time band 49.6-82.3 ms)")
       assert ms <= 250.0, ms
       PYEOF
     expected: >-
-      Prints the elapsed total and exits 0. Plan-time baseline was measured TWICE on the unchanged
-      tree at 50.3 ms and 82.3 ms, so treat 50-85 ms as the noise band; the 250 ms ceiling is
-      deliberately ~3x the top of that band so ordinary machine variance cannot red the step. Judge
-      a regression by order of magnitude, not by a few ms.
+      Prints the elapsed total and exits 0. Plan-time baseline was measured on the unchanged tree at
+      49.6 ms, 50.3 ms and 82.3 ms across runs, so treat 49-85 ms as the noise band; the 250 ms
+      ceiling is ~3x its top so ordinary machine variance cannot red the step. Judge a regression by
+      order of magnitude, not by a few ms.
     fix_if: >-
-      Over 250 ms. Memoize load_decision_bodies at module level so DECISIONS.md is parsed once per
+      Over 250 ms. Memoize load_decision_bodies at module level so the corpus is parsed once per
       process, and keep the composite path subprocess-free (Decision 153).
     hermetic: false
-    graduation: graduate
-    graduation_check_id: marker-guard-five-guards-under-250ms
-  - step: 14
+    graduation: waive
+    graduation_waiver_reason: >-
+      A wall-clock timing assertion is inherently machine- and load-dependent (the plan-time
+      baseline itself varied 49.6-82.3 ms on an identical tree). Graduating it would install a
+      flaky standing guard whose failures carry no reliable signal -- exactly the check-quality
+      anti-pattern CD.29/CD.30 curation exists to prevent. It is a useful one-time regression probe
+      for this PR only.
+  - step: 17
     phase: pre-deploy
     action: >-
-      Confirm the governance artefacts landed and conform: the new Decision, the regenerated index,
-      the non-ritual contract, and its file-router route.
+      Confirm the governance artefacts landed and conform: the new Decision with its five
+      amendments, the regenerated index, the non-ritual contract, and its file-router route.
     command: >-
       bash -c 'bin/venv-python -m scripts.decisions_index --check &&
       test -f docs/contracts/marker-grammar.yaml &&
       ! grep -qE "^(contract|class):" docs/contracts/marker-grammar.yaml &&
       grep -q "marker-grammar.yaml" docs/contracts/file-router.yaml &&
-      grep -q "marker-grammar.yaml" docs/DECISIONS.md && echo "governance artefacts OK"'
+      grep -q "marker-grammar.yaml" docs/DECISIONS.md &&
+      grep -q "Decision 149" docs/DECISIONS.md && echo "governance artefacts OK"'
     expected: "Prints `governance artefacts OK`; exit 0."
     fix_if: >-
       The index drifted -- run `bin/venv-python -m scripts.decisions_index --write`. If the contract
@@ -525,11 +684,11 @@ verification_plan:
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      This is a one-time landing check for artefacts this PR creates. Its durable half is already
-      owned by registered checks (validate_decisions_index_freshness,
-      validate_decision_entry_conformance, validate_contract_drift, validate_placement); a
-      graduated copy would be a duplicate registry row with no independent signal.
-  - step: 15
+      A one-time landing check for artefacts this PR creates. Its durable half is already owned by
+      registered checks (validate_decisions_index_freshness, validate_decision_entry_conformance,
+      validate_contract_drift, validate_placement); a graduated copy would be a duplicate registry
+      row with no independent signal.
+  - step: 18
     phase: pre-deploy
     action: >-
       Run the authoritative pre-merge gate over the whole change, then the full tier before commit
@@ -541,8 +700,13 @@ verification_plan:
       If the full tier times out, treat the handoff as blocked and rerun from the start rather than
       committing on a partial pass.
     hermetic: false
-    graduation: not-applicable
-  - step: 16
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero but must not be graduated: the full-tier obligation is
+      already owned by the registered validate_handoff_full_tier check, and a registry row that
+      invokes scripts/validate.py would make validation re-enter itself when the graduated check is
+      run BY validate.py -- the recursion the _VALIDATE_DEPTH guard exists to prevent.
+  - step: 19
     phase: post-deploy
     action: >-
       Closure obligation: confirm rec-2974 actually closed via the squash-merge `Resolves:` trailer.
@@ -570,9 +734,9 @@ constraints:
   - >-
     No new registered check name is minted. Enforcement rides the five ALREADY-registered checks, so
     scripts/checks/registry.py and scripts/validate.py need no edit -- which is also what keeps
-    tests/test_checks_registry.py (643 SLOC against a 643 budget, ZERO headroom) untouched. If a new
-    check ever does become necessary, it lands as a registry sequence entry PLUS a validate.py
-    re-export PLUS tests that fail without it -- never a CI-workflow-only check.
+    tests/test_checks_registry.py (643 SLOC against a 643 budget, ZERO headroom) untouched. Verified
+    safe: the per-tier membership lists at tests/test_checks_registry.py:84-85,154 are frozenset
+    FLOORS, and the module-enumerating tests are dynamic.
   - >-
     Decompose, never raise (Decision 128). Every created or modified file stays under 500 SLOC; if
     one would cross, move cases into tests/checks/test__marker_guard.py or split the module into a
@@ -585,9 +749,15 @@ constraints:
     contract exists to close). Writing one inside a slice whose purpose is de-duplicating
     copy-pasted guards would be self-defeating.
   - >-
+    Authorization is KEY-SIDE ONLY: generate the key's ancestor prefixes and substring-match them
+    against the Decision body. NEVER tokenize the body to extract path-like strings -- markdown
+    emits `**`, `**Date`, `**Decision` as apparent tokens, and the corpus carries 178 distinct
+    >=2-segment "path-like" prefixes that are actually decision-number lists (`80/104/`,
+    `134/145/`). Key-side generation makes both classes structurally irrelevant.
+  - >-
     Marker-grammar MECHANICS go in docs/contracts/marker-grammar.yaml, never in the Decision --
     docs/contracts/decision-entry.yaml significance.routing.field_semantics forbids field semantics
-    in a numbered Decision. The Decision carries only the commitment, the four amendments, and a
+    in a numbered Decision. The Decision carries only the commitment, the five amendments, and a
     pointer. Keep it minimal: header headroom is 116 of 120.
   - >-
     The AMENDMENTS must be in the Decision, not the contract -- a contract cannot amend a Decision
@@ -596,10 +766,16 @@ constraints:
     authority chain.
   - >-
     AGENTS.md edit must be net <= 0 bytes on the S1 aggregate (5 bytes of headroom). Ratchet
-    config/prose_budgets.yaml DOWN afterwards; never raise it, never mark it.
+    config/prose_budgets.yaml DOWN afterwards by editing ONLY the S1 line; never raise it, never
+    mark it, and never reseed the whole file (nine ratchet-down advisories are live at plan time and
+    all but S1 are out of scope).
   - >-
-    scripts/checks/_marker_guard.py must be mypy-clean and must NEVER be added to
-    config/mypy_baseline.yaml.
+    scripts/checks/_marker_guard.py must have ZERO mypy errors ATTRIBUTED TO ITSELF and must NEVER
+    be added to config/mypy_baseline.yaml. Do not chase errors attributed to other files -- notably
+    the pre-existing baselined scripts/checks/_common.py:147.
+  - >-
+    scripts/checks/_marker_guard.py must import ROOT from scripts.checks._common and never
+    recompute it (tests/test_checks_registry.py::TestNoLocalRootRecomputation).
   - >-
     The composite guard must remain subprocess-free and filesystem-only (Decision 153 fast-tier
     budget) -- never call the git-based base reader from that path.
@@ -607,9 +783,10 @@ constraints:
     Composite R1 keeps its no-marker-escape property absolutely. Only R3 binds to the shared
     authorization rule.
   - >-
-    No glob-literal matching in the authorization rule. Markdown `**bold**` emits `**` tokens
-    (measured on Decision 161's body: `['**','**Date','**Decision','**Problem',...]`), so a glob
-    matcher would authorize every path in the repository.
+    Every `graduate` VP step needs a matching NEW row in
+    config/agent/verification_registry/registry.yaml with the same check_id AND plan_slug, or
+    validate_graduation_completeness's implement-PR leg fails. Twelve rows, listed in the acceptance
+    criteria.
   - >-
     Bundle NOTHING beyond rec-2974. The squash-merge `Resolves:` trailer names rec-2974 alone.
   - "No rescue agents or workaround loops (Decision 55). Forward-fix only; never auto-revert."
@@ -626,11 +803,28 @@ context:
     Decision 124, Decision 80, Decision 132, Decision 148, Decision 86, Decision 118, Decision 145,
     Decision 146, Decision 55.
   - >-
-    "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=pending (Step 9)"
+    "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=REVISE after 1 round(s), round 2 pending"
+  - >-
+    PRIMARY authority for retroactive scope is SGE-07's own acceptance clause, which reads
+    verbatim: "A marker citing a Decision whose text nowhere mentions the file (or covering glob)
+    fails; rec-2974's instance is caught retroactively." A diff-only guard structurally CANNOT
+    satisfy that -- the is_new/is_increase short-circuit skips an already-merged entry whose value
+    did not change. The measured population of 3 is the cost argument, not the authority.
   - >-
     Source of record for this slice is audits/size-governance-expansion-3dee4a5.yaml finding SGE-07
     (severity medium, confidence CONFIRMED, classification planned-insufficient against rec-2974,
     effort S, depends_on []). The audit is merged (#840) and must NOT be re-run or re-litigated.
+  - >-
+    Plan-critique round 1 finding (NOT caught by the decision-scout), now first-class: Decision 149's
+    compact-in-place lifecycle keeps the header but reduces the body to `**Status:** Superseded`, an
+    ISO `**Date:**`, a ONE-LINE `**Decision:**` and `**Superseded by: Decision N**` -- destroying the
+    path mentions this plan's rule depends on. Decision 149's never-remove-headers rule is precisely
+    what made the incumbent existence check permanently safe across ~12,103 inbound citations, and
+    the body-mention rule voids that guarantee. Decision 146 archival cover does NOT extend here.
+    Closed by the one-hop supersession rule (verification step 9); Decision 149 clause 1's
+    eligibility criterion -- the superseder restates every live clause -- is what makes one hop
+    sufficient. Remediation if a hop ever fails: retarget the marker, or add the key to the frozen
+    grandfather hook. Either way the COMPACTING PR fails loudly rather than a later innocent one.
   - >-
     Scout flag WARN on Decision 134: resolved by building on the shared parser rather than writing a
     sixth header regex, and by promoting _iter_decision_sections to a public name in this PR.
@@ -638,36 +832,56 @@ context:
     Scout flag WARN on Decision 128 clause 3 ("marker persistence is not required ... authorized at
     the diff-vs-base moment"): the retroactive scan makes a persisted marker load-bearing, so the new
     Decision amends clause 3 EXPLICITLY. The scout's second half -- that a bare ancestor-directory
-    mention is a permanent skeleton key -- is resolved by the two-segment rule plus a negative test.
+    mention is a permanent skeleton key -- is resolved by the >=2-segment rule plus a negative test.
   - >-
-    Scout flag NOTE on Decision 161 clause 4: a categorical authorization becomes a conditional
-    same-diff proof obligation, so clause 4 is named in the amendment list and the retroactive-scan
-    skip is stated as part of the amendment.
+    Measured width of the accepted false-negative band, to be recorded in marker-grammar.yaml rather
+    than described qualitatively: `.claude/skills/` appears in 12 live Decisions and `scripts/checks/`
+    in 22, so within prose surface class S4 the upgrade is "any of 116 Decisions" -> "one of 12", not
+    per-file proof; 45 of 57 current mypy entries are authorizable by at least one existing Decision,
+    34 by directory prefix alone. The band is real and bounded, and wider than "accepted band" alone
+    conveys. SGE-07 frames this as upgrade-not-proof: mention is not proof of authorization.
+  - >-
+    Scout flag NOTE on Decision 161 clause 4, corrected by plan-critique and NO LONGER over-claimed:
+    clause 4's `moved from <old-path>` form is UNIMPLEMENTED in production code today, surviving only
+    as free-form `<reason>` text in two test fixtures (test_mypy_baseline.py:37 and :306) where it
+    passes incidentally because dec-161's HEADER exists. This plan gives clause 4 its FIRST
+    implementation, in conditional form -- it is not withdrawing a live categorical grant. The
+    Decision still names clause 4 in its amendment list, but the stakes are low and the plan says so.
   - >-
     Scout flag NOTE on Decision 162 R3 (its baseline is a Decision 130 clause 2 one-time grandfather,
     "explicitly not a precedent", while the retroactive scan installs a stricter rule with no
-    grandfather): accepted BECAUSE measured clean -- verification step 5 turns that measurement into
-    a test rather than an assertion, and the day-one-empty frozen hook bounds the scope.
+    grandfather): accepted BECAUSE measured clean -- verification step 6 turns that measurement into
+    a test, and the day-one-empty frozen hook (verification step 12) bounds the scope.
   - >-
     Scout SPIRIT flag NOTE on Decision 151 (this repo's grammar changes have been
     forward-conformance-only): the new Decision states why retroactive scope is justified here
-    (population measured at 3, all authorization-clean post-fix, so zero migration cost) and bounds it
-    with a grandfather hook that is EMPTY on day one and growable only by a reviewed code edit -- the
-    _R1_KNOWN_VIOLATORS shape.
+    (SGE-07's acceptance clause mandates it; population measured at 3, all authorization-clean
+    post-fix, so zero migration cost) and bounds it with a grandfather hook that is EMPTY on day one
+    and growable only by a reviewed code edit -- the _R1_KNOWN_VIOLATORS shape.
   - >-
-    Measured at plan time against a8357d3, all independently reproducible: exactly 3 token-bearing
-    marker lines repo-wide (config/sloc_budgets.yaml:18 dec-161; config/prose_budgets.yaml:50,54
-    dec-150 x2); Decision 150's body names BOTH SKILL.md paths verbatim, so both prose markers pass;
-    Decision 159's body names tests/test_checks_registry.py verbatim while Decision 161's names
-    neither that path nor `tests/` at all, which is precisely why the retarget works and the current
-    state fails; coverage's 9 `# grandfathered dec-159` comments carry no marker token.
+    Design alternative considered and deferred (plan-critique frame challenge Q1): a declared
+    `Governs:` marker in docs/contracts/decision-entry.yaml's optional_markers_fixed_spelling, the
+    mechanism Decision 151 used to add `Intent`, would make authorization a typed declared fact and
+    dissolve the ancestor/no-glob problem class entirely. Rejected FOR THIS SLICE because a declared
+    marker is empty on all 116 historical entries and therefore structurally cannot catch rec-2974
+    retroactively -- which is SGE-07's stated acceptance. The natural successor is a hybrid
+    ("declared Governs: wins if present, prose-mention fallback"), which would let the measured band
+    above shrink over time; not filed as a rec here to avoid pre-empting Slice B's design.
   - >-
-    Measured sizes at plan time: the five guards run in 50.3 ms combined on a first pass (composite
-    35.2, sloc 5.4, prose 3.4, coverage 3.1, mypy 3.2) and 82.3 ms on a repeat of the identical
-    unchanged tree -- treat 50-85 ms as the noise band, not 50.3 as a hard number. Test-file SLOC
-    headroom to 500 (awk 'NF && $1 !~ /^#/' reproduces the repo's counting rule exactly):
-    composite 46 (454),
-    mypy 77 (423), coverage 165 (335), prose 365 (135), sloc 415 (85). S1 root_ambient_load_set
+    Measured at plan time against a8357d3, all independently reproduced by the critique: exactly 3
+    token-bearing marker lines repo-wide (config/sloc_budgets.yaml:18 dec-161;
+    config/prose_budgets.yaml:50,54 dec-150 x2); Decision 150's body names BOTH SKILL.md paths
+    verbatim, so both prose markers pass; Decision 159's body names tests/test_checks_registry.py
+    verbatim while Decision 161's names neither that path nor `tests/` at all, which is precisely why
+    the retarget works and the current state fails; coverage's 9 `# grandfathered dec-159` comments
+    carry no marker token.
+  - >-
+    Measured sizes at plan time: the five guards run in 49.6-82.3 ms combined across repeated runs on
+    the identical unchanged tree (first-pass split: composite 35.2, sloc 5.4, prose 3.4, coverage 3.1,
+    mypy 3.2) -- treat 49-85 ms as the noise band, never a single number. Test-file SLOC headroom to
+    500 (awk 'NF && $1 !~ /^#/' reproduces the repo counting rule exactly): composite 46 (454),
+    mypy 77 (423), coverage 165 (335), prose 365 (135), sloc 415 (85); deletions of
+    now-removed-symbol tests free further headroom in four of the five. S1 root_ambient_load_set
     33210 of 33215. docs/DECISIONS.md live headers 116 of 120; DECISIONS.md + DECISIONS_ARCHIVE.md
     combined 651,726 of 700,000 bytes.
   - >-
@@ -675,6 +889,8 @@ context:
     and coverage_baseline.py, and they are the SAME defect -- `base_entry[0]` indexed where mypy
     cannot narrow base_entry to non-None through the is_increase flag. That code is exactly what
     moves into the shared module, so writing it once with an explicit narrow clears all three.
+    Separately, scripts/checks/_common.py:147 has a pre-existing baselined error that any mypy run
+    following imports will surface -- it is out of scope and must not be chased.
   - >-
     rec-2954 ("Composite-action shell-body guard hygiene cluster") is NOT bundled. Its finding (3)
     -- _parse_raw_r3_markers clears its in-section flag on any column-0 line including a comment,
@@ -696,12 +912,6 @@ context:
     `limit: 500` as budget entries. Slice B binds to the eight names in verification step 1 and
     passes a `budgets:`-scoped extractor -- it must not mint a sixth copy of the guard.
   - >-
-    Known and ACCEPTED false negative, not a defect to engineer past: a Decision naming a broad
-    directory authorizes anything at least two segments deep beneath it. Decision 161's body really
-    does contain `scripts/checks/`, so it authorizes `scripts/checks/**` mypy entries -- which is
-    arguably correct, since Decision 161 IS the mypy-baseline decision scoped to scripts/ and src/.
-    SGE-07 frames this as upgrade-not-proof: mention is not proof of authorization.
-  - >-
     Planning-context notes from preflight, all non-blocking: 925 open recommendations; 795
     non-automatable (soft cap 250 breached); data-quality checks have never run
     (tables_covered 0, last_run null) and this plan touches no data pipeline or table schema;
@@ -719,13 +929,18 @@ pre_implementation_checklist:
   - "Branch confirmed not on main (`git branch --show-current`)"
   - "docs/PROJECT_CONTEXT.md read"
   - >-
-    Only the plan-cited decision sections read: 128 (clause 3 verbatim), 43, 102, 130, 159, 161
-    (clause 4 verbatim), 162 (R3), 104, 131, 150, 151, 153, 163, 149, 160, 127
+    Only the plan-cited decision sections read: 128 (clause 3 verbatim), 43, 102, 130, 149 (clause 1
+    stub grammar verbatim), 159, 161 (clause 4 verbatim), 162 (R3), 104, 131, 150, 151, 153, 163,
+    160, 127
   - >-
     audits/size-governance-expansion-3dee4a5.yaml finding SGE-07 read (proposed_change + acceptance
     are the build spec); the audit is NOT re-run
   - "docs/contracts/decision-entry.yaml significance.routing.field_semantics read (the Decision/contract split authority)"
   - "All files in scope located and readable"
+  - >-
+    The five consumer test files grepped for `_decision_header_exists`, `_default_base_reader`,
+    `_parse_entry_lines`, `_parse_budget_lines`, `_parse_raw_r3_markers` BEFORE deleting any symbol
+    -- two are module-level imports and will break pytest COLLECTION
   - "Acceptance criteria understood and verifiable"
   - >-
     Current max `## Decision NNN:` header re-checked in docs/DECISIONS.md before writing the entry
@@ -743,16 +958,19 @@ execution_steps:
     top-level section key, ending at the next column-0 NON-COMMENT line, accepting optionally-quoted
     keys so composite's `"<dir>::<step-id>"` form parses); default_base_reader; a module-level
     memoized load_decision_bodies over DECISIONS.md + DECISIONS_ARCHIVE.md; authorization_failure
-    (verbatim key, or >=2-segment ancestor prefix, or a spec mention candidate -- no globs);
-    check_diff; check_present_markers; and the frozen, day-one-EMPTY retroactive grandfather hook.
-    Keep it under 500 SLOC and mypy-clean.
+    (key-side prefix generation with the >=2-segment floor, plus spec mention_candidates, plus the
+    one-hop supersession fallback via _extract_superseded_by); check_diff; check_present_markers; and
+    RETRO_SCAN_GRANDFATHER as an EMPTY frozenset. Import ROOT from _common. Keep it under 500 SLOC
+    with zero self-attributed mypy errors.
   - >-
     Create docs/contracts/marker-grammar.yaml (non-ritual, no top-level contract:/class: block)
-    carrying every mechanic: the three tokens and their per-registry directions, the authorization
-    rule including the two-segment ancestor rule and the no-glob `**bold**` rationale, the moved-from
-    same-diff proof and its mypy-only opt-in, the retroactive-scan token-scoping rule, the
-    archive-counts rule, the grandfather hook's shape, and Slice B's eight-name binding surface
-    documented as a stable contract.
+    carrying every mechanic: the three tokens and their per-registry directions; the authorization
+    rule stated as key-side prefix generation plus substring containment, with the >=2-segment floor,
+    the measured band width, and the explicit statement that the body is never tokenized; the
+    composite mention_candidates rule; the Decision 149 compaction interaction and the supersession
+    hop; the moved-from same-diff proof and its mypy-only opt-in; the retroactive-scan token-scoping
+    rule; the archive-counts rule; the grandfather hook's shape; and Slice B's eight-name binding
+    surface documented as a stable contract.
   - >-
     Rebind the five guards to the shared module, deleting each local regex/parser/reader/header-check
     copy. Preserve prose's relief-valve text, coverage's `< 100.0` new-entry predicate, mypy's
@@ -763,25 +981,36 @@ execution_steps:
     dec-161 to dec-159, comment text only, value 643 unchanged.
   - >-
     Write the new Decision in docs/DECISIONS.md -- MINIMAL: the existence-to-authorization commitment
-    and retroactive scan, the four amendments (128 clause 3, 159, 161 clause 4, 162 R3), the
-    Decision 151 forward-conformance justification bounded by the empty hook, and a pointer to
-    docs/contracts/marker-grammar.yaml. Conform to docs/contracts/decision-entry.yaml required
-    markers (Status, Date, Decision). Then regenerate docs/decisions-index.json.
+    and retroactive scan (led by SGE-07's acceptance clause), the FIVE amendments (128 clause 3, 159,
+    161 clause 4, 162 R3, 149), the Decision 151 forward-conformance justification bounded by the
+    empty hook, and a pointer to docs/contracts/marker-grammar.yaml. Conform to
+    docs/contracts/decision-entry.yaml required markers (Status, Date, Decision). Then regenerate
+    docs/decisions-index.json.
   - >-
-    Correct AGENTS.md's stale marker sentence with a net <= 0 byte delta, then ratchet
-    config/prose_budgets.yaml's S1 entry DOWN to the measured post-edit size.
+    Correct AGENTS.md's stale marker sentence with a net <= 0 byte delta, then ratchet ONLY the S1
+    line in config/prose_budgets.yaml DOWN to the measured post-edit size.
   - >-
     Update docs/contracts/composite-action-shape.yaml rules.r3.escape to require authorization and
     point at the new contract; add the marker-grammar route to docs/contracts/file-router.yaml.
   - >-
-    Write tests/checks/test__marker_guard.py carrying the bulk of the new coverage (extractor shapes
-    including the class-table and comment-immunity cases, the authorization rule including the
-    bare-root negative, moved-from, the day-one-empty hook, the cross-registry live-marker invariant
-    and the install-state population pin). Add only thin binding assertions to the five existing
-    consumer test files -- composite has 46 SLOC of headroom and mypy 77, so keep those two minimal.
+    FIRST repoint or delete every test referencing a removed symbol -- module-level imports at
+    tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py:11 and
+    tests/checks/prose/test_prose_budget_raises.py:12 are hard COLLECTION failures; attribute
+    accesses at test_mypy_baseline.py:38-62,140,148 and test_coverage_baseline.py:282,289 are runtime
+    AttributeErrors; test_mypy_baseline.py:37 and :306 are the repo's only `moved from` fixtures and
+    must be rewritten to supply a base map. THEN add thin binding assertions to each of the five.
+  - >-
+    Write tests/checks/test__marker_guard.py carrying the bulk of the new coverage: extractor shapes
+    (class-table exclusion, comment immunity), the authorization rule (bare-root negative, band
+    positive, no body tokenization), composite `dir::step-id` keys, the supersession hop, moved-from,
+    the empty grandfather hook, the cross-registry live-marker invariant and the population upper
+    bound.
+  - >-
+    Add the 12 graduation rows to config/agent/verification_registry/registry.yaml, one per graduate
+    step, each with plan_slug `size-gov-marker-guard`.
   - >-
     Drop the now-clean entries from config/mypy_baseline.yaml, but only for guards that actually
-    measure 0.
+    measure 0, and never the pre-existing _common.py entry.
   - >-
     Execute the Verification Plan -- run each step, loop until pass. On unrecoverable failure, stop
     and RCA (Decision 55); never inline-patch around a red gate.
@@ -792,7 +1021,7 @@ execution_steps:
 rollback: >-
   Single-PR revert. The change is additive plus in-place rebinding: reverting restores the five
   self-contained guards, the dec-161 marker, the AGENTS.md sentence and the prose budget, and drops
-  the new module, contract, tests and Decision. No data migration, no infrastructure, no deployed
-  artefact, so there is nothing to unwind beyond the commit. If only the retroactive scan proves
-  problematic post-merge, the narrower rollback is to add the offending entry keys to the frozen
-  grandfather hook (a reviewed code edit, by design) rather than reverting the whole slice.
+  the new module, contract, tests, registry rows and Decision. No data migration, no infrastructure,
+  no deployed artefact, so there is nothing to unwind beyond the commit. If only the retroactive scan
+  proves problematic post-merge, the narrower rollback is to add the offending entry keys to the
+  frozen grandfather hook (a reviewed code edit, by design) rather than reverting the whole slice.
