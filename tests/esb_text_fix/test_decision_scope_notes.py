@@ -170,23 +170,16 @@ def test_cd27_gates_reference_only_existing_tier_items():
     assert not dangling, f"CD.27 gates references nonexistent tier_item id(s): {dangling}"
 
 
-#: (tier_item_id, quoted_phrase) pairs that are DELIBERATELY left stale in place. Each entry here
-#: lives inside a discipline_point VP step 9 protects byte-for-byte (wave-3/ESB-02 ownership of
-#: docs/ROADMAP-PLATFORM.yaml :821) -- editing it in place is out of this wave's scope even though
-#: the quote it carries is now stale (H1, code-review round 1). The fix instead lands as a SEPARATE,
-#: sibling discipline_point that must (a) quote the exact same stale phrase, marking it as the
-#: acknowledged target, and (b) provide its own resolvable id-based replacement reference.
-_WAVE3_PROTECTED_STALE_QUOTES = {("T4.2", "checkpoint-replay verified")}
-
-
 def test_cd27_exit_criterion_cross_references_resolve():
     """H1 class guard: a discipline_points reference to 'T4.x exit criterion <id-or-quote>'
     must resolve against that tier_item's actual exit_criteria -- catching the H1 defect
     (CD.27's maturity-monitoring point quoted T4.2's old c1 text verbatim; renaming c1 left the
-    quote dangling). A stale quote inside a VP-step-9-protected, wave-3-owned point is exempt from
-    direct resolution ONLY if _WAVE3_PROTECTED_STALE_QUOTES names it AND a sibling discipline_point
-    acknowledges the same phrase with its own resolving replacement -- an orphaned, unacknowledged
-    stale quote anywhere else still fails."""
+    quote dangling). Strictly stronger as of wave 3 (ESB-02 remediation,
+    PLAN-esb-fallback-spec-carrier): the former protected-stale-quote exemption
+    (_WAVE3_PROTECTED_STALE_QUOTES, guarding ("T4.2", "checkpoint-replay verified")) is retired
+    now that wave 3 has rewritten the maturity-monitoring point in place and the stale quote it
+    protected no longer exists -- every quoted T4.x criterion reference must now resolve, with
+    no exempt set."""
     d = load_roadmap()
     cd = cd27(d)
     points = [p for p in cd["discipline_points"] if isinstance(p, str)]
@@ -196,28 +189,9 @@ def test_cd27_exit_criterion_cross_references_resolve():
     for item_id, phrase in quoted_refs:
         item = tier_item(item_id, d)
         criteria_text = " ".join(str(c) for c in item["exit_criteria"])
-        if phrase in criteria_text:
-            continue
-        assert (item_id, phrase) in _WAVE3_PROTECTED_STALE_QUOTES, (
+        assert phrase in criteria_text, (
             f"CD.27 quotes {item_id} exit criterion {phrase!r} verbatim, but it no longer appears "
             f"in {item_id}'s exit_criteria -- a renamed criterion left a dangling quoted reference"
-        )
-        original_pattern = f'{item_id} exit criterion "{phrase}"'
-        acknowledgements = [p for p in points if phrase in p and original_pattern not in p]
-        assert acknowledgements, (
-            f"{item_id} exit criterion {phrase!r} is allowlisted as a protected stale quote, but no "
-            f"sibling discipline_point acknowledges and corrects it"
-        )
-        correction = acknowledgements[0]
-        replacement_ids = re.findall(rf"{re.escape(item_id)} exit criterion ([a-z][a-z0-9_]*)\b", correction)
-        assert replacement_ids, (
-            f"the acknowledgement for {item_id} exit criterion {phrase!r} does not name a resolvable replacement criterion id"
-        )
-        idx_ok = any(
-            re.fullmatch(r"c[0-9]+", rid) and 0 <= int(rid[1:]) - 1 < len(item["exit_criteria"]) for rid in replacement_ids
-        )
-        assert idx_ok, (
-            f"the acknowledgement's replacement id(s) {replacement_ids} do not resolve against {item_id}'s exit_criteria"
         )
 
     id_refs = re.findall(r"(T4\.\d+[a-z]?) exit criterion ([a-z][a-z0-9_]*)\b", blob)

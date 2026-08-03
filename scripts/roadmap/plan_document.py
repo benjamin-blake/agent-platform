@@ -18,6 +18,7 @@ VerificationTier = Literal["V1", "V2", "V3"]
 ScopeAction = Literal["Create", "Modify", "Delete"]
 Complexity = Literal["XS", "S", "M", "L", "XL"]
 GraduationDisposition = Literal["graduate", "waive", "not-applicable"]
+FallbackVerdict = Literal["continue_on_current_substrate", "fallback_triggered", "obligation_lapsed"]
 
 
 class HandoffPolicy(BaseModel):
@@ -91,6 +92,29 @@ class WorkArea(BaseModel):
     complexity: Complexity
 
 
+class FallbackReevaluation(BaseModel):
+    """CD.27 fallback_spec re-evaluation record (ESB-02 remediation).
+
+    Carried by a plan naming a CD.27-gated tier item, per
+    scripts/checks/roadmap/validate_fallback_reevaluation.py. Shape only -- the
+    obligation to attach this block lives in that check, not in this schema.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reevaluated_on: str = Field(min_length=1)
+    substrate_status: str = Field(min_length=1)
+    verdict: FallbackVerdict
+    basis: str = Field(min_length=1)
+
+    @field_validator("basis")
+    @classmethod
+    def _basis_non_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("fallback_reevaluation.basis must be non-blank")
+        return v
+
+
 class PlanDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +139,7 @@ class PlanDocument(BaseModel):
     rollback: str | None = None
     tier_waiver: str | None = None
     handoff_policy: HandoffPolicy | None = None
+    fallback_reevaluation: FallbackReevaluation | None = None
 
     @field_validator("schema_version")
     @classmethod

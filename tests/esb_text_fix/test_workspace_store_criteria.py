@@ -1,27 +1,31 @@
 """ESB-01 criteria guards (PLAN-esb-workspace-store-criteria, wave 2).
 
 CD.43 records the criteria (W1-W8) against which the executor's workspace backing store is
-selected -- it does NOT choose a store. These eleven guards join wave 1's tests/esb_text_fix/
-package rather than a new one: five are direct siblings of wave 1 guards on the same objects
+selected -- it does NOT choose a store. These ten guards join wave 1's tests/esb_text_fix/
+package rather than a new one: four are direct siblings of wave 1 guards on the same objects
 (T4.1-vs-T4.2 bare-string criteria, the CD.43-vs-CD.27 gates resolution, the CD.43-vs-CD.27
-pending/filed_via shape, the layer-2 precondition floor extending wave 1's ESB-04/ESB-06
-obligations test, and the append-only-vs-origin/main invariant), and _anchors.py already names
-"docs/ROADMAP-PLATFORM.yaml" as a literal token that channel-2-selects this package on any
-roadmap edit, anticipating exactly this in later ESB waves. Nine of these eleven guards fail on
-the pre-edit tree; test_t41_exit_criteria_remain_bare_strings and
-test_cd27_string_discipline_points_are_append_only_vs_origin_main are regression guards that pass
-before and after by design.
+pending/filed_via shape, and the layer-2 precondition floor extending wave 1's ESB-04/ESB-06
+obligations test), and _anchors.py already names "docs/ROADMAP-PLATFORM.yaml" as a literal
+token that channel-2-selects this package on any roadmap edit, anticipating exactly this in
+later ESB waves. Eight of these ten guards fail on the pre-edit tree;
+test_t41_exit_criteria_remain_bare_strings is a regression guard that passes before and after
+by design. A ninth regression guard that used to sit here -- CD.27 discipline_points
+byte-identity vs origin/main -- is retired by wave 3 (ESB-02 remediation,
+PLAN-esb-fallback-spec-carrier): it guarded this package's own boundary with wave 3 and was
+always transient by construction (wave 2's own waiver said so); wave 3 legitimately owns and
+rewrites the CD.27 maturity-monitoring clause it protected, so restoring the pre-edit text
+would be wrong, not a regression. Its durable half (the maturity clause staying phantom-free
+and carrier-bound) is now asserted, strictly stronger, by tests/esb_text_fix/test_fallback_spec.py.
 """
 
 from __future__ import annotations
 
 import re
-import subprocess
 from typing import Any
 
 import yaml
 
-from tests.esb_text_fix._anchors import REPO_ROOT, cd27, load_roadmap, tier_item
+from tests.esb_text_fix._anchors import cd27, load_roadmap, tier_item
 
 REQUIRED_CRITERIA_IDS = {"W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"}
 REQUIRED_OPTIONS = {
@@ -129,25 +133,6 @@ def test_layer2_ratification_preconditions_cover_esb01_esb04_esb06():
     esb01 = [p for p in points if "Layer-2 ratification precondition (ESB-01)" in p]
     assert len(esb01) == 1, f"expected exactly 1 ESB-01 precondition, found {len(esb01)}"
     assert "CD.43" in esb01[0], "the ESB-01 precondition must point at the CD holding the criteria"
-
-
-def test_cd27_string_discipline_points_are_append_only_vs_origin_main():
-    result = subprocess.run(
-        ["git", "show", "origin/main:docs/ROADMAP-PLATFORM.yaml"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    base = yaml.safe_load(result.stdout)
-    head = load_roadmap()
-    before = [p for p in cd27(base)["discipline_points"] if isinstance(p, str)]
-    after = {p for p in cd27(head)["discipline_points"] if isinstance(p, str)}
-    lost = [p[:90] for p in before if p not in after]
-    assert not lost, f"CD.27 discipline_point(s) EDITED or REMOVED rather than appended to: {lost}"
-    maturity = [p for p in before if "maturity monitoring" in p]
-    assert maturity, "re-derive this guard: origin/main CD.27 carries no maturity-monitoring point"
-    assert all(p in after for p in maturity), "the wave-3-owned (ESB-02) maturity-monitoring clause changed semantics"
 
 
 def test_criteria_recompute_from_a_stated_basis_and_publish_no_figure():

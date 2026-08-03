@@ -144,6 +144,129 @@ class TestCandidateDecisionRatification:
             validate_candidate_decision_ratification(failed)
         assert failed == []
 
+    # R4 (ESB-02 remediation wave 3): precondition-discharge coverage.
+
+    def test_precondition_discharge_no_discharge_fails(self, tmp_path: Path) -> None:
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.27\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-200\n    filed_via: ops_decisions:dec-200\n"
+            "    discipline_points:\n"
+            "      - Layer-2 ratification precondition (ESB-04). Do the thing.\n",
+            decisions_md="## Decision 200: X (Decided)\n",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert "Candidate decision ratification guard" in failed
+
+    def test_precondition_discharge_partial_coverage_fails_naming_missing_id(self, tmp_path: Path) -> None:
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.27\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-200\n    filed_via: ops_decisions:dec-200\n"
+            "    discipline_points:\n"
+            "      - Layer-2 ratification precondition (ESB-04). Do the thing.\n"
+            "      - Layer-2 ratification precondition (ESB-06). Do the other thing.\n"
+            "      - precondition_discharge:\n"
+            "          ESB-04: Discharged at ratification -- comparative record landed.\n",
+            decisions_md="## Decision 200: X (Decided)\n",
+        )
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("builtins.print") as mock_print,
+        ):
+            validate_candidate_decision_ratification(failed)
+        assert "Candidate decision ratification guard" in failed
+        printed = "\n".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
+        assert "ESB-06" in printed
+
+    def test_precondition_discharge_full_coverage_passes(self, tmp_path: Path) -> None:
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.27\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-200\n    filed_via: ops_decisions:dec-200\n"
+            "    discipline_points:\n"
+            "      - Layer-2 ratification precondition (ESB-04). Do the thing.\n"
+            "      - Layer-2 ratification precondition (ESB-06). Do the other thing.\n"
+            "      - precondition_discharge:\n"
+            "          ESB-04: Discharged at ratification -- comparative record landed.\n"
+            "          ESB-06: Discharged at ratification -- determinism rules landed.\n",
+            decisions_md="## Decision 200: X (Decided)\n",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == []
+
+    def test_precondition_discharge_lapse_entry_counts_as_discharge(self, tmp_path: Path) -> None:
+        """A LAPSE-worded entry is still a non-empty string -- R4 checks presence, not verdict."""
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.27\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-200\n    filed_via: ops_decisions:dec-200\n"
+            "    discipline_points:\n"
+            "      - Layer-2 ratification precondition (ESB-06). Do the other thing.\n"
+            "      - precondition_discharge:\n"
+            "          ESB-06: LAPSED -- spike selected a non-replay substrate; obligation does not apply.\n",
+            decisions_md="## Decision 200: X (Decided)\n",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == []
+
+    def test_precondition_discharge_no_op_ratified_no_preconditions_passes(self, tmp_path: Path) -> None:
+        """A ratified CD declaring zero preconditions needs no precondition_discharge block at all."""
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.28\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-200\n    filed_via: ops_decisions:dec-200\n"
+            "    discipline_points:\n"
+            "      - Some unrelated discipline point with no precondition pattern in it.\n",
+            decisions_md="## Decision 200: X (Decided)\n",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == []
+
+    def test_precondition_discharge_no_op_no_discipline_points_passes(self, tmp_path: Path) -> None:
+        """A ratified CD with no discipline_points key at all is a clean no-op for R4."""
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.28\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-200\n    filed_via: ops_decisions:dec-200\n",
+            decisions_md="## Decision 200: X (Decided)\n",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == []
+
+    def test_precondition_discharge_no_op_pending_with_preconditions_passes(self, tmp_path: Path) -> None:
+        """A pending CD carrying preconditions is not yet due -- R4 applies only to state==ratified."""
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.27\n    title: t\n    state: pending\n"
+            "    filed_via: pending_log_decision_lambda\n"
+            "    discipline_points:\n"
+            "      - Layer-2 ratification precondition (ESB-04). Do the thing.\n",
+            decisions_md="",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == []
+
     def test_multiple_cds_share_one_ratified_as_passes(self, tmp_path: Path) -> None:
         # batch-wave: >=2 CDs share one ratified_as (CD.16/CD.24 -> dec-079 precedent)
         self._setup(
