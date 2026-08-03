@@ -397,6 +397,30 @@ class TestGraduationDisposition:
         with pytest.raises(ValidationError, match="graduation_waiver_reason requires graduation='waive'"):
             PlanDocument.model_validate(d)
 
+    def test_graduate_with_stray_waiver_reason_rejected(self) -> None:
+        """Cross-field leakage: a 'graduate' step must not also carry a waiver reason."""
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "graduate"
+        d["verification_plan"][0]["graduation_check_id"] = "some-check-id"
+        d["verification_plan"][0]["graduation_waiver_reason"] = "stray leftover reason"
+        with pytest.raises(ValidationError, match="graduation_waiver_reason requires graduation='waive'"):
+            PlanDocument.model_validate(d)
+
+    def test_waive_with_stray_check_id_rejected(self) -> None:
+        """Cross-field leakage: a 'waive' step must not also carry a check_id."""
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "waive"
+        d["verification_plan"][0]["graduation_waiver_reason"] = "requires live infra"
+        d["verification_plan"][0]["graduation_check_id"] = "stray leftover check-id"
+        with pytest.raises(ValidationError, match="graduation_check_id requires graduation='graduate'"):
+            PlanDocument.model_validate(d)
+
+    def test_historical_plans_all_validate(self) -> None:
+        """No PLAN-*.yaml on disk carries the new field yet -- confirms the field is optional."""
+        from scripts.roadmap.plan_document import main as _main
+
+        assert _main([]) == 0
+
 
 class TestFallbackReevaluation:
     """ESB-02 remediation (PLAN-esb-fallback-spec-carrier): the optional fallback_reevaluation
@@ -434,6 +458,40 @@ class TestFallbackReevaluation:
         with pytest.raises(ValidationError, match="basis must be non-blank"):
             PlanDocument.model_validate(d)
 
+    def test_whitespace_only_reevaluated_on_rejected(self) -> None:
+        """Symmetry with basis (code review round 1): all three free-text fields reject blank."""
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="   "))
+        with pytest.raises(ValidationError, match="reevaluated_on must be non-blank"):
+            PlanDocument.model_validate(d)
+
+    def test_whitespace_only_substrate_status_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(substrate_status="   "))
+        with pytest.raises(ValidationError, match="substrate_status must be non-blank"):
+            PlanDocument.model_validate(d)
+
+    def test_non_iso_reevaluated_on_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="August 2, 2026"))
+        with pytest.raises(ValidationError, match="must be an ISO date"):
+            PlanDocument.model_validate(d)
+
+    def test_iso_reevaluated_on_accepted(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="2026-01-05"))
+        doc = PlanDocument.model_validate(d)
+        assert doc.fallback_reevaluation.reevaluated_on == "2026-01-05"
+
+    def test_basic_format_reevaluated_on_rejected(self) -> None:
+        """Code review round 2 (Low): date.fromisoformat() alone accepts the dash-free basic
+        ISO format on Python 3.11+ ('20260802'); the validator must reject it -- this is a date
+        stamp in a governance document, and the error message promises YYYY-MM-DD specifically."""
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="20260802"))
+        with pytest.raises(ValidationError, match="must be an ISO date"):
+            PlanDocument.model_validate(d)
+
+    def test_datetime_with_time_component_reevaluated_on_rejected(self) -> None:
+        d = _mutate(fallback_reevaluation=self._block(reevaluated_on="2026-08-02T00:00:00"))
+        with pytest.raises(ValidationError, match="must be an ISO date"):
+            PlanDocument.model_validate(d)
+
     def test_missing_basis_rejected(self) -> None:
         block = self._block()
         block.pop("basis")
@@ -452,27 +510,3 @@ class TestFallbackReevaluation:
         paths = sorted((Path(__file__).parent.parent / "docs" / "plans").glob("PLAN-*.yaml"))
         failures = validate_paths(paths)
         assert not failures, f"historical plan(s) invalidated by the new field: {[(p.name, e[:80]) for p, e in failures[:3]]}"
-
-    def test_graduate_with_stray_waiver_reason_rejected(self) -> None:
-        """Cross-field leakage: a 'graduate' step must not also carry a waiver reason."""
-        d = _base()
-        d["verification_plan"][0]["graduation"] = "graduate"
-        d["verification_plan"][0]["graduation_check_id"] = "some-check-id"
-        d["verification_plan"][0]["graduation_waiver_reason"] = "stray leftover reason"
-        with pytest.raises(ValidationError, match="graduation_waiver_reason requires graduation='waive'"):
-            PlanDocument.model_validate(d)
-
-    def test_waive_with_stray_check_id_rejected(self) -> None:
-        """Cross-field leakage: a 'waive' step must not also carry a check_id."""
-        d = _base()
-        d["verification_plan"][0]["graduation"] = "waive"
-        d["verification_plan"][0]["graduation_waiver_reason"] = "requires live infra"
-        d["verification_plan"][0]["graduation_check_id"] = "stray leftover check-id"
-        with pytest.raises(ValidationError, match="graduation_check_id requires graduation='graduate'"):
-            PlanDocument.model_validate(d)
-
-    def test_historical_plans_all_validate(self) -> None:
-        """No PLAN-*.yaml on disk carries the new field yet -- confirms the field is optional."""
-        from scripts.roadmap.plan_document import main as _main
-
-        assert _main([]) == 0

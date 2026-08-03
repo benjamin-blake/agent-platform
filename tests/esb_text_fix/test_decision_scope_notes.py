@@ -175,11 +175,10 @@ def test_cd27_exit_criterion_cross_references_resolve():
     must resolve against that tier_item's actual exit_criteria -- catching the H1 defect
     (CD.27's maturity-monitoring point quoted T4.2's old c1 text verbatim; renaming c1 left the
     quote dangling). Strictly stronger as of wave 3 (ESB-02 remediation,
-    PLAN-esb-fallback-spec-carrier): the former protected-stale-quote exemption
-    (_WAVE3_PROTECTED_STALE_QUOTES, guarding ("T4.2", "checkpoint-replay verified")) is retired
-    now that wave 3 has rewritten the maturity-monitoring point in place and the stale quote it
-    protected no longer exists -- every quoted T4.x criterion reference must now resolve, with
-    no exempt set."""
+    PLAN-esb-fallback-spec-carrier): the former protected-stale-quote exemption module constant
+    (which guarded the T4.2 "checkpoint-replay verified" quote) is retired now that wave 3 has
+    rewritten the maturity-monitoring point in place and the stale quote it protected no longer
+    exists -- every quoted T4.x criterion reference must now resolve, with no exempt set."""
     d = load_roadmap()
     cd = cd27(d)
     points = [p for p in cd["discipline_points"] if isinstance(p, str)]

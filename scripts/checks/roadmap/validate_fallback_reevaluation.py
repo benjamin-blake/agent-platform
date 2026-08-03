@@ -52,12 +52,44 @@ Fail-loud (Decision 55) if CD.27 is absent from the roadmap -- a missing trigger
 limitation A) -- structurally identical to validate_graduation_completeness's own advisory-SKIP
 for the same condition.
 
-Injectable seams: `plans_dir` and `roadmap_path` ONLY (mirrors validate_plan_documents /
-validate_candidate_decision_ratification). Deliberately NO `added_paths` injection seam --
-validate_graduation_completeness's own docstring (:34-38) refuses that seam because "a seam
-would defeat the point of the test": the net-new predicate must be proven against REAL git
+Injectable seam: `roadmap_path` ONLY. There is deliberately no `plans_dir` seam and no
+`added_paths` seam. `_common.ROOT` is the SOLE root for everything net-new-plan-related (the
+diff itself, and resolving each added path back to a file to load) -- a second, independent
+root parameter here would be two ways to be wrong instead of one: a caller could patch
+`_common.ROOT` (which the real-git tests do) while a stale `plans_dir` default silently pointed
+elsewhere, and nothing would catch the mismatch. Tests that need to prove the net-new predicate
+against real git state patch `scripts.checks._common.ROOT` and lay out the fixture tree there --
+see tests/checks/roadmap/test_validate_fallback_reevaluation.py. NO `added_paths` injection seam
+either: validate_graduation_completeness's own docstring (:34-38) refuses that seam because "a
+seam would defeat the point of the test": the net-new predicate must be proven against REAL git
 state (a throwaway repo with a real refs/remotes/origin/main), not an injected stub, because
 this plan's entire retro-fit defence rests on that property actually holding.
+
+CARRIER LIFECYCLE -- CANONICAL HERE (code review round 3 / High): this module docstring is the
+enforcement-collocated site (AGENTS.md: "collocate semantic definitions with their enforcement
+counterparts in a single file"), so the full lifecycle lives ONLY here. CD.27's own
+`fallback_spec.reevaluation_carrier` text and the plan's CARRIER LIFECYCLE context entry each
+carry a one-line POINTER to this paragraph, never a restatement -- a second or third verbatim
+copy with nothing enforcing sync would be a NEW unenforced claim minted inside the very
+remediation ESB-02 exists to close.
+  - PERSISTENCE: the carrier PERSISTS against a ratified CD. All ratified CDs retain their
+    candidate_decisions entry and `gates` list, so the CD.27-sourced trigger set survives
+    ratification unchanged -- this is correct rather than incidental, because CD.27 scopes the
+    maturity hedge to the first 12 months AFTER ratification, so the obligation's live window
+    BEGINS at ratification and the check is a no-op in practice before it.
+  - EXIT: in-band, via the `obligation_lapsed` FallbackVerdict recorded on a plan's
+    `fallback_reevaluation` block (basis: the ratification date, or whatever event closed the
+    obligation). The carrier requires A recorded verdict, never a particular one -- it retires by
+    leaving an audit trail, never by someone remembering to delete a check, which is the exact
+    failure that would make it a cousin of the phantom control it replaces.
+  - DISCLOSED RESIDUALS (all three, not a partial list -- each is an honest floor of a text-keyed
+    trigger, accepted rather than papered over):
+      (i) a plan MODIFIED rather than added escapes the net-new-scoping leg (Decision 132's own
+          disclosed limitation, inherited knowingly here).
+      (ii) an unreachable origin/main advisory-SKIPs the whole check rather than failing (Decision
+           132 limitation A) -- see the origin_main_reachable() discussion above.
+      (iii) a T4.x plan naming no gated item in either `phase` or `closes_criteria` escapes
+            entirely -- the carrier has no third leg to catch it.
 """
 
 from __future__ import annotations
@@ -68,7 +100,14 @@ from pathlib import Path
 
 from scripts.checks import _common, registry
 
-_GATE_TOKEN_TEMPLATE = r"(?<![\w.]){}(?![\w])"
+# The two halves of the boundary-aware gate-token match, named separately (not just embedded in
+# _gate_pattern's return) because VP step 3's regex-identity ratchet pins each independently: the
+# lookbehind alone was insufficient -- round 2's own history is a lookahead defect
+# ((?![0-9a-zA-Z.]) silently dropping a legitimate sentence-final "T4.4."), so a ratchet that only
+# checks the lookbehind pins the half that never broke. One definition, consumed by _gate_pattern
+# -- no second copy of either literal anywhere in this module.
+_GATE_LOOKBEHIND = r"(?<![\w.])"
+_GATE_LOOKAHEAD = r"(?![\w])"
 
 
 def _cd27_gates(roadmap_path: Path) -> list[str] | None:
@@ -93,7 +132,7 @@ def _cd27_gates(roadmap_path: Path) -> list[str] | None:
 def _gate_pattern(gates: list[str]) -> re.Pattern[str]:
     """Boundary-aware alternation over gates: (?<![\\w.])(gate1|gate2|...)(?![\\w])."""
     alts = "|".join(re.escape(g) for g in gates)
-    return re.compile(r"(?<![\w.])(" + alts + r")(?![\w])")
+    return re.compile(_GATE_LOOKBEHIND + "(" + alts + ")" + _GATE_LOOKAHEAD)
 
 
 def _closes_criteria_item_ids(closes_criteria: list[str]) -> set[str]:
@@ -112,14 +151,12 @@ def _closes_criteria_item_ids(closes_criteria: list[str]) -> set[str]:
     return ids
 
 
-def _net_new_plan_paths(plans_dir: Path) -> list[str] | None:
+def _net_new_plan_paths() -> list[str] | None:
     """Net-new (git status 'A') docs/plans/PLAN-*.yaml paths vs the origin/main merge-base.
 
-    Returns None when origin/main is unreachable (caller advisory-SKIPs). plans_dir is accepted
-    for signature symmetry with the other injectable seam but the diff itself always runs
-    against _common.ROOT -- callers proving the net-new predicate against real git state must
-    point plans_dir at the SAME tree as the patched _common.ROOT, or repo-relative diff paths
-    will never match plans_dir-resolved paths (the two seams are not independent).
+    Returns None when origin/main is unreachable (caller advisory-SKIPs). Always runs against
+    module-level `_common.ROOT` -- the sole root (no parameter here); a caller proving the
+    net-new predicate against real git state patches `scripts.checks._common.ROOT` directly.
     """
     if not _common.origin_main_reachable(_common.ROOT):
         return None
@@ -130,17 +167,15 @@ def _net_new_plan_paths(plans_dir: Path) -> list[str] | None:
 @registry.register("validate_fallback_reevaluation", owner="platform")
 def validate_fallback_reevaluation(
     failed: list[str],
-    plans_dir: Path | None = None,
     roadmap_path: Path | None = None,
 ) -> None:
     """Enforce the CD.27 fallback re-evaluation carrier on net-new gated atomic plans.
 
-    plans_dir / roadmap_path are injectable seams (test/dogfood); the net-new-plan-path
-    predicate itself is never injectable -- see module docstring.
+    roadmap_path is the sole injectable seam (test/dogfood); the net-new-plan-path predicate
+    itself is never injectable -- see module docstring.
     """
     print("\n=== Fallback re-evaluation carrier (ESB-02 remediation) ===")
 
-    plans_dir = plans_dir if plans_dir is not None else _common.ROOT / "docs" / "plans"
     roadmap_path = roadmap_path if roadmap_path is not None else _common.ROOT / "docs" / "ROADMAP-PLATFORM.yaml"
 
     if not roadmap_path.exists():
@@ -164,10 +199,15 @@ def validate_fallback_reevaluation(
         return
 
     if not gates:
-        print("  PASS: CD.27 declares no gates -- nothing to trigger on.")
+        print(
+            f"  FAIL: CD.27 in {roadmap_path} declares an empty gates list -- the re-evaluation carrier has no "
+            "trigger set (Decision 55: fail loud; an emptied gates list is the phantom-control shape this wave "
+            "exists to remove -- a silent pass here would make the carrier a permanent, undetectable no-op)."
+        )
+        failed.append("Fallback re-evaluation carrier")
         return
 
-    added = _net_new_plan_paths(plans_dir)
+    added = _net_new_plan_paths()
     if added is None:
         print("  SKIP: origin/main unreachable (advisory locally, authoritative in CI; Decision 132 limitation A).")
         return

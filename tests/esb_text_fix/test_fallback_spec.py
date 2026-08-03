@@ -23,6 +23,7 @@ import re
 
 import yaml
 
+from scripts.checks.roadmap.validate_fallback_reevaluation import _gate_pattern
 from tests.esb_text_fix._anchors import cd27, load_roadmap
 
 REQUIRED_FALLBACK_SPEC_KEYS = {
@@ -37,6 +38,14 @@ REQUIRED_FALLBACK_SPEC_KEYS = {
     "lapse_condition",
 }
 REQUIRED_STATE_SCHEMA_KEYS = {"grain", "identity", "partition_key", "sort_key", "attributes", "write_mode"}
+
+#: A fallback_spec key present but under this length is contentless/stubbed, not a real value.
+#: Duplicated (not importable) in VP step 1's command and its graduated registry-row check_spec
+#: (config/agent/verification_registry/registry.yaml, check_id
+#: cd27-fallback-spec-and-carrier-binding) -- both are standalone `bin/venv-python -c` scripts
+#: embedded in YAML documents, so they cannot import this constant; this module is the one site
+#: where naming it is possible at all (code review round 3, Low).
+_FALLBACK_SPEC_KEY_MIN_LEN = 40
 
 #: Growth-safe anchor-phrase floor over the four CD.27 string discipline_points the retired
 #: append-only-vs-origin/main guard protected only incidentally.
@@ -68,7 +77,7 @@ def test_fallback_spec_well_formed():
     cd = cd27()
     s = _fallback_spec_block(cd)
     assert REQUIRED_FALLBACK_SPEC_KEYS <= set(s), f"fallback_spec missing {sorted(REQUIRED_FALLBACK_SPEC_KEYS - set(s))}"
-    thin = {k: v for k, v in s.items() if isinstance(v, str) and len(v.strip()) < 40}
+    thin = {k: v for k, v in s.items() if isinstance(v, str) and len(v.strip()) < _FALLBACK_SPEC_KEY_MIN_LEN}
     assert not thin, f"fallback_spec key(s) present but contentless: {sorted(thin)}"
 
     sch = s["state_schema"]
@@ -107,11 +116,16 @@ def test_maturity_point_is_phantom_free_and_carrier_bound():
 def test_maturity_point_names_every_gate_it_fires_on():
     """DOC-SAYS-X / CONTROL-DOES-Y guard: the control (validate_fallback_reevaluation) fires on
     every item CD.27 gates, so the text must name every one of them -- boundary-aware, so a bare
-    substring match on gate T4.1 is not satisfied by a T4.10/T4.12/T4.13-class mention."""
+    substring match on gate T4.1 is not satisfied by a T4.10/T4.12/T4.13-class mention.
+
+    Imports `_gate_pattern` from the carrier module itself rather than rebuilding the
+    boundary-aware regex by hand -- the REGEX-IDENTITY RATCHET installed at VP step 3 exists
+    precisely because a frozen hand-rolled copy silently diverges from source; a fourth copy
+    here would be exactly the kind of copy that ratchet does not cover."""
     d = load_roadmap()
     cd = cd27(d)
     gates = cd["gates"]
-    tok = re.compile(r"(?<![\w.])(" + "|".join(re.escape(g) for g in gates) + r")(?![\w])")
+    tok = _gate_pattern(gates)
     named = sorted(set(tok.findall(_maturity_point(cd))))
     assert set(named) == set(gates), f"control fires on {gates} but the text names only {named}"
 

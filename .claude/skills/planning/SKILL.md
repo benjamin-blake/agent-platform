@@ -519,7 +519,7 @@ execution_steps: # REQUIRED non-empty for IMPLEMENTATION plans
   - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
   - 'Report: what was implemented, verification results'
 work_areas: [] # STRATEGIC plans only (required there, forbidden otherwise);
-# entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
+  # entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
 rollback: optional rollback note # optional str; omit if not applicable
 # fallback_reevaluation: OPTIONAL -- fill only if this plan names a CD.27-gated tier item
 # (validate_fallback_reevaluation). Never fill on an ordinary plan (extra=forbid, 4 fields required):
