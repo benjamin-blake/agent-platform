@@ -118,7 +118,10 @@ scope:
     purpose: >-
       Ratchet the S1 root_ambient_load_set entry DOWN to the AGENTS.md post-edit measured size.
       A decrease, always unrestricted (Decision 102) -- never a raise, and never a raise-approved
-      marker on this entry.
+      marker on this entry. Edit ONLY the S1 line by hand: validate_prose_limits also emits a
+      pre-existing ratchet-down advisory for S2 src/data/handlers/CLAUDE.md (4302 of 4307), which is
+      NOT this plan's business -- a wholesale reseed of the file would silently pull that
+      out-of-scope entry into the diff.
   - file: AGENTS.md
     action: Modify
     purpose: >-
@@ -355,9 +358,12 @@ verification_plan:
       and that the archive is part of the authorizing corpus.
     command: >-
       bash -c 'grep -q "from scripts.decisions_md import" scripts/checks/_marker_guard.py &&
-      ! grep -qE "Decision \\\\\\(?\\\\d|## Decision \\(" scripts/checks/_marker_guard.py &&
+      ! grep -q "## Decision" scripts/checks/_marker_guard.py &&
       grep -q "DECISIONS_ARCHIVE" scripts/checks/_marker_guard.py && echo "shared parser OK"'
-    expected: "Prints `shared parser OK`; exit 0."
+    expected: >-
+      Prints `shared parser OK`; exit 0. The middle clause is the load-bearing one: a hand-rolled
+      header regex must contain the literal `## Decision`, so its absence proves the module reuses
+      the shared parser rather than duplicating its grammar.
     fix_if: >-
       A local header regex survives. Delete it and call the public name promoted from
       scripts/decisions_md._iter_decision_sections; source the corpus from both DECISIONS.md and
@@ -420,22 +426,18 @@ verification_plan:
     action: >-
       Enforce the plan's own rule against itself: no file crosses 500 SLOC and the diff neither adds
       a config/sloc_budgets.yaml entry nor raises a budget.
-    command: >-
-      bash -c 'bin/venv-python -c "
-      import pathlib,sys
-      bad=[]
-      for p in sys.argv[1:]:
-          f=pathlib.Path(p)
-          if not f.exists(): continue
-          n=sum(1 for l in f.read_text(encoding=\"utf-8\").splitlines() if l.strip() and not l.strip().startswith(\"#\"))
-          if n>500: bad.append((p,n))
-      assert not bad, bad
-      print(\"all under 500 SLOC\")
-      " scripts/checks/_marker_guard.py tests/checks/test__marker_guard.py
-      tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py
-      tests/checks/typing/test_mypy_baseline.py tests/checks/misc/test_coverage_baseline.py &&
-      test "$(git diff origin/main -- config/sloc_budgets.yaml | grep -c "^+  ")" -eq 0 &&
-      echo "no budget raise"'
+    command: |-
+      set -e
+      for f in scripts/checks/_marker_guard.py tests/checks/test__marker_guard.py \
+               tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py \
+               tests/checks/typing/test_mypy_baseline.py \
+               tests/checks/misc/test_coverage_baseline.py; do
+        n=$(awk 'NF && $1 !~ /^#/' "$f" | wc -l)
+        echo "$f: $n SLOC"
+        test "$n" -le 500 || { echo "OVER 500: $f ($n)"; exit 1; }
+      done
+      test "$(git diff origin/main -- config/sloc_budgets.yaml | grep -c '^+  ')" -eq 0
+      echo "all under 500 SLOC; no budget raise"
     expected: "Prints `all under 500 SLOC` then `no budget raise`; exit 0."
     fix_if: >-
       A test file crossed 500. Move the cases into tests/checks/test__marker_guard.py -- decompose,
@@ -448,12 +450,11 @@ verification_plan:
     action: >-
       Confirm the AGENTS.md correction cost <= 0 bytes on the S1 aggregate and that prose budgets
       were ratcheted DOWN, not raised.
-    command: >-
-      bash -c 'bin/venv-python -c "
-      from scripts.checks.prose import prose_limits
-      f=[]; prose_limits.validate_prose_limits(f); assert not f, f; print(\"prose OK\")" &&
-      test "$(git show origin/main:AGENTS.md | wc -c)" -ge "$(wc -c < AGENTS.md)" &&
-      echo "AGENTS.md net delta <= 0"'
+    command: |-
+      set -e
+      bin/venv-python -c "from scripts.checks.prose import prose_limits; f=[]; prose_limits.validate_prose_limits(f); assert not f, f; print('prose OK')"
+      test "$(git show origin/main:AGENTS.md | wc -c)" -ge "$(wc -c < AGENTS.md)"
+      echo "AGENTS.md net delta <= 0"
     expected: "Prints `prose OK` then `AGENTS.md net delta <= 0`; exit 0."
     fix_if: >-
       AGENTS.md grew. Shorten the replacement wording; headroom is 5 bytes (33210 of 33215). Never
@@ -471,23 +472,34 @@ verification_plan:
     action: >-
       Confirm the fast-tier cost did not regress. All five guards already read the 540 KB
       DECISIONS.md independently today, so a single memoized parse should be net-negative.
-    command: >-
-      bin/venv-python -c "
-      import time,io,contextlib
+    command: |-
+      bin/venv-python - <<'PYEOF'
+      import time, io, contextlib
       from scripts.checks.sloc import validate_sloc_budget_raises as a
       from scripts.checks.prose import prose_budget_raises as b
       from scripts.checks.misc import coverage_baseline as c
       from scripts.checks.typing import mypy_baseline as d
       from scripts.checks.ci_guards import validate_composite_action_shell_bodies as e
-      fns=[a.validate_sloc_budget_raises,b.validate_prose_budget_raises,c.validate_coverage_baseline_edits,d.validate_mypy_baseline_edits,e.validate_composite_action_shell_bodies]
-      t0=time.perf_counter()
+      fns = [
+          a.validate_sloc_budget_raises,
+          b.validate_prose_budget_raises,
+          c.validate_coverage_baseline_edits,
+          d.validate_mypy_baseline_edits,
+          e.validate_composite_action_shell_bodies,
+      ]
+      t0 = time.perf_counter()
       for fn in fns:
-          with contextlib.redirect_stdout(io.StringIO()): fn([])
-      ms=(time.perf_counter()-t0)*1000
-      print(f'five guards: {ms:.1f} ms (plan-time baseline 50.3 ms)')
-      assert ms <= 250.0, ms"
+          with contextlib.redirect_stdout(io.StringIO()):
+              fn([])
+      ms = (time.perf_counter() - t0) * 1000
+      print(f"five guards: {ms:.1f} ms (plan-time baseline 50.3 ms)")
+      assert ms <= 250.0, ms
+      PYEOF
     expected: >-
-      Prints the elapsed total and exits 0; expected at or below the 50.3 ms baseline, ceiling 250 ms.
+      Prints the elapsed total and exits 0. Plan-time baseline was measured TWICE on the unchanged
+      tree at 50.3 ms and 82.3 ms, so treat 50-85 ms as the noise band; the 250 ms ceiling is
+      deliberately ~3x the top of that band so ordinary machine variance cannot red the step. Judge
+      a regression by order of magnitude, not by a few ms.
     fix_if: >-
       Over 250 ms. Memoize load_decision_bodies at module level so DECISIONS.md is parsed once per
       process, and keep the composite path subprocess-free (Decision 153).
@@ -534,14 +546,16 @@ verification_plan:
     phase: post-deploy
     action: >-
       Closure obligation: confirm rec-2974 actually closed via the squash-merge `Resolves:` trailer.
-    command: >-
-      bash -c 'bin/venv-python -m scripts.ops_data_portal --sync >/dev/null &&
-      bin/venv-python -c "
-      import json,pathlib
-      rows=[json.loads(l) for l in pathlib.Path(\"logs/.recommendations-log.jsonl\").read_text().splitlines() if l.strip()]
-      r=next(x for x in rows if x[\"id\"]==\"rec-2974\")
-      assert r[\"status\"]==\"closed\", r[\"status\"]
-      print(\"rec-2974 closed\")"'
+    command: |-
+      set -e
+      bin/venv-python -m scripts.ops_data_portal --sync >/dev/null
+      bin/venv-python - <<'PYEOF'
+      import json, pathlib
+      rows = [json.loads(l) for l in pathlib.Path("logs/.recommendations-log.jsonl").read_text().splitlines() if l.strip()]
+      r = next(x for x in rows if x["id"] == "rec-2974")
+      assert r["status"] == "closed", r["status"]
+      print("rec-2974 closed")
+      PYEOF
     expected: "Prints `rec-2974 closed`."
     fix_if: >-
       Still open -- the trailer did not fire. Close it via the portal fallback:
@@ -648,8 +662,11 @@ context:
     neither that path nor `tests/` at all, which is precisely why the retarget works and the current
     state fails; coverage's 9 `# grandfathered dec-159` comments carry no marker token.
   - >-
-    Measured sizes at plan time: the five guards run in 50.3 ms combined (composite 35.2, sloc 5.4,
-    prose 3.4, coverage 3.1, mypy 3.2). Test-file SLOC headroom to 500: composite 46 (454),
+    Measured sizes at plan time: the five guards run in 50.3 ms combined on a first pass (composite
+    35.2, sloc 5.4, prose 3.4, coverage 3.1, mypy 3.2) and 82.3 ms on a repeat of the identical
+    unchanged tree -- treat 50-85 ms as the noise band, not 50.3 as a hard number. Test-file SLOC
+    headroom to 500 (awk 'NF && $1 !~ /^#/' reproduces the repo's counting rule exactly):
+    composite 46 (454),
     mypy 77 (423), coverage 165 (335), prose 365 (135), sloc 415 (85). S1 root_ambient_load_set
     33210 of 33215. docs/DECISIONS.md live headers 116 of 120; DECISIONS.md + DECISIONS_ARCHIVE.md
     combined 651,726 of 700,000 bytes.
