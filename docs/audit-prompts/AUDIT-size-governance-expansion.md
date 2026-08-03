@@ -96,8 +96,7 @@ Six hazards. Each invites a specific misread that would waste most of a session.
    tracked and live, under `.github/prompts/scheduled/` and
    `config/agent/executor/prompts/` (the latter is Layer 5 of the instruction architecture). Only
    the legacy top-level `.github/prompts/*.prompt.md` set was deleted at T-1.13. Verify both counts
-   yourself. The consequence is the reason `.prompt.md` is an in-scope class (`instruction_prompts`,
-   `agent_instructions_md`, row 12) despite being markdown: a live Decision 43 row governs 12 live
+   yourself. The consequence is the reason `.prompt.md` is an in-scope class (`agent_instructions_md`, row 12) despite being markdown: a live Decision 43 row governs 12 live
    files at a limit six
    times the Python limit, and you should establish whether ANY check enforces it. Do not assume
    the prose regime covers it -- verify against `config/prose_budgets.yaml` and against what
@@ -142,8 +141,8 @@ NOT a slug and never appears in `class_verdicts`, `rubric_ratings` or `per_surfa
 | 9 | `workflow_outputs` | `docs/plans/**/*.yaml`, `audits/**/*.yaml` | one file per workflow run |
 | 10 | `test_fixtures` | `tests/fixtures/**/*.yaml`, `tests/fixtures/**/*.yml`, `tests/fixtures/**/*.json` | inputs asserted against by tests |
 | 11 | `data_query` | `**/*.sql`, `**/*.json`, `**/*.toml`, `**/*.jsonl` | miscellaneous structured |
-| 12 | `agent_instructions_md` | `.claude/commands/**/*.md`, `**/*.prompt.md`, `docs/contracts/**/*.md` | markdown an agent loads in order to ACT (see the markdown rule) |
-| 13 | `workflow_artifacts_md` | `docs/audit-prompts/**/*.md`, `docs/plans/**/*.md` | markdown siblings of `workflow_outputs` |
+| 12 | `agent_instructions_md` | `.claude/commands/**/*.md`, `**/*.prompt.md`, `**/*.instructions.md`, `.claude/agents/**/*.md`, `docs/contracts/**/*.md` | markdown an agent loads in order to ACT |
+| 13 | `workflow_artifacts_md` | `docs/audit-prompts/**/*.md`, `docs/plans/**/*.md`, `audits/**/*.md` | markdown siblings of `workflow_outputs` |
 | 14 | `residual` | every tracked, non-excluded file matching no row above | see the residual rule |
 
 **Generated provenance test (row 1).** A file is generated if ANY holds: it carries a do-not-edit
@@ -161,9 +160,11 @@ classes is the right key -- that is DD-C and Q8 seed 1. Note the interesting
 edge: `config/sloc_budgets.yaml` is BOTH machine-regenerated (by `--update-sloc-budgets`) AND
 hand-edited (to add raise markers), so its provenance is genuinely hybrid. `config/prose_budgets.yaml`
 has NO regeneration command at all despite mirroring the same registry shape -- verify that
-asymmetry and decide what it means for Q3. First-match-wins governs the census: it satisfies the provenance test, so it
-counts as `generated` and you do not get to re-file it. The judgment asked of you is what that
-MEANS -- whether a key that puts a hand-edited registry in the generated class is the right key --
+asymmetry and decide what it means for Q3. For the census, first-match-wins settles both
+mechanically: `config/sloc_budgets.yaml` satisfies the provenance test and is `generated`;
+`config/prose_budgets.yaml` does not and is `config`. You do not get to re-file either. The
+judgment asked of you is what that MEANS -- whether a key that puts a hand-edited registry in the
+generated class, and splits two mirror-shaped registries across two classes, is the right key --
 and that belongs in DD-C and Q8 seed 1, not in a reclassification.
 If provenance is genuinely undeterminable for a file, classify it by extension and record the
 ambiguity as a DD-C observation.
@@ -228,9 +229,17 @@ first-match-wins runs. A generated `.py` file is excluded (Python is out of scop
   `personal_scripts/`, and any path not tracked by `git ls-files`;
 - **`**/*.py`** -- Python is already governed and is context-only for this audit (see "Context-only"
   below). It is NOT a residual member; do not census it and do not issue a class verdict for it;
-- **human-audience markdown ONLY** -- specifically `README.md` at the repository root and
-  `docs/plans/reports/**` (the REPORT-* deliverables and spike notes). These have a human
-  audience-of-record and are deliberately exempt. Do not census them and do not verdict on them.
+- **human-audience markdown ONLY** -- `README.md` at the repository root and
+  `docs/plans/reports/**/*.md` (the REPORT-* deliverables and spike notes). Human
+  audience-of-record, deliberately exempt: do not census them, do not verdict on them. The glob is
+  `.md`-scoped on purpose -- NON-markdown files under `docs/plans/reports/` are NOT exempt, and one
+  of them (`OVERSEER-terraform-deploy-redesign.yaml`) is class `workflow_outputs` and is DD-A's
+  centrepiece.
+- **already-governed agent prose** -- every path that is a budget key in
+  `config/prose_budgets.yaml` (the root ambient set, each non-root `**/CLAUDE.md`, each
+  `.claude/skills/*/SKILL.md`, `docs/PROJECT_CONTEXT.md`), plus `docs/DECISIONS.md` and
+  `docs/DECISIONS_ARCHIVE.md`. These are context-only. Excluding them explicitly is what stops
+  `residual` from sweeping them back in and forcing a verdict on settled Decision 127 territory.
 
 ### Context-only, not audit targets
 
@@ -251,12 +260,10 @@ settled.
 
 ### Vocabulary
 
-- **effective lines**: non-blank lines whose first non-whitespace character is not `#`. This is
-  what the current Python gate counts. Comment syntax differs by language -- `.tf` uses `#`,
-  `//` and `/* */`; JSON has no comments -- so this definition does not port cleanly. That
-  non-portability is evidence for Q2, not an incidental detail.
-
-- **CENSUS RULE -- pinned, not your judgment.** For the P2 census and for every population number
+- **effective lines / CENSUS RULE -- pinned, not your judgment.** Effective lines are non-blank
+  lines whose first non-whitespace character is not `#` -- what the current Python gate counts.
+  Comment syntax differs by language (`.tf` uses `#`, `//` and `/* */`; JSON has no comments), so
+  this does not port cleanly, which is itself evidence for Q2. For the P2 census and for every population number
   you report, apply the Python definition of effective lines VERBATIM to every class: non-blank,
   first non-whitespace character not `#`. Do NOT strip `//` or `/* */` in `.tf`, and do not apply
   per-language comment rules. This is deliberate: it makes your census reproducible, it matches
@@ -389,7 +396,8 @@ a named precondition is missing.
 
 **Q2 -- What is the right unit of measure?**
 Verdict enum: `keep-effective-lines | unify-on-bytes | per-class-unit | tokens | composite`.
-The repository currently uses four units across four gates: effective lines, raw lines, bytes,
+The repository currently uses four distinct units across the five size-measuring gates DD-B
+enumerates: effective lines, raw lines, bytes,
 and structural-entity count. Assess at minimum: does each unit track NS-A comprehension load for
 the class it governs; is it deterministic and dependency-free; can it be satisfied without
 reducing load; what does it cost to compute across the whole tree on every CI run. If you
@@ -504,6 +512,12 @@ Answer each seed below AND extend the list with anything recon surfaces. Use the
   of scope?
 - Is there a class where the right answer is to change how the file is PRODUCED rather than to
   cap it?
+- **What happens at the `commands` -> `skills` boundary?** `.claude/commands/*.md` is in scope
+  (`agent_instructions_md`), but the `.claude/skills/*/SKILL.md` files those commands invoke are
+  byte-governed by `validate_prose_limits` and are context-only here -- and they carry most of the
+  instruction load a session actually reads. Can a line-governed surface and a byte-governed
+  surface coexist coherently across one invocation chain, and would a file ever need to sit under
+  both? If your Q2 answer unifies the unit, say what that does to the prose regime.
 - **What is the base rate of the harm?** Every recommendation here traces to NS-A -- lower-tier
   models mis-editing large files. Establish whether that harm has ever been OBSERVED in this
   repository's non-Python classes, or whether it is assumed. Look for evidence in CI-RCA
@@ -616,7 +630,10 @@ non-resolving anchors in `meta.stale_anchors` and continue.
 - `scripts/checks/decisions/validate_decisions_size.py:20` -- `_DECISIONS_LIVE_MAX_H2 = 120`, a
   structural-entity count.
 - `scripts/checks/decisions/validate_decisions_size.py:21` --
-  `_DECISIONS_COMBINED_MAX_BYTES = 700_000`.
+  `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. Note this is the live+archive COMBINED ceiling and it
+  survives; the constant Decision 160 retired was the separate LIVE-byte ceiling
+  (`_DECISIONS_LIVE_MAX_BYTES`, Decision 145's 500,000), which is absent from the tree. Two
+  different ceilings on one surface -- do not conflate them.
 - `scripts/checks/ci_guards/validate_composite_action_shell_bodies.py` and
   `config/composite_action_body_baseline.yaml` -- a size-adjacent ratchet over inline shell bodies
   in composite actions, measured in effective lines, with a section that permits no raise marker at
@@ -727,8 +744,7 @@ is expected to move slightly with tree state; the counts are expected to reprodu
   `config/agent/verification_registry/registry.yaml`.
 - 2 files under `.github/workflows/` exceed 500.
 - 2 files under `docs/contracts/` exceed 500.
-- No `.sh` file exceeds 500; the largest measures about 106 effective lines. Shell is the one class
-  where adoption is free today.
+- No `.sh` file exceeds 500; the largest measures about 106 effective lines (13 files tracked).
 - Median bytes per effective line, with 10th and 90th percentiles, over ALL tracked files of each
   extension. Percentile method, stated so you can reproduce it exactly: sort the per-file ratios
   ascending and take the value at nearest-rank index `floor(q*(n-1)+0.5)`. Median is the middle
@@ -748,6 +764,18 @@ is expected to move slightly with tree state; the counts are expected to reprodu
   matches it recursively), so it is a workflow output -- which means the most extreme
   unit-divergence case in the repository sits in the class DD-D may conclude should be exempt.
   Reconcile those two conclusions explicitly rather than letting them pass in separate sections.
+- **Markdown population, by the classes rows 12-13 define.** Handed over because the requester's
+  scoping turns on it and it is otherwise invisible next to the non-markdown table above. Counts are
+  files / files over 500 effective lines / largest:
+  `.claude/commands/**` 6 / 0 / 119 -- `**/*.prompt.md` 12 / 0 / 155 --
+  `**/*.instructions.md` 6 / 0 / 127 -- `docs/contracts/**/*.md` 2 / 0 / 193 --
+  `audits/**/*.md` 19 / 0 / 141 -- `docs/plans/**/*.md` (excluding reports) 195 / 3 / 1274 (all
+  three under `archive/`) -- `docs/audit-prompts/**/*.md` 23 / **13** / 3368
+  (`AUDIT-PROMPT-product-roadmap-yaml.md`). Across ALL tracked `.md`, 28 exceed 500 effective
+  lines. Two consequences to weigh rather than assume: every agent-instruction surface the
+  requester named is already comfortably compliant, so a limit there is preventive rather than
+  corrective; and `docs/audit-prompts/` is the single oversized agent-markdown class, which
+  includes THIS prompt -- see the self-referential check under GUARDRAILS.
 - `config/sloc_budgets.yaml` currently holds far fewer entries than the 24 its header comment
   describes -- composition counted 3 entries, 1 of them under `tests/`. Count both and compare. The
   drain was performed by the decomposition program the header names; the header text was not
@@ -767,7 +795,9 @@ Bounded sampling. Do NOT exceed these caps.
    line gate and a byte gate disagree, and disagreement runs both ways, so take up to 5 from the
    high side and up to 3 from the low side:
    - HIGH side (byte-heavy; passes a line gate while carrying large load): ratio >= 2x the class
-     median. Rank descending by ratio; break ties by total bytes, largest first. Take up to 5.
+     median -- the median of the CLASS (the row-N slug population from your own census), not of the
+     file extension; the per-extension figures in the GROUNDING MAP are for comparison only. Rank
+     descending by ratio; break ties by total bytes, largest first. Take up to 5.
    - LOW side (line-heavy; would fail a line gate while carrying little load per line): ratio
      <= 0.5x the class median. Rank ascending by ratio; break ties by effective lines, largest
      first. Take up to 3.
@@ -937,7 +967,10 @@ audit:
   # raw-lines, bytes, tokens, entries, or a named composite like "effective-lines+max-line-length".
   # `limit` is an integer for extend-uniform / extend-calibrated, and the literal n/a for
   # exempt-with-reason and for defer (a deferred class has no limit yet, by definition).
-  # `population_over_limit` counts files breaching YOUR recommended limit for that class. For an
+  # `population_over_limit` is ALWAYS counted in effective lines under the pinned CENSUS RULE,
+  # even when your recommended unit is bytes or tokens, so the number stays comparable across
+  # classes; if your unit differs, add the count in that unit parenthetically in `relief_valve`.
+  # `unit` is the literal n/a for an exempt-with-reason or defer class. For an
   # exempt-with-reason or defer class there is no recommended limit: set limit: n/a, record
   # population_over_limit against the incumbent 500-effective-line rule, and say so in
   # `relief_valve` so the number is never read as a breach of a rule you did not propose.
