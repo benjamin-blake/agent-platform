@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from scripts.checks.roadmap.validate_candidate_decision_ratification import (
     _dec_number,
+    _load_roadmap,
     validate_candidate_decision_ratification,
 )
 from scripts.decisions_md import decision_header_numbers
@@ -432,6 +433,47 @@ class TestCandidateDecisionRatification:
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_candidate_decision_ratification(failed)
         assert failed == []
+
+    # Coverage paydown (rec-2965 / PLAN-coverage-gate-handoff-integrity): the four arms below
+    # were uncovered pre-836 too (measured 87% on the pre-extraction file, identical four arms) --
+    # PR #836's _load_roadmap extraction merely moved them, it did not introduce them.
+
+    def test_dec_number_falsy_pointer_returns_none(self) -> None:
+        """_dec_number's falsy-pointer short-circuit (None and empty string both return None
+        before the regex is ever consulted)."""
+        assert _dec_number(None) is None
+        assert _dec_number("") is None
+
+    def test_roadmap_file_not_found_fails(self, tmp_path: Path) -> None:
+        """The roadmap-not-found guard: docs/ exists but ROADMAP-PLATFORM.yaml does not."""
+        (tmp_path / "docs").mkdir(parents=True)
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == ["Candidate decision ratification guard"]
+
+    def test_load_roadmap_except_arm_via_malformed_yaml_fails(self, tmp_path: Path) -> None:
+        """The _load_roadmap except-Exception arm, reached through the public entry point via a
+        genuinely malformed ROADMAP-PLATFORM.yaml (not a mock) -- covers both the except arm
+        and the caller's doc-is-None early return in the same pass."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True)
+        (docs_dir / "ROADMAP-PLATFORM.yaml").write_text("candidate_decisions: [\n  - broken: [\n", encoding="utf-8")
+        (docs_dir / "DECISIONS.md").write_text("", encoding="utf-8")
+        (docs_dir / "DECISIONS_ARCHIVE.md").write_text("", encoding="utf-8")
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == ["Candidate decision ratification guard"]
+
+    def test_load_roadmap_direct_call_returns_none_on_error(self, tmp_path: Path) -> None:
+        """_load_roadmap called directly (not through the public entry point) returns None and
+        appends exactly one failure on a load error."""
+        bad_path = tmp_path / "does-not-exist.yaml"
+        failed: list[str] = []
+        result = _load_roadmap(bad_path, failed)
+        assert result is None
+        assert failed == ["Candidate decision ratification guard"]
 
 
 class TestConsolidatedHeaderHelper:

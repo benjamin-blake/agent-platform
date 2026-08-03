@@ -3323,3 +3323,140 @@ entries:
         assert c.get('why_dismissed'), 'the original dismissal text must be retained, not replaced by the annotation'
         assert c.get('compensating_control'), 'the original compensating_control record must be retained'
         print('OK C7 annotated; original dismissal record intact')
+  - check_id: ratification-guard-coverage-100
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/roadmap/validate_candidate_decision_ratification.py
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import importlib.util,sys;from pathlib import Path;R=Path('.').resolve();s=importlib.util.spec_from_file_location('t',R/'scripts'/'test_coverage_checker.py');m=importlib.util.module_from_spec(s);sys.path.insert(0,str(R));s.loader.exec_module(m);e=m.check_per_file_coverage([R/'scripts/checks/roadmap/validate_candidate_decision_ratification.py']);print('ERRORS:',e);sys.exit(1
+        if e else 0)
+  - check_id: handoff-full-tier-fails-noncompliant-passes-compliant
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/verification/validate_handoff_full_tier.py
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -m
+      - pytest
+      - tests/checks/verification/test_validate_handoff_full_tier.py::TestHandoffFullTier::test_plan_without_full_tier_step_fails
+      - tests/checks/verification/test_validate_handoff_full_tier.py::TestHandoffFullTier::test_plan_with_full_tier_step_passes
+      - -q
+  - check_id: handoff-full-tier-noop-outside-trigger
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/verification/validate_handoff_full_tier.py
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -m
+      - pytest
+      - tests/checks/verification/test_validate_handoff_full_tier.py::TestHandoffFullTier::test_plan_outside_diff_is_untouched
+      - tests/checks/verification/test_validate_handoff_full_tier.py::TestHandoffFullTier::test_empty_plan_diff_is_noop
+      - -q
+  - check_id: handoff-full-tier-matcher-discriminates-836
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/verification/validate_handoff_full_tier.py
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -m
+      - pytest
+      - tests/checks/verification/test_validate_handoff_full_tier.py::TestFullTierMatcher
+      - -q
+  - check_id: handoff-full-tier-clean-on-live-diff
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/verification/validate_handoff_full_tier.py
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import sys;sys.path.insert(0,'.');from scripts.checks.verification.validate_handoff_full_tier import validate_handoff_full_tier
+        as v;f=[];v(f);print('FAILED:',f);sys.exit(1 if f else 0)
+  - check_id: handoff-full-tier-registered-both-tiers
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import sys;sys.path.insert(0,'.');from scripts.checks import registry;import scripts.validate as v;n='validate_handoff_full_tier';pre={s.name
+        for s in registry.pre_sequence() if s.kind=='check'};full={s.name for s in registry.full_sequence() if s.kind=='check'};print('pre:',n
+        in pre,'full:',n in full,'facade:',hasattr(v,n));sys.exit(0 if (n in pre and n in full and hasattr(v,n)) else 1)
+  - check_id: handoff-full-tier-coverage-100
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/verification/validate_handoff_full_tier.py
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import importlib.util,sys;from pathlib import Path;R=Path('.').resolve();s=importlib.util.spec_from_file_location('t',R/'scripts'/'test_coverage_checker.py');m=importlib.util.module_from_spec(s);sys.path.insert(0,str(R));s.loader.exec_module(m);p=R/'scripts/checks/verification/validate_handoff_full_tier.py';ok,msg=m.check_test_file_exists(p);e=m.check_per_file_coverage([p]);print('test_file_ok:',ok,'|
+        ERRORS:',e);sys.exit(0 if ok and not e else 1)
+  - check_id: agents-md-full-tier-pre-handoff-stated
+    primitive_slot: command_exit_zero
+    guard_target: AGENTS.md
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import sys,re;from pathlib import Path;t=Path('AGENTS.md').read_text(encoding='utf-8');rows=[l for l in t.splitlines()
+        if l.startswith('| Full ')];print(rows);sys.exit(0 if rows and re.search(r'pre-handoff|before handoff',rows[0],re.I)
+        else 1)
+  - check_id: dec-163-header-present
+    primitive_slot: grep_count
+    guard_target: docs/DECISIONS.md
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      path: docs/DECISIONS.md
+      pattern: '(?m)^## Decision 163:'
+      operator: eq
+      count: 1
+  - check_id: governance-tier-items-present-and-roadmap-valid
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: coverage-gate-handoff-integrity
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import sys,yaml;sys.path.insert(0,'.');from pathlib import Path;d=yaml.safe_load(Path('docs/ROADMAP-PLATFORM.yaml').read_text(encoding='utf-8'));ids={i['id']
+        for i in (d.get('tier_items') or [])};want={'T2.54','T2.55','T2.56'};print('missing:',sorted(want-ids));from scripts.checks.roadmap.validate_platform_roadmap
+        import validate_platform_roadmap as v;f=[];v(f);print('FAILED:',f);sys.exit(0 if not (want-ids) and not f else 1)
