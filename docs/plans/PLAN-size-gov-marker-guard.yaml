@@ -50,6 +50,10 @@ scope:
       Cover the two newly-public names. Required by the test_coverage_checker rule that every
       modified source file carries a corresponding test file at its coverage threshold; 30,869
       bytes today, and the byte-reconstruction invariant it already asserts must keep passing.
+      TIGHT HEADROOM: 478 SLOC against the 500 ceiling and UNREGISTERED, so only 22 lines are
+      available. Keep the two new tests thin (an alias-identity assertion each); push any
+      behavioural case into tests/checks/test__marker_guard.py per the decompose-never-raise
+      constraint. Included in verification step 14's SLOC loop.
   - file: scripts/checks/sloc/validate_sloc_budget_raises.py
     action: Modify
     purpose: >-
@@ -149,7 +153,10 @@ scope:
   - file: config/prose_budgets.yaml
     action: Modify
     purpose: >-
-      Ratchet the S1 root_ambient_load_set entry DOWN to the AGENTS.md post-edit measured size.
+      Ratchet the S1 root_ambient_load_set entry DOWN to the S1 AGGREGATE post-edit measured size --
+      that is CLAUDE.md (11 bytes) PLUS AGENTS.md, not AGENTS.md alone. Setting it to the AGENTS.md
+      figure would leave the budget 11 bytes under the true aggregate and hard-fail
+      validate_prose_limits.
       A decrease, always unrestricted (Decision 102) -- never a raise, and never a raise-approved
       marker on this entry. Edit ONLY the S1 line by hand: validate_prose_limits emits NINE
       ratchet-down advisories at plan time (S1, src/data/handlers/CLAUDE.md, terraform/CLAUDE.md,
@@ -315,8 +322,9 @@ acceptance_criteria:
     VALUE is unchanged between origin/main and HEAD (marker-comment text may change -- the rec-2974
     fix does exactly that).
   - >-
-    validate_prose_limits passes with the S1 root_ambient_load_set entry ratcheted DOWN to the
-    AGENTS.md post-edit size; the net byte delta on the S1 aggregate is <= 0.
+    validate_prose_limits passes with the S1 root_ambient_load_set entry ratcheted DOWN to the S1
+    AGGREGATE post-edit size (CLAUDE.md + AGENTS.md, not AGENTS.md alone); the net byte delta on the
+    S1 aggregate is <= 0.
   - >-
     docs/contracts/marker-grammar.yaml exists, is non-ritual (no top-level `contract:`/`class:`
     block), and is routed from docs/contracts/file-router.yaml.
@@ -607,7 +615,8 @@ verification_plan:
       for f in scripts/checks/_marker_guard.py tests/checks/test__marker_guard.py \
                tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py \
                tests/checks/typing/test_mypy_baseline.py \
-               tests/checks/misc/test_coverage_baseline.py; do
+               tests/checks/misc/test_coverage_baseline.py \
+               tests/test_decisions_md.py scripts/decisions_md.py; do
         n=$(awk 'NF && $1 !~ /^#/' "$f" | wc -l)
         echo "$f: $n SLOC"
         test "$n" -le 500 || { echo "OVER 500: $f ($n)"; exit 1; }
@@ -882,10 +891,14 @@ context:
     path mentions this plan's rule depends on. Decision 149's never-remove-headers rule is precisely
     what made the incumbent existence check permanently safe across ~12,103 inbound citations, and
     the body-mention rule voids that guarantee. Decision 146 archival cover does NOT extend here.
-    Closed by the one-hop supersession rule (verification step 9); Decision 149 clause 1's
-    eligibility criterion -- the superseder restates every live clause -- is what makes one hop
-    sufficient. Remediation if a hop ever fails: retarget the marker, or add the key to the frozen
-    grandfather hook. Either way the COMPACTING PR fails loudly rather than a later innocent one.
+    Closed by the one-hop supersession rule (verification step 9). The one-hop bound is deliberate
+    and covers the single-generation case; it is NOT a claim that chains cannot exceed length 1 --
+    Decision 149 evaluates direction-consistency per compaction EVENT and its stub grammar never
+    re-points an inbound A->B stub to C, so a two-generation A->B(stub)->C chain is structurally
+    reachable. What actually bounds the risk is FAIL-LOUD: the five guards are registered
+    unconditionally in `--pre` with no diff-gating, so the PR that compacts B re-runs the
+    retroactive scan against the freshly-stubbed corpus and reds THERE, never on a later innocent
+    PR. Remediation in that PR: retarget the marker, or add the key to the frozen grandfather hook.
   - >-
     Scout flag WARN on Decision 134: resolved by building on the shared parser rather than writing a
     sixth header regex, and by promoting _iter_decision_sections to a public name in this PR.
