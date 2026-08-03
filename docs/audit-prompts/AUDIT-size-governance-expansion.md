@@ -73,10 +73,18 @@ Six hazards. Each invites a specific misread that would waste most of a session.
    prose and documentation" includes them depends on whether classification keys off extension or
    off role -- which is itself part of what you must decide. Do not assume either reading.
 
-5. **Decision 43 already claims coverage it does not have.** Its structural-limits table declares
-   limits "across all repository code, prompts, and agents" and carries rows for `.prompt.md`
-   (3000 lines) and `.agent.md` (1500 lines). Those surfaces were deleted at roadmap item T-1.13.
-   Those rows are dead letters. Do not read them as live coverage of any current file class.
+5. **Decision 43's two legacy rows are in DIFFERENT states -- do not treat them alike.** Its
+   structural-limits table declares limits "across all repository code, prompts, and agents" and
+   carries rows for `.prompt.md` (3000 lines) and `.agent.md` (1500 lines). The `.agent.md` row IS
+   a dead letter: zero such files are tracked. The `.prompt.md` row is NOT: 12 such files are
+   tracked and live, under `.github/prompts/scheduled/` and
+   `config/agent/executor/prompts/` (the latter is Layer 5 of the instruction architecture). Only
+   the legacy top-level `.github/prompts/*.prompt.md` set was deleted at T-1.13. Verify both counts
+   yourself. Note the consequence: a live Decision 43 row governs a live surface at a limit
+   (3000 lines) six times the Python limit, and whether that row is enforced by any check at all is
+   worth establishing -- but `.prompt.md` is markdown and therefore falls under the prose regime as
+   an audit target, so treat this as evidence about the coherence of the existing rule set, not as
+   a class to issue a verdict on.
 
 6. **Ratchet direction is per-registry, not universal.** `config/coverage_baseline.yaml` ratchets
    UP (a minimum that may only rise). `config/sloc_budgets.yaml`, `config/prose_budgets.yaml` and
@@ -90,46 +98,68 @@ Six hazards. Each invites a specific misread that would waste most of a session.
 Every class below is BUILT and present on disk. Enumerate the current population of each yourself.
 
 All globs are repo-root-relative. **Classification is FIRST MATCH WINS, in the table order given
-below** -- a file matching several rows belongs to the first row it matches, so
-`docs/decisions-index.json` is Generated/derived (row 9) and never Data/query (row 10), and
-`docs/contracts/*.yaml` is Contracts (row 3) and never Config (row 2). This precedence is a
-compose-time convenience so your census is reproducible; whether it is the RIGHT keying is Q1/DD-C
-and you may recommend a different one.
+below.** Note that row 1 (generated) deliberately precedes every hand-authored row, so a generated
+file living inside a hand-authored directory is classified by its provenance, not its location --
+`terraform/personal/.terraform.lock.hcl` is Generated (row 1), never Terraform (row 2), and
+`config/mypy_baseline.yaml` is Generated (row 1), never Config (row 3). A genuine cross-row case
+lower down: `docs/decisions-index.json` would match row 11's `**/*.json` but is caught by row 1
+first. This ordering is a compose-time convenience so your census is reproducible; whether
+provenance SHOULD outrank location is exactly Q8 seed 1 and DD-C, and you may recommend otherwise.
 
-| # | Class | Locations (repo-root-relative) | Role |
+The `slug` column is the PINNED identifier. Use it verbatim as the key in `class_verdicts`, as
+`findings[].surface`, and as `rubric_ratings[].surface`, so the four blocks cross-reference
+mechanically. Do not invent or prettify these strings.
+
+| # | slug | Locations (repo-root-relative) | Role |
 |---|---|---|---|
-| 1 | Terraform | `terraform/**/*.tf`, `terraform/**/*.tfvars`, `terraform/**/*.hcl`, `*.hcl` | hand-authored infrastructure |
-| 2 | Hand-authored config | `config/**/*.yaml`, `config/**/*.yml` | machine-consumed configuration and registries |
-| 3 | Machine-readable contracts | `docs/contracts/**/*.yaml` | agent-consumed field/procedure semantics |
-| 4 | CI workflows and actions | `.github/**/*.yml`, `.github/**/*.yaml` | CI/CD definitions |
-| 5 | Shell | `**/*.sh`, plus extensionless files under `bin/` whose first line is a shell shebang | setup, hooks, wrappers |
-| 6 | Lambda manifests | `src/lambdas/*/manifest.yaml` | packaging descriptors |
-| 7 | Append-only registries | `docs/ROADMAP-PLATFORM.yaml`, `docs/ROADMAP-PRODUCT.yaml` | monotonically growing work-lists |
-| 8 | Workflow output artifacts | `docs/plans/**/*.yaml`, `audits/**/*.yaml` | one file per workflow run |
-| 9 | Generated / derived | any file meeting the provenance test below | projections of a source of truth |
-| 10 | Data / query | `**/*.sql`, `**/*.json`, `**/*.toml`, `**/*.jsonl` | miscellaneous structured |
-| 11 | **Residual** | every tracked file matching no row above and not excluded below | see the residual rule |
+| 1 | `generated` | any file meeting the provenance test below, wherever it lives | projections of a source of truth |
+| 2 | `terraform` | `terraform/**/*.tf`, `terraform/**/*.hcl`, `*.hcl` | hand-authored infrastructure |
+| 3 | `config` | `config/**/*.yaml`, `config/**/*.yml` | machine-consumed configuration and registries |
+| 4 | `contracts` | `docs/contracts/**/*.yaml` | agent-consumed field/procedure semantics |
+| 5 | `ci_workflows` | `.github/**/*.yml`, `.github/**/*.yaml` | CI/CD definitions |
+| 6 | `shell` | `**/*.sh`, plus extensionless files under `bin/` whose first line is a shell shebang | setup, hooks, wrappers |
+| 7 | `lambda_manifests` | `src/lambdas/*/manifest.yaml` | packaging descriptors |
+| 8 | `roadmaps` | `docs/ROADMAP-*.yaml` (there are THREE, not two -- enumerate them) | monotonically growing work-lists |
+| 9 | `workflow_outputs` | `docs/plans/**/*.yaml`, `audits/**/*.yaml` | one file per workflow run |
+| 10 | `test_fixtures` | `tests/fixtures/**/*.yaml`, `tests/fixtures/**/*.yml`, `tests/fixtures/**/*.json` | inputs asserted against by tests |
+| 11 | `data_query` | `**/*.sql`, `**/*.json`, `**/*.toml`, `**/*.jsonl` | miscellaneous structured |
+| 12 | `residual` | every tracked, non-excluded file matching no row above | see the residual rule |
 
-**Generated/derived provenance test (row 9).** A file is generated if ANY holds: it carries a
-do-not-edit or generated-by banner in its first 10 lines; a checked-in command or check
-regenerates it (search for the path in `scripts/`, `.github/workflows/`, and the `Makefile` if
-present); or it is a documented projection of a named source of truth. Apply the test; if
-provenance is genuinely undeterminable for a file, classify it by extension into row 10 and record
-the ambiguity as a Q8/DD-C observation. Whether provenance SHOULD be the keying at all is Q8 seed
-1 -- the test here exists so your census is reproducible, not to pre-answer that question.
+**Generated provenance test (row 1).** A file is generated if ANY holds: it carries a do-not-edit
+or generated-by banner in its first 10 lines; a checked-in command or check regenerates it (search
+the path in `scripts/` and `.github/workflows/` -- there is no Makefile in this repository); or it
+is a documented projection of a named source of truth. Known members you should expect the test to
+catch, and should verify rather than assume: `docs/decisions-index.json`, both
+`.terraform.lock.hcl` files, and the `config/*baseline*.yaml` registries. Note the interesting
+edge: `config/sloc_budgets.yaml` and `config/prose_budgets.yaml` are BOTH machine-regenerated (by
+`--update-sloc-budgets`) AND hand-edited (to add raise markers). Decide which row they belong to
+and say why -- that hybrid is itself a finding candidate about whether provenance is a clean key.
+If provenance is genuinely undeterminable for a file, classify it by extension and record the
+ambiguity as a DD-C observation.
 
-**Residual class (row 11) -- MANDATORY.** `git ls-files` tracks classes none of rows 1-10 name:
-`.txt` (including requirements files), `.jsonl` outside row 10's glob, `.log`, `.lock`, `.tfrc`,
-`.importlinter`, `.gitattributes`, `.gitignore`, `.example`, `.python-version`, `.baseline`, and
-extensionless files. Enumerate them yourself; do not trust that list. `class_verdicts` MUST carry a
-`residual` entry giving the DEFAULT verdict for any file class not explicitly named -- because the
-deliverable is draft Decision text, and a rule built from a closed-but-partial table ships a gap on
-day one. State whether the default is govern, exempt, or fail-closed-pending-classification, and
-say what happens when a NEW file class appears in the repository after the Decision lands.
+**Residual class (row 12) -- MANDATORY.** `git ls-files` tracks files that match no row above.
+Composition observed these unmatched extensions: `.txt` (12, including requirements files), `.log`
+(3), `.gitignore` (2), `.example` (2), `.gitkeep` (2), `.lock`, `.tfrc`, `.importlinter`,
+`.gitattributes`, `.python-version`, `.baseline` (1 each), and 4 extensionless files. It also
+observed unmatched `.yaml` files, which matter more because YAML is where the oversized population
+lives: at least `.pre-commit-config.yaml`, `EVALUATION-PROMPTS.yaml`, and
+`docs/intent-migration/MANIFEST.yaml` (which exceeds 500 effective lines). Enumerate the real set
+yourself; do not trust this list.
 
-**Excluded from all classes** (do not census, do not verdict): anything under `.git/`, `.venv/`,
-`node_modules/`, `pip/`, `lambda-packages/`, `docker/`, `personal_scripts/`, and any path not
-tracked by `git ls-files`. Prose classes (`**/*.md`) are excluded as audit targets per below.
+`class_verdicts` MUST carry a `residual` entry giving the DEFAULT verdict for any file matching no
+named class -- because the deliverable is draft Decision text, and a rule built from a
+closed-but-partial table ships a gap on day one. State whether the default is govern, exempt, or
+fail-closed-pending-classification, and say what happens when a NEW file class appears in the
+repository after the Decision lands. A residual verdict of "exempt" is a decision to leave future
+classes ungoverned by default; a verdict of "fail-closed" is a decision to block the PR that
+introduces an unclassified file. Both are defensible; pick one and own the consequence.
+
+**Excluded from all classes** (do not census, do not verdict):
+- anything under `.git/`, `.venv/`, `node_modules/`, `pip/`, `lambda-packages/`, `docker/`,
+  `personal_scripts/`, and any path not tracked by `git ls-files`;
+- **`**/*.py`** -- Python is already governed and is context-only for this audit (see "Context-only"
+  below). It is NOT a residual member; do not census it and do not issue a class verdict for it;
+- **`**/*.md`** -- prose, governed by the separate regime described in trap 2.
 
 ### Context-only, not audit targets
 
@@ -170,9 +200,22 @@ settled.
 - **ratchet**: a registry of per-file budgets plus a gate, where movement in the tolerant
   direction is unrestricted and movement in the permissive direction requires a marker citing a
   real Decision.
-- **relief valve**: the sanctioned way to bring an over-budget file into compliance. The Python
-  gate's is decomposition into a facade package. The prose gate's is relocation or deferral, and
-  it explicitly forbids decomposition.
+- **relief valve**: the sanctioned way to bring an over-budget file into compliance. This
+  repository has already used SIX distinct ones, and you must consider all six for every class --
+  treating the list as {decompose, raise} would wrongly make several classes look ungovernable:
+  1. **Decompose** into a facade package (the Python gate's valve).
+  2. **Relocate** content to another surface (the prose gate's valve).
+  3. **Defer** detail to an uncapped auxiliary file the surface points at rather than inlines.
+  4. **Compact in place** -- strip terminal/dead content while preserving the single file. Used on
+     `ROADMAP-PLATFORM.yaml` (Decision 147) and on the decision corpus as a compact-to-stub
+     lifecycle (Decision 149).
+  5. **Archive** -- move inert entries to a sibling file under a lifecycle rule (Decision 146).
+  6. **Take a loud, Decision-cited raise** (Decision 128's marker mechanism).
+  A seventh possibility is not a relief valve but a redesign: **change how the file is produced**
+  so it never reaches the limit. Q8 asks about this explicitly.
+  Which valves are honest for which class is a judgment you must make. Valves 4 and 5 are the ones
+  a registry, an append-only roadmap, or a generated projection can typically use when 1 is
+  forbidden by anti-fragmentation.
 - **raise marker**: an inline `# raise-approved: dec-NNN <reason>` comment on a registry entry
   line, validated against a real `## Decision NNN:` header.
 - **class**: a set of files sharing a governance-relevant role. Whether class membership is
@@ -217,9 +260,10 @@ Degraded paths. Never abort; set the flag, downgrade confidence, proceed.
   from `HEAD` instead of `origin/main`, and record
   `meta.contract_notes: "origin unreachable; audited tree is local HEAD <sha>, not origin/main"`.
   The audit is still valid against the tree you actually read.
-- IF web access is unavailable when answering Q7, do not abort: answer from model knowledge, mark
-  those `external_checklist` entries `evidence: "model knowledge, unverified"`, and set
-  `meta.contract_notes` accordingly. Q7 is never a reason to stop.
+- IF web access is unavailable when answering Q7, do not abort: answer the external half from model
+  knowledge. Keep the two-part `evidence` shape the Q7 section pins -- the repo-side citation is
+  still required -- and suffix only the external half with `(model knowledge, unverified)`. Add a
+  note to `meta.contract_notes`. Q7 is never a reason to stop.
 - IF the PR creation call fails at the end: the deliverables are already committed and pushed,
   which is the substantive result. Report the failure and the branch name in your final message
   and STOP. Do not retry more than twice, and do not fall back to any other publication route.
@@ -288,7 +332,15 @@ regeneration command. Assess whether extending means one parameterized engine ov
 or another instance of the pattern per class. Weigh against NS-F specifically: the raise-guard
 has already been duplicated once, and the check modules are themselves subject to the 500-line
 rule. Specify: which tier each new check runs in, what the class taxonomy is keyed on, where it
-lives, and what happens to the four existing gates under your design.
+lives, and what happens to the existing gates under your design.
+
+On tier cost specifically -- do not treat "run it in `--pre`" as free. Decision 135 replaced the
+`--pre` edited-set tier gate with live, cacheless, strictly-additive affected-set selection, and
+`--pre` checks carry a `pre_globs` scoping declaration (visible in `scripts/checks/registry.py`,
+e.g. on `validate_tier_floor`). Establish whether a whole-tree size census can be `pre_globs`-scoped
+at all, or whether it must walk everything on every PR, and price that under VD4 and NS-F. Note
+that the incumbent `validate_sloc_limits` declares no `pre_globs` -- work out what that implies
+before recommending N more whole-tree walks.
 
 **Q4 -- Are the previous ratchet successes a sound foundation for a repo-wide rule?**
 Verdict enum: `sound-reusable | sound-needs-generalization | unsound-in-this-direction`.
@@ -463,9 +515,9 @@ non-resolving anchors in `meta.stale_anchors` and continue.
 
 - `scripts/checks/prose/prose_limits.py:86` -- `validate_prose_limits`, byte-based, over surface
   classes S1/S2/S4/S8.
-- `scripts/checks/prose/prose_limits.py:1-22` -- the module docstring states its relief valves are
-  relocate, defer, or take a cited raise, and states that fragmenting ambient prose does not
-  reduce the load.
+- `scripts/checks/prose/prose_limits.py:1-21` -- the module docstring states its relief valves are
+  relocate, defer, or take a cited raise, and states at lines 13-15 that fragmenting ambient prose
+  does not reduce the load.
 - `scripts/checks/prose/prose_budget_raises.py:1-3` -- describes itself as a self-contained mirror
   of `scripts/checks/sloc/validate_sloc_budget_raises.py`.
 - `config/prose_budgets.yaml` -- nested by surface class, seeded at current size, two entries carry
@@ -501,7 +553,12 @@ non-resolving anchors in `meta.stale_anchors` and continue.
   size-and-prose checks are interleaved with the two sibling-ratchet raise-guards, which is
   directly relevant to Q3 and Q4 -- the raise-guard shape is already applied to four different
   registries side by side in one block.
-- `scripts/checks/registry.py:173` -- `full_sequence()`.
+- `scripts/checks/registry.py:173` -- `full_sequence()`. Handed over so you do not have to
+  rediscover it: `validate_coverage_baseline_edits` and `validate_mypy_baseline_edits` DO appear in
+  `full_sequence()`, while `validate_sloc_budget_raises` and `validate_prose_budget_raises` do NOT.
+  The four raise-guards therefore run in different tier sets. Whether that asymmetry is principled
+  (a diff-vs-base check is meaningless post-merge) or accidental is yours to judge, and it bears
+  directly on Q3 and Q4.
 - `scripts/checks/registry.py:205-206` -- in the full tier: `validate_sloc_limits` and
   `validate_prose_limits`. Determine for yourself whether the two raise-guards appear in the full
   tier and whether their absence or presence is coherent with their design.
@@ -534,6 +591,40 @@ Read each in `docs/DECISIONS.md`; do not rely on these one-line characterization
 - **CD.29 and CD.30** in `docs/ROADMAP-PLATFORM.yaml` `candidate_decisions` -- validation as a
   curated asset, and the diff-line-coverage ratchet.
 
+### The post-131 size-governance family -- READ THESE, they carry the counter-evidence
+
+Q4 asks whether the ratchet family is a sound foundation. The decisions below are where that
+family was stress-tested, and two of them cut AGAINST simply adding more ceilings. A Q4 answer that
+does not engage with Decisions 160, 145 and 147 has not done the work.
+
+- **Decision 134** -- ratified `DECISIONS.md` size governance at Decision-114 parity: a live-header
+  ceiling plus a live-byte ceiling.
+- **Decision 145** -- raised the `DECISIONS.md` live-byte ceiling 400,000 -> 500,000, describing
+  itself as an ARBITRARY STOPGAP, and warned in its own text that a second stopgap raise "is itself
+  a signal that the structural fix is overdue."
+- **Decision 160** -- **RETIRED that byte ceiling entirely** rather than raise it again, on the
+  grounds that the ceiling existed to size one specific consumer behaviour (a whole-file read) and
+  that once the consumer was rebuilt to read boundedly, the ceiling had no referent. This is the
+  repository's own worked example of a size ceiling being judged WRONG-SHAPED rather than
+  wrong-valued. Weigh it against Q1 and Q2 directly.
+- **Decision 147** -- Decision 114's reversal trigger FIRED (the roadmap reached 9,996 of 10,000
+  lines). The response was Path A, compact in place, explicitly rejecting Path C (per-tier split,
+  as the N-files-to-reassemble anti-pattern) and Path D (a bare ceiling raise, as the Decision 128
+  silent-trade anti-pattern). Read the full path set; it is the closest precedent for what an
+  expanded rule would have to offer each class.
+- **Decision 146** -- archival policy for the decision corpus.
+- **Decision 149** -- number-preserving compact-to-stub lifecycle, with a stub grammar.
+- **Decision 150** -- decision-log growth direction: a significance bar governing what may be
+  created at all, rather than a ceiling on what exists. A different governance shape from a
+  ratchet; assess whether any in-scope class wants it.
+- **Decision 135** -- replaced the `--pre` edited-set tier gate with live, cacheless, strictly
+  additive affected-set selection. This determines the CI wall-time cost of any new `--pre` check
+  and is directly relevant to VD4 and Q3.
+- **Decisions 159, 161, 162** -- three ratchets that landed AFTER the ones named earlier in this
+  map: the coverage baseline, the mypy error-count baseline, and the composite-action shell-body
+  baseline. Together with SLOC and prose that makes five live ratchets sharing one shape, which is
+  the population Q4 asks you to judge.
+
 ### Observed population facts -- re-derive every one
 
 Composition measured the following, applying the pinned CENSUS RULE over `git ls-files`. Treat each
@@ -552,19 +643,26 @@ is expected to move slightly with tree state; the counts are expected to reprodu
 - No `.sh` file exceeds 500; the largest measures about 106 effective lines. Shell is the one class
   where adoption is free today.
 - Median bytes per effective line, with 10th and 90th percentiles, over ALL tracked files of each
-  extension (n in parentheses): Python about 53.6 (44.3 to 64.3, n=823); YAML about 72.4 (55.4 to
-  113.9, n=421); `.yml` about 66.0 (34.6 to 105.1, n=27); Terraform `.tf` about 60.8 (35.8 to
-  125.6, n=33); shell `.sh` about 92.2 (46.4 to 130.5, n=13); markdown about 105.3 (69.9 to 241.1,
-  n=314). Note the within-class spread against the between-class spread before concluding anything
-  about unit substitutability -- and note that the small-n classes (`.sh` at 13, `.tf` at 33) carry
-  wide percentile uncertainty, so do not over-read their tails.
+  extension. Percentile method, stated so you can reproduce it exactly: sort the per-file ratios
+  ascending and take the value at nearest-rank index `floor(q*(n-1)+0.5)`. Files with zero
+  effective lines are dropped from the ratio set (the ratio is undefined); this rule applies to
+  every ranking in this prompt, including the DD-A outlier selection.
+  Python 53.6 (44.3 to 64.3, n=823); `.yaml` 72.4 (55.4 to 113.9, n=421); `.yml` 66.0 (46.5 to
+  98.5, n=27); Terraform `.tf` 60.8 (35.8 to 125.6, n=33); shell `.sh` 92.2 (46.4 to 130.5, n=13);
+  markdown 105.3 (69.9 to 241.1, n=314). Weigh the within-class spread against the between-class
+  spread before concluding anything about unit substitutability -- and note that the small-n
+  classes (`.sh` at 13, `.yml` and `.tf` at 27 and 33) carry wide percentile uncertainty, so do not
+  over-read their tails.
 - `docs/plans/reports/OVERSEER-terraform-deploy-redesign.yaml` measures 326 effective lines,
-  255,039 bytes, longest line 8,211 characters. It falls under row 8 (`docs/plans/**/*.yaml`
+  255,039 bytes, longest line 8,211 characters. It falls under `workflow_outputs` (row 9; `docs/plans/**/*.yaml`
   matches it recursively), so it is a workflow output -- which means the most extreme
   unit-divergence case in the repository sits in the class DD-D may conclude should be exempt.
   Reconcile those two conclusions explicitly rather than letting them pass in separate sections.
 - `config/sloc_budgets.yaml` currently holds far fewer entries than the 24 its header comment
-  describes. Count both and compare.
+  describes -- composition counted 3 entries, 1 of them under `tests/`. Count both and compare. The
+  drain was performed by the decomposition program the header names; the header text was not
+  updated alongside it. This is handed over as evidence for Q4 (the ratchet-plus-decompose pattern
+  demonstrably drained a 24-file grandfather roster), not as a documentation nit to file.
 
 ## EMPIRICAL PASS
 
@@ -631,12 +729,17 @@ decisions.
 Each of these is a decided position, not an oversight. Flagging one as a defect is a false
 positive.
 
-- **Decision 114** -- the 10,000-line roadmap ceiling and the rejection of splitting
-  `ROADMAP-PLATFORM.yaml`. This is FIXED and not reopenable. However, you MUST state the
-  principled boundary that allows it to stand while other files in the same class are capped, so
-  the resulting rule is coherent rather than arbitrary. The requester's position, which you should
-  record and may build on: this file is an exception granted to how the roadmap currently exists,
-  and explicitly NOT a precedent for how future roadmaps are built.
+- **Decision 114 as amended by Decision 147** -- the single-file-preserved treatment of
+  `ROADMAP-PLATFORM.yaml` is FIXED and not reopenable: do not recommend splitting it. Be precise
+  about the state, because it is easy to get wrong: Decision 114's reversal trigger has ALREADY
+  FIRED (the file reached 9,996 of 10,000 lines) and was answered by Decision 147 with in-place
+  compaction, not with a raise and not with a split. So "the ceiling has never been tested" would
+  be a false statement. What remains fixed is the one-coherent-file outcome, not an
+  untouchable number. You MUST state the principled boundary that lets this file stand while other
+  files in the same class are capped, so the resulting rule is coherent rather than arbitrary. The
+  requester's position, which you should record and may build on: this file is an exception granted
+  to how the roadmap currently exists, and explicitly NOT a precedent for how future roadmaps are
+  built.
 - **Decision 130 clause 2** -- the one-time `tests/` grandfather was deliberate and bounded.
 - **Decision 128 clause 3** -- raise markers are not required to persist after merge.
 - **Decision 127** -- the prose taxonomy.
@@ -666,7 +769,13 @@ audit:
          model: <your self-reported model name, free text>,
          methodology_version: 1,
          scope_surfaces: [<the classes you assessed>],
-         degraded_dedup: false, contract_notes: "", stale_anchors: [],
+         degraded_dedup: false,
+         # contract_notes: a single string. If several degraded paths fire, concatenate them
+         # separated by "; " -- it records EVERY degraded path taken, not just the last.
+         contract_notes: "",
+         # stale_anchors: list of objects, never bare strings.
+         stale_anchors: [{anchor: "file:line as this prompt cited it", expected: "", found: ""}],
+         # md_words: measured by `wc -w` on the committed .md, so it is checkable against the cap.
          deliverable_size: {yaml_effective_lines: 0, md_words: 0,
                             breaches_own_recommendation: true|false, note: ""}}
   question_answers:
@@ -689,9 +798,19 @@ audit:
        # suffix the external side with "(model knowledge, unverified)" when not live-verified
        external_checklist: [{property: "", rating: met|partial|missed, evidence: ""}]}
     - {q: Q8, answers: [{question: "", answer: "", basis: []}]}
-  # One entry per SCOPE-table row 1-11, including `residual`. None may be omitted.
+  # One entry per SCOPE-table slug, rows 1-12, including `residual`. None may be omitted.
+  # Key is the pinned slug verbatim (generated, terraform, config, contracts, ci_workflows,
+  # shell, lambda_manifests, roadmaps, workflow_outputs, test_fixtures, data_query, residual).
+  # `confidence` here follows the same degraded-run rule as findings: if meta.degraded_dedup is
+  # true, every class verdict is HYPOTHESIS. This matters more than the findings case, because
+  # draft_decision is built from these verdicts.
+  # `unit` must be one of the Q2 enum values, or a concrete named measure if Q2 returned
+  # per-class-unit or composite; never free prose.
+  # `population_over_limit` counts files breaching YOUR recommended limit for that class. For an
+  # exempt-with-reason or reject class there is no recommended limit: record the count against the
+  # incumbent 500-effective-line rule instead, and note that in `relief_valve`.
   class_verdicts:
-    <class name>: {verdict: extend-uniform|extend-calibrated|exempt-with-reason|defer,  # Q1
+    <slug>: {verdict: extend-uniform|extend-calibrated|exempt-with-reason|defer,  # Q1
                    rationale: {transfer: transfers-fully|transfers-comprehension-only|
                                          needs-distinct-rationale|does-not-transfer,    # Q5
                                actual_purpose: ""},
@@ -702,8 +821,11 @@ audit:
   # One entry per class. `frontier` is NOT legal here -- it exists only on summary.maturity_overall.
   per_surface_assessment:
     - {surface: <class>, maturity: strong|solid|nascent, strengths: "", top_gaps: [<finding ids>]}
+  # Read by: per_surface_assessment (a class's weak/absent cells are its top_gaps) and by the
+  # human comparing classes on one dimension. 12 slugs x 8 dimensions = 96 cells; `n/a` is
+  # expected to be common and is costless.
   rubric_ratings:
-    - {surface: <class>, dimension: VD1..VD8, rating: strong|adequate|weak|absent|n/a,
+    - {surface: <slug>, dimension: VD1..VD8, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
   draft_decision:
     number: "NNN -- allocate at merge time, do not guess"
@@ -738,9 +860,10 @@ audit:
             maturity_overall: frontier|strong|solid|nascent}
 ```
 
-`audits/size-governance-expansion-<sha>.md` -- prose companion, at most 1500 words, the executive
-layer a human reads first. Lead with the eight verdicts and the recommended design in one
-paragraph. Do not restate the YAML.
+`audits/size-governance-expansion-<sha>.md` -- prose companion, at most 1500 words as measured by
+`wc -w`, the executive layer a human reads first. Lead with the seven question verdicts (Q1-Q7;
+Q8 carries answers rather than a verdict, so summarize it in a sentence) and the recommended
+design, in one paragraph. Then the per-class verdict table. Do not restate the YAML.
 
 ### Invariants
 
@@ -755,8 +878,8 @@ paragraph. Do not restate the YAML.
   control would FAIL if the defect were real.
 - `CONFIRMED` requires the behavior traced to a file:line or to an observed sampled artifact.
   Anything less is `HYPOTHESIS`.
-- Every SCOPE-table row 1-11 must appear in `class_verdicts`, including classes you exempt and
-  including `residual`. Eleven entries, no omissions.
+- Every SCOPE-table slug, rows 1-12, must appear in `class_verdicts`, including classes you
+  exempt and including `residual`. Twelve entries, keyed by the pinned slug, no omissions.
 - `findings[].questions` and `findings[].dimensions` are lists; every value must come from the
   pinned Q1..Q8 and VD1..VD8 sets.
 - `draft_decision.number` is a placeholder. Do not guess a number; the human allocates it.
@@ -844,9 +967,9 @@ Nothing else. Not a config file, not a check module, not a decision entry, not a
 unrelated failing gate. If you believe something needs changing, that belief belongs in a finding.
 
 **The self-referential check -- REQUIRED, not optional.** Your own YAML deliverable lands in
-`audits/`, which is an in-scope class (SCOPE row 8). Before you push, measure it under the pinned
+`audits/`, which is the in-scope `workflow_outputs` class (SCOPE row 9). Before you push, measure it under the pinned
 CENSUS RULE and fill `meta.deliverable_size`. If it breaches the limit YOUR OWN Q1/Q6 verdicts
-would impose on row 8, set `breaches_own_recommendation: true` and address it explicitly in the
+would impose on `workflow_outputs`, set `breaches_own_recommendation: true` and address it in the
 companion report: either the workflow-output class should be exempt (and your verdict should say
 so), or your recommended limit is not survivable by the tooling that must live under it, or the
 right answer is to change what these workflows emit. Do NOT resolve this by trimming the audit to
