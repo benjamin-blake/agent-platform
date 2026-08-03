@@ -3526,3 +3526,81 @@ entries:
       - -c
       - grep -q -- "git push --force-with-lease" .claude/commands/plan.md && grep -q "git push -u origin HEAD" .claude/commands/plan.md
         && test "$(grep -c "git push" .claude/commands/plan.md)" -ge 3 && echo PUSH_EARLY_WIRED
+  - check_id: dec-164-persona-routing-principle-recorded
+    primitive_slot: command_output_matches
+    guard_target: docs/DECISIONS.md
+    guard_symbol: null
+    plan_slug: esb-routing-rationale
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'from scripts.decisions_md import parse_decisions_md; rows={r[''decision_id'']:r for r in parse_decisions_md()}; r=rows[164];
+        b=r[''raw_block'']; assert r[''status'']==''Decided'', r[''status'']; assert r[''decided_date'']==''2026-08-03'', r[''decided_date''];
+        assert r[''intent''] and r[''reversal_conditions''] and r[''decision_text''], ''Intent/Reversal conditions/Decision
+        marker missing''; order=[b.find(m) for m in (''**Problem:**'',''**Intent:**'',''**Decision:**'')]; assert all(i>=0 for
+        i in order) and order==sorted(order), (''marker order must be Problem -> Intent -> Decision per Decision 151 clause
+        1; offsets'', order); missing=[t for t in (''SCHEDULED AGENTS ONLY'',''CLI-hosting class'',''long_running_container'',''hosted_cli_runner'',''self_checkpointed_lambda_dynamodb'',''durable_functions'',''0.05/rec'',''Max
+        x5 programmatic pool'',''Decision 47'',''Escape-hatch preservation'',''price that collapse explicitly'',''**Related:**'')
+        if t not in b]; assert not missing, missing; assert ''## Decision 122: Ratify CD.28'' not in b, ''the dec-122 header
+        literal is reproduced inside dec-164 and would double the graduated grep_count row''; t=r[''title'']; assert all(k in
+        t for k in (''LiteLLM'',''claude -p'',''CLI-hosting class'')), t; print(''DEC164_RECORDED ok'')'
+      expected: DEC164_RECORDED ok
+      use_regex: false
+  - check_id: dec-164-index-triage-discoverable
+    primitive_slot: command_output_matches
+    guard_target: docs/decisions-index.json
+    guard_symbol: null
+    plan_slug: esb-routing-rationale
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import json; d=json.load(open('docs/decisions-index.json')); e=[x for x in d['decisions'] if x['number']==164][0]; assert
+        e['live'] is True, e['live']; assert e['amends']==[116,122], e['amends']; assert e['triage_excerpt_source']=='Intent',
+        e['triage_excerpt_source']; assert len(e['triage_excerpt'])<=320, len(e['triage_excerpt']); assert 'CLI-hosting class'
+        in e['triage_excerpt'], 'the reopen consequence is outside the 320-char triage window'; assert 'lambda' in e['category_tags'],
+        e['category_tags']; print('DEC164_INDEX ok', e['amends'], e['triage_excerpt_source'], len(e['triage_excerpt']))
+      expected: DEC164_INDEX ok
+      use_regex: true
+  - check_id: dec-164-forward-pointers-on-both-amended-entries
+    primitive_slot: command_output_matches
+    guard_target: docs/DECISIONS.md
+    guard_symbol: null
+    plan_slug: esb-routing-rationale
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - from scripts.decisions_md import parse_decisions_md; rows={r['decision_id']:r for r in parse_decisions_md()}; bad=[n
+        for n in (116,122) if '[Amendment 2026-08-03:' not in rows[n]['raw_block'] or 'Decision 164' not in rows[n]['raw_block']];
+        assert not bad, bad; import re; spurious={n:[m.group(0) for m in re.finditer('(?:Supersedes|supersedes|amends|Amends|partially
+        supersedes) Decision [0-9]+', rows[n]['raw_block'].split('[Amendment 2026-08-03:')[1])] for n in (116,122)}; assert
+        not any(spurious.values()), spurious; print('DEC164_POINTERS ok 116 122')
+      expected: DEC164_POINTERS ok 116 122
+      use_regex: false
+  - check_id: roadmap-t4-persona-routing-cites-dec-164
+    primitive_slot: command_output_matches
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: esb-routing-rationale
+    graduated_at: '2026-08-03'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import pathlib, yaml; from scripts.decisions_md import decision_header_numbers; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
+        it={i['id']:i for i in d['tier_items']}; t42=it['T4.2']; t412=it['T4.12']; assert 'Decision 164' in t42['intent'], 'T4.2
+        intent does not cite Decision 164'; r42=t42.get('related_decisions') or []; r412=t412.get('related_decisions') or [];
+        assert 164 in r42 and 164 in r412, (r42, r412); assert 116 in r42 and 122 in r42 and 116 in r412, (r42, r412); live=decision_header_numbers(paths=[pathlib.Path('docs/DECISIONS.md')]);
+        dangling=sorted(n for n in set(r42)|set(r412) if n not in live); assert not dangling, dangling; print('ROADMAP_CITES_164
+        ok', sorted(r42), sorted(r412))
+      expected: ROADMAP_CITES_164 ok
+      use_regex: true
