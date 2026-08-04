@@ -1,0 +1,856 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: size-gov-engine
+intent: >-
+  Close audit findings SGE-01 (terraform has never been scanned by any size gate), SGE-02 (roster
+  half -- machine-consumed config registries ungoverned) and SGE-04 (agent-consumed contracts
+  accrete unguarded) by installing the structural-size governance class engine from
+  draft_decision clauses 1-9 of audits/size-governance-expansion-3dee4a5.yaml: one registry
+  (config/structural_size_budgets.yaml) carrying a first-match-wins class table plus flat per-file
+  grandfather rosters, one limit gate (validate_structural_size_limits) in both presubmit tiers,
+  and ONE raise-guard that binds to Slice A's shared scripts/checks/_marker_guard.py rather than
+  minting a sixth copy. Completes the scope Decision 43 declared and Decision 130 extended
+  whole-repo but implemented for Python only.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-size-gov-engine.yaml
+phase: >-
+  Platform governance-integrity. Slice B -- the KEYSTONE -- of the structural-size-governance-
+  expansion overseer run driving audits/size-governance-expansion-3dee4a5.yaml (merged in #840) to
+  completion. Audit-sourced; no tier_item id and no product-roadmap phase dependency. Consumes
+  Slice A (Decision 165 / PLAN-size-gov-marker-guard, merged as d1cc5bb). Sibling slices SGE-05
+  (ROADMAP-PRODUCT's designed 6,000 ceiling; the roadmap long-line companion; the raw-line
+  gameability record) and SGE-03 (Decision 162 R3 body ratchet extended to workflow run: bodies,
+  draft clause 8) land AFTER this slice and depend on the class table it installs.
+
+scope:
+  - file: config/structural_size_budgets.yaml
+    action: Create
+    purpose: >-
+      The single new registry. Five top-level blocks, in this order (the order is load-bearing for
+      the section extractors -- see the CRITICAL SEAM constraint):
+      (1) `exclusions:` -- suffixes [".py", ".md"] and the vendored/tooling dir set
+      {pip, lambda-packages, docker, .venv, node_modules, .git, personal_scripts}.
+      (2) `generated_pinned:` -- the provenance-override membership list (row 1 of the class
+      table). Load-bearing, NOT decorative: measured at d1cc5bb, docs/decisions-index.json,
+      config/mypy_baseline.yaml, config/sloc_budgets.yaml and both tracked .terraform.lock.hcl
+      files carry NO do-not-edit banner at all, so a banner-only test would drop
+      docs/decisions-index.json (2,298 eff) into data_query and force a 17th roster entry.
+      (3) `classes:` -- an ORDERED list of 12 rows, first-match-wins, each row carrying: slug,
+      include globs (BOTH .yaml and .yml spellings wherever either can occur -- rec-2928),
+      governed (bool), unit, limit, max_line_chars, actual_purpose (copied VERBATIM from the
+      audit's class_verdicts), relief_valves, and for the roadmaps row a
+      `defer_to_incumbent:` list holding the single exact filename docs/ROADMAP-PLATFORM.yaml.
+      (4) `budgets:` -- the flat per-file effective-line grandfather roster (13 entries).
+      (5) `long_line_budgets:` -- the flat per-file max-line-character grandfather roster (3
+      entries).
+      This file is also the field-semantics HOME for the class table, the counting rule, the glob
+      grammar and the long-line threshold (Decision 86/127 collocation; the audit's own DD-C:
+      "Taxonomy home: in the new registry itself"). It is a config registry, NOT a ritual
+      contract -- no top-level `contract:`/`class:` block, so validate_contract_drift skips it
+      (precedent: config/sloc_budgets.yaml, config/prose_budgets.yaml).
+  - file: scripts/checks/structural/__init__.py
+    action: Create
+    purpose: >-
+      Package marker only (mirrors scripts/checks/sloc/__init__.py, which is 1 line). Exempt from
+      the SLOC gate by iter_gated_py_files' __init__.py skip; keep it that way -- do not turn it
+      into a re-export facade carrying logic.
+  - file: scripts/checks/structural/_classify.py
+    action: Create
+    purpose: >-
+      The classification + measurement engine, shared by both new checks so their scan roots can
+      never drift apart (the scripts/checks/sloc/_shared.py::iter_gated_py_files precedent).
+      Provides: load_registry() (yaml.safe_load with a cached parse), classify_path(rel) ->
+      slug implementing the layered first-match-wins key (exclusions, then the provenance
+      override, then directory+extension globs, then the mandatory residual default),
+      effective_lines(text), longest_line(text), and iter_measured_files() yielding
+      (rel, slug) over `git ls-files` for every tracked, non-excluded, GOVERNED file --
+      excluding exempt classes and excluding every path in the roadmaps row's
+      defer_to_incumbent list. The provenance test is a NARROW banner regex over the first 10
+      lines OR membership in generated_pinned. Must stay under 500 effective lines.
+  - file: scripts/checks/structural/structural_size_limits.py
+    action: Create
+    purpose: >-
+      `validate_structural_size_limits`. Walks iter_measured_files(); for each file compares
+      effective lines against (its `budgets:` entry if registered, else its class row's `limit`)
+      and longest line against (its `long_line_budgets:` entry if registered, else its class
+      row's `max_line_chars`). Registered in BOTH tiers, unscoped (no pre_globs), matching the
+      validate_sloc_limits precedent -- measured whole-tree cost is 0.133s against Decision 73's
+      300s budget, so pre_globs machinery would cost more complexity than it saves. Every failure
+      message names the offending file's CLASS and that class row's recorded relief_valves, so
+      the gate is actionable rather than a stop sign (the validate_decisions_size precedent).
+      Must stay under 500 effective lines.
+  - file: scripts/checks/structural/validate_structural_size_budget_raises.py
+    action: Create
+    purpose: >-
+      `validate_structural_size_budget_raises` -- the SIXTH CONSUMER of
+      scripts/checks/_marker_guard.py, never a sixth copy. Declares TWO module-level
+      RegistrySpecs over the SAME rel_path (config/structural_size_budgets.yaml): _BUDGET_SPEC
+      with make_section_extractor("budgets") and _LONG_LINE_SPEC with
+      make_section_extractor("long_line_budgets"); both token "raise-approved", both
+      gated_direction "up", both gates_new_entry=lambda _v: True. The check body is
+      check_diff(spec) + check_present_markers(spec) over both specs, concatenated. Contains NO
+      local Decision-header regex, NO local base reader, NO local entry parser -- Slice A owns
+      all of that. Must stay under 500 effective lines.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Two `_c(...)` entries in pre_sequence() (validate_structural_size_limits immediately after
+      validate_sloc_limits; validate_structural_size_budget_raises immediately after
+      validate_sloc_budget_raises) and the same two names in full_sequence() at the equivalent
+      positions. Both UNSCOPED -- no pre_globs tuple. This is the validate.py-first requirement:
+      a check that exists only in a CI workflow is forbidden.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Two `from scripts.checks.structural.<module> import <name>  # noqa: F401,E402` re-export
+      lines. Dispatch is globals()[name](failed) with no walk_packages auto-discovery, so without
+      these lines `validate --pre` KeyErrors on the new names and the reachability tests in
+      tests/test_checks_registry.py fail. scripts/validate.py carries a coverage_baseline entry
+      (80.7) -- do not disturb it.
+  - file: tests/checks/structural/__init__.py
+    action: Create
+    purpose: Test-package marker mirroring tests/checks/sloc/__init__.py (Decision 131 mirror convention).
+  - file: tests/checks/structural/test__classify.py
+    action: Create
+    purpose: >-
+      Unit coverage for the classification engine against an INJECTED root (never the live tree):
+      first-match-wins ordering (a generated file inside a hand-authored directory classifies by
+      provenance, not location); both .yaml and .yml spellings per glob row; the residual default
+      for an unmatched extension; the narrow banner regex NOT matching the bare word "generated"
+      in prose (measured over-match: a loose regex matched audits/size-governance-expansion-
+      3dee4a5.yaml and docs/plans/PLAN-dcg-decisions-index.yaml); generated_pinned membership
+      outranking a missing banner; docs/ROADMAP-PLATFORM.yaml excluded from the measured set by
+      exact filename while docs/ROADMAP-PRODUCT.yaml is included; and the pinned counting rule
+      (a line whose first non-whitespace character is `#` is not counted; a `//` line in .tf IS
+      counted -- no per-language cleverness).
+  - file: tests/checks/structural/test_structural_size_limits.py
+    action: Create
+    purpose: >-
+      Unit coverage for the limit gate against an INJECTED root: a 501-effective-line file in a
+      governed class with no roster entry FAILS; the same file with a roster entry at 501 PASSES;
+      at 502 FAILS again (ratchet direction); a file with a 2,001-character line in a governed
+      class FAILS on the long-line companion and PASSES with a long_line_budgets entry; an exempt
+      class (workflow_outputs / test_fixtures / generated) at 5,000 effective lines PASSES; a
+      file matching no class row is governed at 500 by the residual default; and the failure
+      message names the file's class and that row's relief valves.
+  - file: tests/checks/structural/test_validate_structural_size_budget_raises.py
+    action: Create
+    purpose: >-
+      Unit coverage for the raise-guard: THE CRITICAL SEAM (a `classes:` block's `limit: 500` and
+      `max_line_chars: 2000` scalars are absent from BOTH section extractions, while a flat
+      extractor over the same text WOULD capture them -- assert both halves so the test proves
+      the seam rather than merely observing it); the two sections do not cross-leak keys; an
+      unmarked increase in either section fails; a marked increase citing a Decision that names
+      the key passes; a marked increase citing a Decision that does NOT name the key fails
+      (authorization, not existence); and the retroactive present-markers leg fails an unchanged
+      but unbacked marker.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add `## Decision 166:` (166 is the next free number -- max live header at d1cc5bb is 165).
+      LEAN by construction. Carries ONLY: the durable commitment, the 16 roster keys named
+      VERBATIM, the amendments (including the Decision 130 clause 1 clarification), the
+      roster-expansion record, the CD.29 pre-commitment, reversal conditions, and a
+      `**Significance:**` marker (Decision 150; template = Decision 153's body). NOTHING
+      mechanical -- the class table, counting rule, glob grammar and long-line threshold live in
+      config/structural_size_budgets.yaml per decision-entry.yaml
+      significance.routing.field_semantics.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      REGENERATED via the scripts.decisions_index projection, never hand-edited.
+      validate_decisions_index_freshness runs in both tiers and will red on a stale index.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      One `- topic: structural-size-budgets` route pointing at
+      config/structural_size_budgets.yaml, mirroring the marker-grammar route Slice A added, so
+      a future agent looking for the class table finds it without grepping.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Append one graduated verification row per VP step carrying `graduation: graduate`, each
+      keyed on that step's graduation_check_id. NOTE the self-reference: this file is itself a
+      governed roster entry in this same PR, seeded at a 6,000 ceiling that already accommodates
+      these rows (measured 3,700 at d1cc5bb + ~150 for this PR). Decision 132 clause 2's
+      implement-PR leg makes these rows mandatory pre-merge, so the ceiling is sized so both
+      gates can be satisfied in one PR.
+  - file: docs/plans/PLAN-size-gov-engine.yaml
+    action: Create
+    purpose: This plan document.
+
+bundled_recommendations: []
+infrastructure_dependencies: []
+
+acceptance_criteria:
+  - >-
+    config/structural_size_budgets.yaml exists and carries all five blocks; its `classes:` list
+    has exactly 12 rows whose slugs are the audit's 12 pinned slugs (generated, terraform, config,
+    contracts, ci_workflows, shell, lambda_manifests, roadmaps, workflow_outputs, test_fixtures,
+    data_query, residual), in first-match-wins order, with `residual` last and mandatory.
+  - >-
+    Every glob row that can match a YAML file lists BOTH the .yaml and .yml spellings. Measured
+    anchor: .github/ holds 27 .yml against 1 .yaml, so a .yaml-only ci_workflows glob would scan 1
+    of 28 workflow files (rec-2928's live defect).
+  - >-
+    validate_structural_size_limits is registered in BOTH the --pre and full sequences in
+    scripts/checks/registry.py, unscoped (pre_globs is None), AND re-exported as a module-level
+    global of scripts/validate.py. Same for validate_structural_size_budget_raises. Neither check
+    exists only in a CI workflow.
+  - >-
+    terraform/**/*.tf files are in the measured set (SGE-01 closed), docs/contracts/**/*.yaml are
+    in the measured set (SGE-04 closed), and config/**/*.{yaml,yml} are in the measured set
+    (SGE-02 roster half closed).
+  - >-
+    validate_structural_size_limits exits clean on the complete tree at the end of this PR --
+    the installing PR is green BY CONSTRUCTION, not by exclusion (Decision 130 clause 2 precedent).
+  - >-
+    validate_structural_size_budget_raises binds to scripts/checks/_marker_guard.py via TWO
+    RegistrySpecs using make_section_extractor exclusively. It contains no local Decision-header
+    regex, no local base reader, and no local entry parser. A `limit: 500` scalar inside the
+    `classes:` block is absent from BOTH section extractions.
+  - >-
+    All 16 roster keys (13 in `budgets:`, 3 in `long_line_budgets:`) are authorized by Decision
+    166 under scripts.checks._marker_guard.authorization_failure -- verified by executing the real
+    function, not by inspection. This is load-bearing: five of them are 2-segment keys
+    (terraform/iceberg_tables.tf, terraform/data_pipeline.tf, docs/ROADMAP-PRODUCT.yaml,
+    logs/.retro-lite-log.jsonl, logs/.execution-step-telemetry.jsonl) for which
+    _expand_ancestor_candidates generates NO ancestor candidate, so only a verbatim mention
+    authorizes them.
+  - >-
+    The `long_line_budgets:` roster contains EXACTLY the set of governed-class files whose longest
+    line exceeds 2,000 characters at implement time -- no over-seeding, no under-seeding.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml is NOT in the measured set (deferred by exact filename to its
+    incumbent validate_platform_roadmap gate, Decisions 114/147), while docs/ROADMAP-PRODUCT.yaml
+    IS measured and carries a grandfather budget at its current measured size. _ROADMAP_MAX_LINES
+    is unchanged and docs/ROADMAP-PLATFORM.yaml is not edited.
+  - >-
+    Every new module under scripts/checks/structural/ measures under 500 effective lines and NONE
+    is registered in config/sloc_budgets.yaml -- the enforcement passes its own rule by
+    decomposition, never by a budget raise (Decision 128).
+  - >-
+    Decision 166 exists, is lean, carries a `**Significance:**` marker, and contains no
+    mechanical/field-semantics content. docs/decisions-index.json is regenerated, not hand-edited.
+  - >-
+    The CD.29 verification-registry archival-lifecycle recommendation is filed via the ops portal
+    and is discoverable in the local read cache after a sync pull.
+  - >-
+    A full-tier `bin/venv-python -m scripts.validate` run completes with exit 0 before commit
+    (handoff_policy obligation, Decision 163 clause 3).
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the raise-guard is a CONSUMER of Slice A's shared module, not a sixth copy: it imports
+      _marker_guard, uses the section extractor exclusively, and mints no local Decision-header
+      regex or base reader of its own.
+    command: >-
+      bin/venv-python -c "import pathlib;
+      src=pathlib.Path('scripts/checks/structural/validate_structural_size_budget_raises.py').read_text(encoding='utf-8');
+      assert '_marker_guard' in src, 'not bound to the shared module';
+      assert 'make_section_extractor' in src, 'must use the section extractor';
+      assert 'make_flat_extractor' not in src, 'flat extractor forbidden here -- it parses class-table scalars as budget entries';
+      assert '## Decision' not in src, 'local Decision-header regex -- this is a sixth copy';
+      assert 'subprocess' not in src, 'local base reader -- default_base_reader belongs to the shared module';
+      print('GUARD_BINDING_OK')"
+    expected: "Prints `GUARD_BINDING_OK`; exit 0."
+    fix_if: >-
+      A local regex, a local base reader, or make_flat_extractor is present. Delete it and bind to
+      scripts.checks._marker_guard's eight-name surface (docs/contracts/marker-grammar.yaml
+      binding_surface.exports). Slice A exists specifically so this module owns only its
+      RegistrySpecs.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-guard-binds-shared-marker-module
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove THE CRITICAL SEAM against the REAL registry file: each section-anchored extractor
+      returns only its own section's roster keys, and neither returns the class table's scalars.
+      This is the seam docs/contracts/marker-grammar.yaml's extractor_shapes clause was written
+      for; a flat extractor would return `limit` and `max_line_chars` as budget entries.
+    command: >-
+      bin/venv-python -c "import pathlib;
+      from scripts.checks.structural.validate_structural_size_budget_raises import _BUDGET_SPEC, _LONG_LINE_SPEC;
+      text=pathlib.Path('config/structural_size_budgets.yaml').read_text(encoding='utf-8');
+      b=_BUDGET_SPEC.extractor(text); l=_LONG_LINE_SPEC.extractor(text);
+      leaked=[k for k in ('limit','max_line_chars','version') if k in b or k in l];
+      assert not leaked, f'class-table scalars leaked into a roster extraction: {leaked}';
+      assert 'terraform/iceberg_tables.tf' in b, 'budgets roster not extracted';
+      assert 'logs/.retro-lite-log.jsonl' in l, 'long_line_budgets roster not extracted';
+      assert 'terraform/iceberg_tables.tf' not in l and 'logs/.retro-lite-log.jsonl' not in b, 'the two sections cross-leaked';
+      print('SECTION_SEAM_OK')"
+    expected: "Prints `SECTION_SEAM_OK`; exit 0."
+    fix_if: >-
+      A scalar leaked -- the spec is using make_flat_extractor, or the registry's block ordering
+      broke the anchor. make_section_extractor ends a section at the next column-0 NON-COMMENT
+      line, so `classes:`, `budgets:` and `long_line_budgets:` must each start at column 0. If the
+      sections cross-leaked, the two specs are sharing one extractor.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-registry-section-scoped-extraction
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the engine measures the three finding surfaces, correctly scopes the roadmaps
+      deferral, and is GREEN on the complete tree -- the green-by-construction acceptance for
+      SGE-01, SGE-02 and SGE-04 in one executable assertion.
+    command: >-
+      bin/venv-python -c "import scripts.validate as v;
+      from scripts.checks.structural import _classify;
+      measured={rel for rel, _slug in _classify.iter_measured_files()};
+      assert 'terraform/iceberg_tables.tf' in measured, 'terraform not scanned -- SGE-01 unclosed';
+      assert 'config/agent/verification_registry/registry.yaml' in measured, 'config not scanned -- SGE-02 unclosed';
+      assert 'docs/contracts/ops_recommendations.yaml' in measured, 'contracts not scanned -- SGE-04 unclosed';
+      assert 'docs/ROADMAP-PRODUCT.yaml' in measured, 'ROADMAP-PRODUCT ungoverned -- the exempt-by-omission hole';
+      assert 'docs/ROADMAP-PLATFORM.yaml' not in measured, 'PLATFORM must defer to validate_platform_roadmap (Decisions 114/147)';
+      failed=[]; v.validate_structural_size_limits(failed);
+      assert not failed, f'installing PR is NOT green by construction: {failed}';
+      print('ENGINE_GREEN_AND_SCOPED')"
+    expected: "Prints `ENGINE_GREEN_AND_SCOPED`; exit 0."
+    fix_if: >-
+      A membership assertion trips -- the class row's globs are wrong (check both .yaml/.yml
+      spellings) or the exclusion set is over-broad. If the PLATFORM assertion trips, the
+      deferral was scoped to the glob rather than the exact filename. If the green assertion
+      trips, re-run the census and re-seed the roster from measured values -- never relax a
+      class row to make the tree pass.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-engine-green-and-scoped
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run the unit suite covering the failure paths the on-tree assertions structurally cannot
+      reach: an unregistered 501-effective-line file failing, a roster entry at 501 passing and at
+      502 failing, a 2,001-character line failing the companion, an exempt class passing at 5,000
+      lines, the residual default governing an unmatched extension, an unmarked roster increase
+      failing, and a marker citing a non-authorizing Decision failing.
+    command: bin/venv-python -m pytest tests/checks/structural && echo STRUCTURAL_SUITE_PASSED
+    expected: >-
+      The pytest run reports zero failures and the chained echo emits
+      `STRUCTURAL_SUITE_PASSED`; exit 0. (The literal is echoed rather than harvested from
+      pytest's own report so validate_vp_replay's substring rule is satisfiable by construction.)
+    fix_if: >-
+      A failure-path test does not fail without the fix -- the test is asserting on a mocked path
+      rather than the real check function. Every test must drive the real
+      validate_structural_size_limits / validate_structural_size_budget_raises body against an
+      injected root.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-unit-suite-failure-paths
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove rec-2928's defect cannot recur: every tracked .yml AND .yaml file under .github/
+      classifies as ci_workflows, anchored on the measured population so the assertion is not
+      vacuous (a .yaml-only glob would cover 1 of 28).
+    command: >-
+      bin/venv-python -c "import subprocess;
+      from scripts.checks.structural import _classify;
+      out=subprocess.run(['git','ls-files','.github'],capture_output=True,text=True,check=True).stdout.split();
+      yamls=[f for f in out if f.endswith(('.yml','.yaml'))];
+      hit=[f for f in yamls if _classify.classify_path(f)=='ci_workflows'];
+      assert len(yamls)>=28, f'population anchor moved: {len(yamls)} -- re-derive before relaxing';
+      assert len(hit)==len(yamls), f'ci_workflows glob covers {len(hit)} of {len(yamls)} -- both spellings required (rec-2928)';
+      assert _classify.classify_path('config/agent/probe.yml')=='config' and _classify.classify_path('config/agent/probe.yaml')=='config', 'config row misses a spelling';
+      print('BOTH_SPELLINGS_COVERED')"
+    expected: "Prints `BOTH_SPELLINGS_COVERED`; exit 0."
+    fix_if: >-
+      The count mismatches -- a glob row lists only one spelling. Add the sibling spelling to
+      every row that can match YAML (config, contracts, ci_workflows, lambda_manifests, roadmaps,
+      test_fixtures). Do NOT close this by renaming files; rec-2928 owns the .yml-to-.yaml
+      standardisation separately.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-globs-cover-both-yaml-spellings
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Prove the residual govern-by-default row exists and governs at 500: a tracked file matching
+      no named class is governed, not ignored. This is the day-one-gap clause -- a closed-but-
+      partial table ships a hole.
+    command: >-
+      bin/venv-python -c "from scripts.checks.structural import _classify;
+      rows=_classify.load_registry()['classes'];
+      slugs=[r['slug'] for r in rows];
+      assert slugs[-1]=='residual', 'residual must be the LAST row, got: ' + str(slugs);
+      assert slugs.count('residual')==1, 'duplicate residual row';
+      assert rows[-1]['limit']==500, 'residual limit must be 500, got: ' + str(rows[-1]['limit']);
+      assert _classify.classify_path('some/new/surface.hcl2')=='residual', 'unmatched extension is not govern-by-default';
+      assert _classify.classify_path('docs/intent-migration/MANIFEST.yaml')=='residual', 'MANIFEST.yaml must land in residual';
+      assert len(rows)==12, 'class table must have exactly 12 rows, got: ' + str(len(rows));
+      print('RESIDUAL_GOVERNS_BY_DEFAULT')"
+    expected: "Prints `RESIDUAL_GOVERNS_BY_DEFAULT`; exit 0."
+    fix_if: >-
+      The residual row is missing, is not last, or leaves unmatched files ungoverned. First-match-
+      wins requires residual to be the terminal catch-all; block-until-classified was rejected at
+      audit time because it fails NS-C (no relief valve at introduction).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-residual-default-row
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Prove the long_line_budgets roster is EXACTLY the measured breach set -- no over-seeding
+      (which would grant unearned slack) and no under-seeding (which would red the installing PR).
+      The audit censused long lines only inside the exempt workflow_outputs class, so this roster
+      is this plan's own measurement.
+    command: >-
+      bin/venv-python -c "import pathlib;
+      from scripts.checks.structural import _classify;
+      reg=_classify.load_registry();
+      seeded=set(reg.get('long_line_budgets') or {});
+      breaches={rel for rel, _slug in _classify.iter_measured_files()
+      if max((len(x) for x in pathlib.Path(rel).read_text(encoding='utf-8', errors='replace').splitlines()), default=0) > 2000};
+      assert breaches==seeded, f'long-line roster drift -- measured {sorted(breaches)} seeded {sorted(seeded)}';
+      print('LONGLINE_ROSTER_EXACT')"
+    expected: "Prints `LONGLINE_ROSTER_EXACT`; exit 0."
+    fix_if: >-
+      Drift in either direction. Re-measure and re-seed from the measured values; do not drop the
+      companion or raise the 2,000-character threshold to make the set empty -- a line-based gate
+      without the companion is satisfiable by line-joining with zero load reduction (the audit's
+      Q2 verdict and SGE-05's VD3 counterfactual).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-longline-roster-exactly-measured
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Prove Decision 166 authorizes EVERY roster key by executing the real authorization function.
+      This is the 2-segment trap: _expand_ancestor_candidates generates no ancestor for a
+      2-segment key, and check_present_markers re-checks every present marker on every run, so an
+      under-naming Decision body reds every subsequent PR in the repo, not just this one.
+    command: >-
+      bin/venv-python -c "from scripts.checks import _marker_guard as mg;
+      from scripts.checks.structural import _classify;
+      reg=_classify.load_registry();
+      keys=sorted(set(reg.get('budgets') or {}) | set(reg.get('long_line_budgets') or {}));
+      bodies=mg.load_decision_bodies();
+      unbacked=[k for k in keys if mg.authorization_failure('dec-166', k, bodies)];
+      assert not unbacked, f'Decision 166 does not authorize: {unbacked}';
+      two_seg=[k for k in keys if len(k.split('/'))==2];
+      assert len(two_seg)>=5, f'expected at least 5 two-segment keys, found {two_seg}';
+      assert len(keys)==16, f'expected 16 roster keys, found {len(keys)}';
+      print('ALL_ROSTER_KEYS_AUTHORIZED')"
+    expected: "Prints `ALL_ROSTER_KEYS_AUTHORIZED`; exit 0."
+    fix_if: >-
+      A key is unbacked -- add its VERBATIM path to Decision 166's body. Never add it to
+      RETRO_SCAN_GRANDFATHER (that frozenset ships empty by design and growing it is a reviewed
+      code edit, not a remedy for an under-written Decision), and never rely on a directory
+      mention for a 2-segment key.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-decision-166-authorizes-every-roster-key
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Run the registered raise-guard end to end (both the diff leg and the retroactive
+      present-markers leg, over both sections) against the real tree.
+    command: >-
+      bin/venv-python -c "import scripts.validate as v;
+      failed=[]; v.validate_structural_size_budget_raises(failed);
+      assert not failed, f'raise-guard red: {failed}';
+      print('RAISE_GUARD_GREEN')"
+    expected: "Prints `RAISE_GUARD_GREEN`; exit 0."
+    fix_if: >-
+      A marker is missing on a seeded entry (every entry in both rosters is a NEW registration and
+      gates_new_entry returns True for all of them), or a marker cites a Decision that does not
+      name its key. Fix the marker or the Decision body -- not the guard.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-raise-guard-green-on-tree
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Prove the validate.py-first requirement: both checks are in BOTH tier sequences, both are
+      unscoped, and both resolve as module-level globals of scripts/validate.py (dispatch is
+      globals()[name](failed) with no auto-discovery).
+    command: >-
+      bin/venv-python -c "from scripts.checks import registry; import scripts.validate as v;
+      names=('validate_structural_size_limits','validate_structural_size_budget_raises');
+      pre={s.name: s for s in registry.pre_sequence() if s.kind=='check'};
+      full={s.name for s in registry.full_sequence() if s.kind=='check'};
+      assert not [n for n in names if n not in pre], 'missing from the --pre sequence: ' + str([n for n in names if n not in pre]);
+      assert not [n for n in names if n not in full], 'missing from the full sequence: ' + str([n for n in names if n not in full]);
+      assert not [n for n in names if pre[n].pre_globs is not None], 'must be unscoped (no pre_globs): ' + str([n for n in names if pre[n].pre_globs is not None]);
+      assert not [n for n in names if not callable(getattr(v, n, None))], 'not re-exported as a scripts/validate.py global: ' + str([n for n in names if not callable(getattr(v, n, None))]);
+      print('REGISTERED_BOTH_TIERS_UNSCOPED')"
+    expected: "Prints `REGISTERED_BOTH_TIERS_UNSCOPED`; exit 0."
+    fix_if: >-
+      A leg is missing. Add the registry.py sequence entry AND the scripts/validate.py re-export
+      line -- both are required; the registry entry alone KeyErrors at dispatch. If pre_globs is
+      set, remove it: the census is 0.133s and diff-scoping an unskippable ratchet is the
+      exempt-by-omission shape Decision 130 exists to close.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-checks-registered-both-tiers-unscoped
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Prove the enforcement passes its own rule: every new module is under 500 effective lines and
+      none bought its way in via a SLOC budget raise (Decision 128 decompose-by-default).
+    command: >-
+      bin/venv-python -c "import pathlib;
+      mods=[p for p in sorted(pathlib.Path('scripts/checks/structural').glob('*.py')) if p.name != '__init__.py'];
+      assert len(mods)>=3, 'expected the decomposed package, found: ' + str([p.name for p in mods]);
+      eff=lambda p: len([x for x in p.read_text(encoding='utf-8').splitlines() if x.strip() and not x.strip().startswith('#')]);
+      oversized=[(str(p), eff(p)) for p in mods if eff(p) > 500];
+      assert not oversized, 'oversized new modules -- decompose, do not raise: ' + str(oversized);
+      budgets=pathlib.Path('config/sloc_budgets.yaml').read_text(encoding='utf-8');
+      assert 'checks/structural' not in budgets, 'a structural module was registered in the SLOC budget registry';
+      print('SELF_SUBJECT_OK')"
+    expected: "Prints `SELF_SUBJECT_OK`; exit 0."
+    fix_if: >-
+      A module is over 500 -- split it further within scripts/checks/structural/ (the
+      scripts/checks/sloc/ package shape is the precedent). Do NOT add a config/sloc_budgets.yaml
+      entry: a size-governance engine that exempts itself is the self-subjection failure the audit
+      rated this repository STRONG on.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-modules-under-own-limit
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Prove the whole-tree census fits the Decision 73 fast-tier budget with orders of magnitude
+      to spare (planning-time measurement: 0.133s against 300s).
+    command: >-
+      bin/venv-python -c "import time, scripts.validate as v;
+      t=time.perf_counter(); failed=[]; v.validate_structural_size_limits(failed); d=time.perf_counter()-t;
+      assert not failed, failed;
+      assert d < 5.0, f'census took {d:.3f}s -- investigate before merging';
+      print('CENSUS_BUDGET_OK');
+      print(f'measured {d:.3f}s')"
+    expected: "Prints `CENSUS_BUDGET_OK` followed by the measured duration; exit 0."
+    fix_if: >-
+      The census exceeds 5s -- the walk is re-reading files or not pruning excluded directories.
+      Prune at the directory level and read each file exactly once. If it cannot be brought under
+      budget, draft_decision reversal condition (b) applies: move the engine full-tier-only and
+      keep the raise-guard in the fast tier.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-census-within-fast-tier-budget
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Confirm the CD.29 verification-registry archival-lifecycle recommendation was filed via the
+      ops portal (SGE-02's named drain owner, and the pre-committed response when the 6,000
+      ceiling fires). Refreshes the read cache from the warehouse first -- the cache is never a
+      write source.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json, pathlib;
+      rows=[json.loads(x) for x in pathlib.Path('logs/.recommendations-log.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()];
+      hits=[r for r in rows if r.get('status')=='open'
+      and 'verification_registry' in ((r.get('file') or '')+(r.get('title') or '')+(r.get('context') or ''))
+      and 'archiv' in ((r.get('title') or '')+(r.get('context') or '')).lower()];
+      assert hits, 'CD.29 archival-lifecycle rec not found in the refreshed cache';
+      print('LIFECYCLE_REC_FILED', hits[0]['id'])"
+    expected: "Prints `LIFECYCLE_REC_FILED` followed by the allocated rec id; exit 0."
+    fix_if: >-
+      No hit -- file it with `bin/venv-python -m scripts.ops_data_portal file_rec` (call
+      get_rec_write_guidance() first, per the Precision Context Injection rule), citing the
+      measured evidence: 22 commits in 60 days, every one append-only with zero deletions, 66-167
+      lines each, ~1,200 lines/month. A portal write that cannot complete FAILS LOUDLY (Decision
+      84 I-4) -- there is no offline outbox; restore connectivity and re-file.
+    hermetic: false
+    graduation: not-applicable
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Run the FULL presubmit tier to exit 0 before committing -- the handoff_policy obligation
+      this plan declares (Decision 163 clause 3; validate_handoff_full_tier has deliberately no
+      advisory-SKIP leg, so a plan whose VP names no full-tier run fails in --pre).
+    command: bin/venv-python -m scripts.validate
+    expected: "The full tier completes with exit 0 and reports no failed checks."
+    fix_if: >-
+      Any check reds. Forward-fix on this branch; never revert and never bypass. If a check
+      unrelated to this scope fails, check whether it is one of the four deferred ci-rca recs
+      recorded in Context before patching anything inline (Decision 55 / Decision 72: no inline
+      fixes without architectural review).
+    hermetic: false
+    graduation: not-applicable
+
+constraints:
+  - >-
+    IMPLEMENTATION plan type only. STRATEGIC is frozen (Decision 67) and drains are human-planned
+    recs, never executor work.
+  - >-
+    validate.py-first: a new check requires a scripts/checks/<domain>/ module with
+    @registry.register, a sequence entry in scripts/checks/registry.py, AND a re-export line in
+    scripts/validate.py. Never add a check to .github/workflows/ci.yml without adding it to
+    validate.py first.
+  - >-
+    THE CRITICAL SEAM: the raise-guard MUST use make_section_extractor, never make_flat_extractor.
+    The registry mixes a class table with flat rosters, so a flat extractor would parse
+    `limit: 500` and `max_line_chars: 2000` as budget entries. Slice A built and tested this seam
+    for exactly this consumer (docs/contracts/marker-grammar.yaml extractor_shapes).
+  - >-
+    Consume, never copy: scripts/checks/_marker_guard.py's eight-name surface (RegistrySpec,
+    make_flat_extractor, make_section_extractor, default_base_reader, load_decision_bodies,
+    authorization_failure, check_diff, check_present_markers) is the binding contract. This module
+    is the sixth CONSUMER, not the sixth copy (SGE-07's whole point).
+  - >-
+    New modules stay under 500 effective lines and are NOT registered in config/sloc_budgets.yaml.
+    Decompose within the package rather than raise (Decision 128, AGENTS.md SLOC governance). The
+    enforcement must pass its own rule.
+  - >-
+    Exemption rationale is PROVENANCE and PRODUCTION-PATTERN based, NEVER consumer-tier based.
+    Copy the audit's class_verdicts wording for generated ("no agent hand-edits a generated file;
+    governance belongs on the producer"), workflow_outputs ("produced whole per run; post-merge
+    edits are narrow FIELD FLIPS, never whole-file comprehension edits") and test_fixtures
+    ("captured data asserted against, sometimes byte-for-byte; a cap is an NS-B tax"). Do not
+    improvise tier-keyed reasons.
+  - >-
+    Every glob covers BOTH .yaml and .yml spellings. rec-2928 is open on exactly this defect and
+    .github/ is 27 .yml to 1 .yaml today.
+  - >-
+    The counting rule is PINNED: non-blank lines whose first non-whitespace character is not `#`,
+    applied verbatim to every class. No per-language comment handling. The audit records that its
+    own regex block-comment stripper was fooled by `/*` inside AWS ARN strings ("...personal/*"
+    through "Get*/List*" parsed as one giant comment) and that correct per-language counting needs
+    a lexer -- the rule's simplicity is a determinism asset, not an oversight.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml is FIXED under Decisions 114/147: do not edit it, do not split it,
+    do not change _ROADMAP_MAX_LINES, and defer it by EXACT FILENAME (not by glob -- deferring the
+    glob would leave docs/ROADMAP-PRODUCT.yaml governed by nothing, since
+    validate_platform_roadmap.py hard-codes the one filename).
+  - >-
+    docs/ROADMAP-PRODUCT.yaml is grandfathered at its current measured effective-line count only.
+    Do NOT seed the designed 6,000 ceiling -- that call belongs to the sibling SGE-05 slice. For
+    the record, the roadmaps relief valves are: compact in place (valve 4, proven by Decision 147),
+    archive terminal items (valve 5), loud cited raise -- per-tier split is FORBIDDEN
+    (Decisions 110/114).
+  - >-
+    Decision 166 carries ONLY the durable commitment, the 16 verbatim roster keys, the amendments,
+    the roster-expansion record, the CD.29 pre-commitment, reversal conditions and a
+    `**Significance:**` marker. All mechanics live in config/structural_size_budgets.yaml
+    (decision-entry.yaml significance.routing.field_semantics: field semantics belong in the
+    owning contract/config, never in a numbered Decision). No new contract file is created -- the
+    audit's DD-C puts the taxonomy home in the registry itself.
+  - >-
+    All 16 roster keys are named VERBATIM in Decision 166's body. Five are 2-segment keys for
+    which scripts.checks._marker_guard._expand_ancestor_candidates generates NO ancestor
+    candidate, so a directory mention cannot authorize them. Never grow RETRO_SCAN_GRANDFATHER to
+    paper over an under-written Decision.
+  - >-
+    docs/decisions-index.json is REGENERATED via scripts.decisions_index, never hand-edited
+    (validate_decisions_index_freshness runs in both tiers).
+  - >-
+    No rescue agents, no workaround loops (Decision 55). If a gate reds for a reason outside this
+    scope, surface it as a recommendation via scripts/ops_data_portal -- do not fix it inline.
+  - >-
+    All recommendation writes go through `bin/venv-python -m scripts.ops_data_portal` (Single
+    Portal Invariant). Call get_rec_write_guidance() before file_rec(). Never Edit or Write
+    logs/.recommendations-log.jsonl -- it is a read cache, and a read cache is never a write
+    source.
+  - >-
+    VP-step authoring hygiene (inherited from Slice A at cost): `! cmd` under `set -e` cannot fail
+    (POSIX exempts inverted commands) -- use `if cmd; then echo FAIL; exit 1; fi`. A backticked
+    literal in `expected` is extracted by validate_vp_replay and must genuinely appear in captured
+    stdout+stderr, so `pytest -q` must not carry one. A grep that already passes on the unmodified
+    tree is a vacuous assertion -- anchor every count on a measured population.
+
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND, 118 of 118
+    decisions triaged, corpus verified at origin/main = d1cc5bb. CITE: 165, 43, 128, 102, 104,
+    114, 147, 150, 73, 153, 127, 48. RELATED: 131, 118, 124, 80, 67. SPIRIT: 128 [WARN],
+    145 [NOTE]. Four flags folded in: (1) the 2-segment authorization trap -- all roster keys
+    named verbatim; (2) the withdrawn "designed friction" claim -- authorization matches the key,
+    never the value, so one marker permanently authorizes every future bump of that entry;
+    (3) the roadmaps deferral scoped to the exact filename so ROADMAP-PRODUCT is not left
+    ungoverned; (4) Decision 163's handoff_policy obligation requiring a full-tier VP step.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Base sha d1cc5bb (Slice A, PR #846). Re-censused at d1cc5bb, NOT at the audit's 3dee4a5:
+    557 tracked in-scope files, 91 over 500 effective lines. The audit's 12-file roster reproduces
+    exactly (terraform 5, config 2, contracts 2, ci_workflows 2, residual 1). Measured drift since
+    the audit: config/agent/verification_registry/registry.yaml 3,252 -> 3,700; ROADMAP-PLATFORM
+    8,195 -> 8,312; contracts population 36 -> 37; workflow_outputs over-limit 71 -> 75 (exempt).
+  - >-
+    Seeded `budgets:` roster (13 entries; re-measure at implement time and use the measured value
+    if it differs): terraform/iceberg_tables.tf 1491; terraform/bootstrap/github_ci_apply.tf 695;
+    terraform/personal/oidc.tf 682; terraform/data_pipeline.tf 655;
+    terraform/personal/platform_roles.tf 587; config/agent/verification_registry/registry.yaml
+    6000 (CALIBRATED CEILING, not a grandfather -- see the next Context item);
+    config/agent/data_quality/decisions/ops_recommendations.yaml 522;
+    docs/contracts/iam-simulate-fixture.yaml 584; docs/contracts/ops_recommendations.yaml 556;
+    .github/workflows/reconcile.yml 536; .github/workflows/terraform-apply-sandbox.yml 529;
+    docs/intent-migration/MANIFEST.yaml 521; docs/ROADMAP-PRODUCT.yaml 4707.
+  - >-
+    Seeded `long_line_budgets:` roster (3 entries, this plan's own measurement -- the audit
+    censused long lines only inside the exempt workflow_outputs class):
+    config/agent/verification_registry/registry.yaml 2315; logs/.retro-lite-log.jsonl 2523;
+    logs/.execution-step-telemetry.jsonl 6679. Without this roster, draft clause 5's 2,000-char
+    companion plus clause 3 would have reddened the installing PR. The roster therefore expands
+    from the draft's "exactly 12" to 16 entries across two rosters, and Decision 166 records the
+    expansion rather than letting it pass silently.
+  - >-
+    THE VERIFICATION-REGISTRY DECISION (human-approved option (d) at Step 6b). Measured:
+    config/agent/verification_registry/registry.yaml took 22 commits in 60 days, every one
+    append-only with zero deletions, 66-167 lines each -- roughly 1,200 lines/month, because every
+    graduating plan appends to it. A 500 cap grandfathered at current size would fail the next
+    /implement PR, and the "each append is a reviewable cited raise" argument is FALSE:
+    scripts.checks._marker_guard.authorization_failure matches the entry KEY and never its VALUE,
+    so one marker permanently authorizes every future bump. That is Decision 128's own Problem
+    statement reproduced. Resolution: a calibrated 6,000 ceiling (~1.8 months of runway) plus a
+    pre-commitment in Decision 166 that when it fires the response is the CD.29 mark-then-drop
+    archival lifecycle, NEVER a second raise (Decision 145 clause 3 shape). This is the audit's
+    OWN prescribed valve for this class, not an exception to the rule the same PR installs:
+    class_verdicts.config.relief_valve reads "archive/retire entries per lifecycle (valves 4/5);
+    compact resolved rows; loud cited raise; decompose only where cohesion permits", with
+    drain_owner naming the CD.29 lifecycle and stating the drain is NOT via file-splitting. The
+    Python decompose-into-a-facade answer is explicitly Python-specific (audit Q4:
+    sound-needs-generalization). Make that reasoning explicit in Decision 166's body.
+  - >-
+    A genuine two-gate collision, resolved structurally rather than by a workaround: Decision 132
+    clause 2's implement-PR leg makes appending graduated verification rows MANDATORY pre-merge,
+    while a tight cap on that same file would FAIL the PR adding them. The 6,000 ceiling is sized
+    so both gates are satisfiable in one PR.
+  - >-
+    DECISIONS.md headroom is the binding scarcity: 118 of 120 live `## Decision` headers at
+    d1cc5bb, so Decision 166 takes it to 119 -- ONE slot left. Max allocated number is 165.
+    Combined live+archive is 667,556 of 700,000 bytes (32,444 free; mean entry 4,715 bytes), so a
+    lean entry fits both ceilings. Decision 149's compaction is number-PRESERVING, so archival to
+    docs/DECISIONS_ARCHIVE.md (Decision 146) is the only remaining header relief valve. Keep
+    Decision 166 lean for this reason as well as for routing correctness.
+  - >-
+    Provenance-test evidence measured at plan time: a LOOSE banner regex over-matches hand-authored
+    files (it matched audits/size-governance-expansion-3dee4a5.yaml and
+    docs/plans/PLAN-dcg-decisions-index.yaml on the bare word "generated"), while
+    docs/decisions-index.json, config/mypy_baseline.yaml, config/sloc_budgets.yaml and both tracked
+    .terraform.lock.hcl files carry NO banner at all. So the regex must be narrow AND
+    generated_pinned is load-bearing. Draft clause 2's "checked-in regeneration command" prong is
+    realized AS the pinned list -- a repo-wide grep for a regenerator is neither deterministic nor
+    cheap -- and Decision 166 records that narrowing.
+  - >-
+    Decision 130 clause 1 lists `terraform` in the exclusion set. Decision 166 must state that this
+    was an iter_gated_py_files PYTHON-SCAN ARTIFACT (it excluded Python under terraform/, not .tf
+    files), never a structural-axis exemption -- the audit's READ FIRST 3, confirmed. Absence of
+    coverage was absence of scanning, not a recorded exemption.
+  - >-
+    CI-RCA DEFERRAL RATIONALE (logged per the Related-Work check; 4 unresolved ci-rca recs at
+    preflight). rec-2973 (ci-rca evidence truncation, scripts/ci_rca/log_evidence.py), rec-2970
+    (validate_test_coverage is post-merge-only, scripts/checks/registry.py), rec-2958 (Main Canary
+    validate_invariants, scripts/checks/misc/validate_invariants.py) and rec-2957 (ci-rca log
+    fetcher truncation, scripts/ci_rca/fetch_logs.py) are all deferred. This plan's scope touches
+    scripts/checks/registry.py, which is rec-2970's source_file, so Related-Work condition 1 is
+    technically satisfied -- but this plan does not address rec-2970's substance (fast-tier
+    coverage gating), so the deferral is logged explicitly rather than resting on the
+    file-overlap technicality. The human confirmed at Step 6b that other agents own all four.
+  - >-
+    This plan document is class workflow_outputs (docs/plans/**/*.yaml), which is
+    exempt-with-reason under the very table it installs, on production-pattern grounds -- produced
+    whole per run, post-merge edits are narrow field flips. The self-referential check passes
+    honestly: nothing here was trimmed or split to dodge a limit.
+  - >-
+    Sibling-slice sequencing for the orchestrator: SGE-05 (ratify ROADMAP-PRODUCT's designed 6,000
+    ceiling; the roadmap long-line companion; record the raw-line unit's gameability) and SGE-03
+    (extend Decision 162's R3 inline-body ratchet to .github/workflows/*.yml run: bodies, draft
+    clause 8) both depend on this class table and land after it. Neither is in this plan's scope.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 behind, 0
+    ahead); no Main Divergence deferral required.
+
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness-assigned claude/size-gov-engine-02jtmb)
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read (165, 128, 130, 102, 43, 104, 114, 147, 150, 145,
+    146, 149, 163, 73, 127, 86, 67) -- never the full DECISIONS.md
+  - >-
+    audits/size-governance-expansion-3dee4a5.yaml read: findings SGE-01/SGE-02/SGE-04, all 12
+    class_verdicts entries (for the verbatim actual_purpose and relief_valve wording), and
+    draft_decision clauses 1-9
+  - >-
+    docs/contracts/marker-grammar.yaml read, especially binding_surface.exports and
+    extractor_shapes (the section-extractor seam this plan consumes)
+  - scripts/checks/_marker_guard.py read (the eight-name surface and __all__)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+
+execution_steps:
+  - >-
+    Re-run the census at the implementing HEAD before writing anything. The roster values in
+    Context are measured at d1cc5bb; if any file has moved, use the MEASURED value. Seed the
+    rosters LAST, after every other file in this PR is final, so the verification-registry rows
+    this PR itself appends are already counted.
+  - >-
+    Create config/structural_size_budgets.yaml with the five blocks in order (exclusions,
+    generated_pinned, classes, budgets, long_line_budgets). Each of the 12 class rows copies its
+    actual_purpose and relief_valves VERBATIM from the audit's class_verdicts. Every YAML-matching
+    glob lists both .yaml and .yml. The roadmaps row carries defer_to_incumbent with the single
+    exact filename docs/ROADMAP-PLATFORM.yaml. The residual row is last and mandatory at 500.
+    Write the header comment so this file reads as the field-semantics home for the class table,
+    the counting rule, the glob grammar and the long-line threshold.
+  - >-
+    Create scripts/checks/structural/_classify.py -- load_registry, classify_path,
+    effective_lines, longest_line, iter_measured_files. Import ROOT from scripts.checks._common
+    and never recompute it (tests/test_checks_registry.py::TestNoLocalRootRecomputation enumerates
+    every scripts/checks/**/*.py and forbids Path(__file__).parent.parent.parent).
+  - >-
+    Create scripts/checks/structural/structural_size_limits.py with validate_structural_size_limits
+    under @registry.register("validate_structural_size_limits", owner="platform"). Failure
+    messages name the file's class and that row's relief valves.
+  - >-
+    Create scripts/checks/structural/validate_structural_size_budget_raises.py with the TWO
+    section-scoped RegistrySpecs and the registered check. No local regexes, no local base reader.
+  - >-
+    Add both names to pre_sequence() and full_sequence() in scripts/checks/registry.py (unscoped),
+    and add both re-export lines to scripts/validate.py.
+  - >-
+    Write the three test modules under tests/checks/structural/ (plus __init__.py). Every test
+    drives the real check body against an INJECTED root -- no mocked check functions, and no test
+    that would pass on the unmodified tree.
+  - >-
+    Draft `## Decision 166:` in docs/DECISIONS.md. Re-check the current max `## Decision NNN:`
+    header first -- a concurrent PR may have claimed 166. Required content and nothing more: the
+    durable commitment (one engine, one registry, one guard; classification is layered
+    first-match-wins with a mandatory residual default; exemptions key on provenance and
+    production pattern, never consumer tier); all 16 roster keys named VERBATIM; the amendments
+    (Decision 130 clause 1's terraform entry was a Python-scan artifact, not a structural
+    exemption; Decision 43's declared beyond-Python scope is now implemented); the roster-expansion
+    record (the audit's draft named 12 entries on one unit -- this installs 16 across two, because
+    a re-census at the installing sha found four governed-class files breaching the 2,000-character
+    companion that the audit's workflow_outputs-only long-line census did not reach); the CD.29
+    pre-commitment for config/agent/verification_registry/registry.yaml, stated with the audit's
+    own relief_valve reasoning so a future reader sees the 6,000 ceiling as this class's prescribed
+    valve rather than an exception to the rule the same PR installs; reversal conditions (the
+    audit's (a)-(e), plus: a second raise on the verification registry re-audits the design instead
+    of renewing the ceiling); and a `**Significance:**` marker following Decision 153's template.
+  - >-
+    Regenerate docs/decisions-index.json via scripts.decisions_index. Never hand-edit it.
+  - >-
+    Add the structural-size-budgets route to docs/contracts/file-router.yaml.
+  - >-
+    File the CD.29 verification-registry archival-lifecycle recommendation through the ops portal
+    (get_rec_write_guidance() first, then file_rec), citing the measured growth evidence and naming
+    it as the drain owner referenced by Decision 166 and by the config class row.
+  - >-
+    Append the graduated verification rows to config/agent/verification_registry/registry.yaml for
+    every VP step carrying graduation: graduate, then re-measure and seed both rosters.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until pass. On an unrecoverable
+    failure, stop and RCA rather than working around it (Decision 55).
+  - >-
+    Run the full tier to exit 0 (step 14), then commit with a `feat(size-gov-engine):` subject.
+    No Resolves: trailer -- bundled_recommendations is empty.
+  - >-
+    'Report: what was implemented, the measured roster values actually seeded, the rec id allocated
+    for the CD.29 lifecycle rec, and verification results.'
+
+work_areas: []
+
+rollback: >-
+  Revert the single squash commit. The engine is additive: two new registered check names, one new
+  registry file, one new package, two sequence entries and two re-export lines. Nothing existing
+  changes behaviour -- the five incumbent gates (SLOC, prose, roadmap, decisions, composite bodies)
+  are untouched by design, a convergence path is recorded rather than executed, and
+  _ROADMAP_MAX_LINES and docs/ROADMAP-PLATFORM.yaml are not modified. The only non-revertible side
+  effects are the Decision 166 entry (retire by amendment, not deletion -- and note it consumed one
+  of the two remaining live header slots) and the filed CD.29 lifecycle rec (close via the portal
+  with a resolution note if the engine is abandoned).
