@@ -31,6 +31,23 @@ from typing import NamedTuple
 from scripts.checks import _common
 from scripts.decisions_md import extract_superseded_by, iter_decision_sections
 
+# Bounds this module's public surface to exactly the eight names
+# docs/contracts/marker-grammar.yaml's binding_surface.exports promises Slice B -- VP step 1 only
+# pins that these eight are PRESENT; __all__ additionally keeps the surface from silently growing
+# past what the contract documents (e.g. MarkerEntry, RETRO_SCAN_GRANDFATHER, and the two
+# re-exported scripts.decisions_md names stay importable by explicit dotted access, but are not
+# part of the promised star-import / documented surface).
+__all__ = [
+    "RegistrySpec",
+    "make_flat_extractor",
+    "make_section_extractor",
+    "default_base_reader",
+    "load_decision_bodies",
+    "authorization_failure",
+    "check_diff",
+    "check_present_markers",
+]
+
 _DECISIONS_REL_PATH = "docs/DECISIONS.md"
 _DECISIONS_ARCHIVE_REL_PATH = "docs/DECISIONS_ARCHIVE.md"
 
