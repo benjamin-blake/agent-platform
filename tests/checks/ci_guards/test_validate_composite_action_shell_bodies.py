@@ -109,6 +109,11 @@ class TestR3MarkerGuardBinding:
         assert _R3_SPEC.token == "raise-approved"
         assert _R3_SPEC.gated_direction == "up"
 
+    def test_spec_reason_required(self) -> None:
+        """R3 is the only registry that requires a non-empty <reason> -- see
+        test_marker_with_no_reason_text_does_not_override_growth for the behavioural proof."""
+        assert _R3_SPEC.reason_required is True
+
     def test_mention_candidates_returns_full_key_and_action_rel_dir(self) -> None:
         key = ".github/actions/materialise-tfvars::#0"
         assert _r3_mention_candidates(key) == [key, ".github/actions/materialise-tfvars"]
@@ -419,6 +424,25 @@ class TestBaselineRatchet:
             failed: list[str] = []
             validate_composite_action_shell_bodies(failed)
         assert any("R3" in f and "GREW" in f for f in failed)
+
+    def test_marker_with_no_reason_text_does_not_override_growth(self, tmp_path: Path) -> None:
+        """R3 alone requires a non-empty <reason> (RegistrySpec.reason_required=True, mirroring
+        the incumbent composite-only `_RAISE_APPROVED_RE`'s `\\s+\\S` requirement) -- a bare
+        `# raise-approved: dec-NNN` with nothing after the decision id must parse as NO marker
+        at all, never silently exempting the entry from its declared ceiling."""
+        _make_repo(tmp_path)
+        _write_r3_action(tmp_path, "r3-action", 20)
+        (tmp_path / "docs" / "DECISIONS.md").write_text(
+            "## Decision 162: Test decision (Decided)\n\n**Decision:** Authorizes .github/actions/r3-action.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "config" / "composite_action_body_baseline.yaml").write_text(
+            'r1: {}\nr3:\n  ".github/actions/r3-action::step1": 10  # raise-approved: dec-162\n', encoding="utf-8"
+        )
+        with patch(f"{_MODULE}._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_composite_action_shell_bodies(failed)
+        assert any("R3" in f and "GREW" in f for f in failed), failed
 
     def test_valid_raise_approved_marker_overrides_growth(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)

@@ -11,7 +11,7 @@ binding assertions for each of the five consumer guards live alongside their own
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scripts.checks import _common, _marker_guard
 from scripts.checks._marker_guard import (
@@ -52,6 +52,34 @@ class TestSectionExtractorScoping:
         entries = make_flat_extractor("raise-approved")(self._FIXTURE)
         assert "limit" in entries
         assert entries["limit"].value == 500
+
+
+class TestRequireReason:
+    """High finding fix: require_reason=True (mirroring the incumbent composite-only
+    `_RAISE_APPROVED_RE`'s `\\s+\\S` non-empty-reason requirement) makes a marker with an empty
+    reason parse as NO marker at all -- it can never rescue an entry. Default (False) keeps a
+    bare marker (no reason) valid, matching sloc/prose/coverage/mypy's incumbent behaviour."""
+
+    def test_flat_extractor_require_reason_true_rejects_empty_reason(self) -> None:
+        entries = make_flat_extractor("raise-approved", require_reason=True)("scripts/x.py: 800  # raise-approved: dec-1\n")
+        assert entries["scripts/x.py"].marker is None
+        assert entries["scripts/x.py"].reason is None
+
+    def test_flat_extractor_require_reason_true_accepts_nonempty_reason(self) -> None:
+        entries = make_flat_extractor("raise-approved", require_reason=True)(
+            "scripts/x.py: 800  # raise-approved: dec-1 a real reason\n"
+        )
+        assert entries["scripts/x.py"].marker == "dec-1"
+
+    def test_flat_extractor_require_reason_false_accepts_empty_reason(self) -> None:
+        entries = make_flat_extractor("raise-approved", require_reason=False)("scripts/x.py: 800  # raise-approved: dec-1\n")
+        assert entries["scripts/x.py"].marker == "dec-1"
+
+    def test_section_extractor_require_reason_true_rejects_empty_reason(self) -> None:
+        entries = make_section_extractor("r3", require_reason=True)(
+            'r3:\n  ".github/actions/a::#0": 5  # raise-approved: dec-1\n'
+        )
+        assert entries[".github/actions/a::#0"].marker is None
 
 
 class TestSectionExtractorCommentImmune:
@@ -166,7 +194,6 @@ class TestLiveMarkerCorpusInvariant:
     )
 
     def _live_marker_entries(self) -> list[tuple[RegistrySpec, str, str]]:
-        bodies_unused = None  # noqa: F841 -- documents intent only, not used directly here
         found: list[tuple[RegistrySpec, str, str]] = []
         for spec in self._SPECS:
             path = _common.ROOT / spec.rel_path
@@ -185,6 +212,57 @@ class TestLiveMarkerCorpusInvariant:
 
     def test_install_state_marker_population_upper_bound(self) -> None:
         assert len(self._live_marker_entries()) <= 3
+
+
+class TestRetroactiveScanWiredIntoAllFourGenericConsumers:
+    """Medium finding: pins that each of the four generic (check_diff/check_present_markers)
+    consumers actually WIRES IN the retroactive scan, not just that check_present_markers itself
+    works in isolation. Fixture shape per test: base == current (no diff-side violation --
+    check_diff alone finds nothing), but the current entry carries an unauthorized marker --
+    only check_present_markers can catch it. If a future refactor drops
+    `+ _marker_guard.check_present_markers(_SPEC)` from any of the four consumers, that
+    consumer's test below reds while the other four (and check_present_markers' own unit tests)
+    stay green -- the exact mutation this class exists to catch."""
+
+    def test_sloc_wires_in_retroactive_scan(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        body = "budgets:\n  scripts/x.py: 800  # raise-approved: dec-999999 bogus\n"
+        (config_dir / "sloc_budgets.yaml").write_text(body, encoding="utf-8")
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            sloc_module.validate_sloc_budget_raises(failed, base_reader=lambda rel: body)
+        assert failed, "unauthorized marker present in an unchanged entry must still be caught"
+
+    def test_prose_wires_in_retroactive_scan(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        body = "S1:\n  root_ambient_load_set: 40000  # raise-approved: dec-999999 bogus\n"
+        (config_dir / "prose_budgets.yaml").write_text(body, encoding="utf-8")
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            prose_module.validate_prose_budget_raises(failed, base_reader=lambda rel: body)
+        assert failed, "unauthorized marker present in an unchanged entry must still be caught"
+
+    def test_coverage_wires_in_retroactive_scan(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        body = "entries:\n  scripts/x.py: 60.0  # baseline-lowered: dec-999999 bogus\n"
+        (config_dir / "coverage_baseline.yaml").write_text(body, encoding="utf-8")
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            coverage_module.validate_coverage_baseline_edits(failed, base_reader=lambda rel: body)
+        assert failed, "unauthorized marker present in an unchanged entry must still be caught"
+
+    def test_mypy_wires_in_retroactive_scan(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        body = "entries:\n  scripts/x.py: 5  # baseline-raised: dec-999999 bogus\n"
+        (config_dir / "mypy_baseline.yaml").write_text(body, encoding="utf-8")
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            mypy_module.validate_mypy_baseline_edits(failed, base_reader=lambda rel: body)
+        assert failed, "unauthorized marker present in an unchanged entry must still be caught"
 
 
 class TestMovedFromSameDiffProof:
@@ -251,6 +329,15 @@ class TestDefaultBaseReader:
         fake_result = type("FakeResult", (), {"returncode": 0, "stdout": "budgets:\n  scripts/x.py: 1\n"})()
         with patch("scripts.checks._common.run", return_value=fake_result):
             assert _marker_guard.default_base_reader("config/sloc_budgets.yaml") == "budgets:\n  scripts/x.py: 1\n"
+
+    def test_reads_origin_main_not_head(self) -> None:
+        """Pins the argv contract: `git show origin/main:<path>`, never `HEAD:<path>` -- the
+        deleted per-consumer TestDefaultBaseReader classes asserted this before the move; nothing
+        else pins it post-consolidation."""
+        mock_result = MagicMock(returncode=0, stdout="budgets:\n  scripts/x.py: 1\n")
+        with patch("scripts.checks._common.run", return_value=mock_result) as mock_run:
+            _marker_guard.default_base_reader("config/sloc_budgets.yaml")
+        assert mock_run.call_args.args[0] == ["git", "show", "origin/main:config/sloc_budgets.yaml"]
 
     def test_returns_none_on_nonzero_exit(self) -> None:
         fake_result = type("FakeResult", (), {"returncode": 1, "stdout": ""})()

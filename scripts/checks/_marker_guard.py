@@ -79,6 +79,14 @@ class RegistrySpec:
     mention_candidates: overrides the default path-ancestor candidate generator. Unset (None)
         for the four path-keyed registries; composite's R3 supplies one for its
         "<action-rel-dir>::<step-id>" key form.
+    reason_required: declarative record of whether this registry's extractor was built with
+        require_reason=True (a marker with an empty reason parses as no marker at all, matching
+        the incumbent composite-only `_RAISE_APPROVED_RE`'s `\\s+\\S` non-empty-reason
+        requirement). The actual gate is enforced by the extractor at construction time
+        (make_flat_extractor / make_section_extractor's own require_reason parameter) -- this
+        field exists so a spec's policy is testable/documented in one place, mirroring
+        moved_from_relief. Default False (sloc/prose/coverage/mypy never required a reason);
+        True on the composite R3 spec alone.
     """
 
     rel_path: str
@@ -90,19 +98,31 @@ class RegistrySpec:
     relief_text: str = ""
     moved_from_relief: bool = False
     mention_candidates: Callable[[str], list[str]] | None = None
+    reason_required: bool = False
 
 
-def _parse_marker(comment: str | None, marker_re: re.Pattern[str]) -> tuple[str | None, str | None]:
+def _parse_marker(
+    comment: str | None, marker_re: re.Pattern[str], require_reason: bool = False
+) -> tuple[str | None, str | None]:
+    """require_reason=True mirrors the incumbent composite-only `_RAISE_APPROVED_RE`'s
+    `\\s+\\S` non-empty-reason requirement: a marker with no reason text (`# raise-approved:
+    dec-162`, nothing after) parses as NO marker at all, so it can never rescue an entry from
+    its ceiling. Default False -- sloc/prose/coverage/mypy never required a reason.
+    """
     if not comment:
         return None, None
     match = marker_re.search(comment)
     if not match:
         return None, None
     reason = match.group(2).strip()
+    if require_reason and not reason:
+        return None, None
     return f"dec-{match.group(1)}", (reason or None)
 
 
-def make_flat_extractor(token: str, value_type: type = int) -> Callable[[str], dict[str, MarkerEntry]]:
+def make_flat_extractor(
+    token: str, value_type: type = int, require_reason: bool = False
+) -> Callable[[str], dict[str, MarkerEntry]]:
     """A flattened, indentation-blind line scan (sloc/prose/coverage/mypy's shape) -- every
     non-blank, non-full-line-comment line in the text is a candidate entry line, regardless of
     nesting depth. Safe when a registry's keys are globally unique across its surface groups.
@@ -118,7 +138,7 @@ def make_flat_extractor(token: str, value_type: type = int) -> Callable[[str], d
             match = _ENTRY_RE.match(stripped)
             if not match:
                 continue
-            marker, reason = _parse_marker(match.group("comment"), marker_re)
+            marker, reason = _parse_marker(match.group("comment"), marker_re, require_reason)
             entries[match.group("key")] = MarkerEntry(value_type(match.group("value")), marker, reason)
         return entries
 
@@ -126,7 +146,7 @@ def make_flat_extractor(token: str, value_type: type = int) -> Callable[[str], d
 
 
 def make_section_extractor(
-    section_key: str, token: str = "raise-approved", value_type: type = int
+    section_key: str, token: str = "raise-approved", value_type: type = int, require_reason: bool = False
 ) -> Callable[[str], dict[str, MarkerEntry]]:
     """Anchored on a top-level `<section_key>:` line; ends the section at the next column-0
     NON-COMMENT line (comment-immune -- rec-2954 finding 3: the incumbent
@@ -154,7 +174,7 @@ def make_section_extractor(
             match = _ENTRY_RE.match(stripped)
             if not match:
                 continue
-            marker, reason = _parse_marker(match.group("comment"), marker_re)
+            marker, reason = _parse_marker(match.group("comment"), marker_re, require_reason)
             entries[match.group("key")] = MarkerEntry(value_type(match.group("value")), marker, reason)
         return entries
 

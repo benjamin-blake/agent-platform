@@ -93,10 +93,11 @@ _R3_SPEC = _marker_guard.RegistrySpec(
     rel_path=_BASELINE_REL_PATH,
     token="raise-approved",
     gated_direction="up",
-    extractor=_marker_guard.make_section_extractor("r3", token="raise-approved", value_type=int),
+    extractor=_marker_guard.make_section_extractor("r3", token="raise-approved", value_type=int, require_reason=True),
     gates_new_entry=lambda _value: True,
     label="composite-action shell-body rules (Decision 162)",
     mention_candidates=_r3_mention_candidates,
+    reason_required=True,
 )
 
 
@@ -250,7 +251,7 @@ def validate_composite_action_shell_bodies(failed: list[str]) -> None:
     """Enforce R1 (thin-adapter output producers), R2 (literal-argv test coverage), and R3
     (ratcheted inline-body line-count baseline) across every .github/actions/**/action.yml.
     """
-    print("\n=== composite-action shell-body rules (Decision 162) ===")
+    print(f"\n=== {_R3_SPEC.label} ===")
     scan = scan_repository()
     baseline = _load_baseline()
 

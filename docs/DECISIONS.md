@@ -138,6 +138,12 @@ The fast (`--pre`) tier's diff-scoped design (Decision 73) is deliberately narro
 **Date:** 2026-08-02
 **Warehouse ID:** dec-162 (canonical; per Decision 84)
 
+> **Amended by Decision 165 (2026-08-04):** point 3's R3 marker escape (the composite guard's
+> `validate_composite_action_shell_bodies.py`) now delegates to the shared
+> `scripts/checks/_marker_guard.py` authorization mechanism, upgrading its marker check from
+> existence to authorization. This body is otherwise unedited; see Decision 165 for the full
+> derivation.
+
 **Problem:**
 rec-2923: `write-convergence-record`'s always-run status writer accepted an EMPTY reviewer outcome as if it meant "not starved," latching a false platform-halting red for a run in which terraform apply never executed. The producer half was already fixed by PR #812 (commit 0726593) -- `review.sh` clears the inherited composite-step errexit and pre-writes a fail-closed `outcome=starved` before any fallible command -- but that fix addressed one symptom of a defect CLASS that remains structurally reproducible anywhere else in this repo's `.github/actions/`: CI-embedded shell whose control flow can silently not run (inherited errexit aborting a body mid-assignment), leaving a step output undefined for a downstream consumer to misread as a legitimate value. Two of the three actions that bind a step output to a consumed `outputs.<id>.value` today -- `deterministic-guard` and `fetch-saved-plan` -- still carry inline, non-delegated bash bodies producing exactly such outputs; only `subagent-plan-review` (post-#812) is a thin, testable adapter. Nothing prevented a fourth such action, or a regression of the third, from reintroducing rec-2923's shape unnoticed.
 
@@ -163,6 +169,12 @@ A strict CONSUMER ranks above every producer-side control: a consumer that switc
 **Status:** Decided
 **Date:** 2026-07-31
 **Warehouse ID:** dec-161 (canonical; per Decision 84)
+
+> **Amended by Decision 165 (2026-08-04):** clause 4's mypy tamper guard
+> (`validate_mypy_baseline_edits`) now delegates to the shared `scripts/checks/_marker_guard.py`
+> authorization mechanism, upgrading its marker check from existence to authorization, and
+> receives clause 4's `moved from <old-path>` form's first real implementation as a same-diff
+> proof. This body is otherwise unedited; see Decision 165 for the full derivation.
 
 **Problem:** VTS-15: mypy runs in both presubmit tiers but is purely informational (the retired `_scaffold_mypy_full` step only printed a warning); no Decision owned that status, leaving 129 measured pre-existing errors across 57 `scripts/`+`src/` files ungoverned.
 
@@ -885,6 +897,13 @@ CD.16/CD.24 -> dec-079 precedent the batch-wave form codifies forward).
 > read (skip-with-marker, not job failure) at the single named call site
 > `_assert_no_orphaned_current_rows`. This body is otherwise unedited; see Decision 155 for the
 > full derivation, constraints, and reversal conditions.
+
+> **Amended by Decision 165 (2026-08-04):** the compact-in-place stub grammar's interaction with
+> the five raise-marker guards is closed by a one-hop supersession fallback in the shared
+> `scripts/checks/_marker_guard.py` authorization mechanism -- when a cited Decision's body is a
+> compaction stub, the superseder's body is also consulted for authorization, so a future
+> compaction of a live-cited Decision cannot silently un-authorize every marker citing it. This
+> body is otherwise unedited; see Decision 165 for the full derivation.
 
 **Problem:**
 Decision 145's stopgap ceiling raise (400,000 -> 500,000 bytes) bought headroom but explicitly named the un-built structural fix as audits/decision-consolidation-growth-f79d6b5.yaml's DCG-01/DCG-02/DCG-05: a number-preserving compact-to-stub lifecycle, so the live corpus can shed fully-superseded bodies without breaking the ~12,103 unguarded inbound "Decision N" citations or orphaning a warehouse current-projection row (DCG-03: if a header were ever removed from both files, its ops_decisions current row would be served forever in its last state with no signal it was retired). Decision 146 (the archival sibling, landed first) covers entries with no live citations outside the corpus; it explicitly carves out entries "still cited as a LIVE constraint" (its own worked example: Decision 44 -> 117) as staying in the corpus, with no compaction mechanism yet built for them.
