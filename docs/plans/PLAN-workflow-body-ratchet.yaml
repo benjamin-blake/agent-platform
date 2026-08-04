@@ -1,0 +1,882 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: workflow-body-ratchet
+intent: >-
+  Close audit finding SGE-03: Decision 162's R3 inline-shell-body ratchet is implemented against
+  `.github/actions/` only, leaving 128 inline `run:` bodies across 17 workflow files ungoverned at
+  the unit that produced a real incident (rec-2923's class). Extend R3 -- and only R3 -- to
+  `.github/workflows/` bodies, inside the already-registered guard, with its own seeded baseline
+  section. Restores the declared-equals-actual governance property for the incident-bearing unit
+  while leaving whole-FILE workflow size to Decision 166's separate `ci_workflows` class row.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-workflow-body-ratchet.yaml
+phase: >-
+  Platform governance-integrity. Slice E of the structural-size-governance-expansion overseer run,
+  driving audit finding SGE-03 from audits/size-governance-expansion-3dee4a5.yaml (merged in #840)
+  to completion. Audit-sourced: no tier_item id, no product-roadmap phase dependency, so the Tier
+  Item Freshness Gate is skipped (soft-warn exception category, names no tier_item). Sized M by the
+  audit; 7 files, no new check name, no new Decision.
+
+scope:
+  - file: scripts/checks/ci_guards/_workflow_shell_bodies.py
+    action: Create
+    purpose: >-
+      The whole workflow leg, so that ALL new branching lives in a module covered by its own new
+      mirror test file. Holds: the `.github/workflows/*.yml` + `*.yaml` walk; the step-identity
+      grammar; `scan_workflow_bodies()`; `workflow_mention_candidates()`; a `RegistrySpec` built on
+      `_marker_guard.make_section_extractor("r3_workflows", token="raise-approved", value_type=int,
+      require_reason=True)`; the `_KNOWN_BASELINE_SECTIONS` frozen allowlist; and
+      `check_workflow_bodies(decision_bodies) -> list[str]`, which does its OWN `yaml.safe_load` of
+      the baseline file. Reading the baseline here rather than accepting it from the caller is
+      deliberate and load-bearing -- it is what lets the guard-module delta stay strictly
+      straight-line (see the next scope row). Imports ROOT from `scripts.checks._common` and NEVER
+      recomputes it (tests/test_checks_registry.py::TestNoLocalRootRecomputation enforces this
+      repo-wide). Target ~110 effective lines, hard ceiling 500.
+  - file: scripts/checks/ci_guards/validate_composite_action_shell_bodies.py
+    action: Modify
+    purpose: >-
+      Add EXACTLY TWO unconditional statements and modify ZERO existing lines: a module-level
+      `from scripts.checks.ci_guards import _workflow_shell_bodies`, and one
+      `violations.extend(_workflow_shell_bodies.check_workflow_bodies(bodies))` call placed after
+      the R3 loop, reusing the `bodies` local the function already binds. `_load_baseline()` is NOT
+      touched. Update the module docstring to state that R3 now spans two surfaces and that R1/R2
+      remain composite-only. NO new conditional may be introduced in this file -- see constraint 3
+      for why this is the load-bearing constraint of the whole slice.
+  - file: config/composite_action_body_baseline.yaml
+    action: Modify
+    purpose: >-
+      Add a third top-level section, `r3_workflows:`, seeded ONE-TIME at the re-censused live
+      population (128 bodies measured on origin/main 07e48c9) with each entry at its exactly-measured effective-line
+      count and NO raise marker -- byte-for-byte the same seeding shape Decision 162 used for its
+      own `r3:` section, which likewise carries no markers. Extend the file's header comment to
+      name both governed surfaces, both key grammars, and the section allowlist. The `r1:` and
+      `r3:` sections stay byte-identical. Filename is deliberately NOT changed (see context).
+  - file: tests/checks/ci_guards/test__workflow_shell_bodies.py
+    action: Create
+    purpose: >-
+      The new module's mirror test file (path computed with the repo's own
+      `scripts/test_coverage_checker.py::_mirror_source_to_test`, confirmed at plan time). Carries
+      ALL new tests in three classes -- TestWorkflowBodyRatchet, TestWorkflowStepIdentity,
+      TestWorkflowRatchetLiveSurface -- and must drive `_workflow_shell_bodies.py` to 100% per-file
+      line coverage on its own, since coverage is measured per source file by running only its
+      mirror. Uses the established `patch("scripts.checks._common.ROOT", tmp_path)` seam; never a
+      bare local ROOT patch (tests/test_checks_registry.py::test_zero_residual_bare_root_patch_sites_in_tests).
+  - file: docs/contracts/composite-action-shape.yaml
+    action: Modify
+    purpose: >-
+      The field-semantics home for R1/R2/R3 (Decision 86/127 routing), and therefore where R3's
+      widened surface is recorded -- not in a Decision. Widen `rules.r3.scope` to name both
+      `.github/actions/**` manifests and `.github/workflows/*.yml|*.yaml` bodies; state explicitly
+      that R1 and R2 remain composite-only and why (the `outputs.<id>.value` binding R1 keys on and
+      the action-directory `.sh` delegate R2 covers have no workflow analogue). Restructure
+      `baseline_file` to enumerate its sections with a per-section key form, and record the
+      allowlist rule that an unrecognised top-level section fails. 89 effective lines today; hard
+      ceiling 500.
+  - file: docs/contracts/marker-grammar.yaml
+    action: Modify
+    purpose: >-
+      Add a `workflow_r3_mention_candidates:` entry as a sibling of the existing
+      `composite_r3_mention_candidates:`, documenting that workflow keys generate the full key plus
+      the workflow file path, so a Decision naming `.github/workflows/reconcile.yml` authorizes an
+      entry while one naming only `.github` does not. Records the second `RegistrySpec` binding
+      this module now serves. MUST also record the MEASURED AUTHORIZATION BAND, mirroring the
+      file's own `band_width_measured_at_ratification` precedent: 15 of 146 Decision entries (12
+      live plus 3 archived) contain the 2-segment string `.github/workflows`, against exactly 1
+      containing `.github/actions` (Decision 162 itself). The workflow leg's band is therefore
+      roughly 15x wider than the incumbent's -- a marker citing any of those 15 authorizes ANY
+      workflow entry. Omitting this would leave the widest band in the file the one place the
+      contract stops recording what it exists to record, and would let a future reader over-read
+      the authorization strength. 122 effective lines today; hard ceiling 500.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      One row per `graduate`-disposition VP step whose check_id survives the real differential
+      admission gate (`scripts.verification_graduation.run_differential`), each carrying the same
+      check_id and this plan's slug. Required by validate_graduation_completeness's implement-PR
+      leg (Decision 132).
+
+bundled_recommendations: []
+infrastructure_dependencies: []
+
+acceptance_criteria:
+  - >-
+    SGE-03's stated acceptance, first half: a NEW inline `run:` body added to any
+    `.github/workflows/*.yml` with no `r3_workflows:` entry FAILS
+    validate_composite_action_shell_bodies. This is the single non-negotiable criterion -- it is the
+    coverage gap the finding names.
+  - >-
+    SGE-03's stated acceptance, second half: every body existing at install time is seeded, so the
+    installing PR is GREEN BY CONSTRUCTION. The roster equals the re-censused live population at
+    implement HEAD, each entry at its exactly-measured effective-line count -- no padding, no
+    headroom, no entry for a body that does not exist.
+  - >-
+    A baselined body that GROWS past its declared ceiling FAILS with no marker; a body at EXACTLY
+    its declared ceiling PASSES. This proves the comparison is strict `>`, matching the incumbent R3
+    leg, rather than `>=` which would fail every seeded entry on day one.
+  - >-
+    An inline `# raise-approved: dec-NNN <reason>` marker on an `r3_workflows:` entry exempts it
+    from its ceiling ONLY when the cited Decision's body names the entry key or its workflow file
+    path. A marker citing a Decision that names only `.github` FAILS authorization; a marker with an
+    empty reason parses as NO marker at all (require_reason=True, matching the incumbent leg).
+  - >-
+    DECISION 104 NAMING REQUIREMENT: every violation string the workflow leg emits is prefixed
+    `R3-workflow:` and names the offending `.github/workflows/...` path. A workflow violation is
+    therefore never attributed to a composite action in CI failure text, even though the enclosing
+    check name and its `failed.append` label are unchanged. The label itself is deliberately NOT
+    touched -- the shared RegistrySpec contract records that it is the sole `failed.append` value so
+    existing consumer-test substring assertions keep matching.
+  - >-
+    ENFORCED, NOT ASSERTED IN PROSE: an unrecognised top-level section in
+    config/composite_action_body_baseline.yaml FAILS the guard. Admitting a fourth grandfather
+    section requires editing `_KNOWN_BASELINE_SECTIONS` in a reviewed code change, never a config
+    drop-in -- the same frozen-constant-in-source shape as `_R1_KNOWN_VIOLATORS` (Decision 162) and
+    `_marker_guard.RETRO_SCAN_GRANDFATHER` (Decision 165). Note deliberately NOT cited as precedent:
+    `generated_pinned` is a checked-in list inside config/structural_size_budgets.yaml, not a frozen
+    source constant, so it is the weaker config-edit shape this criterion is avoiding. Scope is
+    stated honestly: this gates new SECTIONS in this one file, not new entries within
+    `r3_workflows:`, which is the ratchet's ordinary registration path.
+  - >-
+    R1 AND R2 ARE UNTOUCHED: `_R1_KNOWN_VIOLATORS` is unchanged, the `r1:` and `r3:` sections of the
+    baseline are byte-identical to origin/main, no workflow step is ever evaluated against R1 or R2,
+    and `_iter_manifests` still walks `.github/actions` alone.
+  - >-
+    ANTI-VACUITY: the live-surface test asserts the scan finds at least 20 bodies across at least 5
+    distinct workflow files as a FLOOR, and never as an equality pin on the count. An equality pin
+    would red the build every time a body is extracted to `scripts/ci/` -- penalising the declared
+    relief valve -- and is exactly the growth-coupled assertion validate_test_count_coupling exists
+    to discourage.
+  - >-
+    NO new registered check name and NO new numbered Decision: `scripts/checks/registry.py`,
+    `scripts/validate.py`, `tests/test_checks_registry.py`, `docs/DECISIONS.md` and
+    `docs/decisions-index.json` are all byte-identical to origin/main. DECISIONS.md stays at 119 of
+    its 120 live-header ceiling.
+  - >-
+    `.github/workflows/` is byte-identical to origin/main. The PR that installs governance over
+    workflow bodies does not edit a single workflow body.
+  - >-
+    COVERAGE, and the reason the slice is shaped as it is: both source files measure 100% per-file
+    line coverage and NO config/coverage_baseline.yaml entry is added. Because the guard-module
+    delta is +2 unconditional statements with zero modified lines, it is covered by the 50 tests
+    already in tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -- that file
+    gains ZERO lines and stays at 490 effective SLOC, clear of the 500 ceiling.
+  - >-
+    Every file VP step 5 measures -- the two source files, the two test files, the baseline config
+    and the two contracts -- stays under 500 effective lines, and NONE is registered in
+    config/sloc_budgets.yaml (decompose by default, never raise -- Decision 128). DELIBERATE
+    EXCEPTION, and do NOT add it to step 5's loop: scope row 7,
+    config/agent/verification_registry/registry.yaml, measures 4,179 effective lines and is governed
+    by Decision 166 at a CALIBRATED 6,000-line ceiling
+    (config/structural_size_budgets.yaml, marked "raise-approved: dec-166 CD.29 calibrated ceiling,
+    not a grandfather"), not at 500. Adding it to the 500-line loop would fail at roughly 4,203 and
+    drive a spurious decomposition of a file whose ceiling Decision 166 sized on purpose; it is
+    already correctly governed by the registered validate_structural_size_limits that step 7 runs.
+  - >-
+    The marker mechanism binds `scripts/checks/_marker_guard.py` through a `RegistrySpec` plus
+    `make_section_extractor("r3_workflows")`. No sixth copy of the marker-guard mechanism is minted
+    (Decision 165); `docs/contracts/marker-grammar.yaml`'s documented eight-name export surface is
+    unchanged. That file's new `workflow_r3_mention_candidates:` entry RECORDS THE MEASURED BAND --
+    15 of 146 Decision entries contain `.github/workflows` against 1 containing `.github/actions` --
+    so the contract states the authorization strength it is granting instead of leaving a reader to
+    assume it matches the incumbent leg's.
+  - >-
+    ROUTING: R3's widened surface is recorded in docs/contracts/composite-action-shape.yaml and the
+    key grammar in docs/contracts/marker-grammar.yaml. No forward commitment is written as prose
+    anywhere that a guard enforces instead.
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the ratchet FIRES on an unregistered workflow body, holds its ceiling with the correct
+      strictness, and admits only a properly-authorized marker. This is SGE-03's acceptance clause
+      turned executable, plus the boundary and authorization cases that separate a real ratchet from
+      an inert one.
+    command: bin/venv-python -m pytest tests/checks/ci_guards/test__workflow_shell_bodies.py::TestWorkflowBodyRatchet -v
+    expected: >-
+      Exit 0, and the verbose run lists `test_unregistered_workflow_body_fails`,
+      `test_body_over_declared_ceiling_fails`, `test_body_at_exactly_the_ceiling_passes`,
+      `test_valid_marker_exempts_entry_from_ceiling`,
+      `test_marker_citing_unauthorizing_decision_fails`,
+      `test_marker_with_no_reason_is_not_a_marker`, `test_non_bash_shell_body_is_skipped`,
+      `test_yaml_spelled_workflow_is_scanned`, `test_unknown_baseline_section_fails` and
+      `test_every_workflow_violation_names_the_workflow_surface` as PASSED. BACKTICK DISCIPLINE --
+      validate_vp_replay extracts EVERY backticked literal in this field, including ones sitting in
+      explanatory prose, and requires each to appear in captured stdout+stderr: only test node names
+      are backticked here, because the verbose pytest run echoes full node ids and nothing else from
+      this paragraph. Every tool name, flag and markdown token in this field is deliberately left
+      unbackticked -- a backtick around explanatory prose is a structurally unsatisfiable assertion.
+    fix_if: >-
+      The unregistered case passes -- the workflow walk never ran, or its glob missed the directory;
+      confirm the walk builds its path from _common.ROOT (the patched seam) and not a module-level
+      absolute path. If the exactly-at-ceiling case FAILS, the comparison is >= rather than >, which
+      would red every one of the seeded entries on day one. If the authorization case passes,
+      mention_candidates was not wired into the RegistrySpec, so the key's own >=2-segment ancestor
+      expansion is silently authorizing on a bare .github/workflows mention alone. If the
+      unknown-section case passes, _KNOWN_BASELINE_SECTIONS is not being compared against the parsed
+      baseline's top-level keys.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: workflow-body-ratchet-fires-and-exempts
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the step-identity grammar is TOTAL and deterministic. This is the slice's one deliberate
+      divergence from the incumbent composite key shape, and a key function that is not total
+      silently drops a body from governance by dict-overwrite rather than failing loudly.
+    command: bin/venv-python -m pytest tests/checks/ci_guards/test__workflow_shell_bodies.py::TestWorkflowStepIdentity -v
+    expected: >-
+      Exit 0, and the run lists `test_step_id_wins_over_name`, `test_name_only_step_uses_slug`,
+      `test_step_with_neither_id_nor_name_uses_positional_index`,
+      `test_positional_index_counts_all_steps_not_only_run_steps`,
+      `test_duplicate_name_in_one_job_is_disambiguated` and
+      `test_slug_contains_no_yaml_unsafe_characters` as PASSED. Only node names are backticked --
+      see step 1's backtick-discipline note.
+    fix_if: >-
+      The duplicate-name case fails -- two same-named id-less steps in one job are collapsing onto
+      one key, so the smaller body's ceiling silently governs the larger one and a body can grow
+      undetected. Add the deterministic tilde-N suffix in step order. If the positional-index case
+      fails, the index is being counted over run-bearing steps only rather than over the job's full
+      steps list, which makes the fallback key shift whenever an unrelated non-run step is inserted.
+      If the unsafe-character case fails, the slug is not reducing runs of non-alphanumeric
+      characters, and a step name containing a quote or a colon will break the baseline entry regex.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: workflow-body-step-identity-grammar
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      The anti-vacuity anchor, run against the REAL tree with no mocking. Steps 1 and 2 prove the
+      ratchet can fire in a synthetic tree; this one proves it is aimed at the live tree, that the
+      seeded roster covers it exactly, and -- the part no other step owns -- that every seeded
+      ceiling EQUALS its measured size rather than merely being at-or-above it. The direction
+      matters: step 4's guard-green run already establishes declared >= measured, so a
+      never-below assertion here would be redundant and would leave acceptance criterion 2's
+      "no padding, no headroom" clause entirely unverified. A padded roster passes every other step
+      in this plan and ships a ratchet with no bite on day one.
+    command: bin/venv-python -m pytest tests/checks/ci_guards/test__workflow_shell_bodies.py::TestWorkflowRatchetLiveSurface -v
+    expected: >-
+      Exit 0, and the run lists `test_live_scan_is_non_trivially_populated`,
+      `test_every_live_workflow_body_is_registered`,
+      `test_every_roster_key_names_an_existing_workflow_file` and
+      `test_seeded_ceiling_equals_measured` as PASSED. Only node names are backticked.
+    fix_if: >-
+      The non-trivially-populated test fails -- the workflow directory was renamed or the glob is
+      matching nothing, so the whole leg is passing vacuously; repoint the glob rather than deleting
+      the assertion, because that assertion is the entire reason this slice is not a no-op. If
+      test_seeded_ceiling_equals_measured fails, report which direction: seeded BELOW measured means
+      the installing PR is red against its own rule, and seeded ABOVE measured means a padded
+      ceiling that grants silent growth headroom the plan explicitly forbids. Either way the fix is
+      the same -- re-run the census and seed the measured value verbatim, never a rounded or
+      hand-typed one, and never widen the assertion to an inequality to make it pass. Assert
+      POPULATION as a floor and CEILINGS as an equality; the two assertions have opposite shapes on
+      purpose. ACCEPTED CONSEQUENCE, so a future maintainer reads this red as intended rather than
+      as a defect: equality is two-sided and therefore STRICTER than R3 itself, which fails only on
+      growth. A body that SHRINKS -- including one partially extracted to scripts/ci/, the declared
+      relief valve -- now reds this test until its roster entry is lowered in the same PR. That is
+      the intended trade and it is cheap: lowering a ceiling needs no marker, and extraction is a
+      deliberate act in which updating the roster is a natural part of the same change. Equality is
+      kept because it is the ONLY assertion that makes acceptance criterion 2's no-padding clause
+      verifiable; a direction-only check would leave a padded roster shipping a bite-free ratchet.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: workflow-body-roster-covers-live-tree
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove GREEN BY CONSTRUCTION against the live tree by running the real guard; prove the six
+      surfaces this slice promised not to touch are untouched by this branch; and prove the baseline
+      edit is append-only. SCOPED HONESTLY: the append-only check establishes that NO LINE WAS
+      REMOVED from the baseline file as a whole. That is strictly weaker than acceptance criterion
+      7's "the r1: and r3: sections stay byte-identical" -- an INSERTED line inside either section
+      is add-only and passes here. A new r1: entry is still caught (by the guard's own
+      _R1_KNOWN_VIOLATORS cross-check), but a new r3: entry is caught by nothing in this step;
+      AC 7's remaining clauses ride indirectly on steps 6 and 7, which re-run the incumbent 50-test
+      mirror against the real tree. Two further scope notes. The scan-size floor inside the same
+      command is what keeps the guard-green half from being satisfiable by a scan that found
+      nothing. And every git assertion uses the THREE-DOT merge-base form rather than two-dot (see
+      fix_if), paired with a git status --porcelain check on the same six paths: the three-dot range
+      is commit-to-commit, so when this step runs at execution step 9 -- BEFORE the feat commit
+      exists -- the range is empty and the diff half passes vacuously. The porcelain half is what
+      gives the assertion real local bite pre-commit, and it stays clean through implementation
+      because none of the six paths is a scope file. The CI replay after the commit lands remains
+      the authoritative leg. The porcelain pairing is deliberately NOT applied to the append-only
+      check, because its target IS a scope file and will legitimately be dirty during
+      implementation.
+    command: |
+      set -e
+      bin/venv-python - <<'PY'
+      from scripts.checks.ci_guards import _workflow_shell_bodies as wsb
+      from scripts.checks.ci_guards.validate_composite_action_shell_bodies import (
+          validate_composite_action_shell_bodies as guard,
+      )
+
+      scan = wsb.scan_workflow_bodies()
+      files = sorted({key.split("::")[0] for key in scan})
+      print(f"scanned {len(scan)} workflow run bodies across {len(files)} workflow files")
+      if len(scan) < 20 or len(files) < 5:
+          print("FAIL: workflow scan is vacuous -- the glob matched nothing meaningful")
+          raise SystemExit(1)
+      failed = []
+      guard(failed)
+      for item in failed:
+          print("  VIOLATION:", item)
+      raise SystemExit(1 if failed else 0)
+      PY
+      for p in .github/workflows/ docs/DECISIONS.md docs/decisions-index.json \
+               scripts/checks/registry.py scripts/validate.py tests/test_checks_registry.py; do
+        if ! git diff --quiet "origin/main...HEAD" -- "$p"; then
+          echo "FAIL: $p changed on this branch -- this slice must not touch it"
+          git diff --stat "origin/main...HEAD" -- "$p"
+          exit 1
+        fi
+        dirty="$(git status --porcelain -- "$p")"
+        if [ -n "$dirty" ]; then
+          echo "FAIL: $p has uncommitted or untracked changes -- this slice must not touch it"
+          echo "$dirty"
+          exit 1
+        fi
+      done
+      removed=$(git diff "origin/main...HEAD" -- config/composite_action_body_baseline.yaml \
+                  | grep -c '^-[^-]' || true)
+      if [ "$removed" != "0" ]; then
+        echo "FAIL: $removed line(s) REMOVED from the baseline -- the r1/r3 sections must be append-only"
+        git diff "origin/main...HEAD" -- config/composite_action_body_baseline.yaml | grep '^-[^-]'
+        exit 1
+      fi
+      echo "workflow ratchet green by construction"
+    expected: >-
+      Prints `workflow ratchet green by construction`; exit 0. That single string is the only
+      backticked literal in this field, and the command echoes it verbatim on success. FORM NOTE,
+      load-bearing but deliberately left unbackticked so it stays prose rather than an assertion:
+      the git assertions use the if-not-command-then-exit form, never a bare inverted statement,
+      because POSIX specifies that set -e is IGNORED for a command whose return value is inverted
+      with an exclamation mark, so the bare form would silently pass on every violation.
+    fix_if: >-
+      A VIOLATION line prints -- the seeded roster does not match the live population. The most
+      likely cause is that main advanced with a workflow edit between plan time and implement time,
+      staling the census; re-run the census at the current HEAD and re-seed, never pad a ceiling to
+      make this pass. If a GIT assertion trips, diagnose the cause before acting, because the two
+      causes need opposite fixes. (a) The branch genuinely edited an out-of-scope file -- revert it
+      and route the change to a recommendation (AGENTS.md out-of-scope rule). (b) The branch is
+      merely BEHIND main and a sibling PR touched that path -- fetch and rebase onto origin/main,
+      then re-run; nothing on this branch is wrong. Cause (b) is why every assertion here uses the
+      three-dot form: two-dot `git diff origin/main -- <path>` compares the working tree against
+      origin/main's TIP, so it reports DIRTY for any path a sibling merged after this branch was
+      cut, on files this slice never touched. That is not hypothetical -- it reproduced on this
+      plan's own worktree for `.github/workflows/` and `scripts/validate.py` after #849 landed, and
+      because validate_vp_replay replays this step in the `--pre` PR gate and requires exit 0, the
+      two-dot form would red this PR spuriously on every sibling merge. If the append-only assertion
+      trips, an `r1:` or `r3:` line was deleted or rewritten -- restore it; this slice only appends a
+      third section. If the scan-size floor trips, the glob is broken.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The git half asserts a one-time property of THIS diff (six specific paths unchanged versus
+      origin/main), which has no meaning as a standing regression guard -- once merged, those paths
+      are origin/main. The guard-green half duplicates the registered
+      validate_composite_action_shell_bodies itself, which runs in both presubmit tiers and owns
+      that property permanently with better diagnostics. Graduating either half would add a registry
+      row that is either vacuous post-merge or redundant with a registered check.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Enforce the slice's own size rules against itself, including the one file whose headroom is
+      the reason the whole slice is shaped as it is -- the incumbent composite test file at 490 of
+      500 effective lines, which must gain nothing.
+    command: |
+      set -e
+      for f in scripts/checks/ci_guards/_workflow_shell_bodies.py \
+               scripts/checks/ci_guards/validate_composite_action_shell_bodies.py \
+               tests/checks/ci_guards/test__workflow_shell_bodies.py \
+               tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py \
+               config/composite_action_body_baseline.yaml \
+               docs/contracts/composite-action-shape.yaml \
+               docs/contracts/marker-grammar.yaml; do
+        n=$(awk 'NF && $1 !~ /^#/' "$f" | wc -l)
+        echo "$f: $n effective lines"
+        test "$n" -le 500 || { echo "OVER 500: $f ($n)"; exit 1; }
+      done
+      if grep -q "ci_guards" config/sloc_budgets.yaml; then
+        echo "FAIL: a ci_guards module was registered in config/sloc_budgets.yaml -- decompose, never register"
+        exit 1
+      fi
+      incumbent=tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py
+      if ! git diff --quiet "origin/main...HEAD" -- "$incumbent"; then
+        echo "FAIL: the incumbent composite test file was modified -- the guard delta must be covered by its existing 50 tests"
+        exit 1
+      fi
+      if [ -n "$(git status --porcelain -- "$incumbent")" ]; then
+        echo "FAIL: the incumbent composite test file has uncommitted changes -- it must gain nothing"
+        git status --porcelain -- "$incumbent"
+        exit 1
+      fi
+      echo "size discipline OK"
+    expected: >-
+      Prints each file's measured effective-line count, then `size discipline OK`; exit 0. That is
+      the only backticked literal in this field. Plan-time baselines for the tripwires that actually
+      matter, left unbackticked because the command prints measured values rather than these: 490
+      for the incumbent composite test file (10 lines of headroom), 273 for the guard module, 13 for
+      the baseline config before seeding, 89 and 122 for the two contracts.
+    fix_if: >-
+      The incumbent composite test file changed ON THIS BRANCH (the assertion uses the three-dot
+      merge-base form, so a sibling's merge into main cannot trip it) -- the guard-module delta was
+      not straight-line, so it needed new tests there. Move the conditional into
+      _workflow_shell_bodies.py, where its branches are covered by the new mirror file, and revert
+      the test-file edit. If any file crossed 500, decompose into a facade package (Decision
+      80/104/124 pattern); do NOT add a config/sloc_budgets.yaml entry and do NOT run
+      --update-sloc-budgets, which no longer auto-seeds newly-oversized unregistered files and
+      strips raise-approved markers from entries it does rewrite.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates registered checks with strictly worse diagnostics: validate_sloc_limits already
+      enforces the 500-SLOC ceiling repo-wide over every gated Python file and
+      validate_structural_size_limits does the same for the config and contract files, while
+      validate_sloc_budget_raises gates registration. The value here is catching the violation in
+      the local edit loop before CI does, and the third assertion is a one-time property of this
+      diff; neither warrants a standing registry row.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Re-measure the coverage claim rather than assuming it. The whole slice's shape rests on the
+      assertion that a two-statement straight-line delta keeps the guard module at 100% from its
+      existing tests; this runs the repo's own authoritative checker over both source files to
+      confirm it, and confirms the new module reaches 100% from its own mirror alone.
+    command: >-
+      bin/venv-python scripts/test_coverage_checker.py --check-tests --check-coverage --files
+      scripts/checks/ci_guards/_workflow_shell_bodies.py
+      scripts/checks/ci_guards/validate_composite_action_shell_bodies.py
+    expected: >-
+      Exit 0, ending with a summary reporting 0 missing test files and 0 below 100 percent coverage.
+      Nothing in this field is backticked: the checker's exact summary wording is not pinned by this
+      plan, and this step is deliberately not hermetic, so a backticked literal here would become an
+      unsatisfiable assertion the moment a future revision flipped that flag.
+    fix_if: >-
+      The new module is below 100% -- it contains a branch its own mirror file never reaches;
+      exercise it in a synthetic tmp_path fixture, or delete the unreachable defensive branch. Do
+      NOT add a config/coverage_baseline.yaml entry: a new sub-100 registration needs a
+      baseline-lowered marker whose cited Decision names the path verbatim, and no such Decision
+      exists for this slice. If the GUARD module dropped below 100%, the delta introduced a
+      conditional -- move it into the new module.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Deliberately not graduated on cost grounds, and the reasoning is the same one that made this
+      step non-hermetic: it runs pytest-under-coverage once per source file, measured at roughly 5
+      seconds per file at plan time, which sits close enough to validate_vp_replay's 30-second
+      per-step ceiling that automating it trades a real timeout-divergence risk for a property the
+      registered validate_test_coverage already owns in the full tier that step 7 runs.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Run the authoritative pre-merge gate over the whole change, then the FULL tier before commit
+      per handoff_policy. The full-tier half is a mechanized requirement, not a courtesy.
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    expected: >-
+      Both exit 0. This exact command string is what discharges the full-tier handoff obligation:
+      validate_handoff_full_tier splits on the shell separator and requires a segment invoking the
+      validate module WITHOUT the fast-tier flag, which the second half supplies. Do not collapse
+      this to the fast-tier half alone; that check is registered in both tiers and would fail this
+      plan's own PR. No prose token in this field is backticked.
+    fix_if: >-
+      Any check fails. Forward-fix on the branch (Decision 55 -- no auto-revert, no workaround loop,
+      no inline patch around a red gate). Expect validate_test_coverage to be the slow one. If the
+      full tier times out, treat the handoff as blocked per handoff_policy.timeout_disposition and
+      rerun from the start rather than committing on a partial pass.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero but must never be graduated: a registry row that shells
+      out to the whole validator would make every future validate run recursively invoke itself
+      through the verification kernel. This step is the handoff gate, not a regression guard.
+
+constraints:
+  - >-
+    IMPLEMENTATION plan type only -- STRATEGIC is frozen (Decision 67). The >5-files / >8-steps
+    complexity heuristic is suspended during the freeze and is informational only.
+  - >-
+    R1 AND R2 STAY COMPOSITE-ONLY, non-negotiable. Do not widen `_iter_manifests`, do not evaluate a
+    workflow step against the thin-adapter classifier, and do not add a workflow entry to the `r1:`
+    section. R1 keys on a manifest's top-level `outputs.<id>.value` block and R2 on a `.sh` file
+    under the action directory; neither construct exists in a workflow, so widening them would be a
+    rule without a referent.
+  - >-
+    THE LOAD-BEARING CONSTRAINT: the delta to validate_composite_action_shell_bodies.py must be
+    STRICTLY STRAIGHT-LINE -- two new unconditional statements, zero modified lines, NO new
+    conditional. Per-file coverage is measured by running ONLY the file's mirror test
+    (coverage_baseline.measure_and_check runs pytest against the mapped test file with --cov set to
+    the source's parent directory), and that mirror sits at 490 of 500 effective SLOC. A new
+    conditional would need new tests there, and Decision 130's ratchet hard-fails at 500. A
+    `# raise-approved:` budget raise on the test file is the WRONG instrument (Decision 128 clause
+    1), and Decision 165 would additionally require the cited Decision to name the path verbatim.
+    All branching lives in _workflow_shell_bodies.py, covered by its own new mirror file.
+  - >-
+    NO new registered check name. Enforcement rides the ALREADY-registered
+    validate_composite_action_shell_bodies, so scripts/checks/registry.py, scripts/validate.py and
+    tests/test_checks_registry.py stay byte-identical to origin/main.
+  - >-
+    NO new numbered Decision and NO blockquote amendment on Decision 162. docs/DECISIONS.md and
+    docs/decisions-index.json stay byte-identical to origin/main. Decision 162's R3 text never names
+    `.github/actions/` -- it says "Every remaining inline `shell: bash`/`sh` body" -- so the
+    directory scope is an implementation fact, and extending it contradicts no sentence in that
+    Decision. Mechanism routes to the two contracts and the code (Decision 86/127).
+  - >-
+    DO NOT write "this is the last seeded grandfather in the R3 family" as a prose commitment
+    anywhere. ENFORCE it: `_KNOWN_BASELINE_SECTIONS` rejects an unrecognised top-level section in
+    config/composite_action_body_baseline.yaml, so A FOURTH SECTION IN THIS FILE fails CI instead of
+    violating a sentence nobody reads. State that scope precisely and do not overclaim it -- the
+    allowlist does not and cannot bar a grandfather roster created in some other file, only one
+    smuggled into this one by config edit. Prose is the fallback only if enforcement proves
+    unachievable within the straight-line constraint -- and it is achievable, because the allowlist
+    check lives in the new module.
+  - >-
+    SEED EXACTLY THE MEASURED POPULATION. Re-census at implement HEAD -- do NOT copy the plan-time
+    roster, and do NOT trust the audit's figure. Every entry is the exactly-measured effective-line
+    count of a body that exists; no padding, no rounding, no headroom, no entry without a body, no
+    body without an entry. Seeded entries carry NO raise markers, matching the incumbent `r3:`
+    section, which likewise has none.
+  - >-
+    Every backticked literal in a VP step's `expected` field is an ASSERTION, not emphasis --
+    INCLUDING backticks that sit inside explanatory prose. validate_vp_replay extracts all of them
+    with a backtick regex and requires each to appear in the replayed command's captured
+    stdout+stderr. Backtick only strings the command actually emits; leave every tool name, flag,
+    path and shell form unbackticked.
+  - >-
+    Never write a bare inverted command statement under `set -e`: POSIX specifies that `set -e` is
+    ignored for a command whose return value is inverted, so the assertion silently passes. Use the
+    if-not-command-then-echo-FAIL-then-exit-1 form instead.
+  - >-
+    No grep or assertion that already passes against the unmodified tree. Every VP assertion must be
+    anchored on a measured population or on a property that does not hold before the change.
+  - >-
+    Decompose, never raise (Decision 128). Every file VP step 5 measures stays under 500 effective
+    lines; do NOT add a config/sloc_budgets.yaml entry and do NOT run --update-sloc-budgets. The
+    500-line rule does NOT apply to scope row 7, config/agent/verification_registry/registry.yaml
+    (4,179 effective lines under Decision 166's calibrated 6,000 ceiling) -- do not add it to step
+    5's loop and do not decompose it.
+  - >-
+    Bind scripts/checks/_marker_guard.py -- never mint a sixth copy (Decision 165). Use a
+    `RegistrySpec` with `make_section_extractor("r3_workflows", token="raise-approved",
+    value_type=int, require_reason=True)` and an explicit `mention_candidates` function. Do not grow
+    the module's documented eight-name export surface.
+  - >-
+    Every `graduate` VP step needs a matching NEW row in config/agent/verification_registry/registry.yaml
+    carrying the same check_id AND plan_slug, or validate_graduation_completeness's implement-PR leg
+    fails (Decision 132). Run `scripts.verification_graduation.run_differential` per candidate first
+    and add a row only for an ADMITTED check_id; a rejected one flips to `waive` with a reason.
+  - >-
+    Do NOT modify config/structural_size_budgets.yaml. Its `ci_workflows.actual_purpose` text goes
+    stale by this change, but that file is Decision 166's artifact and a sibling slice (SGE-05) is
+    editing it concurrently; the correction routes to a recommendation (Decision 150's
+    operational_fact row, AGENTS.md out-of-scope rule).
+  - >-
+    Bundle NOTHING. bundled_recommendations is empty and the squash-merge commit carries no
+    `Resolves:` trailer. The follow-on recommendations named in the execution steps are forward
+    commitments, not bundles -- this plan resolves no open rec.
+  - No rescue agents or workaround loops (Decision 55). Forward-fix only; never auto-revert.
+  - >-
+    Only files in the Scope table may be modified. Out-of-scope bugs become recommendations via
+    `scripts.ops_data_portal file_rec` (call `get_rec_write_guidance()` first, Decision 66), never
+    inline fixes.
+
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (119 of 119 triaged,
+    gate_run_id workflow-body-ratchet-decision-scout-r1-89c5ce32). CITE: Decision 162, Decision 165,
+    Decision 166, Decision 130, Decision 128, Decision 150, Decision 149, Decision 146, Decision 159,
+    Decision 104, Decision 86, Decision 127, Decision 163, Decision 48, Decision 55"
+  - >-
+    "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=REVISE at round 1
+    (gate_run_id workflow-body-ratchet-plan-critique-r1-e5e54f38) and REVISE at round 2
+    (gate_run_id workflow-body-ratchet-plan-critique-r2-e3da17e3), round 3 pending. Round 2 was
+    prose-only and took all five of its items: acceptance criterion 12 and the decompose constraint
+    were FALSE for scope row 7 (config/agent/verification_registry/registry.yaml measures 4,179
+    effective lines under Decision 166's calibrated 6,000 ceiling, not 500) and are now narrowed to
+    the files VP step 5 actually measures; the round-1 branch-state fix had introduced a SECOND
+    false measured claim one paragraph from its own stated lesson (#849 does touch a scope file --
+    registry.yaml); step 4's action now scopes what the append-only proof does and does not
+    establish; the six-path loop is paired with git status --porcelain because the three-dot range
+    is empty pre-commit and would pass vacuously; and the seeded-ceiling equality now names its
+    accepted consequence. Round 1 took all six of ITS items: the seeded-ceiling test flipped from
+    never-below to EQUALS (a never-below
+    assertion duplicated step 4 and left the no-padding clause unverified); both git assertions moved
+    to the three-dot merge-base form; the census restated against origin/main after round 1 caught a
+    false claim that #849 touched no workflow file; an append-only proof added for acceptance
+    criterion 7, which had no VP coverage; the measured authorization band recorded in
+    marker-grammar.yaml; and three citation/scoping corrections. Round 1 also independently CONFIRMED
+    the plan's load-bearing assumption by building the module and measuring 157 to 159 statements at
+    100 percent with zero edits to the 490-SLOC mirror."
+  - >-
+    SOURCE OF RECORD is audits/size-governance-expansion-3dee4a5.yaml finding SGE-03 (severity
+    medium, confidence CONFIRMED, classification novel with dedup_hit_count 0, effort M, depends_on
+    SGE-01) and its class_verdicts.ci_workflows row. The audit is merged (#840) and must NOT be
+    re-run or re-litigated.
+  - >-
+    MEASUREMENT CORRECTION, verified this session and load-bearing. The audit says "15 inline bodies
+    in reconcile.yml alone". That figure reproduces exactly as a grep for block-scalar run
+    introducers, which counts only block-scalar bodies; a structural YAML parse of the same file
+    finds 21 (15 block-scalar plus 6 single-line or folded). REFERENCE CENSUS, measured on
+    origin/main 07e48c9 after rebasing this branch onto it: 128 inline run bodies across 17 of 19
+    workflow files, 1,220 effective lines total, largest body 93 effective lines (dedup-probe.yml),
+    21 in reconcile.yml, 45 carrying an explicit id. The two zero-body files are claude.yml and
+    codeql.yml. A superseded earlier snapshot taken at 81a6c1e read 127 / 17 / 1,212; the one-body
+    delta is ci-rca.yml going 14 to 15 in #849. Seed the parsed population at implement HEAD, not
+    the grep and not either of these snapshots.
+  - >-
+    KEY GRAMMAR and why it diverges from the incumbent. Composite R3 keys are
+    `<action-rel-dir>::<step-id>` with a positional index fallback. Workflow keys are
+    `<workflow-rel-path>::<job-id>::<step-id | name-slug | index>`. The divergence is justified by
+    measured population shape, not taste: composite actions carry at most 4 steps each, while
+    reconcile.yml's apply-reconcile job alone has exactly 26 steps and 83 of the 128 workflow bodies
+    carry no id. Under a positional scheme, inserting one unrelated step would renumber every
+    subsequent key in that job and red the build on bodies nobody touched. Measured on origin/main
+    07e48c9: all 128 bodies carry an id or a name (0 carry neither), the slug scheme produces 0
+    collisions and 0 YAML-unsafe characters, and the longest key is 153 characters. The tilde-N
+    disambiguator and the positional fallback have zero live instances today and are therefore
+    proven by synthetic fixtures, not by the live tree.
+  - >-
+    NO NEW DECISION, and the corrected reasoning behind it. An earlier reading held that Decision
+    162's "a ONE-TIME grandfather in the sense of Decision 130 clause 2, explicitly not a precedent"
+    barred a second seeding without a numbered override. That reading is wrong. Decision 130 clause 2
+    glosses its own term verbatim: "This is a ONE-TIME grandfather, NOT a precedent for future test
+    growth: any tests/ file that grows past its registered budget still fails the gate." The clause
+    bars grandfathered ENTRIES from growing; it is not a bar on future seedings elsewhere. Decision
+    162's trailing "so the PR installing the ratchet is not punished by its own rule" names the
+    sentence's actual, local job. Empirical confirmation: Decision 166 seeded a 13-entry grandfather
+    roster and Decision 162's clause blocked nothing. THE STRONGEST CITATION, and it is affirmative
+    rather than merely permissive: Decision 166's own Related section names "SGE-03/SGE-05 (sibling
+    slices that depend on the class table this Decision installs and land after it)" -- the governing
+    Decision in this family explicitly anticipates THIS slice as post-landing implementation work
+    carrying no Decision obligation of its own. General lesson worth carrying: a tactical sentence
+    justifying one PR is not repo-wide governance, and reading it as such nearly cost the last
+    header slot in the repo.
+  - >-
+    DECISION-LOG CEILINGS, recorded because a governance decision was nearly made on a false model of
+    them. The two ceilings in validate_decisions_size have DISJOINT relief valves. Combined bytes
+    (live + archive) sit at 684,796 of 700,000 and are relieved by Decision 149 compaction. Live
+    `## Decision` headers sit at 119 of 120 and are relieved ONLY by Decision 146 archival to
+    DECISIONS_ARCHIVE.md, because the live-header regex is applied to the live file alone and
+    Decision 149's lifecycle is number-preserving. Verified by applying the four line-anchored
+    body_markers of `compaction.stub_grammar` in docs/contracts/decision-entry.yaml across all 119
+    live entries: exactly TWO (Decision 44 and Decision 58) are compacted stubs that retain their
+    headers, and Decision 58's own body states it is "kept live here rather than
+    archived because docs/ROADMAP-PLATFORM.yaml (T5.3) and docs/contracts/instruction-architecture.yaml
+    still cite 'Decision 58' by name". Do not conflate the two ceilings.
+  - >-
+    rec-2999 DEFERRAL, named explicitly so a later reader cannot mistake the constraint for the
+    cause. The no-new-check-name shape is correct ON THE MERITS: R3 is one rule, the audit classifies
+    SGE-03 as change_type rescope, and a second registered check name would mint a second rule
+    identity for the same rule. That scripts/validate.py sits at 497 of 500 SLOC, with rec-2999
+    owning the pressure, is a REINFORCING FACT and explicitly NOT the reason. If rec-2999's
+    decomposition lands first, this shape does not change.
+  - >-
+    DECISION 104 NAMING DEBT, accepted knowingly and routed to a rec. One registered check name now
+    enforces two surfaces with two key grammars, so validate_composite_action_shell_bodies
+    misdescribes its own scope. Mitigation inside this slice is the R3-workflow violation prefix
+    (acceptance criterion 5), which keeps CI failure text unambiguous. The rename itself is not
+    attempted here, and the blast radius is stated as a QUERY AND ITS RESULT rather than a list:
+    `git grep -l validate_composite_action_shell_bodies origin/main` returns 17 tracked files (18
+    counting this plan document once merged). Illustrative and explicitly PARTIAL: registry.py,
+    validate.py, the guard and its mirror test, both contracts this slice edits, the baseline config,
+    DECISIONS.md, decisions-index.json, the verification registry, and _marker_guard.py. Churning 17
+    files inside an incident-class ratchet install is the bundling anti-pattern Decision 162's own
+    sequencing note warns against, and the larger-than-expected radius makes deferring the rename
+    MORE justified, not less. A follow-on rec carries it. Correction recorded because an earlier
+    draft asserted the name appears in the frozen baseline in tests/test_checks_registry.py: it does
+    NOT -- that file contains zero occurrences of the string, and zero of the substring "composite".
+    Acceptance criterion 9 and constraint 4 still require that file byte-identical, which is sound
+    on its own footing (it holds the frozen check-name baselines a new registration would perturb)
+    and does not depend on the false claim.
+  - >-
+    BASELINE FILENAME retained deliberately. config/composite_action_body_baseline.yaml will govern
+    two surfaces while naming one. Renaming it would churn the guard's baseline path constant, the
+    two contracts, and Decision 162's named artifact for no functional gain; the file's header
+    comment is the authoritative description and will name both surfaces. Nothing bars a second key
+    grammar in one file -- Decision 162 already ships two sections with different semantics, and
+    Decision 166 puts a class table plus two rosters in one file. Recorded as a naming residual
+    alongside the check-name debt above.
+  - >-
+    DUAL GLOB is PROPHYLACTIC, not covering a live case. `.github/workflows/` holds 19 .yml files and
+    0 .yaml files -- the "27 .yml against 1 .yaml" figure from rec-2928 is a repo-wide count
+    including .github/agents/schedule.yaml, which is not a workflow. The glob covers both spellings
+    on the Decision 166 precedent (every glob row in structural_size_budgets.yaml that can match a
+    YAML file lists both), not because a .yaml workflow exists today.
+  - >-
+    DECISIONS 154/158/126 INTERACTION, raised by the scout and answered with evidence. Those
+    Decisions constrain reconcile.yml's content -- Decision 158 point 2 fixes its complete terminal
+    route set, Decision 154 point 5 excludes replan -- so a frozen per-body ceiling there must not
+    make a mandated recovery-path edit require a marker. It does not: a mandated edit to a baselined
+    body is exactly the touch-it-fix-it case, and the relief valve is real and already exercised on
+    this specific file. Stated as a query and its result: scripts/ci/ holds 7 files, of which
+    grepping .github/workflows/reconcile.yml shows exactly THREE are invoked from it --
+    reconcile_target.py (9 references), ducklake_artifacts.py (8, its docstring naming
+    apply-reconcile and gated-apply-reconcile verbatim) and review_verdict.py (4). Those three are
+    the extraction precedent. Correction recorded: an earlier draft also listed
+    reconcile_reachability.py as extracted from reconcile.yml. It was not -- it has zero references
+    in that workflow and `git log -S` over the workflow returns nothing; its docstring identifies it
+    as a one-shot reachability evaluator FOR the apply-reconcile job, an analysis tool ABOUT the
+    workflow rather than a body extracted FROM it. The claim survives at 3 of 4, and 3 is ample. The
+    marker escape remains available for a genuine must-grow case.
+  - >-
+    DECISION 159 SQUEEZE, raised by the scout and resolved by direct probe rather than argument.
+    Per-file coverage is measured by running only the mirror test file, so the squeeze is real in
+    principle. Measured at plan time, running the incumbent composite mirror test with coverage over
+    the ci_guards package reports the guard module at 157 statements, 0 missed, 100 percent, 50 tests
+    in 4.28 seconds. Coverage is line coverage, not branch, so a delta of unconditional statements
+    executed on every call stays at 100 percent with zero new test lines. This is the entire reason
+    the straight-line constraint exists and why the new module does its own baseline read instead of
+    accepting one from the caller.
+  - >-
+    NO SCHEMA/TABLE/WAREHOUSE SURFACE, so the Data-Model Assessment does not fire. No .tf file, so no
+    Infrastructure Assessment and no infrastructure_dependencies. No Lambda-packaged file in scope --
+    verified against the lambda_manifest pattern list -- so no build/deploy/smoke-test steps.
+    Decision 48 tier adjudication: no scope file appears on Decision 48's EXHAUSTIVE V3 trigger list
+    and none is under src/data/handlers/, so V2 stands. `.github/workflows/**` is not on that list,
+    and this slice does not modify a workflow file in any case.
+  - >-
+    ci-rca DEFERRAL RATIONALE. Source and freshness stated rather than assumed: at the
+    logs/.preflight-report.json snapshot this session read, `ci_rca_unresolved_recs` held exactly 5
+    entries, and this plan satisfies none of the three Related-Work conditions against any of them.
+    The five, complete AS OF THAT SNAPSHOT and not re-measured since: rec-2996 and rec-2973 (scripts/ci_rca/log_evidence.py,
+    evidence truncation), rec-2995 (scripts/validate.py, truncated log hides a failing test id),
+    rec-2970 (scripts/checks/registry.py, validate_test_coverage is post-merge-only) and rec-2958
+    (scripts/checks/misc/validate_invariants.py) share no scope file, no Decision Record and no
+    failure category with this slice. Three of them are plausibly addressed by #849
+    (ci-rca-evidence-fidelity), which merged after the preflight snapshot was taken. Deferred
+    deliberately: this slice is one of several parallel slices closing a merged audit, and folding
+    unrelated ci-rca remediation into it would violate the same bundling discipline constraint 15
+    imposes.
+  - >-
+    BRANCH/MAIN STATE, corrected after plan-critique round 1 caught a false assertion here. The
+    worktree was cut from 81a6c1e; origin/main advanced to 07e48c9 (#849) during planning; THIS
+    BRANCH HAS SINCE BEEN REBASED ONTO 07e48c9 and every figure in this plan is measured on that
+    tree. The earlier claim that #849 "changed no file under .github/workflows/" was WRONG: it
+    changed ci-rca.yml, ci.yml and main-canary.yml, and added one governed body (ci-rca.yml 14 to
+    15), which is exactly why the reference census moved 127 to 128 and 1,212 to 1,220. THE
+    INTERSECTION OF #849 WITH THIS PLAN'S SCOPE TABLE IS NOT EMPTY, and an earlier draft of this
+    very paragraph wrongly claimed it was: `git diff --name-only 81a6c1e 07e48c9` lists
+    config/agent/verification_registry/registry.yaml, which is scope row 7. That file is this
+    slice's HIGHEST-CHURN scope file -- every plan in the repository appends graduated-check rows to
+    it -- so it is by far the most likely rebase and merge-conflict surface here, and the one to
+    re-read rather than re-apply after any rebase. THE MEASUREMENT, stated as a query and its result
+    rather than as a list: `git diff --name-only 81a6c1e 07e48c9` returns 41 paths; intersected
+    against this plan's 7 Scope rows, config/agent/verification_registry/registry.yaml is the ONLY
+    overlap. The remaining 40 -- scripts/ci_rca/**, scripts/validate.py,
+    docs/contracts/github-actions-evidence.yaml, config/ci_rca_taxonomy.yaml,
+    scripts/test_coverage_checker.py, docs/ROADMAP-PLATFORM.yaml, two plan documents and their
+    tests, AMONG OTHERS -- touch no scope file. That enumeration is deliberately partial and is
+    labelled as such; the load-bearing sentence is the intersection, not the list. Four durable
+    lessons: a workflow-body census is invalidated by any main advance, which is why constraint 7
+    mandates a re-census at implement HEAD rather than copying any roster from this document; a plan
+    must not assert a measured fact it did not measure on the tree it is describing; correcting one
+    false measured claim is exactly when the next one gets written, so re-measure the replacement
+    too (this paragraph needed three rounds of critique to stop doing it); and the reason it kept
+    recurring is structural rather than careless -- a NARRATIVE claim ("it touched A, B and C")
+    cannot be re-verified cheaply and goes stale silently, while a MEASURED claim ("the intersection
+    is X") can be re-run by the next reader in one command. Where a plan must state a fact about the
+    tree, state the query and its result, and mark any accompanying enumeration explicitly partial.
+  - >-
+    PLANNING-CONTEXT NOTES from preflight, all non-blocking: 932 open recommendations, 802
+    non-automatable (soft cap of 250 breached, surfaced per Decision 73 which suspends per-rec
+    review); data-quality checks have never run (last_run null); one legacy telemetry_sessions entry
+    in the ops outbox, which drains on the standard sync path and is the orchestrator's to clear.
+
+pre_implementation_checklist:
+  - Branch confirmed not on main (`git branch --show-current`)
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read: 162 (points 1-3 and its reversal conditions verbatim),
+    165, 166 (points 1, 2 and 5), 130 (clause 2 verbatim), 128, 150 (significance bar and the four
+    routing rows), 104, 86, 127, 163 (clause 3), 48 (the exhaustive V3 trigger list verbatim), 55
+  - >-
+    audits/size-governance-expansion-3dee4a5.yaml finding SGE-03 and class_verdicts.ci_workflows read
+    (proposed_change plus acceptance are the build spec); the audit is NOT re-run or re-litigated
+  - >-
+    scripts/checks/ci_guards/validate_composite_action_shell_bodies.py read in full as the
+    implementation model -- particularly the R3 leg's marker/ceiling branch order, which the workflow
+    leg mirrors exactly
+  - >-
+    scripts/checks/_marker_guard.py read: RegistrySpec fields, make_section_extractor's
+    column-0-non-comment section-end rule, the ancestor-candidate >=2-segment floor, and
+    authorization_failure's mention_candidates hook
+  - >-
+    docs/contracts/composite-action-shape.yaml and docs/contracts/marker-grammar.yaml read -- the two
+    field-semantics homes this change records itself in, in place of a Decision
+  - >-
+    scripts/checks/misc/coverage_baseline.py measure_and_check read, so the per-source-file mirror
+    measurement that motivates the straight-line constraint is understood rather than taken on trust
+  - All 7 files in scope located and readable
+  - Acceptance criteria understood and verifiable
+
+execution_steps:
+  - >-
+    Re-census .github/workflows/*.yml and *.yaml at the current HEAD with a structural YAML parse
+    (never a grep): for every jobs.<job>.steps[] entry carrying a string run body whose effective
+    shell is absent or begins with bash/sh, record the key and the effective-line count. Reference
+    figures measured on origin/main 07e48c9, to compare against and NOT to copy: 128 bodies, 17
+    files, 1,220 total effective lines. A mismatch is expected and fine if main advanced again --
+    seed what you measure.
+  - >-
+    Create scripts/checks/ci_guards/_workflow_shell_bodies.py holding the entire workflow leg and ALL
+    of its branching: the workflow walk, the step-identity grammar (id, else a slug of name, else a
+    positional index over the job's full steps list, with a deterministic tilde-N suffix on
+    collision), an effective-line counter reusing the incumbent rule, workflow_mention_candidates
+    returning the full key plus the workflow file path, the RegistrySpec, the
+    _KNOWN_BASELINE_SECTIONS frozen allowlist, and check_workflow_bodies(decision_bodies) which reads
+    and parses the baseline file itself. Every violation string starts with the R3-workflow prefix
+    and names the offending path. Import ROOT from scripts.checks._common; never recompute it.
+  - >-
+    Modify scripts/checks/ci_guards/validate_composite_action_shell_bodies.py by adding EXACTLY the
+    import and the one violations.extend call, and by updating the module docstring to state R3's two
+    surfaces and that R1/R2 remain composite-only. Change no existing line and add no conditional. Do
+    not touch _load_baseline(), the failed.append label, or _R1_KNOWN_VIOLATORS.
+  - >-
+    Seed the r3_workflows section in config/composite_action_body_baseline.yaml from the census --
+    exactly the measured set, each at its exactly-measured count, no markers -- and extend the file's
+    header comment to name both surfaces, both key grammars, and the section allowlist. Leave the r1
+    and r3 sections byte-identical.
+  - >-
+    Create tests/checks/ci_guards/test__workflow_shell_bodies.py with the three classes the VP names,
+    driving the new module to 100 percent per-file line coverage on its own. Use the
+    patch("scripts.checks._common.ROOT", tmp_path) seam for every synthetic fixture; never write a
+    fixture into the real .github/workflows/. Add NOTHING to
+    tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py.
+  - >-
+    Record the field semantics in the two contracts: widen rules.r3.scope and restructure
+    baseline_file into per-section entries with their key forms and the allowlist rule in
+    docs/contracts/composite-action-shape.yaml; add workflow_r3_mention_candidates alongside the
+    existing composite entry in docs/contracts/marker-grammar.yaml. Write no forward prose commitment
+    that _KNOWN_BASELINE_SECTIONS already enforces.
+  - >-
+    Run scripts.verification_graduation.run_differential for each of the three candidate check_ids,
+    then add one row per ADMITTED check_id to config/agent/verification_registry/registry.yaml with
+    the matching plan_slug. Flip any rejected candidate to waive with a substantive reason in this
+    plan before committing.
+  - >-
+    File two follow-on recommendations via the portal (call get_rec_write_guidance() BEFORE
+    file_rec(), per Decision 66), neither bundled and neither carrying a Resolves trailer: (a) the
+    stale ci_workflows.actual_purpose sentence in config/structural_size_budgets.yaml, which still
+    asserts that R3 covers .github/actions/** only and repeats the audit's grep-derived figure of 15;
+    (b) the Decision 104 naming debt -- validate_composite_action_shell_bodies now enforces two
+    surfaces and its name misdescribes its scope.
+  - >-
+    Execute the Verification Plan -- run each step, loop until pass. On unrecoverable failure, stop
+    and RCA (Decision 55); never inline-patch around a red gate.
+  - >-
+    'Report: what was implemented, the verification results, the re-censused body/file/line counts
+    versus the origin/main reference figures of 128/17/1,220, and the run_differential verdict for
+    each of the three candidate check_ids.'
+
+work_areas: []
+rollback: >-
+  Single-PR revert. The change is purely additive, across all SEVEN scope rows -- one new module,
+  one new test file, two new statements in an existing guard, one new baseline section,
+  field-semantics text in two contracts, and the graduated-check rows appended to
+  config/agent/verification_registry/registry.yaml (scope row 7, omitted from an earlier draft of
+  this inventory; this list is complete at seven, matching the Scope table one-for-one).
+  Reverting drops workflow-body governance and restores the composite-only R3 scan;
+  nothing else in the repo depends on the new symbols, no registered check name is added or removed,
+  no Decision is minted, and no data or infrastructure migration is involved.
