@@ -20,7 +20,6 @@ import argparse
 import hashlib
 import json
 import logging
-import math
 import os
 import re
 import sys
@@ -29,6 +28,11 @@ from typing import Any
 
 import yaml
 
+from scripts.ci_rca.evidence._bundle_core import (
+    _assemble_core,
+    _resolve_current_pre_runtime,  # noqa: F401  (back-compat: from scripts.ci_rca.evidence import _resolve_current_pre_runtime)
+    _slugify_workflow,
+)
 from scripts.ci_rca.evidence_input import load_retrieval_input
 from scripts.ci_rca.fingerprint import (
     collapse_mass_failure,
@@ -36,12 +40,13 @@ from scripts.ci_rca.fingerprint import (
     error_signature_from_junit,
     error_signature_from_log_tail,
     signature_for_collection_error,
+    signature_for_evidence_insufficient,
 )
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-ROOT = Path(__file__).parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _PENDING_DIR = ROOT / "logs" / ".ci-rca-evidence-pending"
 _EVIDENCE_PREFIX = "ci-rca-evidence"
 
@@ -89,13 +94,6 @@ def _compute_fingerprint(workflow_slug: str, failed_check: str, failure_category
     """
     payload = "\0".join((workflow_slug, failed_check, failure_category))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _slugify_workflow(workflow_name: str) -> str:
-    """Mirror ci-rca.yml's WORKFLOW_SLUG shell derivation so the fingerprint's workflow
-    component matches the same slug the workflow computes independently for status contexts."""
-    slug = workflow_name.lower().replace(" ", "_").replace("/", "-")
-    return re.sub(r"[^a-z0-9_-]", "", slug)
 
 
 def _normalize_first_error_signature(log_text: str, failed_check: str) -> str:
@@ -156,114 +154,6 @@ def upload_and_persist(bundle: dict[str, Any], bucket: str) -> dict[str, str]:
         return {"upload_status": "upload_failed", "s3_uri": "", "pending_path": str(pending)}
 
 
-def _resolve_current_pre_runtime() -> float | None:
-    """Read the maintained env stamp CI_RCA_PRE_RUNTIME_SECONDS; total, never raises."""
-    raw = os.environ.get("CI_RCA_PRE_RUNTIME_SECONDS")
-    if raw is None:
-        return None
-    try:
-        val = float(raw.strip())
-    except (ValueError, AttributeError):
-        return None
-    if not math.isfinite(val) or val <= 0:
-        return None
-    return val
-
-
-def _assemble_core(
-    workflow_run_id: int,
-    workflow_name: str,
-    failed_check: str,
-    failure_category: str,
-    classification_source: str,
-    validate_path: Path | None,
-    taxonomy_path: Path | None,
-    vacuous_pass: "bool | str" = "undetermined",
-    merge_gate_test_coverage: str = "undetermined",
-    coverage_regression: "bool | str" = "undetermined",
-    first_error_signature: str = "",
-    error_signature: str = "",
-    affected_nodeids: list[str] | None = None,
-) -> dict[str, Any]:
-    from scripts.ci_rca.taxonomy import load_taxonomy, resolve_workflow_tier
-    from scripts.ci_rca.tier_map import (
-        AST_WALKER_VERSION,
-        build_tier_membership,
-        compute_earliest_viable_gate,
-        probe_runtime,
-    )
-    from scripts.ci_rca.vacuous_pass import compute_escape_mode
-
-    taxonomy = load_taxonomy(taxonomy_path)
-    taxonomy_version = taxonomy.get("taxonomy_version", 1)
-    wf_tier = resolve_workflow_tier(workflow_name, taxonomy_path)
-    actual_gate = wf_tier if wf_tier != "unknown" else None
-    gate_is_postmerge_canary = wf_tier == "CI"
-
-    tier_membership = build_tier_membership(validate_path)
-    ast_walker_error: str | None = None
-    if tier_membership is None:
-        ast_walker_error = "AST parse failure -- see logs"
-
-    runtime_confidence, median_sec = probe_runtime(failed_check, validate_path)
-    pre_runtime = _resolve_current_pre_runtime()
-    earliest_gate, evg_rationale = compute_earliest_viable_gate(
-        failed_check, tier_membership, runtime_confidence, median_sec, current_pre_runtime=pre_runtime
-    )
-
-    escape_mode = compute_escape_mode(
-        vacuous_pass=vacuous_pass,
-        merge_gate_test_coverage=merge_gate_test_coverage,
-        gate_is_postmerge_canary=gate_is_postmerge_canary,
-        coverage_regression=coverage_regression,
-    )
-
-    check_tiers = None
-    if tier_membership is not None:
-        check_tiers = tier_membership.get(failed_check)
-
-    # ci-rca-identity-lifecycle: v2 grouping fingerprint, anchored on error_signature (the
-    # failure's deterministic CAUSE, junit-parsed or log-tail-derived) -- invariant to
-    # run_id/timestamp/head_sha, distinct across differing error_signature/failure_category, and
-    # SAME across distinct failed_checks that share the same underlying cause (cause grouping).
-    # Deliberately separate from the bundle's canonical sha256 (a whole-bundle integrity hash).
-    resolved_error_signature = error_signature or first_error_signature
-    fingerprint = compute_fingerprint_v2(_slugify_workflow(workflow_name), failure_category, resolved_error_signature)
-
-    bundle: dict[str, Any] = {
-        "schema_version": 3,
-        "workflow_run_id": workflow_run_id,
-        "workflow_name": workflow_name,
-        "workflow_to_tier_resolution": wf_tier,
-        "failed_check": failed_check,
-        "failure_category": failure_category,
-        "fingerprint": fingerprint,
-        "fingerprint_version": 2,
-        "error_signature": resolved_error_signature,
-        "affected_nodeids": affected_nodeids or [],
-        "first_error_signature": first_error_signature,
-        "classification_source": classification_source,
-        "tier_membership": check_tiers,
-        "earliest_viable_gate": earliest_gate,
-        "earliest_viable_gate_rationale": evg_rationale,
-        "pre_runtime_seconds": pre_runtime,
-        "runtime_confidence": runtime_confidence,
-        "actual_gate_that_caught_it": actual_gate,
-        "gate_is_postmerge_canary": gate_is_postmerge_canary,
-        "vacuous_pass": vacuous_pass,
-        "merge_gate_test_coverage": merge_gate_test_coverage,
-        "coverage_regression": coverage_regression,
-        "escape_mode": escape_mode,
-        "related_recs_by_category": [],
-        "decision_records_cited": ["Decision 43", "Decision 60"],
-        "ast_walker_version": AST_WALKER_VERSION,
-        "taxonomy_version": taxonomy_version,
-    }
-    if ast_walker_error:
-        bundle["ast_walker_error"] = ast_walker_error
-    return bundle
-
-
 _ERROR_COLLECTING_RE = re.compile(r"ERROR collecting (\S+)")
 
 
@@ -283,21 +173,19 @@ def _collecting_module_paths(log_text: str) -> list[str]:
 def _resolve_error_signatures(
     log_text: str,
     failures: list[tuple[str, str, str]],
-    junit_path: Path | None,
+    junit_groups: list[tuple[str, list[str]]],
+    truncation_reason: str | None = None,
 ) -> list[tuple[str, str, str, list[str], str]]:
     """Resolve one (failure_category, failed_check, error_signature, affected_nodeids,
-    classification_source) tuple per bundle to emit, BEFORE mass-failure collapse.
-
-    Collection errors always key on the failing MODULE PATH (never junit/log-tail derived,
-    since there is no test body to attribute a traceback to) -- recovered from the log's own
-    `ERROR collecting <path>` headers, one bundle per distinct path. Everything else prefers a
-    junit-parsed cause-group (one bundle per DISTINCT (exception_type, deepest_in_app_frame,
-    normalized_message_head) tuple -- the anti-masking + cause-grouping properties) when a junit
-    report is available and parses; otherwise falls back to one log-tail-derived signature per
-    classify_failures()-enumerated failed check (the pre-junit enumeration axis).
-    """
+    classification_source) tuple per bundle, BEFORE mass-failure collapse. Collection errors key
+    on the failing MODULE PATH; the evidence_insufficient refusal keys on the degenerate
+    evidence_insufficient::<truncation_reason> signature (never log-tail derived, which would
+    fabricate IDENTITY); everything else prefers a junit-parsed cause-group when available, else
+    a log-tail-derived signature per classify_failures() check. junit_groups is pre-parsed by
+    the caller (shared with has_junit_cause_group)."""
     collection_entries = [f for f in failures if f[0] == "collection_error"]
-    other_entries = [f for f in failures if f[0] != "collection_error"]
+    refusal_entries = [f for f in failures if f[0] == "evidence_insufficient"]
+    other_entries = [f for f in failures if f[0] not in ("collection_error", "evidence_insufficient")]
 
     resolved: list[tuple[str, str, str, list[str], str]] = []
     if collection_entries:
@@ -306,13 +194,10 @@ def _resolve_error_signatures(
         for path in module_paths:
             resolved.append((cat, path, signature_for_collection_error(path), [path], "collection_error_module_path"))
 
-    junit_groups: list[tuple[str, list[str]]] = []
-    if junit_path is not None and junit_path.exists():
-        try:
-            junit_groups = error_signature_from_junit(junit_path)
-        except Exception as exc:  # noqa: BLE001 -- fall back to log-tail, never crash bundle generation
-            logger.warning("junit parse failed at %s (%s); falling back to log-tail signatures", junit_path, exc)
-            junit_groups = []
+    if refusal_entries:
+        cat, check, _src = refusal_entries[0]
+        sig = signature_for_evidence_insufficient(truncation_reason or "unknown")
+        resolved.append((cat, check, sig, [], "evidence_insufficient_refusal"))
 
     if junit_groups:
         default_cat, default_check = ("pytest_regression", "pytest")
@@ -361,6 +246,8 @@ def generate_bundles(
     repo: str | None = None,
     junit_path: Path | None = None,
     selection_manifest_path: Path | None = None,
+    validation_result_path: Path | None = None,
+    retrieval_limits: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Parse log (+ optional junit report), classify failure(s), assemble + hash bundles.
 
@@ -373,6 +260,10 @@ def generate_bundles(
     affected nodeid against the merged PR's --pre affected-set selection manifest. Part of the
     hashed bundle payload (like fingerprint) so it is portal-derived, never agent-authored, when
     the write-time cross-check spine reads it back off the verified bundle.
+
+    validation_result_path / retrieval_limits: validate.py's dispatch-attributed
+    failed_check_attributions (Priority 0) and the retrieval envelope's `limits` dict, threaded
+    into classify_failures alongside has_junit_cause_group (one shared junit parse).
     """
     from scripts.ci_rca.taxonomy import classify_failures, load_taxonomy
     from scripts.ci_rca.vacuous_pass import (
@@ -436,8 +327,19 @@ def generate_bundles(
         b["sha256"] = _sha256_of(b)
         return [b]
 
-    failures = classify_failures(log_text, jobs, taxonomy_path)
-    resolved = _resolve_error_signatures(log_text, failures, junit_path)
+    complete = True if retrieval_limits is None else bool(retrieval_limits.get("complete", True))
+    truncation_reason = None if retrieval_limits is None else retrieval_limits.get("truncation_reason")
+    junit_groups: list[tuple[str, list[str]]] = []
+    if junit_path is not None and junit_path.exists():
+        try:
+            junit_groups = error_signature_from_junit(junit_path)
+        except Exception as exc:  # noqa: BLE001 -- fall back to log-tail, never crash bundle generation
+            logger.warning("junit parse failed at %s (%s); falling back to log-tail signatures", junit_path, exc)
+
+    failures = classify_failures(
+        log_text, jobs, taxonomy_path, validation_result_path, complete=complete, has_junit_cause_group=bool(junit_groups)
+    )
+    resolved = _resolve_error_signatures(log_text, failures, junit_groups, truncation_reason)
     manifest = _load_selection_manifest(selection_manifest_path)
 
     collapsed_sig = collapse_mass_failure([r[2] for r in resolved])
@@ -516,6 +418,13 @@ def main(argv: list[str] | None = None) -> None:
         help="the merged PR's --pre affected-set selection manifest (Decision 135) -- when "
         "given, each bundle's escape_class is computed by diffing against it.",
     )
+    parser.add_argument(
+        "--validation-result",
+        dest="validation_result",
+        type=Path,
+        default=None,
+        help="validate.py's logs/debug/validation-result.json (schema_version 2 attributions) -- Priority 0.",
+    )
     parser.add_argument("--print-bundle", action="store_true")
     parser.add_argument(
         "--emit-dir",
@@ -544,6 +453,8 @@ def main(argv: list[str] | None = None) -> None:
         repo=args.repo,
         junit_path=args.junit_file,
         selection_manifest_path=args.selection_manifest,
+        validation_result_path=args.validation_result,
+        retrieval_limits=retrieval["limits"] if retrieval is not None else None,
     )
 
     for bundle in bundles:

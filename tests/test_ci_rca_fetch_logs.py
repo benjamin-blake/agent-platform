@@ -10,10 +10,41 @@ import pytest
 
 from scripts.ci_rca.fetch_logs import _failed_jobs, _run_log, fetch_run_log, main
 from scripts.ci_rca.log_evidence import read_envelope
+from tests.fixtures.ci_rca.oversized_validate_log import build_log
 
 
 def _cp(code: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess([], code, stdout, stderr)
+
+
+def test_end_to_end_oversized_log_retains_tail_anchor_in_published_envelope(tmp_path: Path, monkeypatch) -> None:
+    """VP17 / acceptance criterion 6: the FULL fetch_run_log -> publish_envelope path (not only
+    bound_text_windowed in isolation) retains the "Failed checks:" tail anchor for an oversized
+    log -- an injected runner cannot exercise this (it bypasses _run_log entirely), so this test
+    mocks subprocess.run (metadata) and subprocess.Popen (the real streaming transport, redirected
+    to dump the oversized fixture) instead."""
+    fixture_file = tmp_path / "fixture.log"
+    fixture_file.write_text(build_log())
+    jobs_json = json.dumps(
+        {"jobs": [{"databaseId": 5, "conclusion": "failure", "steps": [{"name": "s", "conclusion": "failure"}]}]}
+    )
+    monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.run", lambda *_a, **_k: _cp(stdout=jobs_json))
+
+    real_popen = subprocess.Popen
+
+    def fake_popen(_command, **kwargs):
+        dump = "import sys,pathlib; sys.stdout.write(pathlib.Path(sys.argv[1]).read_text())"
+        return real_popen([sys.executable, "-c", dump, str(fixture_file)], **kwargs)
+
+    monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.Popen", fake_popen)
+
+    out = tmp_path / "evidence.json"
+    result = fetch_run_log("999", "owner/repo", out)
+    assert result.fetched
+    envelope = read_envelope(out)
+    assert "Failed checks:" in envelope["body"]
+    assert "Coverage below 100%" in envelope["body"]
+    assert envelope["limits"]["truncation_reason"] == "head_tail_window"
 
 
 class Runner:
@@ -178,16 +209,23 @@ class TestTransientRetry:
 
 class TestStreamingTransport:
     def test_exact_byte_cap_is_complete_but_cap_plus_one_is_truncated(self) -> None:
+        """ci-rca-evidence-fidelity: genuine truncation is "more was drained than head
+        retained", not merely "head reached its cap" -- content ending EXACTLY at the cap is
+        complete. The over-cap case now also carries a rolling `tail` sample."""
         exact = _run_log([sys.executable, "-c", "import sys;sys.stdout.write('abcd')"], 4, 10)
         over = _run_log([sys.executable, "-c", "import sys;sys.stdout.write('abcde')"], 4, 10)
         assert exact.stdout == over.stdout == "abcd"
         assert exact.truncated is False
-        assert over.truncated is True and over.truncation_reason == "byte_limit"
+        assert exact.truncation_reason is None
+        assert exact.tail == ""
+        assert over.truncated is True and over.truncation_reason == "head_tail_window"
+        assert over.tail == "bcde"
 
     def test_line_cap_terminates_on_first_byte_of_next_line(self) -> None:
         result = _run_log([sys.executable, "-c", "import sys;sys.stdout.write('one\\ntwo\\nthree')"], 100, 2)
         assert result.stdout == "one\ntwo\n"
-        assert result.truncated is True and result.truncation_reason == "line_limit"
+        assert result.truncated is True and result.truncation_reason == "head_tail_window"
+        assert result.tail == "one\ntwo\nthree"
 
     def test_large_stderr_is_drained_concurrently(self) -> None:
         program = "import sys;sys.stderr.write('x'*200000);sys.stderr.flush();sys.stdout.write('ok')"
@@ -196,16 +234,35 @@ class TestStreamingTransport:
         assert result.stdout == "ok"
         assert len(result.stderr) == 8192
 
-    def test_sigterm_ignoring_child_is_killed_after_truncation(self) -> None:
+    def test_sigterm_ignoring_child_is_killed_after_the_drain_ceiling(self) -> None:
+        """A child that ignores SIGTERM and produces no further output after filling the head
+        buffer must still be bounded -- by the EXPLICIT drain_timeout_s ceiling (test-injected
+        small value), not by an indefinite wait for more data that will never come."""
         program = (
             "import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
             "sys.stdout.write('xx');sys.stdout.flush();time.sleep(10)"
         )
-        result = _run_log([sys.executable, "-c", program], 1, 10)
+        result = _run_log([sys.executable, "-c", program], 1, 10, drain_timeout_s=0.3)
         assert result.stdout == "x"
         assert result.truncated is True
+        assert result.truncation_reason == "drain_ceiling"
+        assert result.returncode == 0
+        assert result.tail == ""
 
-    def test_timeout_kills_child(self, monkeypatch) -> None:
+    def test_drain_max_bytes_ceiling_kills_a_runaway_producer(self) -> None:
+        """A child producing MORE than drain_max_bytes (even though it would eventually finish
+        on its own) is killed rather than drained to completion -- the bounded-memory contract."""
+        program = "import sys;sys.stdout.write('y' * 5000)"
+        result = _run_log([sys.executable, "-c", program], 100, 10, drain_max_bytes=10, drain_timeout_s=5.0)
+        assert result.truncated is True
+        assert result.truncation_reason == "drain_ceiling"
+        assert result.returncode == 0
+
+    def test_timeout_kills_child_escalates_from_sigterm_to_sigkill(self, monkeypatch) -> None:
+        """The wait()-escalation path: a killed child that does not exit within the 1s
+        process.wait() grace period is force-killed. Independent of drain_timeout_s -- this
+        exercises the post-loop cleanup, not the drain ceiling itself."""
+
         class Process:
             stdout = object()
             stderr = object()
@@ -235,8 +292,10 @@ class TestStreamingTransport:
         )()
         monkeypatch.setattr("scripts.ci_rca.fetch_logs.subprocess.Popen", lambda *_args, **_kwargs: process)
         monkeypatch.setattr("scripts.ci_rca.fetch_logs.selectors.DefaultSelector", lambda: selector)
-        _run_log(["gh"], 1, 1)
+        result = _run_log(["gh"], 1, 1)
         assert process.killed
+        assert result.truncated is False
+        assert result.stdout == ""
 
 
 def test_module_entrypoint(monkeypatch, tmp_path: Path) -> None:

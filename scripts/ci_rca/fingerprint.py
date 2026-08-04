@@ -9,7 +9,7 @@ tests get DIFFERENT fingerprints (anti-masking, rec-2710) while one infra error 
 shared src/ helper groups across the different tests that surface it (same cause).
 
 A literal "v2" salt is folded into the hashed payload so a v2 fingerprint can never collide with
-a historical v1 fingerprint (scripts/ci_rca/evidence.py's retained legacy _compute_fingerprint) --
+a historical v1 fingerprint (scripts/ci_rca/evidence's retained legacy _compute_fingerprint) --
 no warehouse migration is required; the two keyspaces are disjoint by construction.
 
 Public API: compute_fingerprint_v2, error_signature_from_junit, error_signature_from_log_tail,
@@ -245,6 +245,17 @@ def signature_for_collection_error(module_path: str) -> str:
     """A pytest collection error keys on the failing MODULE PATH, not a traceback frame (there
     is no test body to attribute the failure to -- the module itself failed to import/collect)."""
     return f"collection_error::{module_path}"
+
+
+# --- evidence-insufficient refusal keying (ci-rca-evidence-fidelity) -----------------------
+
+
+def signature_for_evidence_insufficient(truncation_reason: str) -> str:
+    """Degenerate deterministic signature for the evidence_insufficient refusal verdict, keyed
+    on truncation_reason only (never on wherever the byte/line cap happened to land -- that
+    would fabricate IDENTITY instead of CATEGORY). Two distinct truncated logs sharing a
+    truncation_reason dedup onto the SAME chain; differing reasons key differently."""
+    return f"evidence_insufficient::{truncation_reason}"
 
 
 # --- mass-failure collapse -------------------------------------------------------------------

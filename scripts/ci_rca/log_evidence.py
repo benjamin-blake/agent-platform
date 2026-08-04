@@ -68,6 +68,93 @@ def bound_text(text: str, max_bytes: int, max_lines: int) -> tuple[str, dict[str
     }
 
 
+_WINDOW_MARKER = "\n... [elided] ...\n"
+
+
+def bound_text_windowed(text: str, max_bytes: int, max_lines: int) -> tuple[str, dict[str, Any]]:
+    """Head + elision marker + tail within the SAME max_bytes/max_lines budget bound_text uses.
+
+    Unlike bound_text (head-only truncation), this retains a TAIL sample too -- ci-rca-evidence-
+    fidelity: an oversized `validate.py` log's authoritative "Failed checks:" summary is always
+    the last few lines, and a head-only truncation always drops it. When `text` already fits,
+    behaves identically to bound_text (complete=True, truncation_reason=None). Otherwise the
+    reported observed/included/omitted counts are internally consistent (observed ==
+    included + omitted, forced) but omitted_bytes/omitted_lines under-report the true elision by
+    the marker's own size -- the marker itself is neither included content nor omitted content.
+    """
+    if max_bytes < 1 or max_lines < 1:
+        raise ValueError("evidence limits must be positive")
+    encoded = text.encode("utf-8")
+    lines = text.splitlines(keepends=True)
+    if len(encoded) <= max_bytes and len(lines) <= max_lines:
+        return text, {
+            "max_bytes": max_bytes,
+            "max_lines": max_lines,
+            "observed_bytes": len(encoded),
+            "observed_lines": len(lines),
+            "included_bytes": len(encoded),
+            "included_lines": len(lines),
+            "omitted_bytes": 0,
+            "omitted_lines": 0,
+            "complete": True,
+            "truncation_reason": None,
+        }
+
+    marker_bytes = len(_WINDOW_MARKER.encode("utf-8"))
+    marker_lines = len(_WINDOW_MARKER.splitlines(keepends=True))
+    if max_bytes <= marker_bytes or max_lines <= marker_lines:
+        # Budget too small to fit the elision marker itself (only reachable at test-scale
+        # budgets, never at DEFAULT_MAX_BYTES/DEFAULT_MAX_LINES) -- degrade to plain head
+        # truncation rather than emit a marker-only body that overflows the declared budget.
+        body, limits = bound_text(text, max_bytes, max_lines)
+        if not limits["complete"]:
+            limits["truncation_reason"] = "head_tail_window"
+        return body, limits
+    budget_bytes = max(max_bytes - marker_bytes, 0)
+    budget_lines = max(max_lines - marker_lines, 0)
+    head_budget_bytes = budget_bytes // 2
+    tail_budget_bytes = budget_bytes - head_budget_bytes
+    head_budget_lines = budget_lines // 2
+    tail_budget_lines = budget_lines - head_budget_lines
+
+    head: list[str] = []
+    head_used_bytes = 0
+    for line in lines:
+        raw = line.encode("utf-8")
+        if len(head) == head_budget_lines or head_used_bytes + len(raw) > head_budget_bytes:
+            break
+        head.append(line)
+        head_used_bytes += len(raw)
+
+    tail_rev: list[str] = []
+    tail_used_bytes = 0
+    for line in reversed(lines[len(head) :]):
+        raw = line.encode("utf-8")
+        if len(tail_rev) == tail_budget_lines or tail_used_bytes + len(raw) > tail_budget_bytes:
+            break
+        tail_rev.append(line)
+        tail_used_bytes += len(raw)
+    tail_rev.reverse()
+
+    body = "".join(head) + _WINDOW_MARKER + "".join(tail_rev)
+    included_bytes = len(body.encode("utf-8"))
+    included_lines = len(body.splitlines(keepends=True))
+    observed_bytes = len(encoded)
+    observed_lines = len(lines)
+    return body, {
+        "max_bytes": max_bytes,
+        "max_lines": max_lines,
+        "observed_bytes": observed_bytes,
+        "observed_lines": observed_lines,
+        "included_bytes": included_bytes,
+        "included_lines": included_lines,
+        "omitted_bytes": observed_bytes - included_bytes,
+        "omitted_lines": observed_lines - included_lines,
+        "complete": False,
+        "truncation_reason": "head_tail_window",
+    }
+
+
 def _validate_limits(body: str, limits: Any) -> None:
     if not isinstance(limits, dict):
         raise ValueError("missing limit metadata")
@@ -85,7 +172,10 @@ def _validate_limits(body: str, limits: Any) -> None:
     if (
         type(complete) is not bool
         or (complete and reason is not None)
-        or (not complete and reason not in {"byte_limit", "line_limit", "source_unavailable"})
+        or (
+            not complete
+            and reason not in {"byte_limit", "line_limit", "source_unavailable", "head_tail_window", "drain_ceiling"}
+        )
     ):
         raise ValueError("inconsistent retrieval completeness metadata")
     for observed, included, omitted in (
@@ -150,7 +240,8 @@ def _validate_selection(selection: Any, job_ids: list[int], limits: dict[str, An
         raise ValueError("invalid unqueried job reason")
     if unqueried and (
         limits["complete"]
-        or limits["truncation_reason"] not in {"byte_limit", "line_limit", "source_unavailable"}
+        or limits["truncation_reason"]
+        not in {"byte_limit", "line_limit", "source_unavailable", "head_tail_window", "drain_ceiling"}
         or any(limits[field] is not None for field in ("observed_bytes", "observed_lines", "omitted_bytes", "omitted_lines"))
     ):
         raise ValueError("unqueried fallback jobs require unknown incomplete evidence metadata")

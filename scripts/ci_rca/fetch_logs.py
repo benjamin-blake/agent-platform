@@ -18,7 +18,7 @@ from scripts.ci_rca.log_evidence import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
     SCHEMA,
-    bound_text,
+    bound_text_windowed,
     publish_envelope,
     recovery_url,
 )
@@ -41,27 +41,72 @@ class LogResult:
     stderr: str
     truncated: bool
     truncation_reason: str | None
+    tail: str = ""
 
 
 def _run(runner: _Runner, command: list[str]) -> subprocess.CompletedProcess:
     return runner(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
-def _run_log(command: list[str], max_bytes: int, max_lines: int) -> LogResult:
+_STDOUT_CHUNK_BYTES = 8192
+
+
+def _head_piece(chunk: bytes, head: bytearray, head_lines: int, max_bytes: int, max_lines: int) -> bytes:
+    """The prefix of `chunk` that fits within the still-remaining head byte/line budget --
+    factored out so _run_log's own branch count (Decision 43) absorbs one Call node. Only called
+    while head is not yet full (head_lines < max_lines, len(head) < max_bytes), so the remaining
+    line budget is always positive here."""
+    piece = chunk[: max_bytes - len(head)]
+    head_room_lines = max_lines - head_lines
+    newline_positions = [i for i, byte in enumerate(piece) if byte == 0x0A]
+    if len(newline_positions) >= head_room_lines:
+        piece = piece[: newline_positions[head_room_lines - 1] + 1]
+    return piece
+
+
+def _run_log(
+    command: list[str],
+    max_bytes: int,
+    max_lines: int,
+    *,
+    drain_max_bytes: int = 64 * 1024 * 1024,
+    drain_timeout_s: float = 300.0,
+) -> LogResult:
+    """Stream a subprocess's stdout/stderr without blocking on a full OS pipe (which would hang).
+
+    Retains a bounded HEAD buffer (first max_bytes bytes / max_lines lines -- same semantics as
+    the prior 1-byte-read implementation, now filled via 8192-byte chunked reads) plus a bounded
+    ROLLING TAIL buffer (the most recent up-to-max_bytes bytes seen), so an oversized log's
+    "Failed checks:" tail survives even though the head alone cannot hold it. Draining continues
+    past the head cap (never killing early) until EOF or an explicit drain ceiling
+    (drain_max_bytes total bytes read, or drain_timeout_s wall-clock) is hit, at which point the
+    child is killed -- truncated=True, truncation_reason="drain_ceiling", returncode=0 (a killed
+    child must never poison the exit code). A head-capped-but-fully-drained run is NOT killed:
+    truncated=True, truncation_reason="head_tail_window", and the real process returncode is
+    preserved. `tail` is populated only when the head was actually capped -- otherwise head IS
+    the complete content and no separate tail is needed.
+    """
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert process.stdout is not None and process.stderr is not None
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "stdout")
     selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-    stdout = bytearray()
+    head = bytearray()
+    tail = bytearray()
     stderr = bytearray()
-    lines = 0
-    truncated = False
-    reason = None
-    while selector.get_map() and not truncated:
-        for key, _ in selector.select():
+    head_lines = 0
+    head_full = False
+    total_drained = 0
+    started_at = time.monotonic()
+    killed = False
+    reason: str | None = None
+    while selector.get_map() and not killed:
+        if time.monotonic() - started_at > drain_timeout_s:
+            killed, reason = True, "drain_ceiling"
+            break
+        for key, _ in selector.select(timeout=1.0):
             stream = cast(BinaryIO, key.fileobj)
-            chunk = stream.read(1 if key.data == "stdout" else 8192)
+            chunk = stream.read(_STDOUT_CHUNK_BYTES)
             if not chunk:
                 selector.unregister(key.fileobj)
                 continue
@@ -69,17 +114,22 @@ def _run_log(command: list[str], max_bytes: int, max_lines: int) -> LogResult:
                 if len(stderr) < 8192:
                     stderr.extend(chunk[: 8192 - len(stderr)])
                 continue
-            if len(stdout) == max_bytes:
-                truncated, reason = True, "byte_limit"
+            total_drained += len(chunk)
+            if total_drained > drain_max_bytes:
+                killed, reason = True, "drain_ceiling"
                 break
-            if lines == max_lines:
-                truncated, reason = True, "line_limit"
-                break
-            stdout.extend(chunk)
-            if chunk == b"\n":
-                lines += 1
+            if not head_full:
+                piece = _head_piece(chunk, head, head_lines, max_bytes, max_lines)
+                head.extend(piece)
+                head_lines += piece.count(b"\n")
+                head_full = len(head) >= max_bytes or head_lines >= max_lines
+            tail.extend(chunk)
+            if len(tail) > max_bytes:
+                del tail[: len(tail) - max_bytes]
+        if killed:
+            break
     try:
-        if truncated:
+        if killed:
             process.terminate()
         try:
             process.wait(timeout=1)
@@ -88,12 +138,26 @@ def _run_log(command: list[str], max_bytes: int, max_lines: int) -> LogResult:
             process.wait(timeout=1)
     finally:
         selector.close()
+    if killed:
+        return LogResult(
+            returncode=0,
+            stdout=bytes(head).decode("utf-8", errors="ignore"),
+            stderr=bytes(stderr).decode("utf-8", errors="replace"),
+            truncated=True,
+            truncation_reason=reason,
+        )
+    # Genuine truncation is "more stdout was drained than head retained" -- NOT merely "head
+    # reached its cap", which also fires when the true content ends EXACTLY at the cap (no
+    # overflow). total_drained counts every stdout byte read regardless of head_full state, so
+    # this stays correct across chunk boundaries and both the byte-cap and line-cap paths.
+    genuinely_truncated = total_drained > len(head)
     return LogResult(
-        returncode=0 if truncated else process.returncode,
-        stdout=bytes(stdout).decode("utf-8", errors="ignore"),
+        returncode=process.returncode,
+        stdout=bytes(head).decode("utf-8", errors="ignore"),
         stderr=bytes(stderr).decode("utf-8", errors="replace"),
-        truncated=truncated,
-        truncation_reason=reason,
+        truncated=genuinely_truncated,
+        truncation_reason="head_tail_window" if genuinely_truncated else None,
+        tail=bytes(tail).decode("utf-8", errors="ignore") if genuinely_truncated else "",
     )
 
 
@@ -252,8 +316,24 @@ def fetch_run_log(
                 else:
                     queried_job_ids = [job["job_id"] for job in jobs]
                 if log:
-                    body, limits = bound_text(log, max_bytes, max_lines)
-                    if transport_truncated:
+                    # Ownership (ci-rca-evidence-fidelity): bound_text_windowed is the SOLE
+                    # producer of the published body. The primary transport (_run_log) may
+                    # additionally supply `tail` -- a rolling sample of the stream's own end,
+                    # captured only when its head buffer was capped -- which is appended before
+                    # windowing so the tail anchor survives even though the transport's own head
+                    # alone could not hold it; bound_text_windowed then re-derives a SMALLER,
+                    # budget-correct head+marker+tail from that composition (never re-truncated
+                    # from the head alone, which would silently drop the tail again).
+                    primary_tail = getattr(primary, "tail", "") if retrieval_path == "primary" else ""
+                    text_for_window = log + primary_tail if primary_tail else log
+                    body, limits = bound_text_windowed(text_for_window, max_bytes, max_lines)
+                    # A reliable window (head AND tail both genuinely observed) needs no
+                    # override -- bound_text_windowed's own accurate counts stand. Any other
+                    # transport truncation (a killed drain_ceiling primary fetch, or ANY fallback
+                    # truncation, which composes per-job heads only with no tail) means the true
+                    # extent is genuinely unknown, matching the pre-existing "unknown" contract.
+                    reliable_window = retrieval_path == "primary" and transport_reason == "head_tail_window"
+                    if transport_truncated and not reliable_window:
                         limits.update(
                             complete=False,
                             truncation_reason=transport_reason or "source_unavailable",
