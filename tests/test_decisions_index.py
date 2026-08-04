@@ -405,12 +405,56 @@ class TestCategoryTagsIntegration:
 
 class TestCommittedIndexSizePin:
     """AC1 / VP step 1 graduation candidate 'decisions-index-live-count-matches-file': the
-    committed docs/decisions-index.json stays within its 110,000-byte pin, so the figure recorded
-    in the governing Decision cannot silently drift upward without review."""
+    committed docs/decisions-index.json stays within a re-derived byte pin, so the figure
+    recorded in the governing Decision cannot silently drift upward without review.
 
-    def test_committed_index_under_110000_byte_pin(self) -> None:
+    RE-DERIVED (Decision 166 point 9, PLAN-size-gov-engine): the prior 110,000-byte pin
+    (Decision 160 point 9) had only 236 bytes of headroom left before Decision 166's own
+    entry existed -- exhausted by ordinary corpus growth, not by any defect. Decision 160
+    point 9 itself named this outcome as an open question: "A future owner should reassess
+    whether this indirect bound remains adequate as the corpus grows past the header
+    ceiling's current runway." This is that reassessment.
+
+    Derivation (measured on this tree, indent=2 pretty-printed bytes -- the format the
+    committed file is actually written in):
+      - live term:    120 (live_max_h2_headers ceiling, decision-entry.yaml) x 764 bytes/row
+                       (measured: 119 live rows cost 90,857 bytes net of the {decisions,metadata}
+                       wrapper = 763.5 bytes/row, rounded up) = 91,680 bytes.
+      - archive term: 54 rows (2x the current 27-row archive population -- a multi-quarter
+                       buffer; archival is a rare, operator-disposed event per Decision 146,
+                       not a steady drip) x 726 bytes/row (measured: 27 archive rows cost
+                       19,583 bytes net of wrapper = 725.3 bytes/row, rounded up) = 39,204 bytes.
+      - total: 91,680 + 39,204 = 130,884 bytes, rounded up to 131,000 for measurement variance
+        (unicode, trailing newline, key-order drift).
+
+    This is a stopgap, not a permanent fix, in the Decision 145 sense -- EXCEPT that the
+    named successor already exists and is dated: docs/decisions-index.json is a T1.5-INTERIM
+    surface (Decision 160 point 13: "This arrangement is INTERIM, not the T1.5 portal
+    cutover"). decision-scout's Phase 1 index read (its sole consumer) is scheduled for
+    removal by T1.5 c1 (that item's own exit criteria: "T1.5 c1 owns swapping its bounded
+    index-plus-targeted-reads mechanism for a queried tool call") once the DuckLake
+    ops-decisions portal cutover lands; T1.5 itself is STRATEGIC and CD.17-frozen (AGENTS.md
+    Temporary Operational Constraints), so this pin persists at least that long. rec-3012
+    (filed alongside Decision 166) owns thinning archive rows to skeletons (dropping
+    triage_excerpt/category_tags, which decision-scout never reads for live:false rows) --
+    once landed, the archive term above shrinks and this pin has room to fall back down,
+    never to be treated as a floor.
+
+    The 120-header live_max_h2_headers ceiling (Decision 134 clause 2) is measured separately
+    at 119/120 at this entry's time -- binding within ONE more live entry, not two, regardless
+    of this byte pin. This test does not relieve that ceiling; only an archival wave under
+    Decision 146 does, and queuing one is out of this plan's scope (noted in
+    docs/plans/PLAN-size-gov-engine.yaml Context, not actioned here).
+    """
+
+    _COMMITTED_INDEX_MAX_BYTES = 131_000
+
+    def test_committed_index_under_re_derived_byte_pin(self) -> None:
         size = len(_EXPORT_PATH.read_bytes())
-        assert size <= 110_000, f"committed index is {size} bytes, over the 110,000-byte pin"
+        assert size <= self._COMMITTED_INDEX_MAX_BYTES, (
+            f"committed index is {size} bytes, over the {self._COMMITTED_INDEX_MAX_BYTES:,}-byte pin "
+            "(Decision 166 point 9 re-derivation)"
+        )
 
 
 class TestCheckIndexFreshnessDirect:
