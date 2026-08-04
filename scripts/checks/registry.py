@@ -207,6 +207,7 @@ def full_sequence() -> list[Step]:
         _c("validate_cc_limits"),
         _c("validate_sloc_limits"),
         _c("validate_structural_size_limits"),
+        _c("validate_structural_size_budget_raises"),
         _c("validate_prose_limits"),
         _c("check_source_registry"),
         _c("validate_platform_roadmap"),
