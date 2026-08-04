@@ -441,7 +441,7 @@ class TestCommittedIndexSizePin:
     never to be treated as a floor.
 
     The 120-header live_max_h2_headers ceiling (Decision 134 clause 2) is measured separately
-    at 118/120 at this entry's time -- binding within roughly two more live entries regardless
+    at 119/120 at this entry's time -- binding within ONE more live entry, not two, regardless
     of this byte pin. This test does not relieve that ceiling; only an archival wave under
     Decision 146 does, and queuing one is out of this plan's scope (noted in
     docs/plans/PLAN-size-gov-engine.yaml Context, not actioned here).
