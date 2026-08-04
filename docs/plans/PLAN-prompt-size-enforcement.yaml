@@ -329,11 +329,13 @@ verification_plan:
     command: "bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate"
     expected: >-
       Both exit 0. This exact command string is what discharges Decision 163 clause 3: verified
-      empirically at plan time against the live matcher -- splitting on `&&` yields
+      empirically at plan time against the live matcher -- splitting on the shell separator yields
       ["... --pre" -> False, "... scripts.validate" -> True], so
       validate_handoff_full_tier._has_full_tier_step returns True. Do NOT collapse this to the
-      `--pre` half alone; validate_handoff_full_tier is registered in BOTH tiers and would fail
-      this plan's own PR.
+      fast-tier half alone; validate_handoff_full_tier is registered in BOTH tiers and would fail
+      this plan's own PR. (No prose token in this field is backticked, per constraint 12 -- inert
+      today because this step is not hermetic, but it would become a live unsatisfiable assertion
+      the moment a future revision flipped that flag.)
     fix_if: >-
       Any check fails. Forward-fix on the branch (Decision 55: no auto-revert, no workaround loop,
       no inline patch around a red gate). Expect validate_test_coverage to be the slow one (the full
@@ -408,10 +410,17 @@ constraints:
     flag, path or markdown token that appears solely in explanatory prose -- see the Context entry
     recording how this defect reached round 1 of the critique.
   - >-
-    The 3 amended existing tests must keep asserting on the ERROR TEXT of their original failure
+    The 4 FAILURE-EXPECTING existing tests must assert on the ERROR TEXT of their original failure
     reason, not merely on a non-empty `failed` list. Otherwise a test written to cover a missing H1
     could silently start passing for the new empty-directory reason instead, converting real
-    coverage into a tautology.
+    coverage into a tautology. (The 3 AMENDED tests are the clean-result ones and have no failure
+    reason to assert on; the two sets are disjoint.) MECHANISM, named because the file offers no
+    pattern to copy: validate_prompt_files keeps `errors` as a function-local list that is only
+    `print()`ed and appends just the sentinel "Prompt file validation" to `failed`, so the error text
+    is reachable ONLY through stdout capture -- use `capsys.readouterr().out`, and note that none of
+    the 8 existing tests uses capsys today. The four substrings to assert:
+    "missing H1 title line"; "missing at least one '## ' section"; "dead reference '"; and
+    "no *.prompt.md files found under ".
   - >-
     Decompose, never raise (Decision 128). Both modified files stay under 500 SLOC. Do NOT add a
     config/sloc_budgets.yaml entry and do NOT run `--update-sloc-budgets`.
