@@ -70,7 +70,24 @@ class TestActionsEvidenceCounterfactuals:
 def test_real_contract_enumerates_every_upload() -> None:
     subject.validate_contract(ROOT)
     contract = _yaml(ROOT / subject.CONTRACT_PATH)
-    assert len(contract["artifact_uploads"]) == len(subject._actual_uploads(ROOT)) == 4
+    assert len(contract["artifact_uploads"]) == len(subject._actual_uploads(ROOT)) == 6
+
+
+def test_validation_result_uploads_are_declared_in_the_contract() -> None:
+    contract = _yaml(ROOT / subject.CONTRACT_PATH)
+    declared = {(item["workflow"], item["job"], item["step"], item["artifact"]) for item in contract["artifact_uploads"]}
+    assert (
+        ".github/workflows/ci.yml",
+        "main-validate",
+        "Upload validation-result evidence (CI-RCA attribution substrate)",
+        "validation-result",
+    ) in declared
+    assert (
+        ".github/workflows/main-canary.yml",
+        "canary",
+        "Upload validation-result evidence (CI-RCA attribution substrate)",
+        "validation-result",
+    ) in declared
 
 
 @pytest.mark.parametrize(("age", "state"), [(13, "available"), (15, "unavailable_expired")])
@@ -110,7 +127,7 @@ def test_missing_and_invalid_s1_targets(tmp_path: Path) -> None:
     _write(path, contract)
     with pytest.raises(ValueError, match="producer target is missing"):
         subject.validate_contract(root)
-    contract["s1_linkage"]["producer"] = "scripts/ci_rca/evidence.py"
+    contract["s1_linkage"]["producer"] = "scripts/ci_rca/taxonomy.py"
     _write(path, contract)
     with pytest.raises(ValueError, match="does not expose publish_envelope"):
         subject.validate_contract(root)

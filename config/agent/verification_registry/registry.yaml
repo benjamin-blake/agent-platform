@@ -4163,3 +4163,195 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/checks/structural
+  - check_id: validate-attributes-label-to-check-net-zero
+    primitive_slot: command_exit_zero
+    guard_target: scripts/validate.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - 'bin/venv-python -c "from unittest.mock import patch; from tests.fixtures.validate_module import _validate; from scripts.checks import validation_result; import pathlib; validation_result._ATTRIBUTIONS.clear(); _dispatch_check = _validate._dispatch_check; p = patch(''validate.validate_invariants'', lambda failed: failed.append(''Coverage below 100%'')); p.start(); failed = []; _dispatch_check(''validate_invariants'', failed); p.stop(); assert failed == [''Coverage below 100%''], failed; assert validation_result._ATTRIBUTIONS == [{''check'': ''validate_invariants'', ''label'': ''Coverage below 100%''}], validation_result._ATTRIBUTIONS; sloc = len([l for l in pathlib.Path(''scripts/validate.py'').read_text().splitlines() if l.strip() and not l.strip().startswith(''#'')]); assert sloc <= 499, sloc; print(''ok'')"'
+  - check_id: validation-result-schema-v2-attributions
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/validation_result.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "from scripts.checks import validation_result as vr; import tempfile, pathlib; from unittest.mock import patch, MagicMock; vr._ATTRIBUTIONS.clear(); vr._ATTRIBUTIONS.append({'check':'x','label':'y'}); git = MagicMock(returncode=0, stdout='abc\n'); outpath = pathlib.Path(tempfile.mkdtemp()) / 'r.json'; p = patch('scripts.checks.validation_result.subprocess.run', return_value=git); p.start(); rec = vr.write_completed(started_at='t', exit_code=1, failed_checks=['x'], path=outpath); p.stop(); assert rec['schema_version'] == 2, rec; assert rec['failed_check_attributions'] == [{'check':'x','label':'y'}], rec; vr.clear(outpath); assert vr._ATTRIBUTIONS == []; print('ok')"
+  - check_id: ci-rca-bundle-names-real-failed-check
+    primitive_slot: test_selector
+    guard_target: scripts/ci_rca/evidence/__init__.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/ci_rca/evidence/test_priority_zero.py::TestPriorityZeroAndRefusalIntegration::test_step_name_collision_bundle_names_real_failed_check
+  - check_id: ci-rca-priority-zero-outranks-step-name
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/taxonomy.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "import json,tempfile,pathlib; from scripts.ci_rca.taxonomy import classify_failures; art={'schema_version':2,'exit_code':1,'failed_checks':['Coverage below 100%'],'failed_check_attributions':[{'check':'validate_test_coverage','label':'Coverage below 100%'}]}; p=pathlib.Path(tempfile.mkdtemp())/'vr.json'; p.write_text(json.dumps(art)); jobs=[{'steps':[{'name':'Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)','conclusion':'failure'}]}]; out=classify_failures('irrelevant log\n', jobs, validation_result_path=p); print(out); assert [c for _,c,_ in out] == ['validate_test_coverage'], out"
+  - check_id: ci-rca-taxonomy-covers-registry
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/ci_guards/validate_ci_rca_taxonomy.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - 'bin/venv-python -c "import scripts.checks.ci_guards.validate_ci_rca_taxonomy as subject; from scripts.checks.registry import Check; real = subject.registry.all_checks; checks_copy = real(); checks_copy[''validate_totally_fake_unregistered_check''] = Check(name=''validate_totally_fake_unregistered_check''); subject.registry.all_checks = lambda: checks_copy; failed = []; subject.validate_ci_rca_taxonomy(failed); assert any(''validate_totally_fake_unregistered_check'' in f and ''absent from function_to_category'' in f for f in failed), failed; print(''ok'')"'
+  - check_id: ci-rca-every-registered-check-categorised
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/taxonomy.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "import scripts.validate; from scripts.checks.registry import all_checks; from scripts.ci_rca.taxonomy import load_taxonomy; missing=sorted(set(all_checks())-set(load_taxonomy().get('function_to_category') or {})); print(len(missing), missing[:5]); assert not missing, missing"
+  - check_id: ci-rca-refusal-gate-and-junit-precedence
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/taxonomy.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - 'bin/venv-python -c "import tempfile, pathlib, yaml; from scripts.ci_rca.taxonomy import classify_failure; taxonomy = {''schema_version'': 1, ''taxonomy_version'': 1, ''function_to_category'': {''validate_sloc_limits'': ''sloc_violation''}, ''log_pattern_to_category'': [], ''workflow_to_tier'': {}}; p = pathlib.Path(tempfile.mkdtemp()) / ''taxonomy.yaml''; p.write_text(yaml.dump(taxonomy)); cat, check, src = classify_failure(''validate_sloc_limits FAILED'', path=p, complete=False, has_junit_cause_group=True); assert cat == ''sloc_violation'', (cat, check, src); assert src == ''function_to_category'', (cat, check, src); print(''ok'')"'
+  - check_id: ci-rca-refusal-degenerate-fingerprint
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/fingerprint.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "from scripts.ci_rca.fingerprint import signature_for_evidence_insufficient as f; a=f('byte_limit'); b=f('drain_ceiling'); assert a != b, (a,b); c=f('byte_limit'); assert a==c; print('ok')"
+  - check_id: ci-rca-evidence-insufficient-emitted-not-assignable
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/taxonomy.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - 'bin/venv-python -c "import yaml; from scripts.ci_rca.taxonomy import classify_failure; cat,_,_=classify_failure(''  [PASS] validate_invariants: ok\n'', complete=False); assert cat==''evidence_insufficient'', cat; cfg=yaml.safe_load(open(''config/ci_rca_taxonomy.yaml'')); assert ''evidence_insufficient'' not in (cfg.get(''agent_only_categories'') or []); assert ''evidence_insufficient'' in cfg[''failure_categories'']"'
+  - check_id: ci-rca-oversized-fixture-exceeds-caps
+    primitive_slot: command_exit_zero
+    guard_target: tests/fixtures/ci_rca/oversized_validate_log.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "from tests.fixtures.ci_rca.oversized_validate_log import build_log; from scripts.ci_rca.log_evidence import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES; t=build_log(); b=len(t.encode('utf-8')); n=len(t.splitlines()); print(b,n); assert b > DEFAULT_MAX_BYTES and n > DEFAULT_MAX_LINES; assert 'Failed checks:' in ''.join(t.splitlines(True)[-100:])"
+  - check_id: ci-rca-window-retains-tail-anchor
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/log_evidence.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "from tests.fixtures.ci_rca.oversized_validate_log import build_log; from scripts.ci_rca.log_evidence import bound_text_windowed, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES; body,lim=bound_text_windowed(build_log(), DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES); assert 'Failed checks:' in body and 'Coverage below 100%' in body; assert lim['included_bytes'] <= DEFAULT_MAX_BYTES and lim['included_lines'] <= DEFAULT_MAX_LINES; assert lim['truncation_reason'] == 'head_tail_window'; assert lim['observed_bytes'] == lim['included_bytes'] + lim['omitted_bytes']"
+  - check_id: ci-rca-drain-ceiling-kills-runaway-child
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/fetch_logs.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "import sys, time; from scripts.ci_rca.fetch_logs import _run_log; program = 'import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);sys.stdout.write(chr(120)*2);sys.stdout.flush();time.sleep(10)'; t0=time.monotonic(); result = _run_log([sys.executable, '-c', program], 1, 10, drain_timeout_s=0.3); elapsed = time.monotonic()-t0; assert result.truncated and result.truncation_reason=='drain_ceiling' and result.returncode==0, result; assert elapsed < 5.0, elapsed; print('ok', elapsed)"
+  - check_id: ci-rca-windowed-envelope-publishes
+    primitive_slot: test_selector
+    guard_target: scripts/ci_rca/log_evidence.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_ci_rca_log_evidence.py::TestHeadTailWindowAndDrainCeilingReasons::test_windowed_envelope_publishes_and_round_trips
+  - check_id: ci-rca-workflow-and-artifact-guards-green
+    primitive_slot: test_selector
+    guard_target: docs/contracts/github-actions-evidence.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ci_guards/test_validate_actions_evidence.py::test_validation_result_uploads_are_declared_in_the_contract
+  - check_id: ci-rca-generator-consumes-validation-result
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/ci-rca.yml
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "import yaml; d=yaml.safe_load(open('.github/workflows/ci-rca.yml')); steps=d['jobs']['rca']['steps']; gen=next(s for s in steps if s.get('name')=='Generate evidence bundle')['run']; dl=next(s for s in steps if 'validation-result' in str(s.get('run','')))['run']; assert '--validation-result' in gen, gen; assert '/tmp/ci-rca-validation-result' in gen and '/tmp/ci-rca-validation-result' in dl"
+  - check_id: ci-rca-validation-result-uploads-always
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/ci.yml
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - "bin/venv-python -c \"import yaml\nfor wf,job in (('.github/workflows/ci.yml','main-validate'),('.github/workflows/main-canary.yml','canary')):\n    steps=yaml.safe_load(open(wf))['jobs'][job]['steps']\n    up=[s for s in steps if 'validation-result' in str(s.get('with',{}).get('path',''))]\n    assert len(up)==1, (wf,len(up))\n    assert up[0].get('if')=='always()', (wf, up[0].get('if'))\nprint('ok')\""
+  - check_id: ci-rca-fetch-path-publishes-tail-anchor
+    primitive_slot: test_selector
+    guard_target: scripts/ci_rca/fetch_logs.py
+    guard_symbol: null
+    plan_slug: ci-rca-evidence-fidelity
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_ci_rca_fetch_logs.py::test_end_to_end_oversized_log_retains_tail_anchor_in_published_envelope

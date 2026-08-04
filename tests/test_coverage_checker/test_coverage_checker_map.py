@@ -65,14 +65,19 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "session" / "postflight"
 
-    def test_maps_scripts_ci_rca_evidence_to_concern_split_package(self) -> None:
-        """scripts/ci_rca/evidence.py maps to the tests/ci_rca/evidence/ concern-split package
-        (rec-2709 Wave 10: "test_ci_rca_evidence.py" retired from _RETIRING_GRANDFATHER_HOMES,
-        and scripts/ci_rca/evidence.py is a declared _CONCERN_SPLIT_TEST_PACKAGES entry)."""
-        source = ROOT / "scripts" / "ci_rca" / "evidence.py"
+    def test_maps_scripts_ci_rca_taxonomy_to_concern_split_package(self) -> None:
+        """scripts/ci_rca/taxonomy.py maps to the tests/ci_rca/taxonomy/ concern-split package
+        (ci-rca-evidence-fidelity: scripts/ci_rca/taxonomy.py is a declared
+        _CONCERN_SPLIT_TEST_PACKAGES entry, needed once its test file's Priority-0/refusal
+        coverage pushed tests/test_ci_rca_taxonomy.py past the 500-SLOC budget). Note:
+        scripts/ci_rca/evidence.py is no longer a real source path (it became the
+        scripts/ci_rca/evidence/ package, whose members are excluded from or unmapped by this
+        registry -- __init__.py is excluded upstream by get_changed_source_files; its submodules
+        are covered end to end by the existing tests/ci_rca/evidence/ suite regardless)."""
+        source = ROOT / "scripts" / "ci_rca" / "taxonomy.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "ci_rca" / "evidence"
+        assert result == ROOT / "tests" / "ci_rca" / "taxonomy"
 
     def test_maps_still_grandfathered_sync_sibling_to_flat_home(self) -> None:
         """scripts/sync/ducklake_version.py (never on the 24-roster, never concern-split) still

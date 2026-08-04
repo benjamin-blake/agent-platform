@@ -273,7 +273,7 @@ def _dispatch_check(name: str, failed: list[str]) -> None:
     Uses globals() (equivalent to getattr(sys.modules[__name__], name)) rather than a
     captured function reference, so `patch("validate.<name>")` continues to intercept.
     """
-    globals()[name](failed)
+    validation_result.dispatch_recording(name, failed, globals())
 
 
 def _pre_glob_match(path: str, glob: str) -> bool:

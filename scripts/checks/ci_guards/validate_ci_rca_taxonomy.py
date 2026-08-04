@@ -29,6 +29,23 @@ def validate_ci_rca_taxonomy(failed: list[str]) -> None:
         return
     print(f"All {len(actual_names)} workflow name(s) present in workflow_to_tier.")
 
+    # Check 1b: every REGISTERED check resolves to a category in function_to_category -- a
+    # PRECONDITION of the Priority-0 attribution path (scripts.ci_rca.taxonomy.classify_failure/
+    # classify_failures resolve an attributed check's failure_category through
+    # func_map[check_name]), not standalone hygiene. Same shape as the workflow_to_tier coverage
+    # assertion above.
+    func_map: dict[str, str] = taxonomy.get("function_to_category") or {}
+    registered_checks = sorted(registry.all_checks())
+    unmapped_checks = [c for c in registered_checks if c not in func_map]
+    if unmapped_checks:
+        for c in unmapped_checks:
+            failed.append(
+                f"CI-RCA taxonomy: registered check {c!r} absent from function_to_category in "
+                f"config/ci_rca_taxonomy.yaml (Priority-0 attribution precondition)"
+            )
+        return
+    print(f"All {len(registered_checks)} registered check(s) present in function_to_category.")
+
     # Check 2: failure_categories list matches classifier's actual category set
     failure_categories = taxonomy.get("failure_categories")
     if failure_categories is None:
@@ -40,8 +57,11 @@ def validate_ci_rca_taxonomy(failed: list[str]) -> None:
     func_map = taxonomy.get("function_to_category") or {}
     step_map = taxonomy.get("step_name_to_category") or {}
     used_cats = set(func_map.values()) | set(step_map.values())
-    # Also include "unknown" sentinel which classify_failure can return
+    # Also include code-emitted sentinels which classify_failure can return without a map entry:
+    # "unknown" (taxonomy_fallback) and "evidence_insufficient" (the refusal verdict, emitted at
+    # the classify_failure/classify_failures call sites, never via a func_map/step_map entry).
     used_cats.add("unknown")
+    used_cats.add("evidence_insufficient")
 
     # Add categories from log_pattern_to_category
     for entry in taxonomy.get("log_pattern_to_category") or []:

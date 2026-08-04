@@ -19,6 +19,7 @@ from scripts.ci_rca.fingerprint import (
     error_signature_from_log_tail,
     normalize_message_head,
     signature_for_collection_error,
+    signature_for_evidence_insufficient,
 )
 
 
@@ -340,6 +341,41 @@ class TestCollectionErrorSpecialCase:
         a = signature_for_collection_error("tests/test_x.py")
         b = signature_for_collection_error("tests/test_y.py")
         assert a != b
+
+
+class TestEvidenceInsufficientDegenerateSignature:
+    """ci-rca-evidence-fidelity: the refusal verdict's degenerate signature, keyed ONLY on
+    truncation_reason (never on the truncated tail content) -- recurrences with the same
+    truncation_reason dedup onto one chain per workflow."""
+
+    def test_keys_on_truncation_reason(self):
+        assert signature_for_evidence_insufficient("byte_limit") == "evidence_insufficient::byte_limit"
+
+    def test_same_truncation_reason_same_signature(self):
+        a = signature_for_evidence_insufficient("head_tail_window")
+        b = signature_for_evidence_insufficient("head_tail_window")
+        assert a == b
+
+    def test_differing_truncation_reason_differing_signature(self):
+        a = signature_for_evidence_insufficient("byte_limit")
+        b = signature_for_evidence_insufficient("drain_ceiling")
+        assert a != b
+
+    def test_same_truncation_reason_same_fingerprint(self):
+        """Two distinct truncated logs sharing a truncation_reason must dedup onto ONE chain --
+        exercised through the real compute_fingerprint_v2 grouping key, not the signature alone."""
+        sig_a = signature_for_evidence_insufficient("byte_limit")
+        sig_b = signature_for_evidence_insufficient("byte_limit")
+        fp_a = compute_fingerprint_v2("ci", "evidence_insufficient", sig_a)
+        fp_b = compute_fingerprint_v2("ci", "evidence_insufficient", sig_b)
+        assert fp_a == fp_b
+
+    def test_differing_truncation_reason_differing_fingerprint(self):
+        sig_a = signature_for_evidence_insufficient("byte_limit")
+        sig_b = signature_for_evidence_insufficient("drain_ceiling")
+        fp_a = compute_fingerprint_v2("ci", "evidence_insufficient", sig_a)
+        fp_b = compute_fingerprint_v2("ci", "evidence_insufficient", sig_b)
+        assert fp_a != fp_b
 
 
 class TestNonPytestFallback:

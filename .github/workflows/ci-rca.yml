@@ -212,6 +212,22 @@ jobs:
           gh run download "$RUN_ID" --repo "${{ github.repository }}" --name pytest-junit --dir /tmp/ci-rca-junit \
             || echo "No pytest-junit artifact for run ${RUN_ID} -- falling back to log-tail signature."
 
+      - name: Fetch validation-result artifact (CI-RCA attribution substrate)
+        # ci-rca-evidence-fidelity: best-effort download of the failing run's own
+        # validation-result artifact (uploaded by ci.yml's main-validate / main-canary.yml's
+        # canary job -- scripts.checks.validation_result.write_completed). Absent for a workflow
+        # that never runs `scripts.validate` (e.g. terraform-apply-sandbox) -- the evidence
+        # generator falls back to the existing log-derived classification ladder when the file is
+        # missing, never fails the job.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          RUN_ID="${{ steps.meta.outputs.run_id }}"
+          mkdir -p /tmp/ci-rca-validation-result
+          gh run download "$RUN_ID" --repo "${{ github.repository }}" --name validation-result --dir /tmp/ci-rca-validation-result \
+            || echo "No validation-result artifact for run ${RUN_ID} -- falling back to log-derived classification."
+
       - name: Fetch merged PR's selection-manifest (Decision 135 escape-attribution)
         # ci-rca-identity-lifecycle: this workflow only ever fires post-merge on the default
         # branch (see the job-level `if:` gate above), so the failing commit IS a merge onto
@@ -262,6 +278,10 @@ jobs:
           if [ -f /tmp/ci-rca-manifest/selection-manifest.json ]; then
             MANIFEST_FLAG="--selection-manifest /tmp/ci-rca-manifest/selection-manifest.json"
           fi
+          VALIDATION_RESULT_FLAG=""
+          if [ -f /tmp/ci-rca-validation-result/validation-result.json ]; then
+            VALIDATION_RESULT_FLAG="--validation-result /tmp/ci-rca-validation-result/validation-result.json"
+          fi
           .venv/bin/python -m scripts.ci_rca.evidence \
             --log-file /tmp/ci-rca-failed.log \
             --retrieval-envelope /tmp/ci-rca-log-evidence.json \
@@ -269,7 +289,7 @@ jobs:
             --workflow-name "$WORKFLOW_NAME" \
             --workflow-run-id "$RUN_ID" \
             --emit-dir /tmp/ci-rca-bundles \
-            ${JUNIT_FLAG} ${MANIFEST_FLAG} \
+            ${JUNIT_FLAG} ${MANIFEST_FLAG} ${VALIDATION_RESULT_FLAG} \
             > /tmp/ci-rca-evidence-out.txt 2>/tmp/ci-rca-evidence-err.txt || true
           BUNDLE_SHA=$(grep '^BUNDLE_SHA=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
           BUNDLE_S3_URI=$(grep '^BUNDLE_S3_URI=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")

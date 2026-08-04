@@ -47,7 +47,7 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "session" / "preflight.py": ROOT / "tests" / "session" / "preflight",
             ROOT / "scripts" / "sync" / "ops.py": ROOT / "tests" / "sync" / "ops",
             ROOT / "scripts" / "session" / "postflight.py": ROOT / "tests" / "session" / "postflight",
-            ROOT / "scripts" / "ci_rca" / "evidence.py": ROOT / "tests" / "ci_rca" / "evidence",
+            ROOT / "scripts" / "ci_rca" / "taxonomy.py": ROOT / "tests" / "ci_rca" / "taxonomy",
             ROOT / "scripts" / "sync" / "recommendations.py": ROOT / "tests" / "sync" / "recommendations",
             ROOT / "scripts" / "ci_rca" / "filing.py": ROOT / "tests" / "test_ci_rca_filing.py",
             ROOT / "scripts" / "session" / "metrics.py": ROOT / "tests" / "test_session_metrics.py",

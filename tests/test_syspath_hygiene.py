@@ -26,7 +26,7 @@ import pytest
 ROOT = Path(__file__).parent.parent
 
 _MODULES = [
-    ROOT / "tests" / "test_ci_rca_taxonomy.py",
+    ROOT / "tests" / "ci_rca" / "taxonomy" / "test_load_and_classify.py",
     ROOT / "tests" / "test_ci_rca_vacuous_pass.py",
     ROOT / "tests" / "test_ci_claude_p_retry.py",
     ROOT / "tests" / "test_ci_rca_tier_map.py",

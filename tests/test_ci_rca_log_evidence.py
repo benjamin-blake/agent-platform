@@ -12,6 +12,7 @@ from scripts.ci_rca.fingerprint import error_signature_from_log_tail
 from scripts.ci_rca.log_evidence import (
     SCHEMA,
     bound_text,
+    bound_text_windowed,
     extract_body,
     main,
     publish_envelope,
@@ -19,6 +20,7 @@ from scripts.ci_rca.log_evidence import (
     recovery_url,
     validate_envelope,
 )
+from tests.fixtures.ci_rca.oversized_validate_log import build_log
 
 
 def _envelope(body: str = "one\ntwo\n") -> dict:
@@ -312,3 +314,126 @@ class TestScopeDeclarationCounterfactuals:
             omitted_lines=0,
         )
         assert validate_envelope(envelope) is envelope
+
+
+class TestBoundTextWindowed:
+    """ci-rca-evidence-fidelity: head + elision marker + tail within the SAME budget bound_text
+    uses -- the mechanism that keeps an oversized validate.py log's "Failed checks:" tail inside
+    the published body instead of being dropped by a head-only truncation."""
+
+    def test_fits_entirely_behaves_like_bound_text(self) -> None:
+        body, limits = bound_text_windowed("one\ntwo\n", 100, 10)
+        assert body == "one\ntwo\n"
+        assert limits["complete"] is True
+        assert limits["truncation_reason"] is None
+        assert limits["omitted_bytes"] == 0
+        assert limits["omitted_lines"] == 0
+
+    def test_rejects_non_positive_limits(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            bound_text_windowed("body", 0, 1)
+        with pytest.raises(ValueError, match="positive"):
+            bound_text_windowed("body", 1, 0)
+
+    def test_truncates_with_head_and_tail_present(self) -> None:
+        text = "".join(f"line{i}\n" for i in range(1000))
+        body, limits = bound_text_windowed(text, 200, 20)
+        assert limits["complete"] is False
+        assert limits["truncation_reason"] == "head_tail_window"
+        assert body.startswith("line0\n")
+        assert body.rstrip("\n").endswith("line999")
+        assert "[elided]" in body
+
+    def test_balance_invariant_holds(self) -> None:
+        text = "".join(f"line{i}\n" for i in range(1000))
+        _, limits = bound_text_windowed(text, 200, 20)
+        assert limits["observed_bytes"] == limits["included_bytes"] + limits["omitted_bytes"]
+        assert limits["observed_lines"] == limits["included_lines"] + limits["omitted_lines"]
+
+    def test_included_never_exceeds_budget(self) -> None:
+        text = "".join(f"line{i}\n" for i in range(1000))
+        _, limits = bound_text_windowed(text, 200, 20)
+        assert limits["included_bytes"] <= 200
+        assert limits["included_lines"] <= 20
+
+    def test_real_oversized_fixture_retains_tail_anchor(self) -> None:
+        from scripts.ci_rca.log_evidence import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES
+
+        body, limits = bound_text_windowed(build_log(), DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES)
+        assert "Failed checks:" in body
+        assert "Coverage below 100%" in body
+        assert limits["truncation_reason"] == "head_tail_window"
+
+    def test_budget_too_small_for_marker_degrades_to_plain_bound_text(self) -> None:
+        """max_bytes smaller than the elision marker itself must not emit a marker-only body
+        that overflows the declared budget -- it degrades to plain head truncation instead."""
+        text = "".join(f"line{i}\n" for i in range(1000))
+        body, limits = bound_text_windowed(text, 5, 1000)
+        assert limits["complete"] is False
+        assert limits["truncation_reason"] == "head_tail_window"
+        assert "[elided]" not in body
+
+    def test_budget_too_small_for_marker_by_line_count_degrades_to_plain_bound_text(self) -> None:
+        text = "".join(f"line{i}\n" for i in range(1000))
+        body, limits = bound_text_windowed(text, 100_000, 1)
+        assert limits["complete"] is False
+        assert limits["truncation_reason"] == "head_tail_window"
+        assert "[elided]" not in body
+
+    def test_budget_too_small_for_marker_but_content_fits_stays_complete(self) -> None:
+        """Degraded path still delegates to bound_text's own complete-fit case -- content that
+        fits under the tiny byte budget must not be force-marked truncated."""
+        body, limits = bound_text_windowed("hi\n", 5, 1000)
+        assert body == "hi\n"
+        assert limits["complete"] is True
+
+
+class TestHeadTailWindowAndDrainCeilingReasons:
+    """Both new truncation reasons (head_tail_window, drain_ceiling) must be admitted by BOTH
+    hardcoded reason sets: _validate_limits (the body-vs-limits reason) and _validate_selection
+    (the unqueried-fallback-job reason) -- the latter is consulted only on a fallback job that
+    went unqueried, so missing it there is latent, not immediate."""
+
+    @pytest.mark.parametrize("reason", ["head_tail_window", "drain_ceiling"])
+    def test_reason_admitted_by_validate_limits(self, reason: str) -> None:
+        envelope = _envelope()
+        body, limits = bound_text_windowed("".join(f"line{i}\n" for i in range(1000)), 200, 20)
+        envelope["body"] = body
+        envelope["limits"] = limits
+        envelope["limits"]["truncation_reason"] = reason
+        assert validate_envelope(envelope) is envelope
+
+    @pytest.mark.parametrize("reason", ["head_tail_window", "drain_ceiling"])
+    def test_reason_admitted_by_validate_selection_unqueried_path(self, reason: str) -> None:
+        envelope = _envelope()
+        envelope["retrieval_path"] = "fallback"
+        envelope["fallback_selection"] = {
+            "queried_job_ids": [],
+            "unqueried_job_ids": [7],
+            "unqueried_reason": "aggregate_limit",
+        }
+        for step in envelope["scope"][0]["steps"]:
+            step["log_retrieved"] = False
+        envelope["limits"].update(
+            complete=False,
+            truncation_reason=reason,
+            observed_bytes=None,
+            observed_lines=None,
+            omitted_bytes=None,
+            omitted_lines=None,
+        )
+        assert validate_envelope(envelope) is envelope
+
+    def test_windowed_envelope_publishes_and_round_trips(self, tmp_path: Path) -> None:
+        """Windowed-envelope validation through publish_envelope: an oversized body windowed via
+        bound_text_windowed publishes and reads back with its tail anchor intact."""
+        text = "".join(f"line{i}\n" for i in range(1000)) + "Failed checks:\n  - Coverage below 100%\n"
+        body, limits = bound_text_windowed(text, 400, 40)
+        envelope = _envelope()
+        envelope["body"] = body
+        envelope["limits"] = limits
+        source = tmp_path / "evidence.json"
+        publish_envelope(source, envelope)
+        read_back = read_envelope(source)
+        assert read_back["limits"]["truncation_reason"] == "head_tail_window"
+        assert "Failed checks:" in read_back["body"]
