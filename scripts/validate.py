@@ -227,12 +227,10 @@ from scripts.checks.sloc._shared import (  # noqa: E402
 )
 from scripts.checks.sloc.cc_limits import validate_cc_limits  # noqa: F401,E402
 from scripts.checks.sloc.complexity import validate_complexity  # noqa: F401,E402
-from scripts.checks.sloc.sloc_limits import (  # noqa: E402
-    _load_sloc_budgets,  # noqa: F401
-    _update_sloc_budgets,
-    validate_sloc_limits,  # noqa: F401
-)
+from scripts.checks.sloc.sloc_limits import _load_sloc_budgets, _update_sloc_budgets, validate_sloc_limits  # noqa: F401,E402
 from scripts.checks.sloc.validate_sloc_budget_raises import validate_sloc_budget_raises  # noqa: F401,E402
+from scripts.checks.structural.budget_raises import validate_structural_size_budget_raises  # noqa: F401,E402
+from scripts.checks.structural.size_limits import validate_structural_size_limits  # noqa: F401,E402
 from scripts.checks.typing.mypy_baseline import validate_mypy_baseline_edits, validate_mypy_ratchet  # noqa: F401,E402
 from scripts.checks.verification.validate_differential_gate_baseline import (  # noqa: F401,E402
     validate_differential_gate_baseline,

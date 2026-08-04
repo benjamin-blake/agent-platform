@@ -3798,3 +3798,367 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/checks/prompts/test_validate_prompt_files.py::TestPromptSizeLiveSurface
+  - check_id: structural-guard-binds-shared-marker-module
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/budget_raises.py
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import pathlib
+
+        src=pathlib.Path(''scripts/checks/structural/budget_raises.py'').read_text(encoding=''utf-8'')
+
+        assert ''_marker_guard'' in src, ''not bound to the shared module''
+
+        assert ''make_section_extractor'' in src, ''must use the section extractor''
+
+        assert ''make_flat_extractor'' not in src, ''flat extractor forbidden here -- it parses class-table scalars as budget
+        entries''
+
+        assert ''## Decision'' not in src, ''local Decision-header regex -- this is a sixth copy''
+
+        assert ''subprocess'' not in src, ''local base reader -- default_base_reader belongs to the shared module''
+
+        print(''GUARD_BINDING_OK'')
+
+        '
+  - check_id: structural-registry-section-scoped-extraction
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/budget_raises.py
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import pathlib
+
+        from scripts.checks.structural.budget_raises import _BUDGET_SPEC, _LONG_LINE_SPEC
+
+        text=pathlib.Path(''config/structural_size_budgets.yaml'').read_text(encoding=''utf-8'')
+
+        b=_BUDGET_SPEC.extractor(text); l=_LONG_LINE_SPEC.extractor(text)
+
+        leaked=[k for k in (''limit'',''max_line_chars'',''version'') if k in b or k in l]
+
+        assert not leaked, f''class-table scalars leaked into a roster extraction: {leaked}''
+
+        assert ''terraform/iceberg_tables.tf'' in b, ''budgets roster not extracted''
+
+        assert ''logs/.retro-lite-log.jsonl'' in l, ''long_line_budgets roster not extracted''
+
+        assert ''terraform/iceberg_tables.tf'' not in l and ''logs/.retro-lite-log.jsonl'' not in b, ''the two sections cross-leaked''
+
+        print(''SECTION_SEAM_OK'')
+
+        '
+  - check_id: structural-engine-green-and-scoped
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/size_limits.py
+    guard_symbol: validate_structural_size_limits
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import scripts.validate as v
+
+        from scripts.checks.structural import _classify
+
+        measured={rel for rel, _slug in _classify.iter_measured_files()}
+
+        assert ''terraform/iceberg_tables.tf'' in measured, ''terraform not scanned -- SGE-01 unclosed''
+
+        assert ''config/agent/verification_registry/registry.yaml'' in measured, ''config not scanned -- SGE-02 unclosed''
+
+        assert ''docs/contracts/ops_recommendations.yaml'' in measured, ''contracts not scanned -- SGE-04 unclosed''
+
+        assert ''docs/ROADMAP-PRODUCT.yaml'' in measured, ''ROADMAP-PRODUCT ungoverned -- the exempt-by-omission hole''
+
+        assert ''docs/ROADMAP-PLATFORM.yaml'' not in measured, ''PLATFORM must defer to validate_platform_roadmap (Decisions
+        114/147)''
+
+        failed=[]; v.validate_structural_size_limits(failed)
+
+        assert not failed, f''installing PR is NOT green by construction: {failed}''
+
+        print(''ENGINE_GREEN_AND_SCOPED'')
+
+        '
+  - check_id: structural-globs-cover-both-yaml-spellings
+    primitive_slot: command_exit_zero
+    guard_target: config/structural_size_budgets.yaml
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import subprocess
+
+        from scripts.checks.structural import _classify
+
+        out=subprocess.run([''git'',''ls-files'',''.github''],capture_output=True,text=True,check=True).stdout.split()
+
+        yamls=[f for f in out if f.endswith((''.yml'',''.yaml''))]
+
+        hit=[f for f in yamls if _classify.classify_path(f)==''ci_workflows'']
+
+        assert len(yamls)>=28, f''population anchor moved: {len(yamls)} -- re-derive before relaxing''
+
+        assert len(hit)==len(yamls), f''ci_workflows glob covers {len(hit)} of {len(yamls)} -- both spellings required (rec-2928)''
+
+        assert _classify.classify_path(''config/agent/probe.yml'')==''config'' and _classify.classify_path(''config/agent/probe.yaml'')==''config'',
+        ''config row misses a spelling''
+
+        print(''BOTH_SPELLINGS_COVERED'')
+
+        '
+  - check_id: structural-residual-default-row
+    primitive_slot: command_exit_zero
+    guard_target: config/structural_size_budgets.yaml
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'from scripts.checks.structural import _classify
+
+        rows=_classify.load_registry()[''classes'']
+
+        slugs=[r[''slug''] for r in rows]
+
+        assert slugs[-1]==''residual'', ''residual must be the LAST row, got: '' + str(slugs)
+
+        assert slugs.count(''residual'')==1, ''duplicate residual row''
+
+        assert rows[-1][''limit'']==500, ''residual limit must be 500, got: '' + str(rows[-1][''limit''])
+
+        assert _classify.classify_path(''some/new/surface.hcl2'')==''residual'', ''unmatched extension is not govern-by-default''
+
+        assert _classify.classify_path(''docs/intent-migration/MANIFEST.yaml'')==''residual'', ''MANIFEST.yaml must land in
+        residual''
+
+        assert len(rows)==12, ''class table must have exactly 12 rows, got: '' + str(len(rows))
+
+        roadmaps=[r for r in rows if r[''slug'']==''roadmaps''][0]
+
+        assert roadmaps[''limit'']==500, ''roadmaps class limit must be 500 -- the designed 6,000 ceiling is SGE-05 to ratify,
+        got: '' + str(roadmaps[''limit''])
+
+        assert ''docs/ROADMAP-PLATFORM.yaml'' in roadmaps[''defer_to_incumbent''], ''PLATFORM must be deferred by exact filename''
+
+        assert ''docs/ROADMAP-PRODUCT.yaml'' not in roadmaps[''defer_to_incumbent''], ''PRODUCT must NOT be deferred -- validate_platform_roadmap
+        does not measure it''
+
+        print(''RESIDUAL_GOVERNS_BY_DEFAULT'')
+
+        '
+  - check_id: structural-longline-roster-exactly-measured
+    primitive_slot: command_exit_zero
+    guard_target: config/structural_size_budgets.yaml
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import pathlib
+
+        from scripts.checks.structural import _classify
+
+        reg=_classify.load_registry()
+
+        seeded=set(reg.get(''long_line_budgets'') or {})
+
+        breaches={rel for rel, _slug in _classify.iter_measured_files()
+
+        if max((len(x) for x in pathlib.Path(rel).read_text(encoding=''utf-8'', errors=''replace'').splitlines()), default=0)
+        > 2000}
+
+        assert breaches==seeded, f''long-line roster drift -- measured {sorted(breaches)} seeded {sorted(seeded)}''
+
+        print(''LONGLINE_ROSTER_EXACT'')
+
+        '
+  - check_id: structural-decision-166-authorizes-every-roster-key
+    primitive_slot: command_exit_zero
+    guard_target: docs/DECISIONS.md
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'from scripts.checks import _marker_guard as mg
+
+        from scripts.checks.structural import _classify
+
+        reg=_classify.load_registry()
+
+        keys=sorted(set(reg.get(''budgets'') or {}) | set(reg.get(''long_line_budgets'') or {}))
+
+        bodies=mg.load_decision_bodies()
+
+        unbacked=[k for k in keys if mg.authorization_failure(''dec-166'', k, bodies)]
+
+        assert not unbacked, f''Decision 166 does not authorize: {unbacked}''
+
+        two_seg=[k for k in keys if len(k.split(''/''))==2]
+
+        assert len(two_seg)>=5, f''expected at least 5 two-segment keys, found {two_seg}''
+
+        assert len(keys)==15, ''expected 15 distinct roster keys (16 entries, registry.yaml in both rosters), found: '' + str(len(keys))
+
+        print(''ALL_ROSTER_KEYS_AUTHORIZED'')
+
+        '
+  - check_id: structural-raise-guard-green-on-tree
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/budget_raises.py
+    guard_symbol: validate_structural_size_budget_raises
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import scripts.validate as v
+
+        failed=[]; v.validate_structural_size_budget_raises(failed)
+
+        assert not failed, f''raise-guard red: {failed}''
+
+        print(''RAISE_GUARD_GREEN'')
+
+        '
+  - check_id: structural-checks-registered-both-tiers-unscoped
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'from scripts.checks import registry
+
+        import scripts.validate as v
+
+        names=(''validate_structural_size_limits'',''validate_structural_size_budget_raises'')
+
+        pre={s.name: s for s in registry.pre_sequence() if s.kind==''check''}
+
+        full={s.name for s in registry.full_sequence() if s.kind==''check''}
+
+        assert not [n for n in names if n not in pre], ''missing from the --pre sequence: '' + str([n for n in names if n not
+        in pre])
+
+        assert ''validate_structural_size_limits'' in full, ''missing from the full sequence''
+
+        assert not [n for n in names if pre[n].pre_globs is not None], ''must be unscoped (no pre_globs): '' + str([n for n
+        in names if pre[n].pre_globs is not None])
+
+        assert not [n for n in names if not callable(getattr(v, n, None))], ''not re-exported as a scripts/validate.py global:
+        '' + str([n for n in names if not callable(getattr(v, n, None))])
+
+        print(''REGISTERED_BOTH_TIERS_UNSCOPED'')
+
+        '
+  - check_id: structural-modules-under-own-limit
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import pathlib
+
+        mods=[p for p in sorted(pathlib.Path(''scripts/checks/structural'').glob(''*.py'')) if p.name != ''__init__.py'']
+
+        assert len(mods)>=3, ''expected the decomposed package, found: '' + str([p.name for p in mods])
+
+        eff=lambda p: len([x for x in p.read_text(encoding=''utf-8'').splitlines() if x.strip() and not x.strip().startswith(''#'')])
+
+        oversized=[(str(p), eff(p)) for p in mods if eff(p) > 500]
+
+        assert not oversized, ''oversized new modules -- decompose, do not raise: '' + str(oversized)
+
+        budgets=pathlib.Path(''config/sloc_budgets.yaml'').read_text(encoding=''utf-8'')
+
+        assert ''checks/structural'' not in budgets, ''a structural module was registered in the SLOC budget registry''
+
+        v=pathlib.Path(''scripts/validate.py'')
+
+        vs=len([x for x in v.read_text(encoding=''utf-8'').splitlines() if x.strip() and not x.strip().startswith(''#'')])
+
+        assert vs <= 500, ''scripts/validate.py is over the SLOC limit at '' + str(vs) + '' -- reclaim a line, do not register
+        it''
+
+        assert ''scripts/validate.py'' not in budgets, ''scripts/validate.py was registered in the SLOC budget registry -- forbidden
+        by Decision 128 and acceptance criterion 10''
+
+        assert max(len(x) for x in v.read_text(encoding=''utf-8'').splitlines()) <= 127, ''a scripts/validate.py line breaches
+        ruff line-length 127''
+
+        print(''SELF_SUBJECT_OK'')
+
+        '
+  - check_id: structural-census-within-fast-tier-budget
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/size_limits.py
+    guard_symbol: validate_structural_size_limits
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import time, scripts.validate as v
+
+        t=time.perf_counter(); failed=[]; v.validate_structural_size_limits(failed); d=time.perf_counter()-t
+
+        assert not failed, failed
+
+        assert d < 5.0, f''census took {d:.3f}s -- investigate before merging''
+
+        print(''CENSUS_BUDGET_OK'')
+
+        print(f''measured {d:.3f}s'')
+
+        '
+  - check_id: structural-unit-suite-failure-paths
+    primitive_slot: test_selector
+    guard_target: scripts/checks/structural
+    guard_symbol: null
+    plan_slug: size-gov-engine
+    graduated_at: '2026-08-04'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/structural
