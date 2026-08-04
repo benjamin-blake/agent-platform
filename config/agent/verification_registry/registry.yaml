@@ -3809,7 +3809,7 @@ entries:
       command:
         - bash
         - -c
-        - bash -c 'bin/venv-python -m pytest tests/validate/test_failed_check_attribution.py -q && test $(bin/venv-python -c "import pathlib;print(len([l for l in pathlib.Path(\"scripts/validate.py\").read_text().splitlines() if l.strip() and not l.strip().startswith(\"#\")]))") -le 499'
+        - 'bin/venv-python -c "from unittest.mock import patch; from tests.fixtures.validate_module import _validate; from scripts.checks import validation_result; import pathlib; validation_result._ATTRIBUTIONS.clear(); _dispatch_check = _validate._dispatch_check; p = patch(''validate.validate_invariants'', lambda failed: failed.append(''Coverage below 100%'')); p.start(); failed = []; _dispatch_check(''validate_invariants'', failed); p.stop(); assert failed == [''Coverage below 100%''], failed; assert validation_result._ATTRIBUTIONS == [{''check'': ''validate_invariants'', ''label'': ''Coverage below 100%''}], validation_result._ATTRIBUTIONS; sloc = len([l for l in pathlib.Path(''scripts/validate.py'').read_text().splitlines() if l.strip() and not l.strip().startswith(''#'')]); assert sloc <= 499, sloc; print(''ok'')"'
   - check_id: validation-result-schema-v2-attributions
     primitive_slot: command_exit_zero
     guard_target: scripts/checks/validation_result.py
