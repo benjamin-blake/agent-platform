@@ -1,0 +1,826 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "ci-rca-evidence-fidelity"
+intent: >-
+  Make CI-RCA name the check that actually failed by CARRYING that fact from the producer instead
+  of re-deriving it from prose: validate.py already knows which check failed and writes it to
+  logs/debug/validation-result.json, but that file is never shipped to the RCA job, so the
+  classifier scrapes logs and fabricates. Three post-merge canary failures whose true cause was
+  "Coverage below 100%" were each filed as validate_invariants, sending critical recommendations
+  at an innocent file.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-evidence-fidelity.yaml
+phase: >-
+  ci_rca rec-driven forward fix (Decision 72 / Decision 73). Claims NO tier_item alignment and
+  declares no closes_criteria, so the Tier Item Freshness Gate's soft-warn exception genuinely
+  applies. The one roadmap edit in scope is data reconciliation, not tier_item advancement:
+  T1.13 c9(b) is marked `met` but this plan's production evidence falsifies it, and the Freshness
+  Gate's output discipline forbids dropping that silently.
+scope:
+  - file: scripts/checks/validation_result.py
+    action: Modify
+    purpose: >-
+      Host the attribution machinery. Bump to schema_version 2, add a module-level attribution
+      accumulator reset by the existing clear() lifecycle (validate.py already calls clear() at
+      line 406, so no new lifecycle is introduced), expose dispatch_recording(name, failed,
+      namespace) which runs the check and records (check, label) for each newly appended entry,
+      and emit failed_check_attributions from write_completed. The file is 40 SLOC with ample
+      headroom, which is why the logic lives here and not in validate.py.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      NET-ZERO line change: replace _dispatch_check's single body line `globals()[name](failed)`
+      with `validation_result.dispatch_recording(name, failed, globals())`. Passing globals()
+      preserves the load-bearing patch("validate.<name>") interception the docstring documents.
+      The file is at 499 of 500 SLOC (the gate is sloc <= 500, so exactly one line of headroom
+      remains) -- hold it net-zero anyway rather than spending it, so the
+      write sites at 606/615 must NOT gain a kwarg; write_completed reads the accumulator itself.
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: >-
+      Upload logs/debug/validation-result.json from the main-validate job with `if: always()`,
+      mirroring the existing pytest-junit step at line 138-149 (always(), if-no-files-found:
+      ignore, retention-days: 14).
+  - file: .github/workflows/main-canary.yml
+    action: Modify
+    purpose: >-
+      Same upload for the canary job -- this is the workflow that produced all three misdiagnosed
+      bundles, so without it the primary fix misses the failure class that motivated it.
+  - file: docs/contracts/github-actions-evidence.yaml
+    action: Modify
+    purpose: >-
+      Declare both new uploads in the artifact_uploads section (workflow/job/step/artifact/
+      retention_class: ordinary_ci), matching the existing pytest-junit entries. This is how the
+      artifact path is guarded: the already-registered validate_actions_evidence check enforces
+      the contract, so no edit to scripts/verify_ci_workflow.py is needed -- that file is at
+      500 of 500 SLOC and any addition would breach it.
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Best-effort download of the failing run's own validation-result artifact (same shape as the
+      existing "Fetch junit report" step at line 200-213, continue-on-error) and pass it to the
+      evidence generator. Absent artifact degrades to the log path, never fails the job.
+  - file: scripts/ci_rca/taxonomy.py
+    action: Modify
+    purpose: >-
+      Add the Priority-0 attribution path ABOVE Priority 1 in BOTH classify_failure (singular)
+      and classify_failures (plural) -- the plural function is the production entry point
+      (evidence.py:439) and its Priority 1 hits on the step name
+      'Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)', which IS a
+      step_name_to_category key, so wiring only the singular function would leave ci.yml failures
+      unchanged. N attributions enumerate to N failed checks (T1.13 c11(ii)). Also add the
+      completeness-gated refusal that preempts Priority 4 (substring scan) and Priority 5 (regex
+      fallback) -- gated on incomplete evidence AND no attribution artifact AND no junit
+      cause-group AND no authoritative source.
+  - file: scripts/ci_rca/evidence.py
+    action: Modify
+    purpose: >-
+      Accept the validation-result artifact and thread THREE things into classify_failures: the
+      artifact, the retrieval envelope's completeness, AND whether a junit cause-group is
+      available. The junit one is easy to miss and load-bearing: _resolve_error_signatures
+      consumes junit_path AFTER classify_failures, so classification cannot see it unless passed
+      explicitly -- and without it the refusal fires with junit present and collapses distinct
+      pytest causes onto one chain (the Decision 142 masking bug). Then route the refusal verdict
+      to the degenerate signature. Minimal delta by design -- the file is at 488 of 500 SLOC. If
+      the delta would cross 500, decompose per the Decision 80/104/124 facade pattern; never
+      register a raise.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Extend function_to_category from 38 entries to cover all 93 registered checks, and declare
+      the evidence_insufficient category (NOT drain_ceiling -- that is a truncation_reason, and
+      declaring it as a category with no map entry would fail the guard's dead-enum-branch pass).
+      Totality is a PRECONDITION OF PRIORITY 0, not hygiene: the attribution path resolves an
+      attributed check's failure_category through func_map[check_name], so any unmapped check
+      breaks the new path. (It is NOT the reason Priority 3 returns None -- that is the
+      label-vs-function-name mismatch documented in Context.) Side effect to accept: widening the
+      map also enlarges Priority 4's substring-scan surface and can change which name wins for
+      non-attributed failures, re-keying some chains beyond the fingerprint fork already
+      acknowledged. evidence_insufficient is deliberately NOT added to agent_only_categories --
+      machine-emitted at one call site only.
+  - file: scripts/checks/ci_guards/validate_ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      Add a registry-totality assertion (every registry.all_checks() name present in
+      function_to_category) -- the same shape as this check's existing workflow_to_tier coverage
+      assertion, so it is the same concern, not a new one. Also add evidence_insufficient to the
+      hardcoded code-emitted-sentinel set beside "unknown" (line 44); the check's third pass
+      (declared - used_cats - agent_only) makes this mandatory, not optional.
+  - file: scripts/ci_rca/fetch_logs.py
+    action: Modify
+    purpose: >-
+      Replace _run_log's 1-byte-per-read head-only stream (which terminates gh at the cap) with
+      CHUNKED reads retaining a bounded head buffer plus a bounded rolling tail buffer, under an
+      explicit drain ceiling. Both bounds are keyword arguments with production defaults and
+      test-overridable values (see constraints for the numbers and the returncode contract).
+      Keeps the five source fragments pinned by verify_ci_workflow's structural guard
+      byte-identical.
+  - file: scripts/ci_rca/log_evidence.py
+    action: Modify
+    purpose: >-
+      Add bound_text_windowed (head + elision marker + tail within the SAME max_bytes/max_lines
+      budget) and admit "head_tail_window" and "drain_ceiling" as truncation reasons in BOTH
+      hardcoded reason sets -- _validate_limits (line 88) and _validate_selection (line 153). The
+      second set is only consulted when a fallback job goes unqueried, so missing it is a latent
+      rather than immediate break -- but on that path it raises from publish_envelope and
+      hard-fails the RCA job at its `test -s` guard, so extend both.
+  - file: scripts/ci_rca/fingerprint.py
+    action: Modify
+    purpose: >-
+      Add the degenerate deterministic signature for the refusal verdict
+      (evidence_insufficient::<truncation_reason>) so truncated-evidence failures dedup onto one
+      chain per workflow instead of keying on an arbitrary truncated tail line.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap data reconciliation only. Flip T1.13 c9 from `met` to `open` with a
+      [RE-GROUNDED 2026-08-04] note recording that only part (b) ("classify_failure must prefer
+      the structured failed-step list over the current naive substring scan") is falsified by
+      three production bundles, and that parts (a) and (c) are re-opened as a side effect of
+      criterion-level status granularity. Follows the in-item c10 precedent (met -> open, audit
+      CIRCA-01). Also note c8's "there is zero actions/upload-artifact in the repo today" premise
+      is stale -- three upload steps exist -- which is what makes c8's own SECONDARY
+      execution-manifest route cheap enough to take here.
+  - file: tests/validate/test_failed_check_attribution.py
+    action: Create
+    purpose: >-
+      Cover dispatch-level attribution end to end. A NEW file deliberately:
+      tests/validate/test_tiers.py is at 499 of 500 SLOC, so adding there forces a raise.
+  - file: tests/checks/test_validation_result.py
+    action: Modify
+    purpose: >-
+      Cover schema_version 2, failed_check_attributions, and accumulator reset by clear() (a
+      leaked accumulator would cross-contaminate runs and tests).
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      Cover Priority-0 in BOTH classify_failure and classify_failures including the
+      step-name-collision case; replace the vacuous Priority-3 tests (they feed synthetic
+      function-name block entries validate.py never emits) with real-label cases; cover the
+      refusal against Priority 4, Priority 5, and the junit-present carve-out. 416 of 500 SLOC.
+  - file: tests/ci_rca/evidence/test_generate.py
+    action: Modify
+    purpose: >-
+      Cover generate_bundles end to end with the artifact present and a jobs.json whose failed
+      step name collides with step_name_to_category, plus N-attribution -> N-bundle enumeration.
+      417 of 500 SLOC.
+  - file: tests/test_ci_rca_fetch_logs.py
+    action: Modify
+    purpose: >-
+      Rewrite FOUR tests, not three: the three terminate-at-cap cases at lines 179-206
+      (test_exact_byte_cap_is_complete_but_cap_plus_one_is_truncated,
+      test_line_cap_terminates_on_first_byte_of_next_line,
+      test_sigterm_ignoring_child_is_killed_after_truncation) plus test_timeout_kills_child at
+      line 208, whose DefaultSelector stub exposes only register/get_map/close and breaks under a
+      chunked selector.select(timeout=...) loop. Add real-scale dual-window and drain-ceiling
+      coverage.
+  - file: tests/test_ci_rca_log_evidence.py
+    action: Modify
+    purpose: Cover bound_text_windowed, both new truncation reasons, and windowed-envelope validation through publish_envelope.
+  - file: tests/test_ci_rca_fingerprint.py
+    action: Modify
+    purpose: >-
+      Cover the degenerate refusal signature. This is the mirror-rule target for
+      scripts/ci_rca/fingerprint.py per map_source_to_test -- NOT
+      tests/ci_rca/evidence/test_fingerprint.py, which is a different file.
+  - file: tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      Cover the registry-totality assertion INCLUDING a mutation case proving it fails when a
+      registered check has no category, plus the evidence_insufficient sentinel exemption.
+  - file: tests/checks/ci_guards/test_validate_actions_evidence.py
+    action: Modify
+    purpose: Cover the two new artifact_uploads contract declarations.
+  - file: tests/fixtures/ci_rca/oversized_validate_log.py
+    action: Create
+    purpose: >-
+      Real-scale fixture GENERATOR (not a committed multi-MB log): synthesises a full-tier
+      validate failure log exceeding both DEFAULT_MAX_BYTES and DEFAULT_MAX_LINES from real
+      structural elements, terminating in the real "Failed checks:\n  - Coverage below 100%"
+      block captured from run 30768605340. Lives in tests/fixtures/ because that package is
+      exempt from the no-cross-test-import guard by construction.
+bundled_recommendations:
+  - rec-2957
+  - rec-2958
+  - rec-2973
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    validate.py attributes each REGISTERED check's failure labels to that check, and
+    logs/debug/validation-result.json carries schema_version 2 with
+    failed_check_attributions=[{"check": "validate_test_coverage", "label": "Coverage below 100%"}]
+    on the real failure path. Scaffold-appended labels are out of scope by construction (see
+    constraints).
+  - >-
+    generate_bundles -- the PRODUCTION entry point, via classify_failures -- emits a bundle whose
+    failed_check is "validate_test_coverage" when the artifact is present, EVEN WHEN the failed
+    step name is 'Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)', which is
+    a step_name_to_category key that would otherwise win at Priority 1.
+  - >-
+    Every one of the 93 registered checks resolves to a category in function_to_category -- a
+    PRECONDITION of the Priority-0 path, which resolves an attributed check's failure_category
+    through func_map[check_name], not standalone hygiene -- and validate_ci_rca_taxonomy FAILS
+    when a registered check is unmapped.
+  - >-
+    When evidence is incomplete AND no attribution artifact is present AND no junit cause-group is
+    available AND no authoritative source named the check, classification returns
+    failure_category="evidence_insufficient" instead of a substring-scan or regex-fallback guess
+    -- verified against BOTH Priority 4 and Priority 5 trigger shapes. With a junit cause-group
+    present the junit signature wins (Decision 142 anti-masking).
+  - >-
+    The refusal verdict fingerprints on evidence_insufficient::<truncation_reason>: two distinct
+    truncated logs sharing a truncation_reason produce the SAME fingerprint (recurrences dedup),
+    and differing truncation_reasons produce different fingerprints.
+  - >-
+    Dual-window retrieval keeps the "Failed checks:" block inside the evidence body for an
+    oversized log while staying within DEFAULT_MAX_BYTES and DEFAULT_MAX_LINES -- asserted through
+    the full fetch_run_log -> publish_envelope path, not only at bound_text_windowed; and a child
+    exceeding the drain ceiling is killed and yields truncation_reason="drain_ceiling" with
+    returncode 0.
+  - >-
+    No config/sloc_budgets.yaml entry is raised and no scope file crosses 500 SLOC. The binding
+    files at entry are: scripts/validate.py 499 (net-zero change required),
+    scripts/verify_ci_workflow.py 500 (deliberately NOT in scope for this reason),
+    scripts/ci_rca/evidence.py 488, tests/validate/test_tiers.py 499 (not modified).
+  - verify_ci_workflow's existing guards and validate_actions_evidence both pass unchanged-plus-additions.
+  - Full-tier `bin/venv-python -m scripts.validate` exits 0 before the implementation PR is opened.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove attribution is exact at the dispatch chokepoint and that validate.py did not grow --
+      it enters at 499 of 500, so a net line addition breaches the SLOC gate.
+    command: >-
+      bash -c 'bin/venv-python -m pytest tests/validate/test_failed_check_attribution.py -q &&
+      test $(bin/venv-python -c "import pathlib;print(len([l for l in
+      pathlib.Path(\"scripts/validate.py\").read_text().splitlines() if l.strip() and not
+      l.strip().startswith(\"#\")]))") -le 499'
+    expected: Tests pass and scripts/validate.py is still at most 499 SLOC.
+    fix_if: >-
+      SLOC over 499 -- move more of the attribution logic into validation_result.py; the
+      _dispatch_check body must remain exactly one line.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: validate-attributes-label-to-check-net-zero
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the artifact carries the attribution under schema_version 2 on the failure path
+      (exit_code=1), and that the accumulator is reset by clear() so runs cannot contaminate.
+    command: bin/venv-python -m pytest tests/checks/test_validation_result.py -q
+    expected: >-
+      All pass, including schema_version == 2, a non-empty failure-path attributions list, and an
+      empty accumulator after clear().
+    fix_if: >-
+      Attributions leak across records -- clear() is not resetting the accumulator, which will
+      also cross-contaminate the test suite.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: validation-result-schema-v2-attributions
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      THE regression this plan exists to fix, asserted through the PRODUCTION entry point.
+      generate_bundles calls classify_failures (plural), whose Priority 1 hits on the full-tier
+      step name -- so this must be driven end to end, not via the singular classify_failure.
+    command: >-
+      bin/venv-python -m pytest tests/ci_rca/evidence/test_generate.py -q -k
+      "attribution or step_name_collision or priority_zero or junit"
+    expected: >-
+      All selected pass, including the case whose jobs.json failed step name is
+      'Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)' and whose emitted
+      bundle still reports failed_check == "validate_test_coverage".
+    fix_if: >-
+      failed_check equals the CI step name or validate_invariants -- Priority 0 was wired into
+      classify_failure only, leaving the production plural path on its old ladder.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-bundle-names-real-failed-check
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Directly assert Priority 0 outranks Priority 1 in the plural function, independent of the
+      bundle assembly around it, so a passing step 3 cannot be an artifact of bundle plumbing.
+    command: >-
+      bin/venv-python -c "import json,tempfile,pathlib; from scripts.ci_rca.taxonomy import
+      classify_failures; art={'schema_version':2,'exit_code':1,'failed_checks':['Coverage below
+      100%'],'failed_check_attributions':[{'check':'validate_test_coverage','label':'Coverage
+      below 100%'}]}; p=pathlib.Path(tempfile.mkdtemp())/'vr.json'; p.write_text(json.dumps(art));
+      jobs=[{'steps':[{'name':'Validate full tier (ruff, mypy, pytest, DQ runner, verifier
+      harness)','conclusion':'failure'}]}];
+      out=classify_failures('irrelevant log\n', jobs, validation_result_path=p); print(out);
+      assert [c for _,c,_ in out] == ['validate_test_coverage'], out"
+    expected: Prints one tuple naming validate_test_coverage and exits 0.
+    fix_if: >-
+      Returns the step name -- the Priority-0 branch sits below the jobs-JSON step-name lookup in
+      classify_failures.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-rca-priority-zero-outranks-step-name
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove the taxonomy covers the whole registry and that the guard can actually fail. 56 of 93
+      checks are currently uncategorised.
+    command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py -q
+    expected: >-
+      All pass, including the mutation case that removes a registered check from
+      function_to_category and asserts the guard appends a failure.
+    fix_if: >-
+      The mutation case passes without the guard failing -- totality is being asserted over the
+      map's own keys rather than over registry.all_checks().
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-taxonomy-covers-registry
+  - step: 6
+    phase: pre-deploy
+    action: Independent cross-check of step 5's premise against the live registry.
+    command: >-
+      bin/venv-python -c "import scripts.validate; from scripts.checks.registry import
+      all_checks; from scripts.ci_rca.taxonomy import load_taxonomy;
+      missing=sorted(set(all_checks())-set(load_taxonomy().get('function_to_category') or {}));
+      print(len(missing), missing[:5]); assert not missing, missing"
+    expected: Prints "0 []" and exits 0.
+    fix_if: Non-empty list names the unmapped checks -- add each against an already-declared category.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-rca-every-registered-check-categorised
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Prove the refusal preempts Priority 4 and Priority 5 on starved evidence, AND that it stands
+      down when a junit cause-group exists -- collapsing distinct pytest causes onto one chain
+      would reintroduce exactly the masking Decision 142 was ratified to remove.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py -q -k
+      "refusal or evidence_insufficient or incomplete or junit"
+    expected: >-
+      All selected pass: the substring-trigger shape that produced rec-2958 and a regex-only
+      trigger both yield evidence_insufficient; with a junit cause-group present the junit
+      signature wins instead.
+    fix_if: >-
+      The junit case still returns evidence_insufficient -- junit availability is missing from the
+      refusal gate, and cause-anchored signatures are being discarded.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-refusal-gate-and-junit-precedence
+  - step: 8
+    phase: pre-deploy
+    action: Prove the refusal fingerprints degenerately so recurrences dedup onto one chain per workflow.
+    command: bin/venv-python -m pytest tests/test_ci_rca_fingerprint.py -q
+    expected: >-
+      All pass, including same-truncation_reason-same-fingerprint and
+      different-truncation_reason-different-fingerprint.
+    fix_if: >-
+      Two truncated logs sharing a truncation_reason produce different fingerprints -- the
+      signature is still derived from error_signature_from_log_tail.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-refusal-degenerate-fingerprint
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Prove evidence_insufficient is emitted by the classifier at runtime (not merely present as
+      a string) and is not agent-assignable.
+    command: >-
+      bin/venv-python -c "import yaml; from scripts.ci_rca.taxonomy import classify_failure;
+      cat,_,_=classify_failure('  [PASS] validate_invariants: ok\n', complete=False);
+      assert cat=='evidence_insufficient', cat;
+      cfg=yaml.safe_load(open('config/ci_rca_taxonomy.yaml'));
+      assert 'evidence_insufficient' not in (cfg.get('agent_only_categories') or []);
+      assert 'evidence_insufficient' in cfg['failure_categories']"
+    expected: Exits 0 -- emitted at runtime, declared, and absent from agent_only_categories.
+    fix_if: >-
+      Non-zero means the classifier does not actually emit it, it is undeclared (the taxonomy
+      guard will also fail), or it leaked into the agent-assignable set.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-rca-evidence-insufficient-emitted-not-assignable
+  - step: 10
+    phase: pre-deploy
+    action: Prove the fixture is genuinely oversized -- otherwise every window assertion is vacuous.
+    command: >-
+      bin/venv-python -c "from tests.fixtures.ci_rca.oversized_validate_log import build_log;
+      from scripts.ci_rca.log_evidence import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES; t=build_log();
+      b=len(t.encode('utf-8')); n=len(t.splitlines()); print(b,n);
+      assert b > DEFAULT_MAX_BYTES and n > DEFAULT_MAX_LINES;
+      assert 'Failed checks:' in ''.join(t.splitlines(True)[-100:])"
+    expected: Prints byte/line counts both above the caps and exits 0.
+    fix_if: Exits non-zero -- scale the synthetic body up and re-anchor the block at the tail.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-rca-oversized-fixture-exceeds-caps
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Prove dual-window retrieval retains the tail anchor within budget -- the D1 claim, which
+      still matters for workflows that emit no attribution artifact.
+    command: >-
+      bin/venv-python -c "from tests.fixtures.ci_rca.oversized_validate_log import build_log;
+      from scripts.ci_rca.log_evidence import bound_text_windowed, DEFAULT_MAX_BYTES,
+      DEFAULT_MAX_LINES; body,lim=bound_text_windowed(build_log(), DEFAULT_MAX_BYTES,
+      DEFAULT_MAX_LINES); assert 'Failed checks:' in body and 'Coverage below 100%' in body;
+      assert lim['included_bytes'] <= DEFAULT_MAX_BYTES and lim['included_lines'] <=
+      DEFAULT_MAX_LINES; assert lim['truncation_reason'] == 'head_tail_window';
+      assert lim['observed_bytes'] == lim['included_bytes'] + lim['omitted_bytes']"
+    expected: Exits 0 -- tail anchor present, both budgets respected, balance invariant holds.
+    fix_if: >-
+      Anchor missing means the tail window is too small or the elision marker displaced it;
+      balance failure means omitted counts do not account for the elided middle plus the marker.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-rca-window-retains-tail-anchor
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Prove the transport is bounded and fast. Removing terminate() removes the old anti-hang
+      mechanism; the drain ceiling must kill a runaway child, and the chunked read must not
+      regress latency (the current loop reads one byte per syscall).
+    command: bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py -q --timeout=120
+    expected: >-
+      All pass within the timeout, including the four rewritten cases and a drain-ceiling case
+      driving a SIGTERM-ignoring child that must be killed.
+    fix_if: >-
+      Suite exceeds the timeout -- the ceiling is checked only between reads and never fires on a
+      slow producer, or the test-injected ceiling was not plumbed through as a keyword argument.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-drain-ceiling-kills-runaway-child
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Prove the windowed body survives publish_envelope -- BOTH hardcoded truncation-reason sets
+      must admit the new reasons, or the RCA job hard-fails at its `test -s` guard.
+    command: bin/venv-python -m pytest tests/test_ci_rca_log_evidence.py tests/ci_rca/evidence -q
+    expected: All pass, including windowed-envelope publication via the fallback path.
+    fix_if: >-
+      A raise from _validate_selection means only _validate_limits (line 88) was extended and the
+      duplicate set at line 153 was missed.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-windowed-envelope-publishes
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Prove the workflow guards hold, covering the unchanged fetch-step invariants and the two new
+      artifact declarations.
+    command: >-
+      bin/venv-python -m pytest tests/verify_ci_workflow
+      tests/checks/ci_guards/test_validate_actions_evidence.py -q
+    expected: >-
+      All pass. The five pinned fetch_logs.py fragments are evaluated against the real file by
+      test_production_step_runtime_is_unchanged; the new uploads are enforced via the
+      artifact_uploads contract.
+    fix_if: >-
+      "bounded retrieval invariant missing" names the fragment whose text changed -- restore it
+      verbatim. A contract failure means the declared step name does not match the YAML exactly.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-workflow-and-artifact-guards-green
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      Prove ci-rca.yml actually PASSES the artifact to the evidence generator. Nothing else in the
+      plan pins this flag (--junit-file and --selection-manifest are likewise unpinned), so every
+      other step can pass while the feature is a production no-op -- the exact CIRCA-01 mode
+      ("built but NOT load-bearing at the production call site") this plan cites to re-open c9.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('.github/workflows/ci-rca.yml'));
+      steps=d['jobs']['rca']['steps'];
+      gen=next(s for s in steps if s.get('name')=='Generate evidence bundle')['run'];
+      dl=next(s for s in steps if 'validation-result' in str(s.get('run','')))['run'];
+      assert '--validation-result' in gen, gen;
+      assert '/tmp/ci-rca-validation-result' in gen and '/tmp/ci-rca-validation-result' in dl"
+    expected: >-
+      Exits 0 -- the generator step passes --validation-result and its path matches what the
+      download step writes.
+    fix_if: >-
+      Flag absent means the generator never receives the artifact and classification silently
+      stays on the log ladder; a path mismatch means the file is downloaded somewhere the
+      generator never looks.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-rca-generator-consumes-validation-result
+  - step: 16
+    phase: pre-deploy
+    action: >-
+      Prove both new upload steps carry `if: always()`. validate_actions_evidence enforces step
+      existence, artifact name, and retention days -- it never inspects `if:`. Without always(),
+      the upload is skipped whenever a prior step fails, i.e. on exactly the red runs this plan
+      exists to serve.
+    command: >-
+      bin/venv-python -c "import yaml
+      for wf,job in (('.github/workflows/ci.yml','main-validate'),('.github/workflows/main-canary.yml','canary')):
+          steps=yaml.safe_load(open(wf))['jobs'][job]['steps']
+          up=[s for s in steps if 'validation-result' in str(s.get('with',{}).get('path',''))]
+          assert len(up)==1, (wf,len(up))
+          assert up[0].get('if')=='always()', (wf, up[0].get('if'))
+      print('ok')"
+    expected: Prints "ok" and exits 0 -- exactly one validation-result upload per job, each gated on always().
+    fix_if: >-
+      Missing or non-always() `if:` -- the artifact will be absent on precisely the failing runs,
+      and the RCA job will silently degrade to the log path with no signal that it did.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-rca-validation-result-uploads-always
+  - step: 17
+    phase: pre-deploy
+    action: >-
+      Prove the dual-window body survives the FULL fetch path into a published envelope. Steps 11
+      and 12 exercise bound_text_windowed and _run_log in isolation; acceptance criterion 6 lives
+      at fetch_run_log -> publish_envelope, where the two mechanisms compose.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py -q -k
+      "end_to_end or published_envelope or oversized"
+    expected: >-
+      All selected pass -- an injected runner serving the oversized fixture yields a published
+      envelope whose body still contains the "Failed checks:" block and "Coverage below 100%".
+    fix_if: >-
+      Anchor missing from the published envelope means fetch_run_log re-truncated the already
+      windowed stdout from the head instead of routing through bound_text_windowed.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: ci-rca-fetch-path-publishes-tail-anchor
+  - step: 18
+    phase: pre-deploy
+    action: Prove no SLOC budget was raised and the zero-headroom files were respected.
+    command: >-
+      bash -c 'bin/venv-python -m scripts.validate --pre; test $? -eq 0 || exit 1;
+      test -z "$(git diff origin/main -- config/sloc_budgets.yaml | grep -E "^\+[^+]")" || exit 1;
+      git diff --name-only origin/main | grep -qxE "tests/validate/test_tiers.py|scripts/verify_ci_workflow.py" && exit 1 || exit 0'
+    expected: >-
+      Exits 0 -- validate --pre passed, no budget line added, and neither zero-headroom file was
+      touched.
+    fix_if: >-
+      validate --pre non-zero means an SLOC violation; an added budget line means a raise was
+      attempted -- decompose per Decision 80/104/124 instead.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Composite of a validate.py tier invocation and two git-diff assertions against origin/main;
+      the diff halves depend on this branch's transient state, so it is not expressible as a
+      standing single-command registry check.
+  - step: 19
+    phase: pre-deploy
+    action: Pre-handoff full tier (Decision 163).
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 with no failed checks in the Validation Summary.
+    fix_if: >-
+      Any failed check -- fix forward before opening the PR. Coverage below 100% on touched files
+      is the likeliest failure (Decision 159).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating "run the full validator" into the validation registry is circular, and
+      Decision 163 already enforces this obligation structurally via validate_handoff_full_tier.
+      Matches the disposition PLAN-coverage-gate-handoff-integrity (the Decision 163 plan itself)
+      used for the identical command.
+  - step: 20
+    phase: post-deploy
+    action: >-
+      After the squash-merge, prove the Resolves: trailer closed all three recs AND stamped
+      fixed_by_sha -- an unstamped closed head fails closed to REGRESSION (Decision 142).
+    command: >-
+      bash -c 'bin/venv-python -m scripts.ops_data_portal --sync >/dev/null && bin/venv-python -c
+      "import json,pathlib; rows=[json.loads(l) for l in
+      pathlib.Path(\"logs/.recommendations-log.jsonl\").read_text().splitlines() if l.strip()];
+      ids={\"rec-2957\",\"rec-2958\",\"rec-2973\"};
+      sel={r[\"id\"]:r for r in rows if r.get(\"id\") in ids};
+      assert all(sel[i][\"status\"]==\"closed\" for i in ids), {i:sel[i][\"status\"] for i in ids};
+      assert all(json.loads(sel[i][\"context_v2_json\"] or \"{}\").get(\"fixed_by_sha\") for i in ids)"'
+    expected: All three recs closed with a non-empty fixed_by_sha in context_v2_json.
+    fix_if: >-
+      status still open -- the trailer was malformed or rec-autoclose.yml did not run. Closed but
+      unstamped -- re-stamp via stamp_fixed_by_sha rather than leaving the trap armed.
+    graduation: not-applicable
+constraints:
+  - >-
+    SLOC, measured at plan time against the 500 ceiling. scripts/validate.py 499 (net-zero change
+    mandatory -- _dispatch_check's body stays ONE line and the write sites gain no kwarg);
+    scripts/verify_ci_workflow.py 500 (deliberately excluded from scope -- the new workflow guards
+    go through the artifact_uploads contract instead); scripts/ci_rca/evidence.py 488;
+    tests/validate/test_tiers.py 499 (not modified); tests/test_ci_rca_taxonomy.py 416;
+    tests/ci_rca/evidence/test_generate.py 417. Decision 128: decompose, never raise.
+  - >-
+    Transport bounds, concrete and injectable. _run_log gains drain_max_bytes (default 64 MiB) and
+    drain_timeout_s (default 300) as keyword arguments so tests can inject small values; chunked
+    reads use an 8192-byte stdout chunk (matching the existing stderr path) instead of the current
+    1-byte read. A ceiling or timeout kill sets truncated=True,
+    truncation_reason="drain_ceiling", and returncode=0 -- the existing `returncode=0 if
+    truncated` contract exists precisely so a killed child does not poison the exit code and
+    silently degrade the primary path into _fallback_logs.
+  - >-
+    Attribution covers REGISTERED checks only. Six full-tier scaffold steps append to `failed`
+    outside _dispatch_check (lint, unit_tests, terraform_checks, dependency_health,
+    ensure_fresh_dq, precommit_all_files -- validate.py:329-343), and unit_tests
+    ("Unit tests + coverage") is the repo's highest-volume failure source. Their labels carry no
+    attribution and fall through to the existing ladder. This is a known residual, not a
+    regression; do not claim total coverage.
+  - >-
+    The refusal must NOT override an available junit cause-group. _resolve_error_signatures emits
+    one cause-anchored group per distinct (exception_type, deepest_in_app_frame,
+    normalized_message_head) when junit is present -- Decision 142's anti-masking property
+    (rec-2710). Collapsing those onto evidence_insufficient::<truncation_reason> would re-collide
+    distinct pytest failures onto one chain.
+  - >-
+    Specify which mechanism owns the envelope body. Two overlapping windowing mechanisms exist
+    after this change -- _run_log's head buffer plus rolling tail deque (transport) and
+    bound_text_windowed (log_evidence) -- and the implementation MUST state which produces the
+    published body and how they compose, so fetch_run_log does not re-truncate already-windowed
+    stdout from the head. Same for _fallback_logs: it concatenates per-job fragments and computes
+    remaining/remaining_lines over already-emitted text, so state whether each job is windowed
+    independently then re-windowed, and ensure the reason surfaced to _validate_selection is one
+    it admits. Note that the observed == included + omitted balance forces
+    omitted_bytes := observed - included, which under-reports the true elision by the marker
+    length -- internally consistent and acceptable, but state it rather than discovering it.
+  - >-
+    Evidence stays BOUNDED in the emitted body. Do not raise DEFAULT_MAX_BYTES or
+    DEFAULT_MAX_LINES (Decision 72 provenance, rec-2117/2118/2718). This knowingly leaves BOTH
+    fetcher recs' acceptance oracles unsatisfied: rec-2973 expects a MiB-scale DEFAULT_MAX_BYTES
+    constant, rec-2957 expects a FAIL_ANCHOR/fail_anchor symbol.
+  - >-
+    The five source fragments pinned by _check_ci_rca_fetch_classification must survive
+    byte-identical. Workflow edits are additive steps only -- both uploads use `if: always()`
+    (mirroring ci.yml:143 and main-canary.yml:57), not a failure condition, or a red run uploads
+    nothing.
+  - >-
+    The ci-rca.yml artifact download is best-effort (continue-on-error), mirroring the junit step.
+    A missing artifact must degrade to the log path and the refusal verdict, never fail the job.
+  - >-
+    evidence_insufficient is machine-emitted and must never enter agent_only_categories, or the
+    near-synonym decay risk that ruled out naming it "undetermined" returns. "undetermined" is
+    unavailable: it is already a sentinel on seven other axes across four ci_rca modules.
+  - >-
+    All rec closures transit the ops portal via the Resolves: trailer (Decision 84; Decision 142
+    fixed_by_sha stamping). Never edit logs/.recommendations-log.jsonl.
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable failure, stop and RCA.
+  - >-
+    Touched files must reach 100% line coverage (Decision 159) or carry a marked
+    config/coverage_baseline.yaml entry; per-file mypy baselines must not rise (Decision 161).
+  - >-
+    Test paths follow the Decision 131 mirror rule as resolved by map_source_to_test: validate.py
+    -> tests/validate/, fingerprint.py -> tests/test_ci_rca_fingerprint.py, evidence.py ->
+    tests/ci_rca/evidence/. Shared fixtures live in tests/fixtures/.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND (116 of 116 triaged).
+    CITE -- Decision 72, Decision 55, Decision 73, Decision 159, Decision 163, Decision 132,
+    Decision 148, Decision 131. RELATED -- Decision 84, Decision 161, Decision 130, Decision 124.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Root-cause evidence gathered at planning time from the raw job logs rather than the bundles:
+    canary runs 30768605340 (job 91551668088), 30789322003 (job 91609378210) and 30812676818 ALL
+    failed on "Failed checks:\n  - Coverage below 100%". None failed on validate_invariants; the
+    junit artifacts were clean. rec-2958's two flagged pytest nodes pass locally on current main.
+    The underlying breakage was fixed on main by 3362491; the canary is green since.
+  - >-
+    ARCHITECTURE: this plan CARRIES the failed-check fact rather than re-deriving it. validate.py
+    already writes logs/debug/validation-result.json with an exact failed_checks list on the
+    failure path (validate.py:615), and ci-rca.yml already downloads a cross-run artifact from the
+    failing run (junit, line 200-213). An earlier draft instead extended the log-scraping ladder
+    with a ~78-entry label map and an AST drift guard; that was the wrong primitive and is
+    deliberately abandoned.
+  - >-
+    Why attribution and not the artifact alone: validation-result.json stores LABELS, not check
+    names, so the artifact by itself would still need a label map. Dispatch runs through one
+    chokepoint (_dispatch_check, validate.py:272-278), making the mapping exact and drift-proof.
+  - >-
+    Why Priority 0 must land in classify_failures (plural), not just classify_failure: the
+    production caller is evidence.py:439 -> classify_failures, whose Priority 1 matches the
+    ci.yml step name 'Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)'
+    against step_name_to_category. Wiring only the singular function would leave ci.yml failures
+    unchanged while a singular-function unit test went green -- the same test-passes-production-
+    unchanged defect this plan exists to remove. The three motivating canary runs used step name
+    'Validate full tier against main', which is in neither map, which is why they fell to
+    Priority 4 and produced validate_invariants.
+  - >-
+    Measured gaps: 93 registered checks, 38 function_to_category entries, 56 with no category.
+    Empirically, classify_failure over the real "Failed checks:" block alone returns
+    ('unknown','unknown','taxonomy_fallback'), and over head+tail STILL returns
+    ('code_regression','validate_invariants','function_to_category') -- so widening the retrieval
+    window alone does NOT fix the symptom.
+  - >-
+    Priority 3 (_classify_via_failed_checks_block) has never fired in production: it keys on
+    validate_* FUNCTION names while all checks append human LABELS. Its existing tests pass only
+    because they feed synthetic function-name entries validate.py never emits -- a vacuous test,
+    which is why step 5 mutation-proves the new guard can fail.
+  - >-
+    Decision 142 fingerprint fork, ACKNOWLEDGED AND INTENTIONAL: compute_fingerprint_v2 takes
+    failure_category and error_signature and both change here. Open non-pytest ci_rca chains
+    re-key one-way and are orphaned, mirroring the deliberate v1->v2 _V2_SALT disjointness
+    precedent, which likewise did not remap historical records.
+  - >-
+    The refusal participates in fingerprint identity via the degenerate
+    evidence_insufficient::<truncation_reason> form. Inheriting error_signature_from_log_tail
+    would key identity on wherever the byte cap landed -- fabricating IDENTITY instead of
+    CATEGORY. Collapsing truncated-evidence failures onto one chain per workflow is correct when
+    no junit cause-group exists; when one does, junit wins (see constraints).
+  - >-
+    Category strings are frozen once hashed, so a later rename orphans every historical chain.
+    This is why a vague catch-all ("other") was rejected in favour of naming the cause now.
+  - >-
+    T1.13 relationship: this plan claims NO tier_item alignment and declares no closes_criteria,
+    so the soft-warn ci_rca exemption applies. The one roadmap edit is data reconciliation. c9(b)
+    is marked met via ci-rca-abstention-and-gate-escape and three production bundles falsify it --
+    the same "built but not load-bearing" mode for which c10 was already re-grounded met -> open
+    (audit CIRCA-01). Only part (b) is falsified; parts (a) and (c) re-open as a side effect of
+    criterion-level status granularity, which the [RE-GROUNDED] note must state. c8's caution
+    against fetching the PR's pr-validate log does not apply here: this artifact is uploaded and
+    downloaded within the SAME failing run, exactly as junit already is.
+  - >-
+    Decision 103 applies to ALL THREE closures, not just rec-2958. rec-2957's acceptance
+    (FAIL_ANCHOR grep) and rec-2973's (MiB-scale DEFAULT_MAX_BYTES grep) are both deliberately
+    unsatisfied by this design, so all three close on semantic verdicts and all three need the
+    execution-time human confirmation gate.
+  - >-
+    rec-2970 ("validate_test_coverage is post-merge-only") is the CORRECT diagnosis of the
+    underlying canary failure and remains genuinely OPEN -- verified: validate_test_coverage is in
+    full_sequence() and absent from pre_sequence(). The preflight report's ci_rca_likely_resolved
+    classification is WRONG (3362491 paid the coverage debt and added validate_handoff_full_tier;
+    it did not move the gate pre-merge). Deliberately NOT bundled: promoting it forks
+    pytest-with-coverage per changed source file on every PR, exactly the cost the Decision 73
+    two-tier split exists to keep out of the fast tier. Separate decision, separate plan.
+  - >-
+    Branch was 2+ commits behind origin/main at planning time and lacks Decision 164 plus T4.2/T5.3
+    related_decisions additions; none touch T1.13 or any cited Decision. ROADMAP-PLATFORM.yaml is
+    both changed on main and edited here -- rebase before pushing and re-read c9 in case its text
+    moved.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    tests/fixtures/ci_rca/oversized_validate_log.py -- build_log() synthesises a full-tier
+    validate failure log above both caps, terminating in the real "Failed checks:" block. Land
+    FIRST; every window assertion depends on it.
+  - >-
+    scripts/checks/validation_result.py -- add the accumulator (reset by clear()),
+    dispatch_recording(name, failed, namespace), schema_version 2, and failed_check_attributions
+    in write_completed. Then swap scripts/validate.py's _dispatch_check body to the one-line
+    delegate; re-measure SLOC immediately (must stay <= 499).
+  - >-
+    Workflows + contract -- add the validation-result upload with `if: always()` to ci.yml's
+    main-validate and main-canary.yml's canary job, declare both in
+    docs/contracts/github-actions-evidence.yaml's artifact_uploads, and add the best-effort
+    continue-on-error download plus generator flag to ci-rca.yml.
+  - >-
+    config/ci_rca_taxonomy.yaml -- extend function_to_category to all 93 registered checks against
+    already-declared categories, and declare evidence_insufficient. Do NOT add it to
+    agent_only_categories.
+  - >-
+    scripts/ci_rca/taxonomy.py -- add the Priority-0 attribution path above Priority 1 in BOTH
+    classify_failure and classify_failures, mapping N attributions to N enumerated failures; add
+    the refusal gate above Priority 4 and Priority 5, standing down when a junit cause-group is
+    available.
+  - scripts/ci_rca/fingerprint.py -- add the degenerate signature helper for the refusal verdict.
+  - >-
+    scripts/ci_rca/evidence.py -- accept the artifact and thread it, limits.complete, AND junit
+    availability into classify_failures (all three; junit is the easy one to drop and its absence
+    silently reintroduces the Decision 142 masking bug), then route the refusal to the degenerate
+    signature. Re-check SLOC after; if the delta crosses 500, decompose rather than raise.
+  - >-
+    scripts/ci_rca/log_evidence.py then fetch_logs.py -- add bound_text_windowed and admit
+    head_tail_window plus drain_ceiling in BOTH reason sets (_validate_limits line 88 AND
+    _validate_selection line 153); then rewrite _run_log for 8192-byte chunked reads with a
+    bounded head buffer plus rolling tail deque under drain_max_bytes/drain_timeout_s keyword
+    bounds, honouring the returncode contract. Specify the _fallback_logs composition. Keep the
+    five pinned fragments byte-identical.
+  - >-
+    scripts/checks/ci_guards/validate_ci_rca_taxonomy.py -- add the registry-totality assertion
+    and the evidence_insufficient sentinel beside "unknown" (line 44).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml -- flip T1.13 c9 met -> open with a [RE-GROUNDED 2026-08-04] note
+    naming part (b) as the falsified clause and (a)/(c) as side-effect re-opens. Roadmap
+    bookkeeping only; surface the staged diff to the human before committing it.
+  - >-
+    Tests -- new tests/validate/test_failed_check_attribution.py; update validation_result,
+    taxonomy (Priority-0 in both functions, step-name collision, real-label, refusal x2, junit
+    carve-out), evidence generator (end-to-end + N->N), fetch_logs (FOUR rewrites including
+    test_timeout_kills_child), log_evidence, fingerprint, taxonomy guard (with mutation case), and
+    actions-evidence contract.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop
+    and RCA (Decision 55).
+  - >-
+    Commit with the trailer "Resolves: rec-2957, rec-2958, rec-2973". Before merging, obtain
+    explicit human confirmation for ALL THREE closures -- each closes on a semantic verdict rather
+    than a satisfied acceptance oracle, which Decision 103 reserves for human confirmation. Record
+    in the closure resolutions: rec-2958's cited file was never defective; rec-2973's MiB-cap grep
+    and rec-2957's FAIL_ANCHOR grep are both deliberately not satisfied.
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Revert the squash-merge commit. The artifact path is additive (uploads are new steps; the
+  download is continue-on-error; failed_checks keeps its shape and schema_version 2 is a superset),
+  and the ci-rca-log-evidence/v2 envelope stays backward-compatible (head_tail_window and
+  drain_ceiling are additive truncation reasons), so a revert restores prior behaviour without
+  stranding envelopes or artifacts. Three caveats: fingerprints computed while the change was live
+  do not revert -- those chains stay re-keyed either way; any rec closed by the Resolves: trailer
+  must be reopened via the portal, never by editing the local cache; and the T1.13 c9 status flip
+  is a deliberate data correction that should NOT be reverted with the code.
