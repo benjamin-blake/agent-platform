@@ -1,0 +1,871 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: roadmap-size-ceiling
+intent: >-
+  Dispose audit finding SGE-05 -- record the operator's supersession of its PRODUCT ceiling
+  recommendation, make docs/ROADMAP-PRODUCT.yaml's deliberate freeze legible and enforceable,
+  record the roadmap raw-line unit residual, and close the structural-size engine's unaccountable
+  escape routes so a future agent cannot silently widen a gate it is meant to be stopped by.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-roadmap-size-ceiling.yaml
+phase: >-
+  Platform governance-integrity. Slice C (SGE-05) of the structural-size-governance-expansion
+  overseer run driving audits/size-governance-expansion-3dee4a5.yaml (merged in #840) to
+  completion. Audit-sourced; no tier_item id and no product-roadmap phase dependency. Consumes
+  Slice A (Decision 165 / PLAN-size-gov-marker-guard, d1cc5bb) and Slice B (Decision 166 /
+  PLAN-size-gov-engine, #851). Sibling slice SGE-03 runs in parallel and does NOT touch
+  config/structural_size_budgets.yaml -- this plan owns that file exclusively for the run.
+scope:
+  - file: config/structural_size_budgets.yaml
+    action: Modify
+    purpose: >-
+      Record the docs/ROADMAP-PRODUCT.yaml freeze as machine-readable data (new top-level
+      budget_notes:), reshape the roadmaps row's defer_to_incumbent into an accountable per-path
+      mapping, and add limit_note + unit_gameability_residual to the roadmaps row. The roadmaps
+      limit stays 500 and the docs/ROADMAP-PRODUCT.yaml 4707 budgets entry is NOT touched.
+  - file: scripts/checks/structural/size_limits.py
+    action: Modify
+    purpose: >-
+      Add the static escape-accountability legs (E1 floor pin, E2-strict class-ceiling pin, E3
+      deferral accountability, E4 budget-note integrity) as a new escape_violations() helper
+      returning leg-labelled messages, consumed by the existing validate_structural_size_limits
+      check. No new registered check and no new scripts/validate.py re-export line.
+  - file: scripts/checks/structural/budget_raises.py
+    action: Modify
+    purpose: >-
+      Add the base-aware half of E4 -- frozen_base_violations(base_text, current_text), whose three
+      legs reject an INCREASE to a frozen entry, an UN-FREEZE while its entry survives, and a frozen
+      path becoming NEWLY DEFERRED -- wired into validate_structural_size_budget_raises via its
+      existing base_reader seam, preserving the base-unreachable advisory SKIP. This module already
+      owns the base-versus-current diff, which is why these rules belong here rather than being
+      approximated in a git-less helper that cannot see a deletion.
+  - file: tests/checks/structural/test_size_limits.py
+    action: Modify
+    purpose: >-
+      Cover every E1-E4 static failure mode by leg label, pin the budgets-entry-caps-over-class-
+      ceiling mechanism, assert the live-tree freeze state, and add the declared regression guards
+      for PLATFORM and the long-line companion.
+  - file: tests/checks/structural/test_budget_raises.py
+    action: Modify
+    purpose: >-
+      Mirror-test the frozen-increase rule -- an increase reds, a shrink passes, a no-op passes, a
+      committed valid marker does not rescue an increase, and a non-frozen entry is unaffected.
+  - file: tests/checks/structural/test__classify.py
+    action: Modify
+    purpose: >-
+      Update the injected-root registry fixture to the reshaped defer_to_incumbent mapping so the
+      existing exclusion tests exercise the shape that actually ships.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Append the graduated rows for this plan's graduate-disposition VP steps, under the hard
+      constraint that this file has ZERO long-line headroom (measured 2315 against a 2315 pin).
+acceptance_criteria:
+  - >-
+    docs/ROADMAP-PRODUCT.yaml keeps its budgets entry at exactly 4707 with its existing dec-166
+    marker, and config/structural_size_budgets.yaml records it under a new budget_notes section as
+    frozen true, with a rationale and a retires_when condition.
+  - >-
+    Frozen-ness is determined from the BASE text, not the current file. Any INCREASE to an entry
+    frozen in base is rejected regardless of marker and regardless of what the current file says
+    about frozen-ness, closing the measured Proof B defect and the one-commit unfreeze-and-raise
+    variant. A DECREASE and a no-op both pass, because compaction is the roadmaps row's own
+    first-listed relief valve and a durable norm under Decision 147.
+  - >-
+    UN-FREEZING is itself a violation: a path frozen in base and not frozen in current reds WHILE
+    its budgets entry survives. This closes the two-PR escape (unfreeze at an unchanged value in one
+    PR, raise in the next). Removing the note AND the budgets entry together stays clean, because
+    that is the prescribed retirement shape and entry removal is unrestricted.
+  - >-
+    Freeze and deferral are mutually exclusive dispositions, enforced by a SPLIT pair because
+    neither half covers the other's case (demonstrated at plan time). Static half, current-side: a
+    path frozen in the CURRENT config may not appear in any defer_to_incumbent mapping -- this
+    catches a note and a deferral added together in one commit, which a base-side rule cannot see
+    because base has neither. Base-side half: a path frozen in BASE may not be NEWLY present in
+    defer_to_incumbent in current -- this catches the measured bypass, which deletes the note in the
+    same commit and so is invisible to the current-side rule.
+  - >-
+    An unreachable base produces the advisory SKIP line and NEVER a clean result derived from an
+    empty base map. The pure-text signature moves check_diff's base_text-is-None contract onto the
+    caller, so the caller must propagate None as a SKIP rather than coercing it to an empty string.
+  - >-
+    A budget_notes key naming a path absent from the budgets roster is rejected, and so is a frozen
+    note whose budgets entry has been removed.
+  - >-
+    E4 carries an EXISTENCE leg, as E3 does: a frozen note whose path no longer exists on disk
+    produces a clean, actionable violation naming the retirement -- never a FileNotFoundError inside
+    a presubmit check. This is the planned end state, since retires_when names the migration that
+    deletes the guarded file.
+  - >-
+    E1 and E2 are TYPE-SAFE: a governed class row whose limit or max_line_chars is not an integer
+    (the three exempt rows carry the string "n/a" today) produces a labelled violation, never a
+    TypeError from comparing a string to an integer.
+  - >-
+    A budgets entry caps its path even when its class row ceiling is higher -- the mechanism the
+    freeze actually depends on, pinned by test.
+  - >-
+    The roadmaps class row still declares limit 500 and max_line_chars 2000, and the residual row is
+    still last at 500 and 2000 -- now enforced live by the gate rather than only by a graduated
+    registry row that CI never executes. A missing residual row is rejected, not silently tolerated.
+  - >-
+    No governed class row can declare a limit or max_line_chars above the permitted maximum for its
+    slug, where a slug absent from the guard module's frozen per-slug mapping defaults to the
+    residual default. A new governed class at 500 needs no guard edit; only a class wanting more
+    than 500 does.
+  - >-
+    Every defer_to_incumbent entry names an incumbent present in the validate check sequence and an
+    authorized_by Decision whose body contains the exact deferred path. A missing field, a dec-114
+    citation, an unsequenced incumbent, a glob path, and a nonexistent file each red the gate, and a
+    glob is rejected on the glob rule specifically rather than incidentally on non-existence.
+  - >-
+    Every violation message escape_violations returns is prefixed with its leg label E1, E2, E3 or
+    E4, and every verification assertion keys on that label, so a step can never be satisfied by a
+    different leg than the one it claims to pin.
+  - >-
+    validate_structural_size_limits reds on a line longer than 2000 characters in a governed
+    roadmaps-class file.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml behaviour is unchanged -- absent from iter_measured_files(),
+    _ROADMAP_MAX_LINES still 10000, file byte-identical.
+  - >-
+    The roadmaps row carries a limit_note that resolves the actual_purpose versus limit-500 tension
+    and names the guard source as the sanctioned path for a different class ceiling, plus a
+    unit_gameability_residual recording SGE-05's VD3 finding.
+  - >-
+    This branch touches none of docs/DECISIONS.md, scripts/validate.py, docs/ROADMAP-PRODUCT.yaml,
+    docs/ROADMAP-PLATFORM.yaml, asserted against the merge-base so main advancing under an open PR
+    cannot produce a false failure.
+  - >-
+    Every graduated registry row whose check_id starts with structural- still replays green after
+    these edits.
+  - >-
+    Exactly FIVE recommendations are filed via the ops portal, matching one-for-one the five
+    enumerated in Context. This count is asserted rather than left implicit because it drifted once
+    already: fold-ins across critique rounds grew it from three to five while the execution step
+    still said three, which would have silently dropped the stale-roster sweep and the
+    incumbent-gate-governs-nothing residual. If a later revision adds a sixth, this criterion and
+    the execution step move together.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-class-ceiling-pinned-to-guard-source
+    action: >-
+      E1 and E2-strict, each asserted BY LEG LABEL so neither can be satisfied by the other. Covers
+      a raised class limit, a raised class max_line_chars, a raised residual floor, and a missing
+      residual row.
+    command: |
+      bin/venv-python -c 'import copy
+      from scripts.checks.structural.size_limits import escape_violations
+      from scripts.checks.structural._classify import load_registry
+      L = load_registry()
+      assert escape_violations(L) == [], "live class table is not clean: " + str(escape_violations(L))
+      def legs(m):
+          return {x.split(":")[0] for x in escape_violations(m)}
+      m = copy.deepcopy(L)
+      [r for r in m["classes"] if r["slug"] == "roadmaps"][0]["limit"] = 6000
+      assert "E2" in legs(m), "E2 must reject a raised class-row limit"
+      m2 = copy.deepcopy(L)
+      [r for r in m2["classes"] if r["slug"] == "roadmaps"][0]["max_line_chars"] = 8000
+      assert "E2" in legs(m2), "E2 must reject a raised class-row max_line_chars"
+      m3 = copy.deepcopy(L)
+      m3["classes"][-1]["limit"] = 2000
+      assert "E1" in legs(m3), "E1 must reject a raised residual floor"
+      m4 = copy.deepcopy(L)
+      m4["classes"] = [r for r in m4["classes"] if r["slug"] != "residual"]
+      assert "E1" in legs(m4), "E1 must reject a missing residual row"
+      m5 = copy.deepcopy(L)
+      [r for r in m5["classes"] if r["slug"] == "workflow_outputs"][0]["governed"] = True
+      assert "E2" in legs(m5), "E2 must REPORT a non-integer limit on a governed row, never raise"
+      import scripts.checks.structural.size_limits as sl
+      sl._PERMITTED_MAXIMA["roadmaps"] = (6000, 2000)
+      m6 = copy.deepcopy(L)
+      [r for r in m6["classes"] if r["slug"] == "roadmaps"][0]["limit"] = 6000
+      assert escape_violations(m6) == [], "a slug PRESENT in the mapping must permit its granted ceiling"
+      m7 = copy.deepcopy(L)
+      [r for r in m7["classes"] if r["slug"] == "roadmaps"][0]["limit"] = 6001
+      assert "E2" in legs(m7), "one over the granted ceiling must still red"
+      del sl._PERMITTED_MAXIMA["roadmaps"]
+      print("CLASS_CEILING_PINNED_OK")'
+    expected: >-
+      Exit 0 and `CLASS_CEILING_PINNED_OK` on stdout.
+    fix_if: >-
+      An E1 assertion fails while E2 messages appear -- E1 is not implemented and E2 was masking it,
+      which is exactly what this step exists to prevent. A missing residual row raises instead of
+      returning a violation -- the helper fails open, the same shape as rec-3020, and must return a
+      labelled violation instead. The governed-flip probe raises TypeError -- E2 compared the string
+      "n/a" against an integer; type-check before comparing and report a violation instead.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-deferral-accountability
+    action: >-
+      E3 -- every deferral is attributable, asserted by leg label, with the glob probe additionally
+      required to fail on the GLOB rule rather than incidentally on non-existence.
+    command: |
+      bin/venv-python -c 'import copy
+      from scripts.checks.structural.size_limits import escape_violations
+      from scripts.checks.structural._classify import load_registry
+      P = "docs/ROADMAP-PLATFORM.yaml"
+      L = load_registry()
+      assert escape_violations(L) == [], "live deferral table is not clean"
+      def mutated(fn):
+          m = copy.deepcopy(L)
+          fn([r for r in m["classes"] if r["slug"] == "roadmaps"][0]["defer_to_incumbent"])
+          return [x for x in escape_violations(m) if x.startswith("E3:")]
+      assert mutated(lambda d: d[P].__setitem__("authorized_by", "dec-114")), "dec-114 must FAIL"
+      assert mutated(lambda d: d[P].__setitem__("authorized_by", "dec-147")) == [], "dec-147 must PASS"
+      assert mutated(lambda d: d[P].__setitem__("incumbent", "validate_no_such_gate")), "dead gate must FAIL"
+      assert mutated(lambda d: d[P].pop("authorized_by")), "a missing authorized_by must FAIL"
+      g = mutated(lambda d: d.__setitem__("docs/ROADMAP-*.yaml", dict(d[P])))
+      assert any("glob" in x for x in g), "a glob must FAIL on the glob rule, not on non-existence: " + str(g)
+      print("DEFERRAL_ACCOUNTABILITY_OK")'
+    expected: >-
+      Exit 0 and `DEFERRAL_ACCOUNTABILITY_OK` on stdout.
+    fix_if: >-
+      dec-114 passes -- the guard matches something looser than the exact path key. dec-147 fails --
+      the guard is over-strict and would reject a legitimate citation. The glob probe fails only on
+      non-existence -- add an explicit glob rule whose message names it, otherwise a glob that
+      happens to match a real file would slip through.
+  - step: 3
+    phase: pre-deploy
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-frozen-budget-note-integrity
+    action: >-
+      E4 static half -- the freeze record exists, is well-formed, cannot be orphaned in either
+      direction, and REPORTS rather than crashes when its path is gone. Asserted by leg label. The
+      missing-path case is the planned end state, not a hypothetical: retires_when names the
+      warehouse-graph migration, which is the event that deletes the guarded file.
+    command: |
+      bin/venv-python -c 'import copy
+      from scripts.checks.structural.size_limits import escape_violations
+      from scripts.checks.structural._classify import load_registry
+      K = "docs/ROADMAP-PRODUCT.yaml"
+      L = load_registry()
+      assert L["budget_notes"][K]["frozen"] is True, "the freeze record is absent or not frozen"
+      assert L["budgets"][K] == 4707, "the frozen pin moved off 4707"
+      assert escape_violations(L) == [], "live frozen state is not clean"
+      def e4(m):
+          return [x for x in escape_violations(m) if x.startswith("E4:")]
+      m = copy.deepcopy(L)
+      m["budget_notes"]["docs/NOT-A-REAL-FILE.yaml"] = dict(m["budget_notes"][K])
+      assert e4(m), "E4 must reject a budget_notes key with no budgets entry"
+      m2 = copy.deepcopy(L)
+      m2["budgets"].pop(K)
+      assert e4(m2), "E4 must reject a frozen note whose budgets entry was removed"
+      m3 = copy.deepcopy(L)
+      GONE = "docs/GONE-AFTER-MIGRATION.yaml"
+      m3["budgets"][GONE] = 100
+      m3["budget_notes"][GONE] = dict(m3["budget_notes"][K])
+      v3 = e4(m3)
+      assert any("exist" in x for x in v3), "E4 must REPORT a missing frozen path, never raise: " + str(v3)
+      m4 = copy.deepcopy(L)
+      [r for r in m4["classes"] if r["slug"] == "roadmaps"][0]["defer_to_incumbent"][K] = {
+          "incumbent": "validate_product_roadmap", "authorized_by": "dec-166"}
+      assert e4(m4), "E4 must reject deferring a FROZEN path -- measured: that un-governs it entirely"
+      print("FROZEN_NOTE_INTEGRITY_OK")'
+    expected: >-
+      Exit 0 and `FROZEN_NOTE_INTEGRITY_OK` on stdout.
+    fix_if: >-
+      An orphan note passes -- the freeze record can drift away from the roster it annotates, and a
+      future reader would trust a note describing an entry that no longer exists. The missing-path
+      probe raises FileNotFoundError -- E4 touched the filesystem without guarding existence, and
+      would crash --pre at exactly the moment the retires_when migration deletes the file.
+  - step: 4
+    phase: pre-deploy
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: structural-frozen-base-side-legs
+    action: >-
+      E4 diff half -- three legs, all reading frozen-ness from BASE. Reproduces Proof B (the pin
+      raised while keeping its committed dec-166 marker), the one-commit unfreeze-and-raise variant,
+      the two-PR unfreeze-then-raise escape, and the MEASURED deferral bypass, while proving a
+      SHRINK and a genuine retirement both stay clean so compaction and the retires_when migration
+      remain available.
+    command: |
+      bin/venv-python -c 'import pathlib
+      from scripts.checks.structural.budget_raises import frozen_base_violations
+      LINE = "docs/ROADMAP-PRODUCT.yaml: 4707"
+      base = pathlib.Path("config/structural_size_budgets.yaml").read_text(encoding="utf-8")
+      assert LINE in base, "the frozen pin line moved -- re-anchor this probe before trusting it"
+      def e4(cur):
+          return [x for x in frozen_base_violations(base, cur) if x.startswith("E4:")]
+      assert frozen_base_violations(base, base) == [], "a no-op diff must be clean"
+      assert e4(base.replace(LINE, "docs/ROADMAP-PRODUCT.yaml: 9999")), "leg 1: an INCREASE must red even with the committed marker"
+      assert frozen_base_violations(base, base.replace(LINE, "docs/ROADMAP-PRODUCT.yaml: 4000")) == [], "a SHRINK must pass"
+      unfrozen = base.replace("frozen: true", "frozen: false")
+      assert "frozen: false" in unfrozen, "probe anchor failed -- the frozen flag is not written as expected"
+      assert e4(unfrozen.replace(LINE, "docs/ROADMAP-PRODUCT.yaml: 9999")), "legs 1+2: a one-commit unfreeze-and-raise must red"
+      assert e4(unfrozen), "leg 2: un-freezing while the entry survives must red"
+      retired = "\n".join([x for x in unfrozen.splitlines() if not x.startswith("  " + LINE)])
+      assert frozen_base_violations(base, retired) == [], "retirement (unfreeze plus entry removal) must stay clean"
+      ANCHOR = "      docs/ROADMAP-PLATFORM.yaml:\n        incumbent: validate_platform_roadmap\n        authorized_by: dec-166\n"
+      assert ANCHOR in base, "the deferral block shape changed -- re-anchor this probe"
+      ADDED = ANCHOR + "      docs/ROADMAP-PRODUCT.yaml:\n        incumbent: validate_product_roadmap\n        authorized_by: dec-166\n"
+      bypass = "\n".join([x for x in unfrozen.replace(ANCHOR, ADDED).splitlines() if not x.startswith("  " + LINE)])
+      assert e4(bypass), "leg 3: a path frozen in BASE that is newly deferred must red even with its note deleted"
+      print("FROZEN_BASE_LEGS_OK")'
+    expected: >-
+      Exit 0 and `FROZEN_BASE_LEGS_OK` on stdout.
+    fix_if: >-
+      The increase passes -- Proof B is still open and the freeze remains aspirational. The shrink
+      reds -- the rule was implemented as equality rather than direction, which taxes the roadmaps
+      row's own first-listed relief valve; the structural engine has no --update-sloc-budgets
+      equivalent to absorb that cost, so direction-only is the required shape.
+  - step: 5
+    phase: pre-deploy
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible, but it asserts a PRE-EXISTING engine property (the budgets-entry-overrides-
+      class-limit resolution order) that already holds on origin/main. The VF-06 differential
+      admission gate requires a new row to FAIL on origin/main and PASS on HEAD, so it would refuse
+      this one. It ships as a regression test in the unit suite instead.
+    action: >-
+      Regression guard (passes on the unmodified tree, declared as such): a budgets entry caps its
+      path unconditionally, even when its class row ceiling is higher. This -- not E2-strict -- is
+      what actually protects the freeze.
+    command: |
+      bin/venv-python -c 'import copy, pathlib
+      from scripts.checks.structural import _classify
+      L = _classify.load_registry()
+      K = "docs/ROADMAP-PRODUCT.yaml"
+      rows = {r["slug"]: r for r in L["classes"]}
+      eff = _classify.effective_lines(pathlib.Path(K).read_text(encoding="utf-8"))
+      assert L["budgets"].get(K, rows["roadmaps"]["limit"]) == 4707, "the entry is not the effective cap"
+      raised = copy.deepcopy(L)
+      [r for r in raised["classes"] if r["slug"] == "roadmaps"][0]["limit"] = 6000
+      rows2 = {r["slug"]: r for r in raised["classes"]}
+      assert raised["budgets"].get(K, rows2["roadmaps"]["limit"]) == 4707, "a higher class ceiling overrode the entry"
+      assert eff == 4707, "PRODUCT measured " + str(eff) + " -- the freeze has zero headroom by design"
+      print("BUDGET_ENTRY_CAPS_OK")'
+    expected: >-
+      Exit 0 and `BUDGET_ENTRY_CAPS_OK` on stdout.
+    fix_if: >-
+      The resolved cap becomes 6000 when the class ceiling rises -- the freeze would evaporate the
+      moment any future slice raised the roadmaps row, and the resolution order must be corrected
+      before anything else in this plan matters.
+  - step: 6
+    phase: pre-deploy
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The already-graduated row structural-engine-green-and-scoped (plan_slug size-gov-engine)
+      asserts both halves of this step, and the step passes on origin/main anyway, which the VF-06
+      differential would refuse. The _ROADMAP_MAX_LINES clause is the only novel assertion and is
+      covered by the unit suite.
+    action: >-
+      Regression guard (passes on the unmodified tree, declared as such): PLATFORM stays unmeasured,
+      its incumbent ceiling constant is untouched, and the whole engine is green.
+    command: |
+      bin/venv-python -c 'import scripts.validate as v
+      from scripts.checks.structural._classify import iter_measured_files
+      from scripts.checks.roadmap.validate_platform_roadmap import _ROADMAP_MAX_LINES
+      measured = {rel for rel, _slug in iter_measured_files()}
+      assert "docs/ROADMAP-PLATFORM.yaml" not in measured, "PLATFORM must stay deferred (Decisions 114/147)"
+      assert "docs/ROADMAP-PRODUCT.yaml" in measured, "PRODUCT must stay measured"
+      assert _ROADMAP_MAX_LINES == 10000, "the incumbent ceiling constant moved"
+      failed = []
+      v.validate_structural_size_limits(failed)
+      assert not failed, "engine red: " + str(failed)
+      print("PLATFORM_UNTOUCHED_ENGINE_GREEN")'
+    expected: >-
+      Exit 0 and `PLATFORM_UNTOUCHED_ENGINE_GREEN` on stdout.
+    fix_if: >-
+      PLATFORM appears in the measured set -- the defer_to_incumbent reshape broke key membership
+      and the class max_line_chars will now fire on its known long line. Revert the reshape rather
+      than adding a long_line_budgets entry for a file the engine must not measure.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      An identical test_selector row over this exact node_id is already graduated as
+      structural-unit-suite-failure-paths (plan_slug size-gov-engine); a second row would duplicate
+      it rather than add coverage.
+    action: >-
+      Run the structural unit suite, which carries the full failure-mode matrix for E1-E4 across
+      both modules plus the long-line companion and freeze regression guards.
+    command: bin/venv-python -m pytest tests/checks/structural/ -q
+    expected: >-
+      Exit 0, with a strictly higher test count than the 29 collected at plan time and no failures.
+    fix_if: >-
+      A failure-mode test passes without the guard change -- the test is vacuous and must be
+      re-anchored against a mutation that genuinely reds. A regression guard fails -- the reshape or
+      a new leg changed behaviour this plan promised to leave alone.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: >-
+      Full-tier presubmit, satisfying the handoff_policy obligation this plan declares (Decision
+      163). Not hermetic -- recursion into scripts.validate is forbidden for replayed steps.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 with no failed checks reported in the summary.
+    fix_if: >-
+      Any check reds. Diagnose the named check; do not narrow this plan's scope to route around it.
+      A structural-size failure on config/agent/verification_registry/registry.yaml most likely
+      means a graduated row appended a line longer than its 2315-character pin.
+  - step: 9
+    phase: pre-deploy
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a property of THIS branch -- that four named files are untouched -- not a standing
+      repo invariant. Graduating it would install a permanent freeze on files this plan merely
+      declines to modify, which is a much stronger claim than the one being made.
+    action: >-
+      Prove the branch spends no Decision header, adds no scripts/validate.py line, and edits
+      neither roadmap file. Uses the THREE-DOT merge-base form, because two-dot reds whenever main
+      advances under an open PR on paths the branch never touched.
+    command: |
+      bin/venv-python -c 'import subprocess, pathlib
+      paths = ["docs/DECISIONS.md", "scripts/validate.py",
+               "docs/ROADMAP-PRODUCT.yaml", "docs/ROADMAP-PLATFORM.yaml"]
+      r = subprocess.run(["git", "diff", "--name-only", "origin/main...HEAD", "--"] + paths,
+                         capture_output=True, text=True)
+      assert r.returncode == 0, "no merge-base with origin/main -- run: git fetch origin main"
+      assert r.stdout.strip() == "", "this branch must touch none of these, but changed: " + r.stdout
+      src = pathlib.Path("scripts/validate.py").read_text(encoding="utf-8")
+      eff = len([x for x in src.splitlines() if x.strip() and not x.strip().startswith("#")])
+      assert eff <= 500, "scripts/validate.py is over the SLOC limit at " + str(eff)
+      print("NO_DECISION_NO_VALIDATE_LINE_NO_ROADMAP_EDIT")'
+    expected: >-
+      Exit 0 and `NO_DECISION_NO_VALIDATE_LINE_NO_ROADMAP_EDIT` on stdout.
+    fix_if: >-
+      A file is listed -- either this branch genuinely edited it (remove the edit), or the branch is
+      behind main and the base is stale (run git fetch origin main and rebase, then re-run).
+      docs/DECISIONS.md appearing means a Decision was minted, which this plan forbids.
+constraints:
+  - >-
+    Mint NO numbered Decision. The class table, the counting rule and these guard thresholds are
+    field semantics whose home is config/structural_size_budgets.yaml and the guard modules
+    (docs/contracts/decision-entry.yaml significance.routing.field_semantics -- "Never a numbered
+    Decision"). The live header count is 119 of 120; the last slot is not spent here.
+  - >-
+    Decisions carry broad architectural direction; mechanism belongs in code and contracts. The
+    budget_notes rationale and the roadmaps limit_note state INTENT and the retirement condition
+    only -- they must not narrate what the guard does. A reader can read the guard.
+  - >-
+    Do NOT modify docs/ROADMAP-PRODUCT.yaml, its 4707 budgets entry, or its dec-166 marker. The
+    zero-headroom pin is a deliberate operator freeze pending migration to a warehouse-backed
+    dependency graph, not a wedge. A red gate on that file is the freeze working.
+  - >-
+    Do NOT modify docs/ROADMAP-PLATFORM.yaml, scripts/checks/roadmap/validate_platform_roadmap.py,
+    or _ROADMAP_MAX_LINES. That ceiling is fixed by Decisions 114/147 and this engine defers to it
+    by exact filename; do not split the file (Decisions 110/114 forbid a per-tier split).
+  - Do NOT raise the roadmaps class limit. It stays at the residual default of 500.
+  - >-
+    HAZARD, measured: config/agent/verification_registry/registry.yaml has a longest line of exactly
+    2315 against a 2315-character pin -- ZERO headroom. Any graduated row appended with a line longer
+    than 2315 characters reds validate_structural_size_limits, this plan's own gate. Keep every
+    appended line at or under that width and re-run the engine after appending.
+  - >-
+    HAZARD, measured: scripts/validate.py sits at 497 effective lines against the implicit 500 limit
+    and is NOT registered in config/sloc_budgets.yaml. Add NO line to it. Both structural checks are
+    already re-exported there; the new legs are helpers consumed by existing checks, never new
+    registered checks.
+  - >-
+    scripts/checks/structural/budget_raises.py (64 raw, 54 effective) and size_limits.py (55 raw, 46
+    effective) are .py files, so the structural engine EXCLUDES them by suffix -- they are governed
+    by validate_sloc_limits at the implicit 500 instead. Neither may be registered in
+    config/sloc_budgets.yaml; re-measure both after editing rather than assuming they stayed small.
+  - >-
+    Do NOT modify scripts/checks/_marker_guard.py. Six consumers share it; the frozen-increase rule
+    is local to this registry and belongs in budget_raises.py.
+  - >-
+    Every leg FAILS LOUDLY AND LEGIBLY, never by exception. Malformed or missing input -- a
+    non-integer limit on a governed row, a missing residual row, a frozen path deleted from disk, an
+    unreadable file -- must produce a labelled violation, not a TypeError, KeyError or
+    FileNotFoundError inside a presubmit check. Under Decision 55's anti-masking principle a crash
+    is worse than a miss here, because it obscures which check failed and why. Guard the type and
+    the existence before comparing or reading.
+  - >-
+    The graduated row structural-guard-binds-shared-marker-module asserts the literals `subprocess`,
+    `## Decision` and `make_flat_extractor` are ABSENT from scripts/checks/structural/budget_raises.py
+    -- verified absent at plan time. That applies to CODE AND DOCSTRINGS alike, since the assertion
+    is a substring scan of the whole file: do not mention make_flat_extractor in a docstring
+    explaining why the section extractor is used, and do not reach for subprocess for git access
+    (use the base_reader seam). Nothing in CI catches a break here, because
+    validate_verification_registry runs differentials only for new-in-diff check_ids.
+  - >-
+    Prose written into config/structural_size_budgets.yaml stays under 2000 characters per line.
+    structural-longline-roster-exactly-measured asserts the >2000-character breach set equals the
+    seeded roster EXACTLY, so a single long rationale line reds it even though the file's own budget
+    entry would still pass.
+  - >-
+    Every glob keeps both the .yaml and .yml spellings (rec-2928). Do not narrow the roadmaps
+    include list.
+  - >-
+    Never write `! cmd` under `set -e` -- POSIX exempts inverted commands from set -e, so the
+    negation cannot fail. Use `if cmd; then echo FAIL; exit 1; fi`.
+  - >-
+    Assert branch-touched-this-file with the three-dot merge-base form, never two-dot. Two-dot reds
+    whenever main advances under an open PR, on paths the branch never touched.
+  - >-
+    No assertion that already passes on the unmodified tree may be presented as proof of this
+    change. Every VP step that passes on the unmodified tree says so in its own action text.
+  - >-
+    Run long commands in the FOREGROUND. Never use run_in_background and then wait -- a background
+    completion does not re-invoke a subagent. If a command exceeds the tool cap, launch it with
+    nohup and poll its log in bounded foreground calls.
+  - No rescue agents or workaround loops; fail loud (Decision 55).
+  - Only files listed in scope may be modified.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND, round 1, 119 of 119
+    triaged (gate_run_id roadmap-size-ceiling-decision-scout-r1-ddb40865). CITE -- dec-166, dec-165,
+    dec-147, dec-114, dec-110, dec-128, dec-102, dec-104, dec-163, dec-132, dec-162, dec-150,
+    dec-86, dec-127, dec-73, dec-55, dec-43, dec-130.
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=REVISE at r1, then <verdict> after <N> round(s)"
+  - >-
+    OPERATOR OVERRIDE, recorded not dropped. Audit finding SGE-05 recommended a 6000-effective-line
+    ceiling for docs/ROADMAP-PRODUCT.yaml. The operator overrode that on 2026-08-04 -- "we don't
+    want that to grow at all. I'll migrate it to a proper graph map with dependencies in the
+    warehouse before beginning work. grandfathering is correct." SGE-05's legs dispose as: leg 1
+    (PRODUCT ceiling at 6000) SUPERSEDED, since the engine reds above 4707 which is strictly
+    stricter than the audit asked; leg 2 (long-line companion) already delivered by Slice B and
+    proved by test here; leg 3 (PLATFORM unchanged) held and pinned by regression test plus E3. The
+    substantive closure of SGE-05's coverage gap was Slice B's work; this slice records the
+    disposition and hardens the adjacent escapes.
+  - >-
+    PROOF B, measured at plan time on 07e48c9 and the reason E4 exists: raising the PRODUCT pin from
+    4707 to 9999 while keeping the already-committed `# raise-approved: dec-166` marker is ALLOWED by
+    validate_structural_size_budget_raises. _marker_guard.authorization_failure matches the entry
+    KEY, never its VALUE, and check_diff gates only on direction before consulting the marker, so
+    one committed marker permanently authorizes every future raise of that entry. Decision 166 point
+    6 names the property verbatim and used it to justify a calibrated ceiling; it was never treated
+    as a defect to close. The freeze therefore rested on nobody trying. Independently reproduced by
+    plan-critique r1 on a scratch tree. The implementing session must RE-RUN it before relying on it.
+  - >-
+    WHY FROZEN-NESS COMES FROM BASE, and why un-freezing is its own violation. A current-side read
+    leaves two escapes. ONE COMMIT: delete the note and raise the pin together -- current-frozen is
+    empty, so a current-side rule sees nothing to guard and 4707 to 9999 passes. TWO PRS: PR 1
+    deletes the note leaving the value unchanged (no increase, clean, merged), then PR 2 raises the
+    value (base no longer carries the note, so the rule does not apply and the committed dec-166
+    marker authorizes). Base-side determination closes the first; only an explicit un-freezing rule
+    closes the second, because by PR 2 the base is already innocent. The reviewer's alternative --
+    a static leg forbidding note removal -- is not implementable as worded, since that leg lives in
+    size_limits.py, which has no git access and structurally cannot see a removal.
+  - >-
+    THE RETIREMENT PATH STAYS OPEN, verified rather than assumed. Leg 2 fires only while the budgets
+    entry SURVIVES the unfreeze, so removing the note and the entry together -- the retirement shape
+    E4's own violation message prescribes -- stays clean. It also cannot be abused: measured, with
+    the pin removed docs/ROADMAP-PRODUCT.yaml falls back to the roadmaps class limit of 500 and its
+    4707 effective lines red validate_structural_size_limits immediately. Retirement therefore only
+    succeeds AFTER the warehouse-graph migration has actually shrunk or removed the file, which is
+    exactly the retires_when condition -- the guard and the note agree without either naming the
+    other.
+  - >-
+    FREEZE AND DEFERRAL ARE MUTUALLY EXCLUSIVE, and this is a measured hole rather than a
+    theoretical one. Deleting the pin and the note while adding docs/ROADMAP-PRODUCT.yaml to
+    defer_to_incumbent drops it from iter_measured_files entirely (scripts/checks/structural/
+    _classify.py's `if rel in defer_to_incumbent: continue` skips a deferred path before
+    classification and before any measurement) and the engine reports GREEN -- reproduced at plan
+    time. E3 as designed does NOT block it: dec-166's body names docs/ROADMAP-PRODUCT.yaml
+    (verified, authorization passes) and validate_product_roadmap is a genuinely sequenced gate
+    (verified) that happens to carry no size logic at all. So the bypass looks fully accountable
+    while un-governing the file.
+  - >-
+    THE DEFERRAL RULE MUST BE SPLIT, and this was demonstrated rather than assumed. A first draft
+    placed it only in E4 static (current-side). Simulating both candidate rules against both attack
+    shapes: for a COEXISTENCE edit (note survives, deferral added) the static rule FIRES and the
+    base-side rule FIRES; for the MEASURED BYPASS (note deleted in the same commit) the static rule
+    is SILENT and only the base-side rule FIRES. Neither alone is sufficient -- the static half is
+    the only one that sees a note and deferral introduced together in one commit (base has neither),
+    and the base-side half is the only one that sees a deletion. Same shape as E4 itself: one rule,
+    split on data access.
+  - >-
+    E4 is deliberately SPLIT across two modules by data access, not by taste. The static half
+    (note-to-roster integrity) needs no git and lives in size_limits.py. The direction half (no
+    increase) needs base-versus-current and lives in budget_raises.py, which already owns that diff
+    via check_diff and already exposes a base_reader injection seam. An earlier draft used equality
+    (pin must equal measured size) purely because budget_raises.py was out of scope -- that was
+    scope constraining design, and the fix was to widen scope rather than weaken the rule.
+  - >-
+    DIRECTION-ONLY, not equality, and why. Equality reds on a SHRINK, but compaction is the roadmaps
+    row's own first-listed relief valve and a durable Decision 147 norm. Decision 102's incumbent
+    SLOC ratchet avoids that cost by pairing itself with --update-sloc-budgets so a shrink never
+    reds; the structural engine has no equivalent and this plan adds none. Equality would therefore
+    be stricter than any incumbent precedent while buying only recapture-on-shrink. Direction-only
+    closes Proof B completely, since 4707 to 9999 is an increase, at zero cost on a shrink.
+  - >-
+    E2-strict uses a frozen PER-SLUG mapping of permitted maxima, keyed by class slug and holding
+    (limit, max_line_chars), where a slug ABSENT from the mapping defaults to the residual default.
+    It ships EMPTY, because all nine governed rows measure exactly 500. A new governed class at 500
+    therefore needs no guard edit; only a class wanting more than 500 does, so the common case
+    carries zero friction and the exceptional case carries reviewed friction. A global scalar was
+    rejected: granting one class a higher ceiling would raise the permitted maximum for all nine at
+    once, which is not what the cited Decision 162 R1 precedent supports -- R1 pins a PER-MEMBER
+    set, not a global scalar.
+  - >-
+    E2-strict is NOT load-bearing for the PRODUCT freeze, and this plan does not imply otherwise --
+    VP step 5 proves a budgets entry caps its path regardless of the class ceiling, so the freeze
+    survives any future class-row movement on its own. E2-strict's warrant is the operator's
+    directive ("why are we allowing a route for SLOC increases?") plus Decision 166 point 3, which
+    left the roadmaps limit explicitly to this slice. It closes a real ungated route -- verified,
+    the classes table is not marker-gated, both RegistrySpecs being section-scoped to budgets and
+    long_line_budgets -- but it is adjacent hardening, not freeze protection.
+  - >-
+    LEG LABELS are a correctness requirement, not cosmetics. Without them VP step 1 could pass with
+    E1 entirely absent, because E2-strict rejects the raised-residual mutation on its own -- which
+    would mint a permanent registry row (structural-class-ceiling-pinned-to-guard-source) that does
+    not pin what its check_id claims. The same shape applies to step 2's glob probe, which would
+    otherwise be satisfied by the file-existence leg.
+  - >-
+    limit_note exists because the roadmaps row's actual_purpose opens with "A monotonic work-list
+    structurally cannot meet 500" while the row declares limit 500. Provenance check: that clause is
+    verbatim from the audit's class_verdicts.roadmaps, which was written under limit 6000, and Slice
+    B copied it while setting 500. Left alone it reads as a broken config and invites exactly the
+    raise this slice exists to prevent. The row's exemption and limit reasoning stays
+    provenance-and-edit-pattern based, never consumer-tier based.
+  - >-
+    authorized_by dec-166 for the PLATFORM deferral, not dec-147. The field means "which Decision
+    authorizes deferring this exact path from the class engine", and dec-166 point 3 is the sentence
+    that installs the deferral; dec-147 authorizes the ceiling regime the deferral points AT, a
+    different claim. Measured: authorization_failure gives dec-114 FAIL, dec-147 PASS, dec-166 PASS
+    (dec-114's body writes the bare filename, and _expand_ancestor_candidates generates no ancestor
+    for a 2-segment key, so the literal path is the only candidate).
+  - >-
+    SEAM WARNING, the highest-risk mechanical detail. budget_notes must be placed AFTER the budgets
+    roster. It is a column-0 non-comment line, so it correctly terminates the budgets section for
+    make_section_extractor, and the anchor regex for budgets does not match budget_notes. This was
+    verified at plan time and independently rebuilt by plan-critique r1 (13 budgets keys, 3
+    long_line keys, zero frozen/rationale/retires_when leakage). Its graduated form is
+    structural-registry-section-scoped-extraction, which must be replayed after the config edit.
+  - >-
+    The defer_to_incumbent list-to-mapping reshape is expected to be a drop-in, because set(dict)
+    yields keys and membership is key membership, so scripts/checks/structural/_classify.py needs no
+    change and is deliberately out of scope. Grain: one row per deferred path. If _classify.py or
+    the existing graduated defer_to_incumbent assertions need editing, that assumption is wrong --
+    surface it rather than patching around it.
+  - >-
+    KNOWN COSMETIC DRIFT, accepted not fixed: scripts/checks/structural/_classify.py's docstring
+    (around line 124) describes "the roadmaps row's defer_to_incumbent LIST", which reads as stale
+    once the field is a mapping. It is deliberately NOT patched -- editing that file would
+    contradict this plan's own drop-in guard, which says needing to touch _classify.py means the
+    reshape assumption was wrong. The behaviour is unaffected (set(dict) yields keys). Record it,
+    leave it; a future slice that legitimately opens _classify.py can correct the wording.
+  - >-
+    Measured at plan time on 07e48c9 and re-measured after the r1 critique -- ROADMAP-PRODUCT 4707
+    eff, 4792 raw, 301 longest, pin 4707, headroom 0; ROADMAP-PLATFORM 8329 eff, 8572 raw, 4606
+    longest, incumbent ceiling 10000 RAW; ROADMAP-SEMANTO 134 eff; scripts/validate.py 497 eff;
+    registry.yaml 4179 eff against a 6000 pin but longest line 2315 against a 2315 pin; all nine
+    governed class rows at exactly 500; 119 live Decision headers. Re-measure rather than cite these.
+  - >-
+    The two-dot versus three-dot defect was reproduced on real history at plan time -- with branch B
+    at 81a6c1e and main advanced to 07e48c9 by #849, two-dot reports scripts/validate.py DIRTY
+    although B never touched it, while three-dot correctly reports CLEAN because the merge-base is
+    81a6c1e. Step 9 uses the three-dot form for exactly this reason.
+  - >-
+    Branch was fast-forwarded 81a6c1e to 07e48c9 before any assessment. commits_ahead was 0, so
+    nothing was replayed and no scoping decision could be invalidated. Recorded per the Main
+    Divergence Assessment.
+  - >-
+    ci-rca deferral rationale (required, rec-2958 unresolved): rec-2958 is a Main Canary
+    validate_invariants failure in scripts/checks/misc/validate_invariants.py. This plan shares no
+    file, no Decision and no failure category with it, so it satisfies none of the three
+    Related-Work conditions and the deferral is logged here deliberately rather than routed around.
+  - >-
+    Recommendations to file at implement time, not fixed here. (1) The key-matched marker defect,
+    with the Proof B reproduction verbatim, cross-referencing Decision 166 point 6, Decision 165 and
+    SGE-07 -- E4 closes it only for entries marked frozen, leaving every other entry across all six
+    RegistrySpec consumers open. (2) docs/ROADMAP-PLATFORM.yaml's incumbent ceiling counts raw
+    splitlines, so blank and comment growth consume it and line-joining relieves it with zero load
+    reduction -- convert to effective lines and add a long-line companion at the next ceiling
+    revisit, cross-referencing rec-2781. (3) generated_pinned is the engine's second unaccountable
+    escape, the same shape defer_to_incumbent had before this plan, and is out of SGE-05's scope.
+    (4) A stale-roster sweep across budgets, long_line_budgets and generated_pinned -- a key naming a
+    deleted path lingers silently, because validate_structural_size_limits walks git ls-files and a
+    deleted file simply drops out of the measured set. E4's existence leg covers frozen entries only;
+    generalizing it to the whole roster is deliberately NOT in this slice (the plan-critique gate
+    ruled it a recommendation). Cross-reference Decision 166 reversal condition (d), and record the
+    measured baseline VERBATIM -- ZERO stale keys across all three sections at 07e48c9 -- so the
+    eventual guard lands clean rather than as a wedge over pre-existing debt.
+  - >-
+    Fifth recommendation, with its repro verbatim: E3 requires a deferral's incumbent to exist in
+    the validate check sequence, but NOT that it enforce a size ceiling at all, so a deferral to a
+    schema-only gate satisfies every accountability field while governing nothing. Measured at
+    07e48c9 -- adding docs/ROADMAP-PRODUCT.yaml to defer_to_incumbent with
+    incumbent validate_product_roadmap and authorized_by dec-166 passes both E3 checks
+    (authorization_failure returns False because dec-166's body names the path; the gate is in
+    registry.full_sequence()), drops the file from iter_measured_files via _classify.py's
+    `if rel in defer_to_incumbent: continue`, and leaves validate_structural_size_limits GREEN with
+    4707 effective lines ungoverned. This slice closes it narrowly for FROZEN paths only, in both
+    the static and base-side halves. The general property -- an incumbent gate must actually enforce
+    a size ceiling -- is not mechanically checkable, which is why it is recorded here rather than
+    guarded; a reviewer adding any future deferral must confirm the named gate measures size.
+  - >-
+    rec-3020 (scripts/checks/structural/_classify.py fails open if the residual class row is
+    removed) may be fully or partly resolved by E1's missing-residual-row leg, which turns that
+    silent drop into a labelled violation. The implementing session must CHECK this against the
+    rec's actual acceptance text rather than assuming: E1 guards the registry contents while
+    rec-3020 concerns _classify.py's own fail-open path, and _classify.py is out of scope here. If
+    E1 does satisfy it, add rec-3020 to bundled_recommendations and to the squash-merge Resolves:
+    trailer; if it only narrows it, leave the rec open and note the partial coverage.
+  - >-
+    Preflight context, non-blocking: 957 open recs, 826 non-automatable (softcap breached),
+    budget_bypass_alert count 10, data_quality last run FAIL with 0 checks defined,
+    cron_review_fresh null. None bear on this slice.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read -- Decisions 166 (esp. points 3, 5, 6), 165, 162 (R1),
+    147, 128, 102, 163, 132
+  - >-
+    audits/size-governance-expansion-3dee4a5.yaml findings.SGE-05 and class_verdicts.roadmaps read
+    for the surviving unit-gameability half
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    config/structural_size_budgets.yaml -- reshape the roadmaps row's defer_to_incumbent from a bare
+    one-element list into a mapping keyed by the exact path docs/ROADMAP-PLATFORM.yaml carrying
+    incumbent validate_platform_roadmap and authorized_by dec-166. Do not add a reason field; the
+    Decision is the reason.
+  - >-
+    config/structural_size_budgets.yaml -- add limit_note to the roadmaps row resolving the
+    actual_purpose versus limit-500 tension: the row stays at the residual default, the audit's
+    designed 6000 ceiling was not ratified because the file it was designed for is frozen, and a
+    genuinely different class ceiling is granted in the guard module's frozen per-slug mapping,
+    never in this file. State intent only; do not narrate the guard.
+  - >-
+    config/structural_size_budgets.yaml -- add unit_gameability_residual to the roadmaps row
+    recording SGE-05's VD3 finding: the class's own unit is effective lines plus the long-line
+    companion, so joining relieves neither; the residual is confined to the one deferred file the
+    engine does not measure, whose incumbent ceiling counts raw lines and is fixed by Decisions
+    114/147. Do not restate the audit's point-in-time census figures.
+  - >-
+    config/structural_size_budgets.yaml -- add a new top-level budget_notes section placed
+    immediately AFTER the budgets roster, with one entry for docs/ROADMAP-PRODUCT.yaml carrying
+    frozen true, a rationale stating the file must not grow and that zero headroom is intent, and a
+    retires_when naming the migration to a warehouse-backed dependency graph. Do NOT touch the
+    budgets entry itself.
+  - >-
+    scripts/checks/structural/size_limits.py -- add a frozen module-level per-slug mapping of
+    permitted maxima (shipping EMPTY) plus the residual default constants, and a public
+    escape_violations(reg) returning LEG-LABELLED message strings. E1: the residual row exists, is
+    last, and declares exactly the residual defaults. E2: no governed class row declares a limit or
+    max_line_chars above its slug's permitted maximum, defaulting to the residual default. E3: every
+    defer_to_incumbent entry declares an incumbent present in the union of registry.pre_sequence()
+    and full_sequence() step names, and an authorized_by passing
+    _marker_guard.authorization_failure against the exact path key, with the path glob-free and
+    existing -- each sub-rule naming itself in its message. E4: every budget_notes key exists in
+    budgets, every frozen note's entry is present, every frozen note's PATH still exists on disk
+    (its absence is a violation naming the retirement, since retires_when's migration is what deletes
+    it), and NO frozen path appears in any defer_to_incumbent mapping (freeze and deferral are
+    mutually exclusive -- measured, deferring a frozen path to a size-less incumbent un-governs it
+    entirely and the engine goes green). Name the frozen per-slug ceiling mapping _PERMITTED_MAXIMA,
+    which VP step 1 monkeypatches by that exact name. TYPE-CHECK BEFORE COMPARING and guard
+    existence before reading: a governed row whose limit
+    or max_line_chars is not an integer is an E2 violation, a missing residual row is an E1
+    violation, a deleted frozen path is an E4 violation -- never a TypeError, KeyError or
+    FileNotFoundError escaping into a presubmit run.
+  - >-
+    scripts/checks/structural/size_limits.py -- call escape_violations() from
+    validate_structural_size_limits and append its results to the same errors list, so violations
+    surface under the existing check name and failed.append label. Do not register a new check and
+    do not add a scripts/validate.py import line.
+    scripts/checks/structural/budget_raises.py -- add a public
+    frozen_base_violations(base_text, current_text) returning E4-labelled messages, with THREE legs,
+    all determining frozen-ness from BASE_TEXT. Leg 1: an entry frozen in base whose value INCREASED
+    reds, regardless of marker and regardless of what current says about frozen-ness -- this closes
+    the one-commit unfreeze-and-raise. Leg 2: a path frozen in base and not frozen in current reds
+    WHILE its budgets entry survives in current -- this closes the two-PR unfreeze-then-raise, which
+    leg 1 alone cannot see because by PR 2 the base no longer carries the note. Leg 3: a path frozen
+    in base that is NEWLY present in current's defer_to_incumbent reds -- this closes the measured
+    deferral bypass, which the current-side static rule cannot see because it deletes the note in
+    the same commit. Removing the note AND the entry together must stay clean (the prescribed
+    retirement).
+  - >-
+    scripts/checks/structural/budget_raises.py -- wire frozen_base_violations into
+    validate_structural_size_budget_raises through the EXISTING base_reader seam, preserving
+    check_diff's base-unreachable contract exactly: when the reader returns None, print the advisory
+    SKIP line and evaluate no frozen leg. NEVER write `reader(rel) or ""` or any equivalent coercion
+    -- an empty base text yields an empty base map, which makes every frozen leg silently vacuous
+    and reports a clean pass on an unreachable base. That failure would be indistinguishable from a
+    genuine pass in CI, which is the exact masking shape Decision 55 forbids.
+  - >-
+    tests/checks/structural/test_size_limits.py -- add injected-root coverage for every E1-E4 static
+    failure mode BY LEG LABEL, the budgets-entry-caps-over-class-ceiling mechanism, the
+    dec-114-fails and dec-147-passes demonstration, the glob-rule-names-itself assertion, and the
+    live-tree freeze state. Include the two fail-loudly cases explicitly: a governed row carrying the
+    string "n/a" yields an E2 violation rather than a TypeError, and a frozen note whose path is
+    absent from disk yields an E4 violation rather than a FileNotFoundError. Add the two declared
+    regression guards (PLATFORM unmeasured; the 2000-character companion firing on a roadmaps-class
+    file) and label them in their docstrings as guards that pass on the unmodified tree.
+  - >-
+    tests/checks/structural/test_budget_raises.py -- mirror-test frozen_base_violations with a case
+    per leg: an increase reds, a shrink passes, a no-op passes, a committed valid marker does not
+    rescue an increase on a frozen entry, a non-frozen entry is unaffected, a ONE-COMMIT
+    unfreeze-and-raise reds (leg 1, base-side determination), an unfreeze at an unchanged value reds
+    while the entry survives (leg 2), an unfreeze with the entry removed together passes (the
+    retirement path), and a path frozen in base that is newly deferred reds even with its note
+    deleted (leg 3). The retirement/leg-2 pair must not be collapsed into one test -- they are the
+    same edit distinguished only by whether the entry survives.
+  - >-
+    tests/checks/structural/test_budget_raises.py -- add the BASE-UNREACHABLE test, which the file
+    has no coverage of today, so it is net-new behaviour under the AGENTS.md test rule. Drive
+    validate_structural_size_budget_raises with base_reader=lambda rel: None and assert the advisory
+    SKIP path: the SKIP line appears in captured stdout, failed stays empty, and NO frozen leg was
+    evaluated. It must be distinguishable from a genuine clean pass, which prints the
+    no-unauthorized-raises line WITHOUT the SKIP line -- assert on that difference, since both
+    outcomes leave failed empty. DO NOT DROP THE THIRD ASSERTION AS REDUNDANT -- it is the only one
+    that bites. check_diff prints SKIP unconditionally, so the SKIP-line assertion alone still
+    passes under a `reader(rel) or ""` implementation; proving no frozen leg ran requires a patched
+    or sentinel frozen_base_violations. The first two assertions document the contract; the third
+    is what enforces it.
+  - >-
+    tests/checks/structural/test__classify.py -- update the injected-root registry fixture's
+    defer_to_incumbent to the mapping shape. The existing membership assertions must keep passing
+    unchanged; if they need editing, the reshape is not the drop-in this plan claims and that must
+    be surfaced, not patched.
+  - >-
+    Re-measure scripts/checks/structural/size_limits.py and budget_raises.py against the implicit
+    500 SLOC limit after editing. If either approaches it, decompose per Decision 128 -- never
+    register it in config/sloc_budgets.yaml.
+  - >-
+    Replay EVERY graduated registry row whose check_id starts with structural- (12 at plan time,
+    covering budget_raises.py, size_limits.py, the config, DECISIONS.md and the registry module).
+    CI replays only new-in-diff rows, so nothing else will catch a row this plan breaks.
+    structural-registry-section-scoped-extraction (the graduated form of the seam warning) and
+    structural-guard-binds-shared-marker-module (the absent-literals scan) must both be among them.
+    DISTINGUISH THE TWO OUTCOMES, they are not the same repair. A row whose assertion went stale
+    because this plan LEGITIMATELY changed what it pins (for example a roster count this plan
+    deliberately altered) may have its assertion corrected. A row that reds because the
+    implementation VIOLATED an invariant the row exists to pin must be fixed IN THE CODE -- never by
+    editing the row to match the new behaviour. Editing a guard to accept its own violation is the
+    workaround anti-pattern (Decision 55, Decision 72); if which case applies is unclear, stop and
+    surface it rather than choosing.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - >-
+    Graduate the four graduate-disposition VP steps into
+    config/agent/verification_registry/registry.yaml under the declared graduation_check_ids,
+    keeping every appended line at or under 2315 characters, and confirm the differential admission
+    gate admits each (fails on origin/main, passes on HEAD). Re-run validate_structural_size_limits
+    after appending to confirm the zero-headroom long-line pin held.
+  - >-
+    File ALL FIVE recommendations named in Context via the ops portal, calling
+    get_rec_write_guidance() before each file_rec(). The five are: (1) the key-matched marker defect,
+    with the Proof B reproduction verbatim; (2) the ROADMAP-PLATFORM raw-line ceiling unit revisit;
+    (3) generated_pinned as the second unaccountable escape; (4) the stale-roster sweep, carrying
+    the measured ZERO-stale-keys-at-07e48c9 baseline; (5) the incumbent-gate-governs-nothing defect,
+    with its measured repro verbatim. Count them against Context before reporting done -- (4) and
+    (5) were added by later critique rounds, and (5) is the entire residual round 3 exists to
+    preserve. Filing fewer than five silently drops a residual into a plan document that nobody
+    reads again.
+  - 'Report: what was implemented, verification results'
+bundled_recommendations: []
+infrastructure_dependencies: []
+work_areas: []
+rollback: >-
+  Every change is additive config plus two helper functions and their tests. Reverting the commit
+  restores the pre-slice state exactly; no data migration, no deployed artefact, and no roadmap or
+  Decision file is touched, so there is nothing to unwind beyond the revert itself.
