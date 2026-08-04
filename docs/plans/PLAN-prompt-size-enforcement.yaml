@@ -1,0 +1,754 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: prompt-size-enforcement
+intent: >-
+  Close audit finding SGE-06: Decision 43's `.prompt.md` 3,000-line governance row is live over 12
+  tracked files and enforced by nothing. Give the live row a live gate by adding a raw-line size
+  assertion to the ALREADY-registered validate_prompt_files check, covering BOTH governed prompt
+  directories, while leaving the scheduled-format structure contract scoped where it belongs.
+  Restores the declared-equals-actual governance property (NS.4 agent-first governance) that
+  Decision 146 corrected for the decisions file and Decision 130 corrected for the SLOC scan.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-prompt-size-enforcement.yaml
+phase: >-
+  Platform governance-integrity. Slice D of the structural-size-governance-expansion overseer run,
+  driving audit finding SGE-06 from audits/size-governance-expansion-3dee4a5.yaml (merged in #840)
+  to completion. Audit-sourced, no tier_item id and no product-roadmap phase dependency. Sized XS
+  by the audit and kept XS here: three files, no new check name, no new Decision.
+
+scope:
+  - file: scripts/checks/prompts/validate_prompt_files.py
+    action: Modify
+    purpose: >-
+      Add `_MAX_PROMPT_LINES = 3000` (Decision 43's row, RAW lines) and
+      `_SIZE_GOVERNED_PROMPT_DIRS` -- a tuple of two path-part tuples: (".github", "prompts",
+      "scheduled") and ("config", "agent", "executor", "prompts"). Sweep BOTH directories for
+      `*.prompt.md`, count `len(content.splitlines())`, and append an error naming the file, its
+      measured line count and the limit when a file exceeds it, with strict `>`. This mirrors
+      Decision 114's `_ROADMAP_MAX_LINES` precedent verbatim in shape (module constant inside an
+      already-registered check, `len(text.splitlines())`, strict `>`, governing Decision named in
+      the failure message) -- verified in source at
+      scripts/checks/roadmap/validate_platform_roadmap.py:13-22. ALSO generalise the EXISTING
+      zero-file guard ("no *.prompt.md files found under {dir}") from the scheduled directory alone
+      to EVERY entry of `_SIZE_GOVERNED_PROMPT_DIRS`, so an empty governed directory fails the check
+      itself rather than passing vacuously -- this is an extension of behaviour the check already
+      has for one directory, not a new invention, and it fires on every PR because the check carries
+      no pre_globs. CRITICAL SCOPE SPLIT: the EXISTING H1 / section-heading /
+      dead-relative-reference structure contract stays scoped to `.github/prompts/scheduled/` ONLY.
+      Layer-5 executor prompts are size-governed but NOT structure-governed. Both directory paths
+      must be built from `_common.ROOT` (never recomputed)
+      so the single `scripts.checks._common.ROOT` patch target intercepts both -- Decision 104, and
+      the seam all 8 existing tests in this file already use. 40 SLOC today; must stay under 500 and
+      must NOT be registered in config/sloc_budgets.yaml.
+  - file: tests/checks/prompts/test_validate_prompt_files.py
+    action: Modify
+    purpose: >-
+      MOSTLY ADDITIONS, PLUS EXACTLY 3 AMENDMENTS. No existing symbol is removed, so nothing needs
+      repointing, but generalising the zero-file guard to both governed directories means the 3
+      existing tests that assert a CLEAN result while creating only the scheduled directory must
+      also seed one minimal executor prompt: `test_passes_with_h1_and_section`,
+      `test_passes_on_live_relative_reference` and
+      `test_no_longer_requires_frontmatter_or_intent_section`. The other 5 are unaffected -- the 4
+      failure-expecting tests still fail (for their original reason, which must be preserved: assert
+      on the error TEXT, not merely on a non-empty failed list, so they cannot pass for the new
+      reason instead of the old one) and `test_live_surface_passes_with_nonzero_count` runs against
+      the real tree. Add three classes that prove the gate FIRES (see acceptance criteria):
+      TestPromptSizeLimit, TestExecutorPromptScope, TestPromptSizeLiveSurface. This is the
+      load-bearing half of the slice: a size assertion
+      against a population whose maximum is 226 of 3,000 passes trivially, so a test suite that
+      only shows green proves nothing. Every oversized fixture is written into `tmp_path` under
+      `patch("scripts.checks._common.ROOT", tmp_path)` and NEVER into a live prompt directory --
+      see the Decision 48 constraint. 79 SLOC today; keep under 500 (decompose, never register,
+      Decision 128).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Land exactly one new row per `graduate`-disposition VP step (three rows: verification steps
+      1, 2 and 3). validate_graduation_completeness's implement-PR leg fails any graduate step
+      lacking a NEW-IN-DIFF row whose `check_id` AND `plan_slug` both match, so omitting this file
+      would make the plan unable to discharge its own graduation obligation (Decision 132). Row
+      shape: check_id / primitive_slot (`test_selector` for all three) / guard_target
+      (scripts/checks/prompts/validate_prompt_files.py) / guard_symbol (validate_prompt_files) /
+      plan_slug (= prompt-size-enforcement) / graduated_at / graduated_by / check_spec.node_id.
+      Registry has 294 entries and 294 distinct check_ids today; per-row graduation slugs are not
+      registered check names, so three rows against an existing check are schema-valid.
+
+bundled_recommendations: []
+
+infrastructure_dependencies: []
+
+acceptance_criteria:
+  - >-
+    A `*.prompt.md` of 3,001 RAW lines under `.github/prompts/scheduled/` FAILS
+    validate_prompt_files. This is SGE-06's stated acceptance ("a check fails a 3,001-line
+    .prompt.md") and the single non-negotiable criterion.
+  - >-
+    A `*.prompt.md` of 3,001 RAW lines under `config/agent/executor/prompts/` ALSO fails -- proving
+    the second governed directory is genuinely swept and not merely named in a constant.
+  - >-
+    A `*.prompt.md` of EXACTLY 3,000 raw lines PASSES. This proves two things at once: the
+    comparison is strict `>` (not `>=`, which would be an off-by-one against Decision 43's row as
+    written) and the assertion is not trivially failing everything.
+  - >-
+    A file under `config/agent/executor/prompts/` with NO H1, NO `## ` section AND a dead relative
+    reference PASSES, provided it is under the line limit. The scheduled-format structure contract
+    must NOT be imposed on Layer-5 executor prompts -- imposing it would fail files that were never
+    meant to conform (implement-step.prompt.md is 9 lines with no `## ` section today).
+  - >-
+    ANTI-VACUITY, ENFORCED IN THE CHECK ITSELF: validate_prompt_files FAILS when ANY entry of
+    `_SIZE_GOVERNED_PROMPT_DIRS` contains zero `*.prompt.md` files. A size gate whose glob matches
+    nothing passes trivially and silently; this is what makes a directory rename or relocation red
+    on the very PR that causes it, because the check carries no pre_globs and therefore runs in the
+    `--pre` tier on EVERY PR. A test-only anchor would not achieve this: the fast tier's pytest step
+    is diff-scoped, so a PR renaming a prompt directory need not select this test file.
+  - >-
+    ANTI-VACUITY, SECOND TIER: the live-surface test additionally asserts each governed directory is
+    non-empty under the real `_common.ROOT`, as `> 0` per directory and NEVER as an equality pin on
+    the file count (an equality pin becomes a standing tripwire that reds CI the next time a prompt
+    is legitimately added or removed).
+  - >-
+    `_MAX_PROMPT_LINES == 3000` exactly, and the live tree's measured maximum raw line count is
+    strictly below it. Enforce Decision 43's row AS WRITTEN -- this criterion is what makes a
+    silent widening of the constant fail.
+  - >-
+    The unit is RAW lines (`len(content.splitlines())`), matching Decision 43's row ("3000 lines")
+    and Decision 114's `_ROADMAP_MAX_LINES` precedent. Not effective lines, not bytes, not tokens.
+  - >-
+    NO new registered check name is minted: `scripts/checks/registry.py`, `scripts/validate.py` and
+    `tests/test_checks_registry.py` are byte-identical to origin/main. Enforcement rides the
+    already-registered validate_prompt_files, which runs in the `--pre` tier (registry.py:104, no
+    pre_globs, so on every PR) and the full tier (registry.py:278), reached through the
+    scripts/validate.py:202 facade.
+  - >-
+    FIXTURE ISOLATION / TIER INTEGRITY: `.github/prompts/scheduled/` and
+    `config/agent/executor/prompts/` are byte-identical to origin/main. No oversized fixture leaked
+    out of `tmp_path`. This is load-bearing for the declared V2 tier: `.github/prompts/scheduled/`
+    is on Decision 48's EXHAUSTIVE V3 scope-trigger list ("deployed to Lambda"), so a fixture
+    landing there as a tracked file would flip the plan to V3, break the structure contract, and
+    ship a junk file into the scheduled-agent Lambda package.
+  - >-
+    NO waiver / escape hatch is implemented. There is no `# complexity-waiver:` handling, and no
+    marker, comment or config key can admit an oversized prompt file. Authority: Decision 163
+    clause 1. The literal divergence from Decision 43's waiver column is recorded in Context, not
+    omitted.
+  - >-
+    Both modified source files stay under 500 SLOC and NEITHER is registered in
+    config/sloc_budgets.yaml (decompose by default, never register -- Decision 128).
+  - >-
+    docs/DECISIONS.md and docs/decisions-index.json are UNTOUCHED. No new numbered Decision is
+    minted and no existing Decision body is edited.
+  - >-
+    config/agent/verification_registry/registry.yaml gains exactly one new row per step whose
+    graduation disposition survives the real differential admission gate
+    (scripts.verification_graduation.run_differential), each with plan_slug
+    `prompt-size-enforcement`: prompt-size-limit-fires-and-boundary,
+    executor-prompts-size-only-not-structure, prompt-size-governed-dirs-live-non-empty. A step whose
+    differential is REJECTED at implement time is flipped to `waive` with a substantive reason in
+    the same PR, per the T3.21 protocol -- never force-landed as a row.
+  - >-
+    All 8 pre-existing tests in tests/checks/prompts/test_validate_prompt_files.py still pass, 5 of
+    them byte-unchanged and 3 amended only by seeding a minimal executor prompt (see the scope row).
+    Each of the 4 failure-expecting tests still fails for its ORIGINAL reason -- asserted on the
+    error text, not merely on a non-empty failed list, so a test cannot silently start passing for
+    the new empty-directory reason instead of the structural one it was written to cover.
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the assertion FIRES on an oversized scheduled prompt and does NOT fire at exactly the
+      limit. This is SGE-06's acceptance clause turned into an executable check, plus the boundary
+      case that distinguishes a real ceiling from an off-by-one.
+    command: >-
+      bin/venv-python -m pytest
+      tests/checks/prompts/test_validate_prompt_files.py::TestPromptSizeLimit -v
+    expected: >-
+      Exit 0, and the verbose run lists `test_fails_on_oversized_scheduled_prompt`,
+      `test_passes_at_exactly_the_line_limit` and `test_fails_when_a_governed_directory_is_empty`
+      as PASSED. BACKTICK DISCIPLINE (validate_vp_replay extracts EVERY backticked literal in this
+      field, including ones in prose, and requires each in captured stdout+stderr): only test node
+      names are backticked here, because the pytest -v run echoes full node ids and nothing else
+      from this paragraph. Any tool name, flag or markdown token mentioned in this field stays
+      unbackticked deliberately -- a backtick around explanatory prose is a structurally
+      unsatisfiable assertion.
+    fix_if: >-
+      The oversized case passes -- the size sweep never ran, or the glob missed the directory.
+      Confirm the sweep builds its path from `_common.ROOT` (the patched seam) rather than a
+      module-level absolute path. If the exactly-3000 case FAILS, the comparison is `>=` instead of
+      `>`: Decision 43's row is a 3,000-line budget, so 3,000 is compliant and 3,001 is not. If the
+      empty-directory case passes, the per-directory non-empty guard was not extended to every
+      entry of `_SIZE_GOVERNED_PROMPT_DIRS`.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: prompt-size-limit-fires-and-boundary
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove THE CRITICAL SEAM: the executor prompts directory is SIZE-governed but NOT
+      STRUCTURE-governed. Getting this backwards is the single most likely way to ship a broken
+      slice, because the scheduled-format contract would fail Layer-5 files that were never meant
+      to conform.
+    command: >-
+      bin/venv-python -m pytest
+      tests/checks/prompts/test_validate_prompt_files.py::TestExecutorPromptScope -v
+    expected: >-
+      Exit 0, and the run lists `test_fails_on_oversized_executor_prompt` (proving the directory IS
+      swept for size) and `test_executor_prompts_are_not_structure_checked` (proving an executor
+      prompt with no H1, no section heading and a dead relative reference still passes when under
+      the limit). Only the two node names are backticked -- see step 1's backtick-discipline note.
+    fix_if: >-
+      The oversized executor case passes -- `config/agent/executor/prompts` is missing from
+      `_SIZE_GOVERNED_PROMPT_DIRS`, or the sweep loop only iterates the first entry. If instead the
+      structure case FAILS, the H1/section/dead-reference contract was widened to both directories:
+      revert that. The structure loop iterates the scheduled directory alone; only the size loop
+      iterates `_SIZE_GOVERNED_PROMPT_DIRS`.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: executor-prompts-size-only-not-structure
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      The SECOND-TIER anti-vacuity anchor, run against the REAL tree with no mocking. The primary
+      anchor is now inside the check itself (an empty governed directory fails, covered by step 1);
+      this step proves the constant is pointed at something real in the LIVE tree, that the real
+      population passes, and that the limit still equals Decision 43's declared 3,000. Steps 1 and 2
+      prove the assertion can fire in a synthetic tree; this one proves it is aimed correctly.
+    command: >-
+      bin/venv-python -m pytest
+      tests/checks/prompts/test_validate_prompt_files.py::TestPromptSizeLiveSurface -v
+    expected: >-
+      Exit 0, and the run lists `test_governed_dirs_are_non_empty_on_the_live_tree`,
+      `test_live_tree_max_raw_lines_is_under_the_limit` and
+      `test_limit_matches_decision_43_row` as PASSED.
+    fix_if: >-
+      The non-empty test fails -- a governed directory was renamed, relocated or emptied, and the
+      size sweep is now matching nothing (passing vacuously). Update `_SIZE_GOVERNED_PROMPT_DIRS`
+      to the directory's new home, or drop the entry deliberately if the surface is genuinely
+      retired. Do NOT "fix" it by deleting the assertion -- that assertion is the entire reason
+      this slice is not a no-op. If the limit test fails, the constant drifted from Decision 43's
+      row: restore 3000, or amend the row first. Assert per-directory counts as `> 0`, never as an
+      equality on the file count.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: prompt-size-governed-dirs-live-non-empty
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove fixture isolation (the declared V2 tier depends on it) and that no new registered check
+      name was minted.
+    command: |-
+      set -e
+      if ! git diff --quiet origin/main -- .github/prompts/scheduled/ config/agent/executor/prompts/; then
+        echo "FAIL: a live prompt directory changed vs origin/main -- a fixture leaked out of tmp_path"
+        git diff --stat origin/main -- .github/prompts/scheduled/ config/agent/executor/prompts/
+        exit 1
+      fi
+      leaks="$(git status --porcelain -- .github/prompts/scheduled/ config/agent/executor/prompts/)"
+      if [ -n "$leaks" ]; then
+        echo "FAIL: uncommitted or UNTRACKED file in a live prompt directory -- a fixture leaked out of tmp_path"
+        echo "$leaks"
+        exit 1
+      fi
+      if ! git diff --quiet origin/main -- scripts/checks/registry.py scripts/validate.py tests/test_checks_registry.py; then
+        echo "FAIL: registry/validate/check-name surface changed -- no new check name may be minted"
+        exit 1
+      fi
+      echo "fixture isolation clean; no new check name minted"
+    expected: "Prints `fixture isolation clean; no new check name minted`; exit 0."
+    fix_if: >-
+      A live prompt directory changed -- a test wrote its oversized fixture into the real tree
+      instead of `tmp_path`. Delete the file and rewrite the test to use the
+      `patch("scripts.checks._common.ROOT", tmp_path)` seam the file's 8 existing tests already
+      use. This matters beyond tidiness: `.github/prompts/scheduled/` is on Decision 48's exhaustive
+      V3 trigger list, so a tracked fixture there flips this plan's tier and ships junk into the
+      scheduled-agent Lambda package. The porcelain assertion is the one that catches the realistic
+      case -- VP execution precedes commit, so a freshly-written fixture is UNTRACKED, and
+      `git diff --quiet origin/main` returns 0 on untracked paths (probed directly at plan time:
+      exit 0 with an untracked file present, while `git status --porcelain` reports it). If the last
+      assertion trips, the implementation minted a new check name; bind to the already-registered
+      validate_prompt_files instead. NOTE ON FORM: the git assertions use
+      `if ! cmd; then ...; exit 1; fi`, never a bare `! cmd` statement -- POSIX specifies `set -e`
+      is IGNORED for a command whose return value is inverted with `!`, so the bare form silently
+      exits 0 even on violation.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      All three halves are one-time properties of THIS diff measured against origin/main, not
+      standing invariants -- once merged there is no delta left to measure, so a graduated row would
+      assert a vacuous truth on every subsequent run. Compensating control for the durable half:
+      an OVERSIZED leaked fixture is caught by this plan's own new size assertion, which is
+      registered in both tiers. Stated precisely because an earlier draft of this reason was WRONG:
+      it claimed a leak would also fail the pre-existing H1/section structure contract, which is
+      false for the fixture shape this plan specifies (`"# t\n\n## s\n" + "x\n" * 2998` carries both
+      an H1 and a section heading). The residue this step alone covers is therefore narrow and real:
+      an at-limit or under-limit leaked fixture passes both size and structure gates, so the
+      porcelain assertion is its only guard.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Enforce the plan's own SLOC rule against itself: neither modified file crosses 500 SLOC, and
+      neither is registered in config/sloc_budgets.yaml.
+    command: |-
+      set -e
+      for f in scripts/checks/prompts/validate_prompt_files.py \
+               tests/checks/prompts/test_validate_prompt_files.py; do
+        n=$(awk 'NF && $1 !~ /^#/' "$f" | wc -l)
+        echo "$f: $n SLOC"
+        test "$n" -le 500 || { echo "OVER 500: $f ($n)"; exit 1; }
+      done
+      if grep -q "validate_prompt_files" config/sloc_budgets.yaml; then
+        echo "FAIL: registered in config/sloc_budgets.yaml -- decompose, never register (Decision 128)"
+        exit 1
+      fi
+      echo "sloc discipline OK"
+    expected: >-
+      Prints each file's measured SLOC, then `sloc discipline OK`; exit 0. Plan-time baseline: 40
+      SLOC for the check and 79 for its test file, so there is ~380 lines of headroom on the tighter
+      of the two -- this step is a tripwire, not an expected constraint.
+    fix_if: >-
+      A file crossed 500 -- decompose into a facade package (Decision 80/104/124 pattern), never
+      raise. Do NOT add a config/sloc_budgets.yaml entry and do NOT run `--update-sloc-budgets`
+      (Decision 128 / B2: it no longer auto-seeds newly-oversized unregistered files, and it strips
+      existing raise-approved markers from entries it does rewrite).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates registered checks with strictly worse diagnostics: validate_sloc_limits already
+      enforces the 500-SLOC ceiling repo-wide over every gated Python file, and
+      validate_sloc_budget_raises already gates registration and increases. This step exists to
+      catch the violation locally before CI does, not to add a standing guard; graduating it would
+      add a redundant registry row asserting a property two registered checks already own.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run the authoritative pre-merge gate over the whole change, then the FULL tier before commit
+      per handoff_policy. The full-tier half is a hard mechanized requirement, not a courtesy.
+    command: "bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate"
+    expected: >-
+      Both exit 0. This exact command string is what discharges Decision 163 clause 3: verified
+      empirically at plan time against the live matcher -- splitting on the shell separator yields
+      ["... --pre" -> False, "... scripts.validate" -> True], so
+      validate_handoff_full_tier._has_full_tier_step returns True. Do NOT collapse this to the
+      fast-tier half alone; validate_handoff_full_tier is registered in BOTH tiers and would fail
+      this plan's own PR. (No prose token in this field is backticked, per constraint 12 -- inert
+      today because this step is not hermetic, but it would become a live unsatisfiable assertion
+      the moment a future revision flipped that flag.)
+    fix_if: >-
+      Any check fails. Forward-fix on the branch (Decision 55: no auto-revert, no workaround loop,
+      no inline patch around a red gate). Expect validate_test_coverage to be the slow one (the full
+      tier runs whole-file per-file coverage, measured at minutes, not seconds); if the full tier
+      times out, treat the handoff as blocked per handoff_policy.timeout_disposition and rerun from
+      the start rather than committing on a partial pass. The modified check module is NOT in
+      config/coverage_baseline.yaml, so it sits at the implicit 100% per-file requirement -- every
+      new branch (over-limit, at-limit, per-directory) needs a test exercising it.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero but must not be graduated: the full-tier obligation is
+      already owned by the registered validate_handoff_full_tier check (Decision 163 clause 2), and
+      a registry row that invokes scripts/validate.py would make validation re-enter itself when the
+      graduated check is run BY validate.py -- exactly the recursion the _VALIDATE_DEPTH guard
+      exists to prevent.
+
+constraints:
+  - >-
+    IMPLEMENTATION plan type only. STRATEGIC is frozen (Decision 67). The >5-files / >8-steps
+    complexity heuristic is suspended during the freeze and does not bind here regardless -- this is
+    3 files and 6 steps.
+  - >-
+    SCOPE SPLIT, non-negotiable: the H1 / `## ` section / dead-relative-reference structure contract
+    stays scoped to `.github/prompts/scheduled/`. Layer-5 executor prompts under
+    `config/agent/executor/prompts/` are SIZE-governed only. Widening the structure contract to
+    both directories would fail files that were never meant to conform and is the single most
+    likely way to break this slice.
+  - >-
+    Enforce Decision 43's row AS WRITTEN: RAW lines, limit 3000, strict `>`. Not effective lines,
+    not bytes, not tokens. Do not re-derive the unit -- Decision 114's `_ROADMAP_MAX_LINES` is the
+    affirmative precedent (module constant, `len(text.splitlines())`, strict `>`) and re-opening
+    the unit question would re-litigate the audit, which is forbidden.
+  - >-
+    NO waiver, marker, comment or config key may admit an oversized prompt file. Authority is
+    Decision 163 clause 1 (an obligation whose owner would never grant an exception is enforced by
+    removing the exception path, not by building a gate a future session can argue past) -- NOT
+    Decision 102/128, which are SLOC-scoped and do not reach the `.prompt.md` row. See the Context
+    entry recording the literal Decision 43 divergence.
+  - >-
+    NO new registered check name. Enforcement rides the ALREADY-registered validate_prompt_files,
+    so scripts/checks/registry.py, scripts/validate.py and tests/test_checks_registry.py must stay
+    byte-identical to origin/main (Decision 104; the Slice A precedent from PR #846). A registry
+    sequence entry and a validate.py re-export are needed only when minting a NEW check name, and
+    this plan mints none.
+  - >-
+    NO new numbered Decision, and docs/DECISIONS.md / docs/decisions-index.json stay UNTOUCHED.
+    Decision 43 already made the commitment; this supplies only its missing gate, which routes to
+    the `operational_fact` row of docs/contracts/decision-entry.yaml significance.routing. Header
+    headroom is 2 (118 of 120 live). Parallel-safety is the second, independent reason: a sibling
+    overseer slice is concurrently authoring Decision 166 and regenerating docs/decisions-index.json,
+    which would be a guaranteed textual conflict.
+  - >-
+    FIXTURE ISOLATION: every oversized fixture lives in `tmp_path` under
+    `patch("scripts.checks._common.ROOT", tmp_path)`. NEVER write a fixture into
+    `.github/prompts/scheduled/` or `config/agent/executor/prompts/`. Beyond the obvious mess, the
+    scheduled directory is on Decision 48's EXHAUSTIVE V3 scope-trigger list ("deployed to Lambda"),
+    so a tracked fixture there would flip this plan's verification tier from V2 to V3 and ship a
+    junk file into the scheduled-agent Lambda package.
+  - >-
+    Do NOT add a directory-injection parameter to validate_prompt_files. Both governed paths are
+    built from `_common.ROOT`, and patching `scripts.checks._common.ROOT` already redirects both --
+    that single-patch-target property is exactly what the Decision 104 `_common` contract exists to
+    provide, and it is the seam all 8 existing tests in this file already use. A new parameter would
+    be scope creep testing the mechanism rather than the property; verification step 4 pins the
+    property instead.
+  - >-
+    Every backticked literal in a VP step's `expected` field is an ASSERTION, not emphasis:
+    validate_vp_replay extracts all of them with `` re.compile(r"`([^`]+)`") `` and requires each to
+    appear in the replayed command's captured stdout+stderr. Backtick ONLY strings the command
+    genuinely emits (pytest node ids under -v, or an explicit echo). Never backtick a tool name,
+    flag, path or markdown token that appears solely in explanatory prose -- see the Context entry
+    recording how this defect reached round 1 of the critique.
+  - >-
+    The 4 FAILURE-EXPECTING existing tests must assert on the ERROR TEXT of their original failure
+    reason, not merely on a non-empty `failed` list. Otherwise a test written to cover a missing H1
+    could silently start passing for the new empty-directory reason instead, converting real
+    coverage into a tautology. (The 3 AMENDED tests are the clean-result ones and have no failure
+    reason to assert on; the two sets are disjoint.) MECHANISM, named because the file offers no
+    pattern to copy: validate_prompt_files keeps `errors` as a function-local list that is only
+    `print()`ed and appends just the sentinel "Prompt file validation" to `failed`, so the error text
+    is reachable ONLY through stdout capture -- use `capsys.readouterr().out`, and note that none of
+    the 8 existing tests uses capsys today. The four substrings to assert:
+    "missing H1 title line"; "missing at least one '## ' section"; "dead reference '"; and
+    "no *.prompt.md files found under ".
+  - >-
+    Decompose, never raise (Decision 128). Both modified files stay under 500 SLOC. Do NOT add a
+    config/sloc_budgets.yaml entry and do NOT run `--update-sloc-budgets`.
+  - >-
+    Every `graduate` VP step needs a matching NEW row in
+    config/agent/verification_registry/registry.yaml with the same check_id AND plan_slug, or
+    validate_graduation_completeness's implement-PR leg fails (Decision 132). Three rows. Run
+    scripts.verification_graduation.run_differential on each before landing its row; a REJECTED
+    differential is flipped to `waive` with a substantive reason in the same PR, never force-landed.
+  - >-
+    Never write `! cmd` as a bare statement under `set -e` in a VP command: POSIX specifies `set -e`
+    is IGNORED for a command whose return value is inverted with `!`, so the assertion silently
+    passes. Use `if ! cmd; then echo FAIL; exit 1; fi` (the form used in verification steps 4 and 5,
+    where the `!` sits inside an `if` condition whose status the `if` consumes).
+  - >-
+    Bundle NOTHING. bundled_recommendations is empty and the squash-merge commit carries no
+    `Resolves:` trailer. Filing the two follow-on recs in the execution steps is a forward
+    commitment, not a bundle -- this plan resolves no existing rec, so the Closure Obligation does
+    not trigger. In particular rec-2399 is NOT bundled and NOT claimed as resolved.
+  - "No rescue agents or workaround loops (Decision 55). Forward-fix only; never auto-revert."
+  - >-
+    Only files in the Scope table may be modified. Out-of-scope bugs become recommendations via
+    `bin/venv-python -m scripts.ops_data_portal --file-rec`, not inline fixes.
+
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (118 of 118 triaged,
+    gate_run_id prompt-size-enforcement-decision-scout-r1-ca60703e). CITE: Decision 163, Decision
+    114, Decision 127, Decision 130, Decision 132, Decision 150, Decision 104, Decision 48.
+    NOTE/divergence: Decision 43, Decision 128, Decision 165. RELATED: Decision 67, Decision 73,
+    Decision 55, Decision 86, Decision 146.
+  - >-
+    "gates: decision-scout=FLAGS_FOUND after 1 round(s); plan-critique=REVISE after 1 round(s),
+    round 2 pending (gate_run_id prompt-size-enforcement-plan-critique-r1-33024ede)"
+  - >-
+    PLAN-CRITIQUE ROUND 1 BLOCKING FINDING (B1), fixed and worth recording because it is the exact
+    trap this plan's own anti-vacuity Context entry claimed to have avoided: verification steps 1
+    and 2 were `pre-deploy` + `hermetic: true`, so validate_vp_replay would replay them on the
+    IMPLEMENT PR, and its `_extract_literals` pulls EVERY backticked literal out of the `expected`
+    field -- including ones sitting in explanatory prose -- then fails the step on any that is
+    absent from captured stdout+stderr. Reproduced directly against the live matcher: step 1
+    demanded 4 literals (2 test node names, plus `pytest -v` and `pytest -q` from a sentence
+    ABOUT backticking) and step 2 demanded 3 (2 node names plus a bare markdown section token). The
+    pytest -v output contains the node names and none of the prose tokens, so the implement PR would
+    have gone red in the fast tier. Root cause is worth internalising verbatim from the critique:
+    the author reasoned about the literals intended as assertions, not about the ones the
+    meta-commentary introduced. Fix was to unbacktick the prose while keeping the node names, which
+    preserves VF-01 replay coverage; flipping the steps to `hermetic: false` was rejected as
+    mechanically legal but coverage-forfeiting. A standing constraint now bans the pattern.
+  - >-
+    PLAN-CRITIQUE ROUND 1 (N2) -- POSITION REVERSED, and the reversal is the substantive one. The
+    original draft rejected a check-level per-directory non-empty guard on two grounds, both of
+    which the critique correctly demolished: the "worse diagnostics" claim does not survive scrutiny
+    (a check-level "no *.prompt.md files found under <dir>" error is at least as good as a pytest
+    assertion, and the check ALREADY emits exactly that message for the scheduled directory), and
+    the breakage count was overstated as 4 of 8 when it is 3 -- test_live_surface_passes_with_nonzero_count
+    runs against the real tree and is unaffected. Independently re-derived here: the 3 are
+    test_passes_with_h1_and_section, test_passes_on_live_relative_reference and
+    test_no_longer_requires_frontmatter_or_intent_section, being the only clean-result tests that
+    create just the scheduled directory. The decisive argument is enforcement TIER, not diagnostics:
+    validate_prompt_files carries no pre_globs, so it runs in `--pre` on every PR, whereas the fast
+    tier's pytest step is diff-scoped -- a PR renaming the executor prompts directory need not
+    select this test file, so a test-only anchor goes green on PR CI and only reds post-merge as a
+    CI-RCA. For a slice whose entire thesis is that a live governance row needs a live gate,
+    accepting the weaker tier to preserve a self-imposed "additions only" convenience constraint was
+    the wrong trade. The guard is now in the check; the live-surface test is retained as a second
+    tier rather than the only one.
+  - >-
+    PLAN-CRITIQUE ROUND 1 (N1), fixed: verification step 4's fixture-isolation assertion used
+    `git diff --quiet origin/main` alone, which returns exit 0 for an UNTRACKED path -- probed
+    directly at plan time with a throwaway file under .github/prompts/scheduled/ (diff exit 0,
+    porcelain reports `?? ...`). Since VP steps run BEFORE the commit, a freshly-written leaked
+    fixture is untracked by definition and would have passed, then been swept in by a later
+    `git add`. A `git status --porcelain` assertion now covers it. The step's graduation waiver
+    reason was ALSO wrong and is corrected: it claimed a leaked fixture would fail the pre-existing
+    H1/section structure contract, which is false for the fixture shape this plan specifies (it
+    carries both an H1 and a section heading). The honest compensating control is the new size
+    assertion, which leaves a genuine narrow residue -- an at-limit or under-limit leak -- that only
+    the porcelain assertion catches.
+  - >-
+    GRADUATION DISPOSITIONS CHALLENGED AND UPHELD (plan-critique round 1). The author's own doubt
+    was whether a node-id differential on a NEW test class is near-tautological and should therefore
+    be `waive`. Confirmed that the MECHANISM is near-tautological -- run_differential needs the
+    revert leg to FAIL, TestSelectorCheck.run() maps any non-zero pytest exit to FAIL, and a node id
+    naming a class absent from origin/main exits 4 -- so a new test class is admitted by
+    construction. `graduate` is nonetheless correct and stays: (i) the T3.21 bar is
+    kernel-expressibility, not differential informativeness, and `pytest <node_id>` is the textbook
+    `test_selector` shape; (ii) 96 of the 118 live `test_selector` registry rows use `::` selectors,
+    so disqualifying them would render Decision 132's producer near-inoperable; (iii) the skill
+    states the asymmetry -- a false `not-applicable` is a missed regression guard while a false
+    `graduate` is a harmless waive-with-reason detour at implement time; (iv) the sibling slice's
+    superficially similar case is NOT the mirror image, because there the differential REJECTED and
+    the mechanism forced the waive, whereas here it admits. The underlying VF-06 c2 limitation is
+    filed as a follow-on rec against the graduation mechanism, not worked around in this plan.
+  - >-
+    Source of record for this slice is audits/size-governance-expansion-3dee4a5.yaml finding SGE-06
+    (severity medium, confidence CONFIRMED, classification novel with dedup_hit_count 0, effort XS,
+    depends_on []). The audit is merged (#840) and must NOT be re-run or re-litigated. Its
+    `proposed_change` and `acceptance` fields are this plan's build spec; the audit offered two
+    dispositions (a size assertion, or a formal retirement clause in a sibling Decision) and the
+    assertion route was settled by a prior advice-consult before this plan was authored.
+  - >-
+    MEASUREMENT CORRECTION, verified this session and worth carrying: the audit's finding text says
+    "largest 155 effective lines". Under the RAW-line unit Decision 43's row actually mandates, the
+    largest tracked prompt is 226 lines (config/agent/executor/prompts/planning.prompt.md; 174
+    non-blank), and it measured IDENTICALLY at the audited commit 3dee4a5 -- so the difference is
+    the audit's stricter effective-line rule, not file growth. Headroom is therefore 13.3x, not the
+    19x the finding implies. The conclusion is unchanged (the unit is not load-bearing and must not
+    be over-engineered), but the plan states the number it actually enforces.
+  - >-
+    Measured population at plan time: 12 tracked `*.prompt.md` -- 7 under `.github/prompts/scheduled/`
+    and 5 under `config/agent/executor/prompts/`. A whole-tree `find` confirms NO `*.prompt.md`
+    exists anywhere else, so the two-directory constant is complete, not a partial sample.
+    Per-file raw lines: rec-curator 201, prompt-quality 105, code-smell 76, findings-compare 70,
+    doc-freshness 56, orphan-code 56, transcript-review 53; planning 226, critique 40, refine 30,
+    code-review 25, implement-step 9.
+  - >-
+    DECISION 43 DIVERGENCE, recorded explicitly rather than omitted (human-approved at the Step 6b
+    gate): Decision 43's `.prompt.md` row declares the waiver pattern
+    "`# complexity-waiver: <decision-id>` in frontmatter comment", and Decision 43's headline clause
+    reads "Every enforcement gate supports explicit waivers with decision-id references". This plan
+    ships NO waiver, which is a literal under-implementation of that clause. The authority is
+    Decision 163 clause 1 (ratified 2026-08-03, four months after Decision 43): "For an obligation
+    whose owner would never actually grant an exception... the correct instrument is removing the
+    exception path entirely (make the obligation structurally unskippable), not building a gate
+    around it that a future session could argue its way past. A policy that is universal in name but
+    discretionary in enforcement is strictly worse than either a genuinely optional check or a
+    genuinely mandatory one." With a measured 13.3x headroom the waiver would ship as dead code
+    carrying a live weakening lever. IMPORTANT CORRECTION to an earlier draft of this reasoning:
+    Decision 102 states in terms that it amends Decision 43's SLOC row ONLY ("its SLOC semantics are
+    amended here only"), and Decision 128 is Python/`sloc_budgets.yaml`-scoped throughout -- NEITHER
+    reaches the `.prompt.md` row, so neither may be cited as the authority here. Decision 163
+    clause 1 is the correct and sufficient one.
+  - >-
+    Decision 114 is the affirmative precedent for BOTH the unit and the home question, verified in
+    source at scripts/checks/roadmap/validate_platform_roadmap.py:13-22: `_ROADMAP_MAX_LINES =
+    10_000` is a bare module-level constant inside an already-registered check, counting
+    `len(text.splitlines())` (RAW), compared with strict `>`, naming its governing Decision in the
+    failure message. This slice reuses that shape verbatim rather than inventing a registry.
+  - >-
+    Decision 128 SPIRIT divergence, recorded as a divergence and NOT an action item: a bare module
+    constant has no raise guard, where every registry-backed ceiling in this repo is marker-gated.
+    Decision 163 clause 1 affirms a no-escape ceiling is the right shape here, and Decision 165
+    reaches markers rather than bare constants, so the residue is narrow: the constant is a
+    frictionless one-line edit from being weakened. Decision 114's `_ROADMAP_MAX_LINES` is the
+    accepted precedent for exactly that trade. Verification step 3's `_MAX_PROMPT_LINES == 3000`
+    assertion is the compensating control.
+  - >-
+    FORWARD NOTE (Decision 165): if a raise mechanism is ever added to this ceiling, it MUST bind
+    the shared `scripts/checks/_marker_guard.py` module landed by Slice A in PR #846 -- never mint a
+    sixth copy of the marker guard. Decision 165's Rationale names the not-yet-built structural-size
+    engine as that module's intended next binder, and SGE-07 exists precisely because the guard was
+    quintuplicated.
+  - >-
+    Decision 48 tier adjudication, done explicitly because it is close: `.github/prompts/scheduled/`
+    IS on Decision 48's EXHAUSTIVE V3 scope-trigger list ("deployed to Lambda"), and rule 1 is "If
+    ANY file in scope matches V3 triggers, the plan is V3". None of this plan's three scope files is
+    a V3 trigger -- they are `scripts/`, `tests/` and a `config/` registry -- so rule 2 applies and
+    V2 is correct. The tier holds ONLY while fixture isolation holds; verification step 4 pins it.
+  - >-
+    Decision 127 clause 1(c) names `config/agent/executor/prompts/**/*.md` and clause 1(e) names
+    `.github/**/*.md` as PERMANENT sanctioned prose classes, which is this plan's authority for
+    governing both surfaces. Re-verified on origin/main: tier_item T5.3 (which once owned deletion
+    of the `.github/prompts/` directory) is `status: complete`, `completed_at: 2026-06-29`, both
+    exit criteria rehomed to T4.12 (deferred_post_mvp) -- so there is NO retirement conflict, and
+    Decision 127 clause 1(e) postdates Decision 76's "legacy" demotion of the directory.
+  - >-
+    No prose-regime overlap: config/prose_budgets.yaml's header enumerates its surfaces exhaustively
+    (S1 root ambient load-set, S2 each non-root CLAUDE.md, S4 each SKILL.md, S8 PROJECT_CONTEXT.md,
+    with S3 `.claude/commands/` explicitly measured-only and carrying no entry), and `.prompt.md`
+    appears in none of them. That file's own header states the governing principle -- "two guards on
+    one surface would be redundant" -- so a line-count constant inside validate_prompt_files is the
+    correct home, not a prose_budgets entry. Decision 127 sanctions WHERE prose may live; it sets no
+    byte budget for these surfaces.
+  - >-
+    The two enforcement configs Decision 43 names -- config/agent_governance.yaml and
+    config/agent_tool_tiers.yaml -- are ABSENT from disk (verified). This is the concrete shape of
+    SGE-06's gap: the row cites machinery that was deleted, which is why nothing enforces it today.
+  - >-
+    Decision 163 clause 3 mechanized obligation, verified EMPIRICALLY at plan time rather than
+    assumed: validate_handoff_full_tier is registered in both tiers (registry.py:109 fast with
+    pre_globs=("docs/plans/**",), :222 full) and fails any diff-added/modified plan declaring
+    handoff_policy unless a verification_plan step matches `-m\s+scripts\.validate(?![\w.])` in a
+    shell segment NOT containing `--pre`. Running the live matcher against verification step 6's
+    exact command string splits it into [("bin/venv-python -m scripts.validate --pre", False),
+    ("bin/venv-python -m scripts.validate", True)] -> satisfied. Without step 6 this plan would fail
+    its own PR.
+  - >-
+    ANTI-VACUITY DISCIPLINE, inherited from a sibling slice at real cost and applied throughout: a
+    `bash -n` sweep proves nothing about whether an assertion can FAIL; a grep that already passes
+    on the unmodified tree is vacuous; and this slice is doubly exposed because a size assertion
+    against files sitting at 226 of 3,000 passes trivially. Every VP step here was designed by
+    asking "would this FAIL if its property were violated?" -- steps 1-3 fire only because their
+    tests construct genuinely oversized fixtures, the empty-directory case anchors against the glob
+    matching nothing, and steps 4-5 use `if ! cmd; then exit 1; fi` rather than the `set -e`-immune
+    bare `! cmd` form. HONEST CAVEAT added after plan-critique round 1: an earlier draft of this
+    entry claimed the backtick literals were satisfiable in every case, and that claim was itself
+    false for steps 1 and 2 (see the B1 entry above) -- the discipline had been applied to the
+    commands and missed the prose. Every literal has since been re-extracted with the live
+    `_extract_literals` matcher and confirmed to be either a pytest node id echoed under -v or an
+    explicit echo string.
+  - >-
+    ci-rca deferral rationale (required: 4 unresolved ci-rca recs are open and this plan satisfies
+    none of the three Related-Work conditions). rec-2973 (scripts/ci_rca/log_evidence.py, evidence
+    truncation), rec-2970 (scripts/checks/registry.py, validate_test_coverage post-merge-only),
+    rec-2958 (scripts/checks/misc/validate_invariants.py, Main Canary failure) and rec-2957
+    (scripts/ci_rca/fetch_logs.py, log fetcher truncation) share no scope file, no Decision Record
+    and no failure category with this plan -- this is a governance-enforcement gap closure, not a CI
+    failure. rec-2970 is the nearest miss (it names scripts/checks/registry.py, which this plan
+    deliberately does NOT modify). The human has confirmed other agents own all four; this slice
+    defers them deliberately rather than by oversight.
+  - >-
+    rec-2399 ("validate_prompt_files missing docstring after becoming a no-op at T-1.13") is
+    adjacent but deliberately NOT bundled, per explicit human direction. Its premise is dead: the
+    function was rescoped to `.github/prompts/scheduled/` at VTS-08, now carries a docstring, and no
+    longer lives in scripts/validate.py at all (only a re-export at line 202), so its acceptance
+    command `grep -A1 'def validate_prompt_files' scripts/validate.py | grep -q '"""'` can never
+    pass. evaluate_rec_relevance returned `unknown` (no signals). It wants a separate portal
+    closure, not a bundle -- bundling it would widen this XS slice and add a closure obligation.
+  - >-
+    Planning-context notes from preflight, all non-blocking: 930 open recommendations; 800
+    non-automatable (soft cap of 250 breached, surfaced per Decision 73 which suspends per-rec
+    review); data-quality checks have never run (tables_covered 0, last_run null) and this plan
+    touches no data pipeline or table schema; creds ok; branch was 0 commits behind AND 0 ahead of
+    origin/main at planning time, so the Main Divergence Assessment is clean and no rebase deferral
+    is recorded.
+  - >-
+    Assessments completed and negative: no .tf files in scope, so no Infrastructure Assessment and
+    no infrastructure_dependencies. No Lambda-packaged file in scope (config/agent/ is explicitly
+    NOT Lambda-packaged), so no build/deploy/smoke-test steps and no V3 trigger from that axis. No
+    table, no field_semantics entry and no warehouse write path, so no Data-Model Assessment.
+    Decision 86 routing satisfied: no new standing prose-architecture doc under docs/. Closure
+    Obligation not triggered: no bundled recs, no Delete scope row, no X -> Y migration.
+
+pre_implementation_checklist:
+  - "Branch confirmed not on main (`git branch --show-current`)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - >-
+    Only the plan-cited decision sections read: 163 (clauses 1 and 3 verbatim), 114, 127 (clauses
+    1(c) and 1(e)), 130, 132, 150, 104, 48 (the exhaustive V3 trigger list verbatim), 43 (the
+    structural-limits table verbatim), 128, 165
+  - >-
+    audits/size-governance-expansion-3dee4a5.yaml finding SGE-06 read (proposed_change + acceptance
+    are the build spec); the audit is NOT re-run or re-litigated
+  - "docs/contracts/decision-entry.yaml significance.bar + significance.routing read (the no-new-Decision authority)"
+  - "All three files in scope located and readable"
+  - >-
+    scripts/checks/roadmap/validate_platform_roadmap.py:13-22 read as the implementation model
+    (`_ROADMAP_MAX_LINES`: module constant, `len(text.splitlines())`, strict `>`, Decision named in
+    the message)
+  - >-
+    The 8 existing tests in tests/checks/prompts/test_validate_prompt_files.py read, and their
+    `patch("scripts.checks._common.ROOT", tmp_path)` seam understood -- new tests reuse it and add
+    no injection parameter
+  - "Acceptance criteria understood and verifiable"
+
+execution_steps:
+  - >-
+    Modify scripts/checks/prompts/validate_prompt_files.py: add `_MAX_PROMPT_LINES = 3000` and
+    `_SIZE_GOVERNED_PROMPT_DIRS` (the two path-part tuples), both with a comment citing Decision 43.
+    Sweep both directories for `*.prompt.md`, read each file once, and append an error naming the
+    repo-relative path, the measured raw line count and the limit when `len(content.splitlines()) >
+    _MAX_PROMPT_LINES`. Build both directory paths from `_common.ROOT`. Extend the module docstring
+    to state the size/structure scope split and to record that no waiver is implemented (Decision
+    163 clause 1), so the next reader does not "restore" one.
+  - >-
+    Leave the existing structure loop (H1 / section heading / dead relative reference) scoped to
+    `.github/prompts/scheduled/` exactly as it is -- do NOT widen it to the executor directory. DO
+    generalise the existing zero-file guard to iterate every entry of `_SIZE_GOVERNED_PROMPT_DIRS`,
+    emitting the same "no *.prompt.md files found under {dir}" error per empty governed directory.
+  - >-
+    Add TestPromptSizeLimit to tests/checks/prompts/test_validate_prompt_files.py: a 3,001-raw-line
+    structurally-valid fixture in the scheduled dir fails; a fixture of EXACTLY 3,000 raw lines
+    passes; the emitted error text names the offending file and the limit; and an EMPTY governed
+    directory fails (`test_fails_when_a_governed_directory_is_empty`). Build the oversized fixture
+    as `"# t\n\n## s\n" + "x\n" * 2998` (3 + 2998 = 3,001 lines) and the at-limit fixture with 2997
+    filler lines.
+  - >-
+    Amend exactly 3 existing tests to seed a minimal executor prompt alongside their scheduled
+    fixture, so they still assert a CLEAN result under the generalised zero-file guard:
+    test_passes_with_h1_and_section, test_passes_on_live_relative_reference, and
+    test_no_longer_requires_frontmatter_or_intent_section. Leave the other 5 alone, and while here
+    tighten the 4 failure-expecting tests to assert on their original error TEXT rather than on a
+    non-empty failed list.
+  - >-
+    Add TestExecutorPromptScope: a 3,001-line fixture under `config/agent/executor/prompts/` fails
+    (proving the directory is swept); and an executor prompt with NO H1, NO `## ` section and a dead
+    relative reference passes when under the limit (proving the structure contract was not widened).
+    Each case also seeds a valid scheduled prompt so the pre-existing zero-file guard does not
+    confound the result.
+  - >-
+    Add TestPromptSizeLiveSurface, running against the REAL `_common.ROOT` with no mocking: every
+    entry of `_SIZE_GOVERNED_PROMPT_DIRS` resolves to a directory containing at least one
+    `*.prompt.md` (assert `> 0` per directory, never an equality on the count); the live tree's
+    maximum raw line count is strictly below the limit; and `_MAX_PROMPT_LINES == 3000`.
+  - >-
+    Run scripts.verification_graduation.run_differential for each of the three candidate check_ids,
+    then add one row per ADMITTED check_id to config/agent/verification_registry/registry.yaml with
+    plan_slug `prompt-size-enforcement`, primitive_slot `test_selector`, guard_target
+    scripts/checks/prompts/validate_prompt_files.py, guard_symbol validate_prompt_files, and
+    check_spec.node_id set to the step's pytest node id. Flip any REJECTED step to `waive` with a
+    substantive reason in this same PR per the T3.21 protocol.
+  - >-
+    File two follow-on recommendations via the portal (call `get_rec_write_guidance()` BEFORE
+    `file_rec()`, per Decision 66). Neither is bundled and neither is resolved by this plan, so
+    bundled_recommendations stays empty and the squash-merge carries no `Resolves:` trailer.
+    (a) Annotate Decision 43's `.prompt.md` row with a pointer to validate_prompt_files as its
+    enforcer and with the no-waiver divergence, once DECISIONS.md contention from the concurrent
+    Decision 166 slice clears -- today the row's Enforcement paragraph still names
+    config/agent_governance.yaml and config/agent_tool_tiers.yaml, both absent from disk, so after
+    this merge it points at two deleted files and never at its live gate. (b) Against the
+    GRADUATION MECHANISM, not this plan: validate_verification_registry's differential admission
+    gate (VF-06 c2) admits any `test_selector` row whose node id names a test absent from
+    origin/main, because the revert leg exits 4 (no tests collected) and TestSelectorCheck.run()
+    maps any non-zero pytest exit to FAIL -- so a brand-new test class is admitted by construction,
+    proving node novelty rather than that the check would catch a regression.
+  - >-
+    Execute the Verification Plan -- run each step, loop until pass. On unrecoverable failure, stop
+    and RCA (Decision 55); never inline-patch around a red gate.
+  - >-
+    'Report: what was implemented, the verification results, the measured live-tree maximum raw line
+    count, and the run_differential verdict for each of the three candidate check_ids.'
+
+rollback: >-
+  Single-PR revert. The change is purely additive -- a constant, a directory tuple, one extra loop
+  in an existing check, three test classes and three registry rows. Reverting restores the
+  structure-only check and drops the size assertion; nothing else in the repo depends on the new
+  symbols. No data migration, no infrastructure, no deployed artefact, no Decision text to unwind.
+  If only the executor-directory coverage proves problematic post-merge (for example if that surface
+  is retired), the narrower rollback is to drop that one entry from `_SIZE_GOVERNED_PROMPT_DIRS`
+  and its corresponding test class, leaving the scheduled-directory ceiling live.
