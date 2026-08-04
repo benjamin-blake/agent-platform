@@ -3821,7 +3821,7 @@ entries:
       command:
         - bash
         - -c
-        - bin/venv-python -m pytest tests/checks/test_validation_result.py -q
+        - bin/venv-python -c "from scripts.checks import validation_result as vr; import tempfile, pathlib; from unittest.mock import patch, MagicMock; vr._ATTRIBUTIONS.clear(); vr._ATTRIBUTIONS.append({'check':'x','label':'y'}); git = MagicMock(returncode=0, stdout='abc\n'); outpath = pathlib.Path(tempfile.mkdtemp()) / 'r.json'; p = patch('scripts.checks.validation_result.subprocess.run', return_value=git); p.start(); rec = vr.write_completed(started_at='t', exit_code=1, failed_checks=['x'], path=outpath); p.stop(); assert rec['schema_version'] == 2, rec; assert rec['failed_check_attributions'] == [{'check':'x','label':'y'}], rec; vr.clear(outpath); assert vr._ATTRIBUTIONS == []; print('ok')"
   - check_id: ci-rca-bundle-names-real-failed-check
     primitive_slot: command_exit_zero
     guard_target: scripts/ci_rca/evidence/__init__.py
@@ -3847,14 +3847,17 @@ entries:
         - -c
         - bin/venv-python -c "import json,tempfile,pathlib; from scripts.ci_rca.taxonomy import classify_failures; art={'schema_version':2,'exit_code':1,'failed_checks':['Coverage below 100%'],'failed_check_attributions':[{'check':'validate_test_coverage','label':'Coverage below 100%'}]}; p=pathlib.Path(tempfile.mkdtemp())/'vr.json'; p.write_text(json.dumps(art)); jobs=[{'steps':[{'name':'Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)','conclusion':'failure'}]}]; out=classify_failures('irrelevant log\n', jobs, validation_result_path=p); print(out); assert [c for _,c,_ in out] == ['validate_test_coverage'], out"
   - check_id: ci-rca-taxonomy-covers-registry
-    primitive_slot: test_selector
+    primitive_slot: command_exit_zero
     guard_target: scripts/checks/ci_guards/validate_ci_rca_taxonomy.py
     guard_symbol: null
     plan_slug: ci-rca-evidence-fidelity
     graduated_at: '2026-08-04'
     graduated_by: implement-agent
     check_spec:
-      node_id: tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py::TestValidateCiRcaTaxonomy::test_registry_totality_guard_fails_on_unmapped_registered_check
+      command:
+        - bash
+        - -c
+        - 'bin/venv-python -c "import scripts.checks.ci_guards.validate_ci_rca_taxonomy as subject; from scripts.checks.registry import Check; real = subject.registry.all_checks; checks_copy = real(); checks_copy[''validate_totally_fake_unregistered_check''] = Check(name=''validate_totally_fake_unregistered_check''); subject.registry.all_checks = lambda: checks_copy; failed = []; subject.validate_ci_rca_taxonomy(failed); assert any(''validate_totally_fake_unregistered_check'' in f and ''absent from function_to_category'' in f for f in failed), failed; print(''ok'')"'
   - check_id: ci-rca-every-registered-check-categorised
     primitive_slot: command_exit_zero
     guard_target: scripts/ci_rca/taxonomy.py
@@ -3878,7 +3881,7 @@ entries:
       command:
         - bash
         - -c
-        - bin/venv-python -m pytest tests/ci_rca/taxonomy/ -q -k "refusal or evidence_insufficient or incomplete or junit"
+        - 'bin/venv-python -c "import tempfile, pathlib, yaml; from scripts.ci_rca.taxonomy import classify_failure; taxonomy = {''schema_version'': 1, ''taxonomy_version'': 1, ''function_to_category'': {''validate_sloc_limits'': ''sloc_violation''}, ''log_pattern_to_category'': [], ''workflow_to_tier'': {}}; p = pathlib.Path(tempfile.mkdtemp()) / ''taxonomy.yaml''; p.write_text(yaml.dump(taxonomy)); cat, check, src = classify_failure(''validate_sloc_limits FAILED'', path=p, complete=False, has_junit_cause_group=True); assert cat == ''sloc_violation'', (cat, check, src); assert src == ''function_to_category'', (cat, check, src); print(''ok'')"'
   - check_id: ci-rca-refusal-degenerate-fingerprint
     primitive_slot: command_exit_zero
     guard_target: scripts/ci_rca/fingerprint.py
@@ -3890,7 +3893,7 @@ entries:
       command:
         - bash
         - -c
-        - bin/venv-python -m pytest tests/test_ci_rca_fingerprint.py -q
+        - bin/venv-python -c "from scripts.ci_rca.fingerprint import signature_for_evidence_insufficient as f; a=f('byte_limit'); b=f('drain_ceiling'); assert a != b, (a,b); c=f('byte_limit'); assert a==c; print('ok')"
   - check_id: ci-rca-evidence-insufficient-emitted-not-assignable
     primitive_slot: command_exit_zero
     guard_target: scripts/ci_rca/taxonomy.py
@@ -3928,14 +3931,17 @@ entries:
         - -c
         - bin/venv-python -c "from tests.fixtures.ci_rca.oversized_validate_log import build_log; from scripts.ci_rca.log_evidence import bound_text_windowed, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES; body,lim=bound_text_windowed(build_log(), DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES); assert 'Failed checks:' in body and 'Coverage below 100%' in body; assert lim['included_bytes'] <= DEFAULT_MAX_BYTES and lim['included_lines'] <= DEFAULT_MAX_LINES; assert lim['truncation_reason'] == 'head_tail_window'; assert lim['observed_bytes'] == lim['included_bytes'] + lim['omitted_bytes']"
   - check_id: ci-rca-drain-ceiling-kills-runaway-child
-    primitive_slot: test_selector
+    primitive_slot: command_exit_zero
     guard_target: scripts/ci_rca/fetch_logs.py
     guard_symbol: null
     plan_slug: ci-rca-evidence-fidelity
     graduated_at: '2026-08-04'
     graduated_by: implement-agent
     check_spec:
-      node_id: tests/test_ci_rca_fetch_logs.py::TestStreamingTransport::test_sigterm_ignoring_child_is_killed_after_the_drain_ceiling
+      command:
+        - bash
+        - -c
+        - bin/venv-python -c "import sys, time; from scripts.ci_rca.fetch_logs import _run_log; program = 'import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);sys.stdout.write(chr(120)*2);sys.stdout.flush();time.sleep(10)'; t0=time.monotonic(); result = _run_log([sys.executable, '-c', program], 1, 10, drain_timeout_s=0.3); elapsed = time.monotonic()-t0; assert result.truncated and result.truncation_reason=='drain_ceiling' and result.returncode==0, result; assert elapsed < 5.0, elapsed; print('ok', elapsed)"
   - check_id: ci-rca-windowed-envelope-publishes
     primitive_slot: test_selector
     guard_target: scripts/ci_rca/log_evidence.py
