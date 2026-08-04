@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import selectors
 import subprocess
@@ -106,7 +107,11 @@ def _run_log(
             break
         for key, _ in selector.select(timeout=1.0):
             stream = cast(BinaryIO, key.fileobj)
-            chunk = stream.read(_STDOUT_CHUNK_BYTES)
+            # os.read() (not stream.read()) -- a BufferedReader.read(n) blocks trying to fill
+            # the full n bytes even after select() reports the fd merely READY (some data, not
+            # necessarily n bytes), which silently defeats drain_timeout_s against a child that
+            # writes a little then goes quiet without closing the pipe.
+            chunk = os.read(stream.fileno(), _STDOUT_CHUNK_BYTES)
             if not chunk:
                 selector.unregister(key.fileobj)
                 continue

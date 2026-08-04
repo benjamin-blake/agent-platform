@@ -4,6 +4,7 @@ import json
 import runpy
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -242,12 +243,19 @@ class TestStreamingTransport:
             "import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
             "sys.stdout.write('xx');sys.stdout.flush();time.sleep(10)"
         )
+        started_at = time.monotonic()
         result = _run_log([sys.executable, "-c", program], 1, 10, drain_timeout_s=0.3)
+        elapsed = time.monotonic() - started_at
         assert result.stdout == "x"
         assert result.truncated is True
         assert result.truncation_reason == "drain_ceiling"
         assert result.returncode == 0
         assert result.tail == ""
+        # Regression guard: a buffered stream.read(n) blocks trying to fill n bytes even after
+        # select() reports the fd merely ready, silently defeating drain_timeout_s against a
+        # child that writes a little then goes quiet -- this must return near drain_timeout_s
+        # (~0.3s) plus kill overhead, not wait out the child's full 10s sleep.
+        assert elapsed < 5.0, f"drain_timeout_s=0.3 should bound this well under 5s, took {elapsed:.2f}s"
 
     def test_drain_max_bytes_ceiling_kills_a_runaway_producer(self) -> None:
         """A child producing MORE than drain_max_bytes (even though it would eventually finish
