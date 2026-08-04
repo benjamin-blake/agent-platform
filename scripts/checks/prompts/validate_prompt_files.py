@@ -54,7 +54,8 @@ def validate_prompt_files(failed: list[str]) -> None:
             content = f.read_text(encoding="utf-8")
             line_count = len(content.splitlines())
             if line_count > _MAX_PROMPT_LINES:
-                errors.append(f"{f.name} : {line_count} raw lines exceeds the {_MAX_PROMPT_LINES}-line limit (Decision 43)")
+                rel_path = f.relative_to(_common.ROOT)
+                errors.append(f"{rel_path} : {line_count} raw lines exceeds the {_MAX_PROMPT_LINES}-line limit (Decision 43)")
 
     structure_dir = _common.ROOT / ".github" / "prompts" / "scheduled"
     for f in structure_dir.glob("*.prompt.md"):
