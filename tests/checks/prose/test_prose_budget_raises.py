@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.checks.prose.prose_budget_raises import _default_base_reader, validate_prose_budget_raises
+from scripts.checks.prose.prose_budget_raises import _SPEC, validate_prose_budget_raises
 
 
 class TestValidateProseBudgetRaises:
@@ -20,11 +20,16 @@ class TestValidateProseBudgetRaises:
         config_dir.mkdir(exist_ok=True)
         (config_dir / "prose_budgets.yaml").write_text(body, encoding="utf-8")
 
-    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int]) -> None:
+    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int], mentions: dict[int, str] | None = None) -> None:
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir(exist_ok=True)
-        text = "\n".join(f"## Decision {n}: Some title (Decided)\n" for n in decision_numbers)
-        (docs_dir / "DECISIONS.md").write_text(text, encoding="utf-8")
+        mentions = mentions or {}
+        parts = []
+        for n in decision_numbers:
+            header = f"## Decision {n}: Some title (Decided)\n"
+            mention = mentions.get(n)
+            parts.append(header if not mention else f"{header}\n**Decision:** Authorizes {mention}.\n")
+        (docs_dir / "DECISIONS.md").write_text("\n".join(parts), encoding="utf-8")
 
     def test_fails_on_unmarked_increase(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "S1:\n  root_ambient_load_set: 40000\n")
@@ -43,7 +48,7 @@ class TestValidateProseBudgetRaises:
             tmp_path,
             "S1:\n  root_ambient_load_set: 40000  # raise-approved: dec-134 consumer-sized ceiling\n",
         )
-        self._write_decisions(tmp_path, [134])
+        self._write_decisions(tmp_path, [134], mentions={134: "root_ambient_load_set"})
         base_reader = lambda rel: "S1:\n  root_ambient_load_set: 30000\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -87,7 +92,7 @@ class TestValidateProseBudgetRaises:
 
     def test_passes_new_registration_with_valid_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "S2:\n  docs/CLAUDE.md: 4000  # raise-approved: dec-127 new CLAUDE.md\n")
-        self._write_decisions(tmp_path, [127])
+        self._write_decisions(tmp_path, [127], mentions={127: "docs/CLAUDE.md"})
         base_reader = lambda rel: "S2:\n  x: 1\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -169,12 +174,19 @@ class TestValidateProseBudgetRaises:
         assert "split" not in out
         assert "decompose" not in out
 
-    def test_default_base_reader_returns_none_on_nonzero_exit(self) -> None:
-        fake_result = type("FakeResult", (), {"returncode": 1, "stdout": ""})()
-        with patch("scripts.checks._common.run", return_value=fake_result):
-            assert _default_base_reader("config/prose_budgets.yaml") is None
+    def test_spec_token_and_direction(self) -> None:
+        assert _SPEC.token == "raise-approved"
+        assert _SPEC.gated_direction == "up"
 
-    def test_default_base_reader_returns_stdout_on_success(self) -> None:
-        fake_result = type("FakeResult", (), {"returncode": 0, "stdout": "S1:\n  root_ambient_load_set: 1\n"})()
-        with patch("scripts.checks._common.run", return_value=fake_result):
-            assert _default_base_reader("config/prose_budgets.yaml") == "S1:\n  root_ambient_load_set: 1\n"
+    def test_unauthorized_marker_fails(self, tmp_path: Path) -> None:
+        self._write_current(
+            tmp_path, "S1:\n  root_ambient_load_set: 40000  # raise-approved: dec-134 consumer-sized ceiling\n"
+        )
+        self._write_decisions(tmp_path, [134])  # header-only body -- never mentions the key
+        base_reader = lambda rel: "S1:\n  root_ambient_load_set: 30000\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_prose_budget_raises(failed, base_reader=base_reader)
+
+        assert len(failed) == 1

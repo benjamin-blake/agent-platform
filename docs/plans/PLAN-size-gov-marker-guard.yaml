@@ -333,14 +333,21 @@ acceptance_criteria:
     162 R3, 149) and POINTS AT docs/contracts/marker-grammar.yaml; it does not restate the grammar
     mechanics.
   - >-
-    config/agent/verification_registry/registry.yaml gains exactly one new row per graduate step,
-    each with plan_slug `size-gov-marker-guard`, for these 12 check_ids:
+    config/agent/verification_registry/registry.yaml gains exactly one new row per step whose
+    graduation disposition survives the real differential admission gate
+    (scripts.verification_graduation.run_differential) as `graduate`, each with plan_slug
+    `size-gov-marker-guard`. Measured 2026-08-04: 11 of the 12 candidate check_ids admitted --
     marker-guard-public-surface-complete, marker-guard-section-extractor-excludes-class-table,
     marker-guard-section-extractor-comment-immune, marker-guard-bare-root-not-authorizing,
     marker-guard-composite-key-authorization, marker-guard-live-markers-authorized,
     sloc-budget-marker-dec159-retarget, marker-guard-uses-shared-decisions-parser,
-    marker-guard-supersession-hop, composite-r1-no-marker-escape,
-    mypy-moved-from-same-diff-proof, marker-guard-grandfather-hook-empty.
+    marker-guard-supersession-hop, mypy-moved-from-same-diff-proof,
+    marker-guard-grandfather-hook-empty. `composite-r1-no-marker-escape` (VP step 10) was
+    REJECTED as tautological (its whole-file command passes identically on HEAD and a real
+    origin/main worktree revert, since both trees carry an internally self-consistent
+    test/source pair) and was flipped to `waive` on that step per the T3.21 protocol -- see that
+    step's `graduation_waiver_reason`. R1's no-marker-escape property remains covered by
+    ordinary (non-graduated) tests in tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py.
   - >-
     The five registered check names, scripts/checks/registry.py, scripts/validate.py and
     tests/test_checks_registry.py are all UNCHANGED.
@@ -377,8 +384,11 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "class_table or section_scope"
     expected: >-
-      All selected tests pass, including one asserting `limit: 500` under a `classes:` block is
-      absent from the section extractor's output and present in the flat extractor's output.
+      All selected tests pass, including one asserting a limit: 500 scalar under a classes: block
+      is absent from the section extractor's output and present in the flat extractor's output.
+      (Literal not backticked: pytest -q's terse dot-report never echoes fixture source text, so a
+      backtick-wrapped literal here would be structurally unsatisfiable for validate_vp_replay's
+      substring-in-output rule -- see docs/contracts/marker-grammar.yaml for the actual mechanics.)
     fix_if: >-
       The section extractor leaks class-table scalars. Anchor on the top-level section key and end
       the section at the next column-0 NON-COMMENT line; do not reuse the flattened
@@ -393,7 +403,7 @@ verification_plan:
       3: the incumbent _parse_raw_r3_markers silently drops every marker after one).
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "comment_immune"
-    expected: "Entries declared AFTER a column-0 `# ...` line inside the section are still returned."
+    expected: "Entries declared AFTER a column-0 comment line inside the section are still returned."
     fix_if: >-
       The in-section flag clears on comments. Clear it only on a column-0 line that is neither blank
       nor a comment.
@@ -410,8 +420,8 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "authorization or ancestor or bare_root or no_glob"
     expected: >-
-      All pass, including: bare `scripts/` does not authorize `scripts/foo.py`; a body containing
-      only `**Date` authorizes nothing; dec-161 does not authorize tests/test_checks_registry.py.
+      All pass, including: bare root scripts/ does not authorize scripts/foo.py; a body containing
+      only **Date authorizes nothing; dec-161 does not authorize tests/test_checks_registry.py.
     fix_if: >-
       A bare root authorizes -- require >=2 segments on generated ancestor prefixes. If you find
       yourself extracting path-like tokens FROM the body, stop: that is the rejected design, and it
@@ -428,11 +438,11 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -q -k "composite_key or mention_candidates"
     expected: >-
-      Passes for a REAL r3 key -- use `.github/actions/materialise-tfvars::#0` (every live r3 key
-      uses the `#N` positional fallback; `.github/actions/deterministic-guard::guard` is an r1 key
+      Passes for a REAL r3 key -- use .github/actions/materialise-tfvars::#0 (every live r3 key
+      uses the #N positional fallback; .github/actions/deterministic-guard::guard is an r1 key
       and must never appear in an authorization example, since R1 has no marker escape at all).
       The full key and the action-relative directory are both offered as candidates, so a Decision
-      naming `.github/actions/materialise-tfvars` authorizes it while one naming only `.github/`
+      naming .github/actions/materialise-tfvars authorizes it while one naming only .github/
       does not.
     fix_if: >-
       mention_candidates is unset for the composite spec, so every R3 marker fails or passes
@@ -451,7 +461,7 @@ verification_plan:
       bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "live_markers or install_population"
     expected: >-
       Both pass: the cross-registry invariant reports zero unauthorized markers, and the population
-      test asserts `<= 3`, not `== 3`.
+      test asserts an upper bound of 3 (<= 3), not an equality pin (== 3).
     fix_if: >-
       An unauthorized marker is found. Do NOT weaken the rule -- retarget the marker to the Decision
       that actually authorizes it (the rec-2974 pattern), or drop the marker line. If the count
@@ -484,7 +494,10 @@ verification_plan:
       grep -q "DECISIONS_ARCHIVE" scripts/checks/_marker_guard.py && echo "shared parser OK"'
     expected: >-
       Prints `shared parser OK`; exit 0. The middle clause is the load-bearing one: a hand-rolled
-      header regex must contain the literal `## Decision`, so its absence proves the module reuses
+      header regex must contain the literal "## Decision" (deliberately not backticked here -- this
+      step exists to prove that literal is ABSENT from _marker_guard.py, so a backtick-wrapped
+      occurrence in this expected field would make validate_vp_replay's substring-in-output rule
+      structurally unsatisfiable by the step's own design), so its absence proves the module reuses
       the shared parser rather than duplicating its grammar.
     fix_if: >-
       A local header regex survives. Delete it and call the public name promoted from
@@ -501,8 +514,8 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/checks/test__marker_guard.py -q -k "supersession or compaction"
     expected: >-
-      A marker citing a Decision whose body is a compaction stub (header + one-line `**Decision:**`
-      + `**Superseded by: Decision N**`, no path mentions) is authorized when Decision N's body
+      A marker citing a Decision whose body is a compaction stub (header + one-line **Decision:**
+      + **Superseded by: Decision N**, no path mentions) is authorized when Decision N's body
       names the key, and still fails when neither body names it. One hop only -- a stub pointing at
       a stub is not chased.
     fix_if: >-
@@ -526,15 +539,28 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -q
     expected: >-
-      Suite green (including collection -- the module-level `_decision_header_exists` import at
+      Suite green (including collection -- the module-level _decision_header_exists import at
       line 11 must have been repointed), with a case where an R1 violation carrying a valid
-      `# raise-approved:` marker STILL fails.
+      # raise-approved: marker STILL fails.
     fix_if: >-
       A marker rescues an R1 violation -- route only the R3 branch through authorization_failure.
       If the file fails to COLLECT, the module-level import of a deleted symbol was not repointed.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: composite-r1-no-marker-escape
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential rejected (measured via scripts.verification_graduation.run_differential,
+      T3.21 real git-worktree admission gate, 2026-08-04): the command
+      `bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py -q`
+      passes on BOTH HEAD and a real origin/main worktree revert (47 passed either way) --
+      origin/main's test file and source module are an internally self-consistent OLD pair (old
+      test imports old `_decision_header_exists`, tests the old R1 behaviour against the old
+      module), so reverting the whole tree to origin/main does not red this whole-file command;
+      it only changes WHAT is being tested, not whether the suite passes. Tautological given this
+      repo's fixture state -- not admissible as a standing regression guard. R1's no-marker-escape
+      property IS still asserted (see TestR1Rule.test_r1_growth_is_not_rescued_by_a_raise_approved_marker
+      and TestR3MarkerGuardBinding.test_r1_never_reaches_shared_authorization_path in
+      tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py), just not as a
+      graduated differential check under this exact whole-file command.
   - step: 11
     phase: pre-deploy
     action: >-

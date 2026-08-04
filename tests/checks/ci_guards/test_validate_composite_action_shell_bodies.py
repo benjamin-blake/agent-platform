@@ -8,13 +8,14 @@ from unittest.mock import patch
 
 from scripts.checks.ci_guards.validate_composite_action_shell_bodies import (
     _R1_KNOWN_VIOLATORS,
-    _decision_header_exists,
+    _R3_SPEC,
     _delegated_script,
     _effective_lines,
     _inline_shell_steps,
     _iter_manifests,
     _output_producing_step_ids,
     _r2_test_covers,
+    _r3_mention_candidates,
     scan_repository,
     validate_composite_action_shell_bodies,
 )
@@ -99,13 +100,31 @@ class TestDelegatedScript:
         assert _delegated_script("") is None
 
 
-class TestDecisionHeaderExists:
-    def test_matching_header_found(self) -> None:
-        text = "## Decision 162: Something (Decided)\n"
-        assert _decision_header_exists("dec-162", text) is True
+class TestR3MarkerGuardBinding:
+    """Thin binding assertions -- R3's marker parsing/authorization delegates to the shared
+    scripts.checks._marker_guard module. Behavioural extractor/authorization cases live in
+    tests/checks/test__marker_guard.py."""
 
-    def test_missing_header(self) -> None:
-        assert _decision_header_exists("dec-999", "## Decision 1: X\n") is False
+    def test_spec_token_and_direction(self) -> None:
+        assert _R3_SPEC.token == "raise-approved"
+        assert _R3_SPEC.gated_direction == "up"
+
+    def test_spec_reason_required(self) -> None:
+        """R3 is the only registry that requires a non-empty <reason> -- see
+        test_marker_with_no_reason_text_does_not_override_growth for the behavioural proof."""
+        assert _R3_SPEC.reason_required is True
+
+    def test_mention_candidates_returns_full_key_and_action_rel_dir(self) -> None:
+        key = ".github/actions/materialise-tfvars::#0"
+        assert _r3_mention_candidates(key) == [key, ".github/actions/materialise-tfvars"]
+
+    def test_r1_never_reaches_shared_authorization_path(self) -> None:
+        """R1 has no marker escape at all -- a valid raise-approved marker on a pinned R1
+        entry still fails (see TestR1Rule.test_r1_growth_is_not_rescued_by_a_raise_approved_marker);
+        this only confirms the module carries no local existence-only shim R1 could reach."""
+        import scripts.checks.ci_guards.validate_composite_action_shell_bodies as mod
+
+        assert not hasattr(mod, "_decision_header_exists")
 
 
 class TestR2TestCovers:
@@ -406,10 +425,32 @@ class TestBaselineRatchet:
             validate_composite_action_shell_bodies(failed)
         assert any("R3" in f and "GREW" in f for f in failed)
 
+    def test_marker_with_no_reason_text_does_not_override_growth(self, tmp_path: Path) -> None:
+        """R3 alone requires a non-empty <reason> (RegistrySpec.reason_required=True, mirroring
+        the incumbent composite-only `_RAISE_APPROVED_RE`'s `\\s+\\S` requirement) -- a bare
+        `# raise-approved: dec-NNN` with nothing after the decision id must parse as NO marker
+        at all, never silently exempting the entry from its declared ceiling."""
+        _make_repo(tmp_path)
+        _write_r3_action(tmp_path, "r3-action", 20)
+        (tmp_path / "docs" / "DECISIONS.md").write_text(
+            "## Decision 162: Test decision (Decided)\n\n**Decision:** Authorizes .github/actions/r3-action.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "config" / "composite_action_body_baseline.yaml").write_text(
+            'r1: {}\nr3:\n  ".github/actions/r3-action::step1": 10  # raise-approved: dec-162\n', encoding="utf-8"
+        )
+        with patch(f"{_MODULE}._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_composite_action_shell_bodies(failed)
+        assert any("R3" in f and "GREW" in f for f in failed), failed
+
     def test_valid_raise_approved_marker_overrides_growth(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         _write_r3_action(tmp_path, "r3-action", 20)
-        (tmp_path / "docs" / "DECISIONS.md").write_text("## Decision 162: Test decision (Decided)\n", encoding="utf-8")
+        (tmp_path / "docs" / "DECISIONS.md").write_text(
+            "## Decision 162: Test decision (Decided)\n\n**Decision:** Authorizes .github/actions/r3-action.\n",
+            encoding="utf-8",
+        )
         (tmp_path / "config" / "composite_action_body_baseline.yaml").write_text(
             "r1: {}\nr3:\n"
             '  ".github/actions/r3-action::step1": 10  '
@@ -432,7 +473,7 @@ class TestBaselineRatchet:
         with patch(f"{_MODULE}._common.ROOT", tmp_path):
             failed: list[str] = []
             validate_composite_action_shell_bodies(failed)
-        assert any("no matching" in f for f in failed)
+        assert any("does not authorize" in f for f in failed)
 
 
 class TestMalformedManifestTolerance:

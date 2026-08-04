@@ -13,7 +13,13 @@ an entry passes iff its measured error count is at or below that entry.
 
 Marker token is `baseline-raised`, deliberately distinct from sloc's `raise-approved` and
 coverage's `baseline-lowered` -- three registries, three direction-correct tokens, so a marker
-copy-pasted from one registry cannot silently authorize an edit in another.
+copy-pasted from one registry cannot silently authorize an edit in another. The tamper guard
+(`validate_mypy_baseline_edits`) delegates its diff/authorization mechanics to
+scripts.checks._marker_guard (shared across all five raise-marker guards, Decision 165
+marker-guard consolidation) -- upgraded from existence to authorization, and the ONLY spec that
+enables the Decision 161 clause 4 `moved from <old-path>` same-diff proof. This module owns
+only the registry's own RegistrySpec binding, plus the untouched mypy-invocation/ratchet
+mechanics below.
 """
 
 from __future__ import annotations
@@ -26,15 +32,10 @@ from typing import Callable, Optional
 
 import yaml
 
-from scripts.checks import _common, registry
+from scripts.checks import _common, _marker_guard, registry
 
 _BASELINE_REL_PATH = "config/mypy_baseline.yaml"
-_DECISIONS_REL_PATH = "docs/DECISIONS.md"
 _GOVERNED_PREFIXES = ("scripts/", "src/")
-
-_ENTRY_LINE_RE = re.compile(r"^\s*([\w./_-]+):\s*(\d+)\s*(#.*)?$")
-_RAISED_MARKER_RE = re.compile(r"#\s*baseline-raised:\s*dec-(\d+)")
-_DECISION_HEADER_RE = re.compile(r"^## Decision (\d+):", re.MULTILINE)
 
 _ERROR_LINE_RE = re.compile(r"^([^:]+):\d+: error: ")
 _FOUND_ERRORS_RE = re.compile(r"Found \d+ errors? in \d+ files?")
@@ -49,35 +50,6 @@ def load_baseline(path: Optional[Path] = None) -> dict[str, int]:
     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     entries = data.get("entries") or {}
     return {str(k): int(v) for k, v in entries.items()}
-
-
-def _parse_entry_lines(text: str) -> dict[str, tuple[int, Optional[str]]]:
-    """Parse raw 'path: N  # comment' lines into {path: (value, baseline-raised dec_id | None)}.
-
-    Raw text, NOT yaml.safe_load -- the approval marker lives in an inline comment that
-    safe_load drops (same rationale as validate_sloc_budget_raises / coverage_baseline).
-    """
-    entries: dict[str, tuple[int, Optional[str]]] = {}
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped in ("entries:",):
-            continue
-        match = _ENTRY_LINE_RE.match(stripped)
-        if not match:
-            continue
-        path, value_str, comment = match.group(1), match.group(2), match.group(3)
-        marker: Optional[str] = None
-        if comment:
-            marker_match = _RAISED_MARKER_RE.search(comment)
-            if marker_match:
-                marker = f"dec-{marker_match.group(1)}"
-        entries[path] = (int(value_str), marker)
-    return entries
-
-
-def _decision_header_exists(dec_id: str, decisions_text: str) -> bool:
-    number = dec_id.removeprefix("dec-")
-    return any(number == n for n in _DECISION_HEADER_RE.findall(decisions_text))
 
 
 def _parse_error_counts(stdout: str) -> dict[str, int]:
@@ -141,18 +113,15 @@ def _run_mypy(failed: list[str]) -> Optional[dict[str, int]]:
     return None
 
 
-def _default_base_reader(rel_path: str) -> Optional[str]:
-    """Read a file's content at origin/main; return None if the ref/path is unreachable."""
-    result = _common.run(
-        ["git", "show", f"origin/main:{rel_path}"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=_common.ROOT,
-    )
-    if result.returncode != 0:
-        return None
-    return result.stdout
+_SPEC = _marker_guard.RegistrySpec(
+    rel_path=_BASELINE_REL_PATH,
+    token="baseline-raised",
+    gated_direction="up",
+    extractor=_marker_guard.make_flat_extractor("baseline-raised", value_type=int),
+    gates_new_entry=lambda value: value > 0,
+    label="mypy baseline tamper guard (Decision 161)",
+    moved_from_relief=True,
+)
 
 
 @registry.register("validate_mypy_ratchet", owner="platform")
@@ -204,53 +173,21 @@ def validate_mypy_baseline_edits(
     base_reader: Optional[Callable[[str], Optional[str]]] = None,
 ) -> None:
     """BOTH TIERS. The cheap tamper guard: fails an unauthorized config/mypy_baseline.yaml
-    increase or new registration lacking an inline `# baseline-raised: dec-NNN <reason>`
-    marker naming a real `## Decision NNN:` header. SKIPs (non-failing) when origin/main or
-    the base file is unreachable, so the seeding PR itself (no base file yet) SKIPs instead of
-    self-failing.
+    increase, new registration, or a currently-committed marker that no longer authorizes its
+    entry -- unless the entry line carries an inline `# baseline-raised: dec-NNN <reason>`
+    marker naming a real `## Decision NNN:` header whose body actually authorizes it (or, the
+    Decision 161 clause 4 `moved from <old-path>` same-diff proof). SKIPs (non-failing) when
+    origin/main or the base file is unreachable, so the seeding PR itself (no base file yet)
+    SKIPs instead of self-failing.
     """
-    print("\n=== mypy baseline tamper guard (Decision 161) ===")
-    reader = base_reader or _default_base_reader
-
-    current_path = _common.ROOT / _BASELINE_REL_PATH
-    if not current_path.exists():
-        print(f"  {_BASELINE_REL_PATH} not found -- nothing to check.")
-        return
-
-    base_text = reader(_BASELINE_REL_PATH)
-    if base_text is None:
-        print("  SKIP: origin/main unreachable, or the baseline file does not exist there yet.")
-        return
-
-    current_text = current_path.read_text(encoding="utf-8")
-    base_entries = _parse_entry_lines(base_text)
-    current_entries = _parse_entry_lines(current_text)
-
-    decisions_path = _common.ROOT / _DECISIONS_REL_PATH
-    decisions_text = decisions_path.read_text(encoding="utf-8") if decisions_path.exists() else ""
-
-    violations: list[str] = []
-    for path, (new_value, marker) in sorted(current_entries.items()):
-        base_entry = base_entries.get(path)
-        is_new = base_entry is None and new_value > 0
-        is_raised = base_entry is not None and new_value > base_entry[0]
-        if not (is_new or is_raised):
-            continue
-
-        if marker is None:
-            old_value = base_entry[0] if base_entry is not None else 0
-            kind = "new registration" if is_new else f"raised {old_value} -> {new_value}"
-            violations.append(f"{path}: unauthorized {kind} with no `# baseline-raised: dec-NNN` marker on the entry line.")
-            continue
-
-        if not _decision_header_exists(marker, decisions_text):
-            violations.append(f"{path}: baseline-raised marker cites {marker}, but no `## Decision N:` header for it exists.")
+    print(f"\n=== {_SPEC.label} ===")
+    violations = _marker_guard.check_diff(_SPEC, base_reader=base_reader) + _marker_guard.check_present_markers(_SPEC)
 
     if violations:
         print("mypy baseline tamper-guard violations:")
         for v in violations:
             print(f"  - {v}")
-        failed.append("mypy baseline tamper guard (Decision 161)")
+        failed.append(_SPEC.label)
     else:
         print("No unauthorized mypy baseline raises or new registrations.")
 

@@ -154,13 +154,24 @@ def _extract_decided_date(text: str) -> str:
     return ""
 
 
-def _extract_superseded_by(text: str) -> str:
-    """Extract a superseded-by target as 'dec-NNN', best-effort for historical prose."""
+def extract_superseded_by(text: str) -> str:
+    """Extract a superseded-by target as 'dec-NNN', best-effort for historical prose.
+
+    Public per DAF-03 consolidation (PLAN-size-gov-marker-guard): the Decision 149
+    supersession-hop authorization check in scripts/checks/_marker_guard.py reaches across a
+    module boundary for this symbol, which is exactly the case the promotion pattern (see
+    iter_decision_sections below) exists to cover instead of a private-symbol reach-across.
+    """
     m = _SUPERSEDED_BY_RE.search(text)
     if not m:
         return ""
     n = m.group(1) or m.group(2)
     return f"dec-{int(n):03d}"
+
+
+# Private alias retained so existing internal callers (this module's own parse_decisions_md)
+# keep working unchanged.
+_extract_superseded_by = extract_superseded_by
 
 
 # DCG-08 (PLAN-dcg-decisions-index) title-relation extraction, shared by the public
@@ -287,7 +298,7 @@ def decision_header_numbers(paths: Optional[list[Path]] = None) -> set[int]:
     return numbers
 
 
-def _iter_decision_sections(content: str) -> list[tuple[re.Match[str], str]]:
+def iter_decision_sections(content: str) -> list[tuple[re.Match[str], str]]:
     """Yield (heading_match, raw_block) pairs for every '## Decision N:' heading, in file
     order, WITHOUT dedup or sort -- unlike parse_decisions_md, which dedupes by decision_id
     (first-wins) and sorts by id.
@@ -297,6 +308,10 @@ def _iter_decision_sections(content: str) -> list[tuple[re.Match[str], str]]:
     Concatenating a file's preamble (the text before its first heading) with every raw_block
     here, in order, byte-reconstructs the source file exactly -- the invariant the
     byte-reconstruction coverage test in tests/test_decisions_md.py asserts.
+
+    Public per DAF-03 consolidation (PLAN-size-gov-marker-guard): the single shared
+    section-block parser scripts/checks/_marker_guard.py's load_decision_bodies() consumes,
+    so that module never hand-rolls a sixth '## Decision' header regex.
     """
     headings = list(_DECISION_HEADING_RE.finditer(content))
     sections: list[tuple[re.Match[str], str]] = []
@@ -304,6 +319,11 @@ def _iter_decision_sections(content: str) -> list[tuple[re.Match[str], str]]:
         end = headings[i + 1].start() if i + 1 < len(headings) else len(content)
         sections.append((m, content[m.start() : end]))
     return sections
+
+
+# Private alias retained so existing internal callers (this module's own parse_decisions_md)
+# keep working unchanged.
+_iter_decision_sections = iter_decision_sections
 
 
 def parse_decisions_md(paths: Optional[list[Path]] = None) -> list[dict]:
