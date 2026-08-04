@@ -2,6 +2,29 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 165: Raise-marker validation narrows from existence to authorization; the retroactive scan is load-bearing over present markers (amends Decision 128 clause 3, Decision 159, Decision 161 clause 4, Decision 162 R3, and Decision 149) (Decided)
+
+**Status:** Decided
+**Date:** 2026-08-04
+**Warehouse ID:** dec-165 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** Audit finding SGE-07 (audits/size-governance-expansion-3dee4a5.yaml): all five raise-marker guards (`validate_sloc_budget_raises`, `validate_prose_budget_raises`, `validate_coverage_baseline_edits`, `validate_mypy_baseline_edits`, and R3 of `validate_composite_action_shell_bodies`) validated only that a cited `# raise-approved: dec-NNN` / `# baseline-lowered: dec-NNN` / `# baseline-raised: dec-NNN` marker named a `## Decision NNN:` header that EXISTS -- never that the Decision's body actually AUTHORIZES the specific entry being marked. rec-2974 found the live instance: `config/sloc_budgets.yaml`'s `tests/test_checks_registry.py` entry cited `dec-161` (a mypy-gate Decision whose body never mentions this path or `tests/` at all), when `dec-159` (whose body names the path verbatim) is what actually authorizes it.
+
+**Decision:**
+1. Marker validation narrows from EXISTENCE to AUTHORIZATION across all five guards, consolidated onto one shared module (`scripts/checks/_marker_guard.py`) rather than five independent copies of the fix. Authorization mechanics (key-side ancestor-prefix generation, the >=2-segment floor, the Decision 149 supersession hop, the moved-from same-diff proof, the retroactive-scan token scoping) are field semantics and live in `docs/contracts/marker-grammar.yaml`, not restated here.
+2. The scan is RETROACTIVE, not diff-only: every currently-committed marker bearing a guard's own token is authorization-checked on every `--pre`/full run, regardless of whether it changed in the diff under validation. This is what makes a persisted marker load-bearing and is required to catch rec-2974's own instance -- a diff-only guard structurally cannot re-examine an already-merged, unchanged entry. Amends Decision 128 clause 3 ("marker persistence is not required... authorized at the diff-vs-base moment") explicitly: a marker that IS present is now retroactively load-bearing, though it still need not persist for the diff-time gate alone.
+3. Amends Decision 159 clause 3 (the coverage tamper guard) and Decision 161 clause 4 (the mypy tamper guard, including its first real implementation of the `moved from <old-path>` same-diff proof) and Decision 162 point 3 (composite R3's marker escape) to the same authorization standard, via the shared module each now binds to.
+4. Retroactive scope is justified by SGE-07's own acceptance clause ("a marker citing a Decision whose text nowhere mentions the file fails; rec-2974's instance is caught retroactively") and bounded against this repo's forward-conformance precedent (Decision 151: prior grammar changes here have been forward-enforced only) by a frozen, EMPTY-at-install grandfather hook (`RETRO_SCAN_GRANDFATHER`) -- the measured install-state marker population (3 total: one sloc, two prose) is fully authorization-clean post-fix, so retroactive enforcement costs zero migration on day one. Growing the hook later is a reviewed code edit, never a config edit.
+5. rec-2974 itself is fixed at the source in this same change: the `tests/test_checks_registry.py` entry's marker is retargeted from `dec-161` to `dec-159`.
+
+**Rationale:** An existence-only check on a marker whose entire purpose is to gate an authorization decision is a category error -- it proves a citation was well-formed, not that the citation justifies the change. Consolidating five copy-pasted guards onto one shared module before upgrading them (rather than patching each independently) closes the drift risk that produced five near-identical implementations in the first place, and gives the not-yet-built structural-size governance engine (Slice B) a stable, single binding surface instead of a sixth copy.
+
+**Reversal conditions:** If the retroactive scan's grandfather hook grows past a small, explainable handful, that is a signal the population assumption (rare, already-clean) no longer holds and the mechanism needs re-audit, not a bigger hook -- mirrors Decision 159/161's own reversal conditions. If a future declared `Governs:` marker (the design alternative considered and deferred at plan time) lands, this mention-based authorization becomes a fallback rather than the primary mechanism.
+
+**Related:** Decision 128 (the raise-marker mechanism this amends clause 3 of), Decision 159 (coverage tamper guard amended), Decision 161 (mypy tamper guard amended, including clause 4's first implementation), Decision 162 (composite R3 amended), Decision 149 (the compaction lifecycle whose compact-in-place interaction the supersession hop closes), Decision 151 (the forward-conformance precedent this retroactive scope departs from, bounded by the empty grandfather hook), Decision 134 (the shared decisions_md.py parser this module consumes, DAF-03 / clause 3), Decision 104 (`_common.py`'s five-primitive reservation; this module's top-level placement), Decision 86/127 (contract-vs-Decision routing this entry and `docs/contracts/marker-grammar.yaml` follow), Decision 130 (whole-repo SLOC scope; the raise-approved grammar's precedent), Decision 153 (composite guard's subprocess-free fast-tier budget, preserved). Bundled: rec-2974. Roadmap ref: audits/size-governance-expansion-3dee4a5.yaml finding SGE-07 (not a DECISIONS.md entry).
+
+---
+
 ## Decision 164: Executor agentic personas route to LiteLLM tiers, not `claude -p`; reopening that split collapses the viable persona substrate set to the CLI-hosting class (amends Decision 122 and Decision 116) (Decided)
 
 **Status:** Decided
@@ -401,6 +424,11 @@ after 3 rounds with all blocking items applied. Roadmap/queue refs (not DECISION
 **Status:** Decided
 **Date:** 2026-07-30
 **Warehouse ID:** dec-159 (canonical; per Decision 84)
+
+> **Amended by Decision 165 (2026-08-04):** clause 3's coverage tamper guard
+> (`validate_coverage_baseline_edits`) now delegates to the shared `scripts/checks/_marker_guard.py`
+> authorization mechanism, upgrading its marker check from existence to authorization. This body
+> is otherwise unedited; see Decision 165 for the full derivation.
 
 **Problem:** `get_status_aware_diff()` and `test_coverage_checker.get_changed_source_files()` resolve their base via `merge-base(origin/main, HEAD)`, which equals HEAD on a clean post-merge main checkout; `get_changed_files()` diffs `origin/main` directly, also HEAD on main. Same result either way: every diff-aware full-tier check silently no-ops post-merge. A MEASUREMENT CORRECTION (Decision 82 framing), not a relaxation.
 
@@ -2025,6 +2053,11 @@ verification here is CI/admin-run, not a local CC-web plan).
 **Status:** Decided
 **Date:** 2026-07-14
 **Warehouse ID:** dec-128 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+> **Amended by Decision 165 (2026-08-04):** clause 3 ("marker persistence is not required...
+> authorized at the diff-vs-base moment") is amended -- a marker that IS present is now
+> retroactively load-bearing under the shared `scripts/checks/_marker_guard.py` authorization
+> mechanism. This body is otherwise unedited; see Decision 165 for the full derivation.
 
 **Problem:**
 `scripts/convergence_health.py` was created at 401 SLOC (#516) and grew to 817 via three manual

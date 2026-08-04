@@ -19,11 +19,16 @@ R3 (ratchet): every OTHER inline bash/sh body (non-output-producing, or an outpu
     checked against config/composite_action_body_baseline.yaml's `r3:` section. A live body that
     exceeds its baseline's declared ceiling fails UNLESS that baseline entry carries an inline
     `# raise-approved: dec-NNN <reason>` marker (Decision 128 grammar) naming a real
-    `## Decision NNN:` header -- the escape is scoped to R3 only.
+    `## Decision NNN:` header whose body actually authorizes the entry (Decision 165
+    marker-guard consolidation upgraded this from existence to authorization) -- the escape is
+    scoped to R3 only.
 
 Filesystem-only, no network, no subprocess (Decision 153 fast-tier budget) -- unlike
 validate_sloc_budget_raises.py's git-diff pattern, this guard never shells out; R3's marker
 exempts an entry from its OWN declared ceiling entirely rather than diffing against origin/main.
+R3's marker parsing and authorization check delegate to scripts.checks._marker_guard (shared
+across all five raise-marker guards); R1's frozen no-marker-escape branch never touches that
+shared path at all, and R2 is untouched.
 """
 
 from __future__ import annotations
@@ -33,11 +38,10 @@ from typing import Any, Optional
 
 import yaml
 
-from scripts.checks import _common, registry
+from scripts.checks import _common, _marker_guard, registry
 
 _MANIFEST_GLOBS = ("action.yml", "action.yaml")
 _BASELINE_REL_PATH = "config/composite_action_body_baseline.yaml"
-_DECISIONS_REL_PATH = "docs/DECISIONS.md"
 
 _OUTPUT_VALUE_STEP_RE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.")
 
@@ -59,8 +63,6 @@ _DELEGATE_LINE_RE = re.compile(
 # the delegate line itself (it contains the `bash "...sh"` call) and is matched by
 # _DELEGATE_LINE_RE above, so no wildcard is needed here.
 _CONTROL_FLOW_RE = re.compile(r"^(then|else|fi|exit(\s+\d+)?)$")
-_RAISE_APPROVED_RE = re.compile(r"#\s*raise-approved:\s*(dec-\d+)\s+\S")
-_DECISION_HEADER_RE = re.compile(r"^## Decision (\d+):", re.MULTILINE)
 _GITHUB_COMPOSITE_ARGV_RE = re.compile(
     r'\(\s*"bash"\s*,\s*"--noprofile"\s*,\s*"--norc"\s*,\s*"-e"\s*,\s*"-o"\s*,\s*"pipefail"\s*\)'
 )
@@ -73,6 +75,28 @@ _R1_KNOWN_VIOLATORS = frozenset(
         ".github/actions/deterministic-guard::guard",
         ".github/actions/fetch-saved-plan::resolve",
     }
+)
+
+
+def _r3_mention_candidates(key: str) -> list[str]:
+    """R3 keys are "<action-rel-dir>::<step-id>", not file paths -- neither verbatim nor
+    ancestor path-matching applies without this. Candidates are the full key and the
+    action-relative directory; the shared module's >=2-segment ancestor rule is then applied
+    to each (the directory is where a real match lives -- a Decision naming
+    ".github/actions/materialise-tfvars" authorizes it, one naming only ".github/" does not).
+    """
+    action_rel_dir = key.split("::", 1)[0]
+    return [key, action_rel_dir]
+
+
+_R3_SPEC = _marker_guard.RegistrySpec(
+    rel_path=_BASELINE_REL_PATH,
+    token="raise-approved",
+    gated_direction="up",
+    extractor=_marker_guard.make_section_extractor("r3", token="raise-approved", value_type=int),
+    gates_new_entry=lambda _value: True,
+    label="composite-action shell-body rules (Decision 162)",
+    mention_candidates=_r3_mention_candidates,
 )
 
 
@@ -206,42 +230,6 @@ def _load_baseline() -> dict[str, dict[str, Any]]:
     return {"r1": dict(data.get("r1") or {}), "r3": dict(data.get("r3") or {})}
 
 
-def _parse_raw_r3_markers(text: str) -> dict[str, Optional[str]]:
-    """Raw-text scan of the r3: section for inline `# raise-approved:` markers on each entry line.
-
-    yaml.safe_load drops comments, and the marker lives in an inline comment on the entry's own
-    line (`"key": N  # raise-approved: dec-NNN <reason>`) -- mirrors
-    validate_sloc_budget_raises.py's raw-text approach for the same reason.
-    """
-    markers: dict[str, Optional[str]] = {}
-    in_r3 = False
-    entry_re = re.compile(r'^\s*"([^"]+)":\s*\d+\s*(#.*)?$')
-    for line in text.splitlines():
-        if re.match(r"^r3:\s*$", line):
-            in_r3 = True
-            continue
-        if re.match(r"^\S", line) and not line.startswith("r3:"):
-            in_r3 = False
-        if not in_r3:
-            continue
-        match = entry_re.match(line)
-        if not match:
-            continue
-        key, comment = match.group(1), match.group(2)
-        marker = None
-        if comment:
-            marker_match = _RAISE_APPROVED_RE.search(comment)
-            if marker_match:
-                marker = marker_match.group(1)
-        markers[key] = marker
-    return markers
-
-
-def _decision_header_exists(dec_id: str, decisions_text: str) -> bool:
-    number = dec_id.removeprefix("dec-")
-    return any(number == n for n in _DECISION_HEADER_RE.findall(decisions_text))
-
-
 def _r2_test_covers(script_name: str) -> bool:
     """A test file references `script_name` AND drives something under the literal GitHub argv."""
     tests_dir = _common.ROOT / "tests"
@@ -266,12 +254,11 @@ def validate_composite_action_shell_bodies(failed: list[str]) -> None:
     scan = scan_repository()
     baseline = _load_baseline()
 
-    decisions_path = _common.ROOT / _DECISIONS_REL_PATH
-    decisions_text = decisions_path.read_text(encoding="utf-8") if decisions_path.exists() else ""
+    bodies = _marker_guard.load_decision_bodies()
 
     baseline_path = _common.ROOT / _BASELINE_REL_PATH
     raw_baseline_text = baseline_path.read_text(encoding="utf-8") if baseline_path.exists() else ""
-    r3_markers = _parse_raw_r3_markers(raw_baseline_text)
+    r3_markers = _R3_SPEC.extractor(raw_baseline_text)
 
     violations: list[str] = []
 
@@ -331,12 +318,13 @@ def validate_composite_action_shell_bodies(failed: list[str]) -> None:
             )
             continue
         declared = int(entry)
-        marker = r3_markers.get(key)
+        marker_entry = r3_markers.get(key)
+        marker = marker_entry.marker if marker_entry is not None else None
         if marker is not None:
-            if not _decision_header_exists(marker, decisions_text):
+            if _marker_guard.authorization_failure(marker, key, bodies, mention_candidates=_r3_mention_candidates):
                 violations.append(
-                    f"R3: {key}'s raise-approved marker cites {marker}, but no matching `## Decision N:` "
-                    f"header exists in {_DECISIONS_REL_PATH}."
+                    f"R3: {key}'s raise-approved marker cites {marker}, but its body does not authorize this "
+                    f"entry (mention `{key.split('::')[0]}` or a >=2-segment ancestor of it)."
                 )
             continue  # a valid marker exempts this entry from its declared ceiling entirely.
         if line_count > declared:

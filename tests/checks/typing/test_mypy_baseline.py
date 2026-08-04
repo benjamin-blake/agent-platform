@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from scripts.checks.typing import mypy_baseline
+from scripts.checks.typing.mypy_baseline import _SPEC
 
 
 class TestLoadBaseline:
@@ -30,36 +31,6 @@ class TestLoadBaseline:
         (config_dir / "mypy_baseline.yaml").write_text("entries:\n  scripts/x.py: 3\n", encoding="utf-8")
         with patch("scripts.checks._common.ROOT", tmp_path):
             assert mypy_baseline.load_baseline() == {"scripts/x.py": 3}
-
-
-class TestParseEntryLines:
-    def test_well_formed_line_with_marker(self) -> None:
-        text = "  scripts/x.py: 5  # baseline-raised: dec-161 moved from scripts/old.py\n"
-        assert mypy_baseline._parse_entry_lines(text) == {"scripts/x.py": (5, "dec-161")}
-
-    def test_well_formed_line_without_marker(self) -> None:
-        text = "  scripts/x.py: 5\n"
-        assert mypy_baseline._parse_entry_lines(text) == {"scripts/x.py": (5, None)}
-
-    def test_comment_with_no_marker_match(self) -> None:
-        text = "  scripts/x.py: 5  # grandfathered, no marker here\n"
-        assert mypy_baseline._parse_entry_lines(text) == {"scripts/x.py": (5, None)}
-
-    def test_blank_and_comment_only_and_entries_key_lines_skipped(self) -> None:
-        text = "entries:\n\n# a full-line comment\n  scripts/x.py: 5\n"
-        assert mypy_baseline._parse_entry_lines(text) == {"scripts/x.py": (5, None)}
-
-    def test_malformed_line_ignored_not_raised(self) -> None:
-        text = "this is not a valid entry line\n  scripts/x.py: 5\n"
-        assert mypy_baseline._parse_entry_lines(text) == {"scripts/x.py": (5, None)}
-
-
-class TestDecisionHeaderExists:
-    def test_true_when_header_present(self) -> None:
-        assert mypy_baseline._decision_header_exists("dec-161", "## Decision 161: Some title (Decided)\n")
-
-    def test_false_when_header_absent(self) -> None:
-        assert not mypy_baseline._decision_header_exists("dec-999", "## Decision 161: Some title (Decided)\n")
 
 
 class TestParseErrorCounts:
@@ -131,23 +102,6 @@ class TestRunMypy:
 
         assert result is None
         assert len(failed) == 1
-
-
-class TestDefaultBaseReader:
-    def test_returns_stdout_on_success(self) -> None:
-        mock_result = MagicMock(returncode=0, stdout="entries:\n  scripts/x.py: 5\n")
-        with patch("scripts.checks._common.run", return_value=mock_result) as mock_run:
-            result = mypy_baseline._default_base_reader("config/mypy_baseline.yaml")
-
-        assert result == "entries:\n  scripts/x.py: 5\n"
-        assert mock_run.call_args.args[0] == ["git", "show", "origin/main:config/mypy_baseline.yaml"]
-
-    def test_returns_none_on_failure(self) -> None:
-        mock_result = MagicMock(returncode=128, stdout="")
-        with patch("scripts.checks._common.run", return_value=mock_result):
-            result = mypy_baseline._default_base_reader("config/mypy_baseline.yaml")
-
-        assert result is None
 
 
 class TestValidateMypyRatchet:
@@ -251,11 +205,16 @@ class TestValidateMypyBaselineEdits:
         config_dir.mkdir(exist_ok=True)
         (config_dir / "mypy_baseline.yaml").write_text(body, encoding="utf-8")
 
-    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int]) -> None:
+    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int], mentions: dict[int, str] | None = None) -> None:
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir(exist_ok=True)
-        text = "\n".join(f"## Decision {n}: Some title (Decided)\n" for n in decision_numbers)
-        (docs_dir / "DECISIONS.md").write_text(text, encoding="utf-8")
+        mentions = mentions or {}
+        parts = []
+        for n in decision_numbers:
+            header = f"## Decision {n}: Some title (Decided)\n"
+            mention = mentions.get(n)
+            parts.append(header if not mention else f"{header}\n**Decision:** Authorizes {mention}.\n")
+        (docs_dir / "DECISIONS.md").write_text("\n".join(parts), encoding="utf-8")
 
     def test_fails_on_unmarked_raise(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/x.py: 10\n")
@@ -271,7 +230,7 @@ class TestValidateMypyBaselineEdits:
 
     def test_passes_raise_with_valid_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/x.py: 10  # baseline-raised: dec-161 regression, tracked\n")
-        self._write_decisions(tmp_path, [161])
+        self._write_decisions(tmp_path, [161], mentions={161: "scripts/x.py"})
         base_reader = lambda rel: "entries:\n  scripts/x.py: 5\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -303,9 +262,13 @@ class TestValidateMypyBaselineEdits:
         assert len(failed) == 1
 
     def test_passes_new_registration_with_marker(self, tmp_path: Path) -> None:
+        """Decision 161 clause 4 same-diff proof: `moved from scripts/old.py` passes ONLY when
+        scripts/old.py is present in the BASE map and absent from the current one -- no separate
+        body-mention is needed since the moved_from_relief path bypasses ordinary authorization
+        entirely (mypy is the only spec with this relief enabled)."""
         self._write_current(tmp_path, "entries:\n  scripts/new.py: 3  # baseline-raised: dec-161 moved from scripts/old.py\n")
         self._write_decisions(tmp_path, [161])
-        base_reader = lambda rel: "entries: {}\n"  # noqa: E731
+        base_reader = lambda rel: "entries:\n  scripts/old.py: 3\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
             failed: list[str] = []
@@ -366,6 +329,11 @@ class TestValidateMypyBaselineEdits:
             mypy_baseline.validate_mypy_baseline_edits(failed)
 
         assert failed == []
+
+    def test_spec_token_and_moved_from_relief(self) -> None:
+        assert _SPEC.token == "baseline-raised"
+        assert _SPEC.gated_direction == "up"
+        assert _SPEC.moved_from_relief is True
 
 
 class TestSeed:

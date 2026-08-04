@@ -40,7 +40,7 @@ You are a Lead Software Developer writing production-quality Python. Primary dev
 ## SLOC governance -- decompose by default, don't raise (Decision 128, amends Decision 102)
 - The 500-SLOC-per-file limit (`config/sloc_budgets.yaml`, `validate_sloc_limits`) is load-bearing for model portability: Opus tolerates large files, but lower-tier models (Sonnet/Gemini/Deepseek) degrade on comprehension. A budget raise silently trades that away.
 - **When a change pushes a file past its budget (or past 500 for an unregistered file), decompose it** into a facade package (Decision 80/104/124 pattern: `__init__.py` facade re-exporting the full public surface, cohesive submodules each under budget) -- this is the default response, not a raise.
-- A budget raise is a deliberate, reviewable exception: the entry line in `config/sloc_budgets.yaml` must carry an inline `# raise-approved: dec-NNN <reason>` marker naming a real `## Decision NNN:` header. `validate_sloc_budget_raises` (registered immediately after `validate_sloc_limits` in the `--pre` tier) fails the PR on any unmarked increase or new >500-SLOC registration; decreases and removals are always unrestricted.
+- A budget raise is a deliberate, reviewable exception: the entry line in `config/sloc_budgets.yaml` must carry an inline `# raise-approved: dec-NNN <reason>` marker naming a real `## Decision NNN:` header that AUTHORIZES the entry (Decision 165) -- `validate_sloc_budget_raises` fails the PR on any unmarked increase, new >500-SLOC registration, or unauthorized marker; decreases and removals are always unrestricted.
 - `--update-sloc-budgets` never auto-seeds a newly-oversized, unregistered file -- decompose it, or register it deliberately with the marker.
 
 ## Branching — never edit or commit on `main`

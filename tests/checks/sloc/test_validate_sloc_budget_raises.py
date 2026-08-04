@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.checks.sloc.validate_sloc_budget_raises import validate_sloc_budget_raises
+from scripts.checks.sloc.validate_sloc_budget_raises import _SPEC, validate_sloc_budget_raises
 
 
 class TestValidateSlocBudgetRaises:
@@ -14,11 +14,16 @@ class TestValidateSlocBudgetRaises:
         config_dir.mkdir(exist_ok=True)
         (config_dir / "sloc_budgets.yaml").write_text(body, encoding="utf-8")
 
-    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int]) -> None:
+    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int], mentions: dict[int, str] | None = None) -> None:
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir(exist_ok=True)
-        text = "\n".join(f"## Decision {n}: Some title (Decided)\n" for n in decision_numbers)
-        (docs_dir / "DECISIONS.md").write_text(text, encoding="utf-8")
+        mentions = mentions or {}
+        parts = []
+        for n in decision_numbers:
+            header = f"## Decision {n}: Some title (Decided)\n"
+            mention = mentions.get(n)
+            parts.append(header if not mention else f"{header}\n**Decision:** Authorizes {mention}.\n")
+        (docs_dir / "DECISIONS.md").write_text("\n".join(parts), encoding="utf-8")
 
     def test_fails_on_unmarked_increase(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 800\n")
@@ -34,7 +39,7 @@ class TestValidateSlocBudgetRaises:
 
     def test_passes_with_valid_marker_and_valid_decision(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 800  # raise-approved: dec-102 module cohesion\n")
-        self._write_decisions(tmp_path, [102])
+        self._write_decisions(tmp_path, [102], mentions={102: "scripts/heavy.py"})
         base_reader = lambda rel: "budgets:\n  scripts/heavy.py: 600\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -67,7 +72,7 @@ class TestValidateSlocBudgetRaises:
 
     def test_passes_new_registration_with_valid_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "budgets:\n  scripts/new_big.py: 550  # raise-approved: dec-102 new module\n")
-        self._write_decisions(tmp_path, [102])
+        self._write_decisions(tmp_path, [102], mentions={102: "scripts/new_big.py"})
         base_reader = lambda rel: "budgets: {}\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -115,3 +120,18 @@ class TestValidateSlocBudgetRaises:
             validate_sloc_budget_raises(failed, base_reader=lambda rel: "budgets: {}\n")
 
         assert failed == []
+
+    def test_spec_token_and_direction(self) -> None:
+        assert _SPEC.token == "raise-approved"
+        assert _SPEC.gated_direction == "up"
+
+    def test_unauthorized_marker_fails(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 800  # raise-approved: dec-102 module cohesion\n")
+        self._write_decisions(tmp_path, [102])  # header-only body -- never mentions the key
+        base_reader = lambda rel: "budgets:\n  scripts/heavy.py: 600\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert len(failed) == 1

@@ -22,11 +22,14 @@ from scripts.decisions_md import (
     _extract_multiline_section,
     _extract_related_decisions,
     _extract_section,
+    _extract_superseded_by,
     _extract_title_borne_supersedes,
     _iter_decision_sections,
     decision_header_numbers,
     extract_amends_edges,
+    extract_superseded_by,
     iter_decision_headings,
+    iter_decision_sections,
     parse_decisions_md,
     read_jsonl,
 )
@@ -513,6 +516,17 @@ class TestDualModelFieldSync:
         payload = DecisionPayload.model_validate(record)
         read_side = Decision.model_validate(record)
         assert payload.intent == read_side.intent == record["intent"]
+
+
+class TestPublicAliases:
+    """DAF-03 promotion (PLAN-size-gov-marker-guard): both names are now public, with the
+    historical private spelling kept as an identity alias for existing internal callers."""
+
+    def test_iter_decision_sections_is_public_alias_of_private(self) -> None:
+        assert iter_decision_sections is _iter_decision_sections
+
+    def test_extract_superseded_by_is_public_alias_of_private(self) -> None:
+        assert extract_superseded_by is _extract_superseded_by
 
 
 class TestExtractSectionHelper:

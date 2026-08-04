@@ -1,0 +1,140 @@
+# Machine-readable field-semantics home for the shared raise-marker authorization mechanism
+# (audit finding SGE-07, Decision 165 / PLAN-size-gov-marker-guard). Rationale and the
+# amendments this mechanism makes to Decisions 128/149/159/161/162 live in Decision 165, not
+# here (Decision 86/127 routing: field semantics live collocated with their enforcement
+# counterpart; a contract never restates what a Decision amended). NOT a Class A/B/C ritual
+# contract -- no top-level contract:/class: block, so the CD.25 drift gate
+# (validate_contract_drift) skips this file as a non-ritual doc (precedent: decision-entry.yaml,
+# file-router.yaml, deploy-paths.yaml, composite-action-shape.yaml).
+projection_id: marker-grammar
+version: 1
+status: active
+ratified_via: "Decision 165 / PLAN-size-gov-marker-guard merge to main"
+description: >-
+  The single shared authorization mechanism scripts/checks/_marker_guard.py implements and all
+  five raise-marker guards (validate_sloc_budget_raises, validate_prose_budget_raises,
+  validate_coverage_baseline_edits, validate_mypy_baseline_edits, and R3 of
+  validate_composite_action_shell_bodies) bind to. Upgrades marker validation from EXISTENCE
+  ("a `## Decision NNN:` header for the cited number exists") to AUTHORIZATION ("that Decision's
+  body actually names the governed entry key").
+
+tokens:
+  # Three registries, three direction-correct tokens -- a marker copy-pasted from one registry
+  # can never silently authorize an edit in another.
+  raise-approved:
+    direction: up
+    used_by: [validate_sloc_budget_raises, validate_prose_budget_raises, "validate_composite_action_shell_bodies (R3 only)"]
+  baseline-lowered:
+    direction: down
+    used_by: [validate_coverage_baseline_edits]
+  baseline-raised:
+    direction: up
+    used_by: [validate_mypy_baseline_edits]
+
+authorization_mechanics:
+  computation: >-
+    KEY-SIDE ONLY. The governed entry key's own ancestor prefixes are generated, then
+    substring-matched against the cited Decision's body. The body is NEVER tokenized to extract
+    path-like strings -- this is what makes markdown `**bold**` markup a non-issue (a token
+    extractor would see `**`, `**Date`, `**Decision` as apparent path-like fragments; a
+    substring-containment check against a key-generated candidate does not) and what makes a
+    bare single-segment root mention insufficient to authorize a deeper file, rather than a
+    universal wildcard.
+  candidate_generation: >-
+    The full key is always a candidate, regardless of its segment count (this is what lets a
+    non-path bare key, e.g. prose's `root_ambient_load_set`, be authorized by its own literal
+    mention). Additionally, every "/"-delimited ANCESTOR prefix of the key with >=2 segments is
+    a candidate. A single-segment prefix (e.g. a bare `scripts/` or `tests/` root, produced by
+    truncating a deeper key) is NEVER generated -- this is the floor that keeps a root-directory
+    mention from becoming a permanent skeleton key. Example: key `scripts/checks/foo.py`
+    generates candidates `scripts/checks/foo.py` (full) and `scripts/checks` (2-segment
+    ancestor) -- never bare `scripts`.
+  band_width_measured_at_ratification: >-
+    `.claude/skills/` appears in 12 live Decisions and `scripts/checks/` in 22 -- within prose
+    surface class S4 the upgrade narrows "any of 116 Decisions" to "one of 12" for a marker
+    citing that prefix, not per-file proof. 45 of 57 mypy-baseline entries at ratification time
+    are authorizable by at least one existing Decision, 34 by directory prefix alone. The band
+    is real and bounded, not zero -- SGE-07 frames this as upgrade-not-proof: mention is not
+    proof of authorization, only a stronger signal than bare existence.
+  supersession_hop: >-
+    ONE hop only. When the cited Decision's own body does not authorize, and that body carries
+    the Decision 149 compact-in-place `**Superseded by: Decision N**` marker, Decision N's body
+    is also consulted. Closes the Decision 149 compaction interaction: a compacted stub's body
+    is reduced to `**Status:** Superseded` / `**Date:**` / a one-line `**Decision:**` pointer /
+    the supersession marker, with no path mentions of its own -- without the hop, compacting a
+    cited Decision would silently un-authorize every live marker citing it, and because the scan
+    is retroactive (see below), that would red every subsequent PR, not just the compacting one.
+    The one-hop bound is deliberate, not a claim that chains cannot exceed length 1: Decision 149
+    evaluates direction-consistency per compaction EVENT and its stub grammar never re-points an
+    inbound A->B stub to a later C, so a two-generation A->B(stub)->C chain is structurally
+    reachable. What actually bounds the risk is fail-loud: the five guards run unconditionally in
+    `--pre` with no diff-gating, so the PR that compacts B re-runs the retroactive scan against
+    the freshly-stubbed corpus and reds THERE -- remediation in that PR is to retarget the
+    marker, or add the key to the grandfather hook (never to chase a second hop).
+  archive_corpus: >-
+    Decisions in docs/DECISIONS_ARCHIVE.md count as authorizing, matching
+    scripts.decisions_md's own `_DECISIONS_MD_PATHS` convention (both files are always parsed
+    together) -- archiving a cited Decision cannot retroactively red an unrelated PR.
+
+composite_r3_mention_candidates: >-
+  Composite R3's registry keys are `"<action-relative-dir>::<step-id>"`, not file paths, so
+  neither verbatim nor ancestor path-matching applies without an explicit
+  `mention_candidates` function. The candidates offered are the full key and the
+  action-relative directory (the text before `::`); the >=2-segment ancestor rule is then
+  applied to the directory. Example: key `.github/actions/materialise-tfvars::#0` generates
+  candidates including the bare directory `.github/actions/materialise-tfvars` -- a Decision
+  naming that directory authorizes the entry, one naming only `.github/` does not.
+
+moved_from_same_diff_proof: >-
+  Decision 161 clause 4's `# baseline-raised: dec-NNN moved from <old-path>` form (a pure
+  structural move needs no new Decision) is a SAME-DIFF PROOF, not a free-form exemption: it
+  passes ONLY when `<old-path>` is present in the diff's BASE entry map and absent from the
+  CURRENT one. The retroactive (present-markers) scan has no base map to prove against, so it
+  SKIPS (does not fail) a marker whose reason text matches `moved from <old-path>` rather than
+  treating the absence of proof as a violation. Gated behind `RegistrySpec.moved_from_relief`,
+  default False; enabled on the mypy spec alone -- Decision 161 clause 4 is the only Decision
+  naming the form.
+
+retroactive_scan:
+  scope: >-
+    Every marker line bearing a guard's OWN token, across all five registries, is
+    authorization-checked on every `--pre`/full run regardless of whether it changed in the
+    current diff -- not just markers touched by the diff being validated. This is what makes a
+    persisted marker load-bearing (Decision 128 clause 3, amended by Decision 165) and is the
+    mechanism that catches an already-merged, never-re-diffed unbacked marker (SGE-07's own
+    acceptance clause: "rec-2974's instance is caught retroactively").
+  token_scoping: >-
+    The scan is scoped to lines bearing the guard's own token specifically -- a free-form
+    comment using different wording (e.g. coverage's `# grandfathered dec-159` roster comments,
+    which carry no `baseline-lowered` token) is never treated as a marker.
+  grandfather_hook: >-
+    `RETRO_SCAN_GRANDFATHER` (scripts/checks/_marker_guard.py) is a frozenset, EMPTY at install
+    -- the measured install-state population (3 markers total) is already authorization-clean,
+    so no entry is justified on day one. Growing it later is a reviewed code edit, mirroring the
+    composite guard's `_R1_KNOWN_VIOLATORS` shape -- never a config-file edit. This is the entire
+    bound on the Decision 151 forward-conformance departure the retroactive scope represents.
+
+binding_surface:
+  # The stable contract Slice B (the structural-size class engine, audit findings SGE-01..06)
+  # binds to instead of minting a sixth copy of this guard.
+  module: scripts/checks/_marker_guard.py
+  exports:
+    - RegistrySpec
+    - make_flat_extractor
+    - make_section_extractor
+    - default_base_reader
+    - load_decision_bodies
+    - authorization_failure
+    - check_diff
+    - check_present_markers
+  extractor_shapes: >-
+    make_flat_extractor(token, value_type) scans every non-blank, non-full-line-comment line
+    regardless of nesting depth (sloc/prose/coverage/mypy's shape -- safe when a registry's keys
+    are globally unique across its surface groups). make_section_extractor(section_key, token,
+    value_type) anchors on a top-level `<section_key>:` line and ends the section at the next
+    column-0 NON-COMMENT line -- comment-immune (a column-0 comment mid-section does not end it,
+    closing the defect rec-2954 finding 3 recorded in the incumbent `_parse_raw_r3_markers`) and
+    section-scoped (does not leak a sibling top-level section's scalar, e.g. a `classes:` block's
+    `limit: 500`, into a `budgets:`-scoped extraction -- the seam Slice B's mixed class-table +
+    flat-budgets registry needs). Both accept optionally-quoted keys, so composite's
+    `"<dir>::<step-id>"` form parses without a second regex.

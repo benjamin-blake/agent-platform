@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from scripts.checks.misc import coverage_baseline
+from scripts.checks.misc.coverage_baseline import _SPEC
 
 
 class TestLoadBaseline:
@@ -275,32 +276,22 @@ class TestMeasureAndCheck:
         assert any("timed out" in e for e in errors)
 
 
-class TestDefaultBaseReader:
-    def test_returns_stdout_on_success(self, tmp_path: Path) -> None:
-        mock_result = MagicMock(returncode=0, stdout="entries:\n  scripts/x.py: 80.0\n")
-        with patch("scripts.checks._common.run", return_value=mock_result) as mock_run:
-            result = coverage_baseline._default_base_reader("config/coverage_baseline.yaml")
-        assert result == "entries:\n  scripts/x.py: 80.0\n"
-        assert mock_run.call_args.args[0] == ["git", "show", "origin/main:config/coverage_baseline.yaml"]
-
-    def test_returns_none_on_failure(self) -> None:
-        mock_result = MagicMock(returncode=128, stdout="")
-        with patch("scripts.checks._common.run", return_value=mock_result):
-            result = coverage_baseline._default_base_reader("config/coverage_baseline.yaml")
-        assert result is None
-
-
 class TestValidateCoverageBaselineEdits:
     def _write_current(self, tmp_path: Path, body: str) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "coverage_baseline.yaml").write_text(body, encoding="utf-8")
 
-    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int]) -> None:
+    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int], mentions: dict[int, str] | None = None) -> None:
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir(exist_ok=True)
-        text = "\n".join(f"## Decision {n}: Some title (Decided)\n" for n in decision_numbers)
-        (docs_dir / "DECISIONS.md").write_text(text, encoding="utf-8")
+        mentions = mentions or {}
+        parts = []
+        for n in decision_numbers:
+            header = f"## Decision {n}: Some title (Decided)\n"
+            mention = mentions.get(n)
+            parts.append(header if not mention else f"{header}\n**Decision:** Authorizes {mention}.\n")
+        (docs_dir / "DECISIONS.md").write_text("\n".join(parts), encoding="utf-8")
 
     def test_skips_when_base_absent(self, tmp_path: Path) -> None:
         """Missing-base (e.g. this plan's own seeding PR) SKIPs -- never 'missing == empty'."""
@@ -327,7 +318,7 @@ class TestValidateCoverageBaselineEdits:
 
     def test_passes_lowering_with_valid_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/x.py: 60.0  # baseline-lowered: dec-159 regression, tracked\n")
-        self._write_decisions(tmp_path, [159])
+        self._write_decisions(tmp_path, [159], mentions={159: "scripts/x.py"})
         base_reader = lambda rel: "entries:\n  scripts/x.py: 80.0\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -373,7 +364,7 @@ class TestValidateCoverageBaselineEdits:
 
     def test_passes_new_sub100_registration_with_marker(self, tmp_path: Path) -> None:
         self._write_current(tmp_path, "entries:\n  scripts/new.py: 90.0  # baseline-lowered: dec-159 newly discovered debt\n")
-        self._write_decisions(tmp_path, [159])
+        self._write_decisions(tmp_path, [159], mentions={159: "scripts/new.py"})
         base_reader = lambda rel: "entries: {}\n"  # noqa: E731
 
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -410,3 +401,20 @@ class TestValidateCoverageBaselineEdits:
             coverage_baseline.validate_coverage_baseline_edits(failed, base_reader=lambda rel: "entries: {}\n")
 
         assert failed == []
+
+    def test_spec_direction_and_new_entry_predicate(self) -> None:
+        assert _SPEC.gated_direction == "down"
+        assert _SPEC.token == "baseline-lowered"
+        assert _SPEC.gates_new_entry(99.9) is True
+        assert _SPEC.gates_new_entry(100.0) is False
+
+    def test_unauthorized_marker_fails(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "entries:\n  scripts/x.py: 60.0  # baseline-lowered: dec-159 regression, tracked\n")
+        self._write_decisions(tmp_path, [159])  # header-only body -- never mentions the key
+        base_reader = lambda rel: "entries:\n  scripts/x.py: 80.0\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            coverage_baseline.validate_coverage_baseline_edits(failed, base_reader=base_reader)
+
+        assert len(failed) == 1
