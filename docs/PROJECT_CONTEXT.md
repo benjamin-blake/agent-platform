@@ -1,404 +1,218 @@
 # Machine Learning Trading System - Project Context
 
-> **Canonical project knowledge base for Claude Code.** Update this file only.
+Canonical Layer 2 project knowledge base for Claude Code. This file is loaded on demand by workflows; keep rules in `CLAUDE.md` / `AGENTS.md`, workflow method in `.claude/commands/` and `.claude/skills/`, and machine semantics in `docs/contracts/*.yaml`.
 
-You are a Lead Software Developer writing production-quality Python. You are operating on a Linux container (Ubuntu 24.04) with bash; use `bin/venv-python` for all Python invocations (Python 3.12+).
-See docs/contracts/instruction-architecture.yaml for the full information architecture.
+Source stamp: ROADMAP-PLATFORM.yaml @ working tree; roadmap_tier_id_set sha256: 5ce59be4136f4c884d0aa427c09f29ed728e5192f41da0f2128fb02a60dc7307
 
-## Rules
+## Operating contract
 
-- **PUBLIC repository (Decisions 73, 83, 101):** This repo is public. Never commit AWS account IDs, IAM ExternalIds, credentials/keys, trading alpha/performance data, or internal hostnames. Confidential data lives only in the personal AWS account (Secrets Manager, gitignored tfvars) and gitignored local files. Market platform engineering, not trading alpha.
-- **AWS Credentials:** A lack of AWS Credentials IS NOT A VALID REASON to bypass a task. The static-key assume-role chain auto-refreshes; verify it with `aws sts get-caller-identity --profile agent_platform` (refresh `~/.aws/credentials` if the `agent_static` key was rotated).
-- No emojis in code, scripts, or documentation
-- Python 3.12+, type hints required, async for I/O
-- **Shell:** Python scripts only for automation. Use subprocess for git/terraform commands. Bash syntax only -- never emit PowerShell commands.
-- Formula evaluation: `sympy.sympify()` + `sympy.lambdify()` only -- never `eval()`/`exec()`
-- No Docker in this environment -- Lambdas use zip packaging via S3
-- **Branching:** On Claude Code on the web the harness auto-creates a per-session branch (e.g. `claude/...`); agents work on that branch. Do NOT create `agent/{slug}` branches. Never commit directly to `main`. Plans are merged to `main` via a GitHub MCP PR and handed off to `/implement` by explicit path.
-- **Context budget:** Files loaded at session start must stay concise, enforced by deterministic size/count guards rather than a periodic review process. `docs/DECISIONS.md` (plus `docs/DECISIONS_ARCHIVE.md` combined) is bounded by `validate_decisions_size`'s byte and live-header ceilings (Decision 134). `docs/ROADMAP-PLATFORM.yaml` is bounded by its own line-count ceiling and deterministic guard (Decision 114). Individual source files are bounded per-file by `config/sloc_budgets.yaml`'s SLOC budgets (Decision 128).
-- **Refactoring Protocol:** When performing complex, non-contiguous edits, verify structural integrity immediately after. Never proceed to logic verification (e.g., merge or test) until the structural integrity of the edit is confirmed.
-- **Agent-First:** This repository is designed for agent consumption. Artefacts at all
-  layers are optimised for agent loading efficiency. Full principle and anti-patterns:
-  `CLAUDE.md` section "Agent-First Repository".
+- Repository visibility: public. Never commit credentials, API keys, AWS account IDs, IAM ExternalIds, account-specific ARNs, internal hostnames, trading alpha, strategy performance, or confidential market research. Safe content is platform engineering, infra patterns, CI/CD design, tooling, and general LLM-agent architecture.
+- Runtime surface: Ubuntu 24.04 / bash / Python 3.12+. Invoke Python with `bin/venv-python`, never `python` or `python3`. Do not rely on `source .venv/bin/activate` between shell calls.
+- Code and docs style: type hints for Python, async for I/O, ruff formatting, no emojis in code/scripts/docs, plain ASCII hyphens, no `eval()` or `exec()`, and no exceptions during module import.
+- Branching: never edit or commit on `main`. Use the harness-assigned `claude/...` session branch. Routine handoff is commit -> PR -> CI -> merge, not direct pushes to `main`.
+- Terraform and Lambda deploys: agents do not routinely run `terraform apply` or local Lambda deploy commands. Use `docs/contracts/deploy-paths.yaml` and `docs/contracts/build-lambda.yaml` to choose the governed path. Local apply/deploy is break-glass only after explicit human direction.
+- External integrations: when a plan step relies on an external API/tool, cite the source defining its input semantics, explain why the delivery mechanism is correct, and describe what breaks if the assumed semantics are wrong.
 
-## External Integration Check
+## North star
 
-When a plan step calls an external tool (Copilot CLI, gh CLI, AWS SDK, Lambda invocation, subprocess call):
-1. Cite the doc page defining the input semantics
-2. State WHY this delivery mechanism is correct for the use case
-3. State what would go wrong if the semantics differ from what the code assumes
+Build a self-improving automated trading system. Product work creates the trading stack; platform work creates the governed agent/warehouse/CI substrate that lets the repository improve itself without losing safety, provenance, or human auditability.
 
-If a boundary contract exists in `docs/contracts/`, reference it. Both `/plan` and `/develop-executor` workflows read this file, so this rule applies to all agent work.
+The platform end-state is a public, agent-first automation platform with:
 
-## Operational Data Governance
+1. durable data as the source of truth;
+2. compute that is swappable by workload;
+3. typed HTTPS tool surfaces instead of ad hoc scripts;
+4. governed CI/CD and deployment channels;
+5. warehouse-backed recommendations, decisions, queue state, and telemetry;
+6. a future autonomous improvement loop that can complete one bounded iteration without a human in the critical path.
 
-### Recommendation & Decision Logging
-- **Single Portal Invariant:** All creation, updates, or status changes to recommendations and decisions MUST go through `scripts/ops_data_portal.py`. Never use `write_to_file` to modify `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly.
-- **Storage backend (Decision 84 consolidation, 2026-06-11):** `ops_recommendations`, `ops_decisions`, `ops_priority_queue` source of truth = **DuckLake-on-Neon, SOLE backend** (the `OPS_STORAGE_BACKEND` rollback flag is RETIRED). Reads transit the closed `ducklake_reader` boundary via named verbs; writes transit `ducklake_writer` (`file_ops` allocates rec-NNN in-transaction; decisions follow DECISIONS.md numbering and rebuild via `ops_data_portal --backfill-decisions-md`). `ops_session_log` / `ops_execution_plans` remain on Athena/Iceberg pending their T2.26 disposition (`ops_compaction` stays live for those two only). See Decision 84 / tier_item T2.26.
-- **ID Authority (Decision 84 I-2):** Recommendation IDs are allocated BY THE WRITER atomically with the insert (`file_ops`); decision numbering authority is DECISIONS.md (callers supply `decision_id`). The local JSONL files are read-only caches, not the source of truth.
-- **Agent surface:** Three functions only -- `file_rec`, `update_rec`, `sync`. Do not call `sync_ops`, `ops_writer`, or any drain/compact/pull CLIs directly. Reads and writes transit the closed DuckLake reader/writer boundary via the agent_platform static-key chain; raises `RuntimeError` if unreachable.
-- **Failure mode (Decision 84 I-4):** there is NO offline outbox. A write that cannot complete FAILS LOUDLY at the call site (after an idempotent transient-5xx retry); re-file after restoring connectivity (verify with `aws sts get-caller-identity --profile agent_platform`). `sync()` only refreshes the local read cache and returns `{"pulled": ...}`.
-- **SCD Type 2:** Append-only SCD2 semantics; the DuckLake reader serves the current-state projection directly (no query-time view dedup).
+## Roadmap sources
 
-### Data Quality Enforcement
+- Product capability roadmap: `docs/ROADMAP-PRODUCT.yaml` for trading-system phases, market features, alpha/portfolio/execution/operations layers, and environment-as-config bundles.
+- Platform roadmap: `docs/ROADMAP-PLATFORM.yaml` for tier_items, platform sequencing, infra governance, candidate decisions, DuckLake/Lambda topology, executor substrate, and bootstrap work.
+- Decision rationale: `docs/DECISIONS.md` plus `docs/DECISIONS_ARCHIVE.md`. Pending candidate decisions in the roadmap are binding until ratified or superseded.
+- Contracts: `docs/contracts/*.yaml` and selected `.md` contracts are the preferred source for machine semantics. Do not duplicate contract truth in prose.
 
-DQ checks for all ops and telemetry tables are defined in `config/agent/data_quality/ops.yaml`
-and `config/agent/data_quality/telemetry.yaml`. The DQ runner is invoked by `scripts/validate.py`
-presubmit tier; results land in `logs/debug/dq-latest.json`.
+Roadmap disambiguation: use PRODUCT for trading capabilities, PLATFORM for agent/infrastructure/control-plane capabilities, and both only when a task spans product intent plus platform machinery.
 
-The remediation arc uses per-table decision manifests as the canonical field-semantic authority
-(Decision 65):
-- Protocol and root cause taxonomy: `config/agent/data_quality/ops.yaml`
-- Per-table decision manifests: `config/agent/data_quality/decisions/{table}.yaml`
+## Platform roadmap end-state map
 
-Each manifest records root cause class, enforcement readiness, and human decision (pending /
-approved / deferred / declined) for every field. Load the manifest at the start
-of any remediation session; walk only `human_decision: pending` fields one at a time.
+### Foundation already shipped
 
-### Field Architecture Decisions
+The repo has shipped enough foundation that the platform is in convergence and hardening rather than bootstrap: CC-web branch workflow, public-repo boundary, GitHub-hosted CI with OIDC, pre-commit secret guards, two-tier validation, Single Portal Invariant, DuckLake reader/writer functions, schema-as-code, field semantics, CI-RCA, candidate-decision ratification lane, governed code-deploy channels, and Terraform guard classification.
 
-The following decisions apply across the ops table schema and were established during the
-2026-05-06 remediation session for `ops_recommendations`.
+T0 is effectively complete. T-1 has only a small deferred packaging tail. T2 is the active center of gravity because storage, deploy, IAM, and guard hardening are the blocking substrate for telemetry and executor work.
 
-**source as lineage key, not routing enum**
+### Critical path to the autonomous loop
 
-The `source` field identifies the agent type that filed a recommendation. It is a first-class
-lineage key -- equivalent in importance to `session_id` for future cross-table telemetry joins
-(e.g., correlating recommendation origin with execution outcomes). `source` must be
-harness-injected as `AGENT_TYPE`; agents must not self-assign or guess this value. New agent
-types must register in `config/agent/data_quality/source_registry.yaml` and pass a CI gate before
-their first production invocation.
+Current critical path from the roadmap and audits:
 
-**execution fields pending normalisation**
-
-The fields `execution_result`, `execution_date`, `execution_branch`, `execution_pr_url`, and
-`execution_steps` are deferred pending an architectural review: do they belong in
-`ops_recommendations` (current location) or normalised to telemetry tables where `session_id`
-already provides the joining key? The `resolution` field semantics depend on this decision.
-Do not add DQ enforcement for these fields until the review is complete.
-
-## Project
-
-**North Star:** Build a self-improving automated trading system. This is achieved through an iterative feedback loop where every aspect of the repository -- code, workflow, tooling, documentation, and the agents themselves -- continuously improves based on captured lessons and friction points.
-
-Dual-environment trading system: AWS (formula discovery) + Docker (live trading).
-Phase 1 complete. Phase 2 (schema backfill) next. Phases 3-7 planned. Phase Platform (automation infrastructure) runs in parallel.
-See [docs/ROADMAP-PRODUCT.yaml](../docs/ROADMAP-PRODUCT.yaml) for product phases and [docs/ROADMAP-PLATFORM.yaml](../docs/ROADMAP-PLATFORM.yaml) for platform tier items. See [docs/DECISIONS.md](../docs/DECISIONS.md) for rationale.
-
-## Roadmap reference disambiguation
-
-Two roadmap files exist since PR #335. Apply this rule per call site:
-
-- **Product context** (phases, milestones, market features, trading capabilities, Phase 1-7 progress) -- reference `docs/ROADMAP-PRODUCT.yaml`
-- **Platform context** (tier_items, infrastructure governance, candidate_decisions, AWS/Lambda topology, T-0 / T-1 / T-N bootstrap work) -- reference `docs/ROADMAP-PLATFORM.yaml`
-- **Both** (e.g. doc-freshness checking all roadmap content; documentation_update authoring across both; plan-critique checking phase AND tier alignment) -- reference both explicitly, with a short note explaining which dimension each addresses
-
-## AWS
-
-- **Region**: eu-west-2
-- **Account**: personal platform account (ID supplied via gitignored `terraform/personal/terraform.personal.tfvars`; never committed)
-- **Profile**: `agent_platform` (PlatformDev, runtime; static-key assume-role) -- agents use this profile for all operations. `agent_platform_admin` (PlatformAdmin) is used for provisioning (IAM + OIDC) only.
-  - Environment promotion is human-triggered via GitHub Actions, not agent-initiated
-  - **Credential model (static-key, supersedes Decision 57's SSO-recovery semantics):** the near-powerless `agent_static` IAM key assumes `PlatformDev`/`PlatformAdmin` via STS; sessions auto-refresh and there is no interactive login. Autonomous executors (Lambda) skip credential-dependent verifiers (emitting SKIPPED) to prevent pipeline deadlocks; they never attempt recovery.
-  - `creds_status: "unavailable"` -- **Static-key recovery (non-fatal, Decision 60):** verify the chain with `aws sts get-caller-identity --profile agent_platform`; refresh `~/.aws/credentials` if `agent_static` was rotated. Do NOT block -- preflight continues in degraded mode (warehouse reads degrade loudly (recs_read_status / verb failures), cache fallback where designed).
-  - See Decision 24 in `docs/DECISIONS.md` for rationale
-- **Glue database**: agent_platform
-- **Athena workgroups**:
-  - `agent-platform-production` (engine v3) -- used for OPTIMIZE, MERGE writes, and all production queries
-  - `agent-platform-lab` (engine v3) -- used for PySR formula discovery queries
-  - `primary` (engine v2, default) -- **do not use** for Iceberg operations; does not support `VACUUM` or full Iceberg DML
-- **S3 bucket**: `agent-platform-data-lake` -- Iceberg data lake, Athena query results, and agent/cron log storage (set as `s3_agent_logs_bucket` in `config.personal.yaml`; see `scripts/s3_log_store.py`).
-- **Lambda runtime**: Python 3.12
-- **Lambda layers**: AWSSDKPandas-Python312:22 (managed) + extras (yfinance/pyyaml, ~11 MB)
-- **LLM substrate**: DeepSeek-direct via LiteLLM (Tier 1) + Anthropic-direct Claude (Tier 2 escape hatch); Bedrock is fully retired for the dev surface (CD.28). Executor is FROZEN (Decision 67); when unfrozen it will consume this substrate, not Gemini CLI or Bedrock.
-- **CI runner**: GitHub-hosted `ubuntu-latest` with OIDC to the personal account (CD.21; superseded Decision 68). Branch role `agent-platform-github-ci-branch`, PR role `agent-platform-github-ci-pr`. See `terraform/personal/oidc.tf`.
-
-## File Router
-
-Machine-readable discovery/ownership index: see [docs/contracts/file-router.yaml](../docs/contracts/file-router.yaml).
-Enforced by `scripts/checks/hygiene/validate_placement.py` (link-validity gate, both `--pre` and full presubmit tiers).
-
-## Recommendations Log Schema
-
-The file `logs/.recommendations-log.jsonl` is used in nearly every session. When writing or updating entries, use this schema:
-
-```json
-{
-  "id": "rec-NNN",           // Required. Format: rec-001 through rec-999+
-  "date": "YYYY-MM-DD",      // Required. ISO date of creation
-  "title": "...",            // Required. Concise description (< 100 chars)
-  "source": "...",           // Required. Origin: executor-supervision, code-review, planning, brainstorm
-  "effort": "XS|S|M|L|XL",   // Required. Estimated implementation effort
-  "priority": "Critical|High|Medium|Low",  // Required
-  "status": "open|closed|failed|declined|superseded",  // Required. See canonical values below
-  "automatable": true|false, // Required. Can the executor handle this?
-  "risk": "low|medium|high", // Required. Risk level for automated execution
-  "file": "path/to/file.py", // Required. Primary target file
-  "context": "...",          // Required. Why this rec exists, cite sources
-  "acceptance": "command",   // Required. Shell command that returns 0 on success (structural: code landed)
-  "verification": "command", // Optional. Shell command for behavioural end-to-end proof (runs post-acceptance, warning-only on failure)
-  "verification_tier": "V1|V2|V3",  // Optional. V1=static, V2=unit, V3=integration (deploy+invoke)
-  "dependencies": ["rec-XXX"], // Optional. Array of blocking rec IDs
-  "tags": ["tag1", "tag2"],  // Optional. Categorisation tags
-  "resolution": "...",       // Optional. Why declined/superseded (required if status is declined/superseded)
-  "execution_result": "success|failure|manual|already_implemented",  // Set by executor on close
-  "execution_date": "ISO-8601",  // Set by executor
-  "execution_branch": "agent/rec-NNN",  // Set by executor
-  "execution_pr_url": "https://...",    // Set by executor
-  "execution_steps": 3                  // Set by executor (step count)
-}
+```text
+T2.18 DuckLake maintenance
+  -> T2.19/T2.26 ops-table migration tail
+  -> T2.36 telemetry rebuild on DuckLake
+  -> T3.2 telemetry causal-chain verifier
+  -> T3.3 telemetry cloud analysis
+  -> T3.4 control-plane loop closure
+  -> T4.1 Step Functions executor substrate
+  -> T4.2 Lambda Durable Function agent personas
 ```
 
-**Status values:** Only `open`, `closed`, `failed`, `declined`, `superseded` are valid. Never use `done`, `complete`, or `implemented`.
+Parallel governance path:
 
-**Spacing:** Use `"key": "value"` (space after colon) for consistency.
+```text
+T1.5 ops_decisions graduation
+  -> T1.6 move live-reader DQ from merge gate to monitor
+  -> T4.2 executor persona readiness
+```
 
-**Acceptance vs Verification:** `acceptance` checks that the code landed correctly (structural: grep, pytest). `verification` proves the feature works end-to-end (behavioural: invoke the system). The executor runs verification after acceptance passes; verification failure emits a warning but does NOT block the merge. Both fields ban `python -c` one-liners (Windows bash compatibility).
+Queue-feed path:
 
-## Known Gotchas
+```text
+T2.26 migrated ops queue substrate
+  -> T4.3 priority-queue producer repoint to DuckLake
+  -> T4.12 scheduled-agent re-enable/repoint
+```
 
-- **Rec/Decision Write Portal (Critical):** Never append to `logs/.recommendations-log.jsonl` or `logs/.decisions-index.jsonl` directly. All writes MUST go through `python -m scripts.ops_data_portal` or the Python API.
-  - **ID Authority (Decision 84 I-2):** rec-NNN ids are allocated by the ducklake_writer atomically with the insert; decision ids follow DECISIONS.md numbering. The local JSONL is a read-only cache; `ops_data_portal.sync()` only rebuilds it from the reader.
-  - **Failure mode (Decision 84 I-4):** there is NO offline outbox. A failed write raises loudly -- re-file after restoring the static-key chain (verify with `aws sts get-caller-identity --profile agent_platform`).
-  - **Deduplication:** SCD Type 2 append-only semantics; the DuckLake reader serves the current-state projection.
-  Direct file writes are caught by `validate.py` and will fail CI. Status changes (closing recs) must also use the portal.
+### Current blockers
 
-- **Git branching workflow:** On Claude Code on the web the harness creates the per-session branch; do NOT create `agent/` branches. Never commit directly to `main`. Merge via a GitHub MCP PR (no local `gh`); wait for CI event-driven via `subscribe_pr_activity`, then squash-merge via `merge_pull_request`. See Decision 76.
+- Strategic/executor freeze: STRATEGIC plans are suspended. Work continues as IMPLEMENTATION plans, but executor unfreeze requires T4.2 stability, T3.2 PASS evidence, and T3.3 grace.
+- T1.5/CD.18: ops_decisions graduation cannot start until its gating candidate decision is ratified.
+- Telemetry gap: the improvement loop is still effectively blind until telemetry storage, causal verification, and cloud analysis are rebuilt.
+- Queue feed gap: rec-curator/priority-queue production must be repointed to DuckLake before autonomous pick-rec has a reliable source.
+- DQ gate shape: live DuckLake-reader checks must move out of the blocking merge gate into scheduled monitoring without weakening write-path structural enforcement.
+- Executor substrate evidence: the incumbent Step Functions + Lambda Durable Functions design leads, but workspace/resume and persona contract evidence must stay explicit.
 
-- **Executor self-modification boundary (Critical):** Recs targeting executor machinery files must have `automatable: false`. The executor must not modify its own code, prompts, instructions, or tests. Boundary files: `scripts/execute_recommendation.py`, `scripts/executor/*.py`, `config/agent/executor/prompts/*.prompt.md`, `config/agent/executor/instructions/executor-*.instructions.md`, `scripts/llm/client.py`, `scripts/llm/utils.py`, `scripts/tool_runtime.py`, `tests/test_execute*`, `tests/test_executor_*`, `tests/test_llm_client*`, `tests/test_llm_utils*`, `tests/test_tool_runtime*`. These recs go through `/plan` -> `/implement` instead. `config/agent/executor/capabilities.yaml` is the code-level SSOT (Decision 117, supersedes Decision 44). Enforced by `validate_executor_boundary()` in `validate.py`.
+## Operational data architecture
 
-- **Venv and Python:** Python 3.12+ on Linux container. Always invoke via `bin/venv-python` (wrapper auto-resolves the venv). Verify: `bin/venv-python -c "import sys; print(sys.executable)"`. If the venv is missing, run `bin/setup-cloud-env.sh` (canonical CC-web/Linux setup). Do not use `source .venv/bin/activate` -- each Bash tool invocation is independent; the wrapper handles activation.
+### Source of truth
 
-- **Import Safety Patterns (Critical):** Never raise exceptions during module import -- breaks pytest collection in CI. Defer validation to explicit `validate()` calls. BAD: `if not os.path.exists(f): raise FileNotFoundError`. GOOD: `logger.warning(...); return default`. Import optional external deps at module level with `try/except ImportError` using a sentinel class fallback. Config modules must load successfully even if config files are missing -- use lazy loading with warning logs.
+Warehouse state is authoritative. Local JSONL files under `logs/` are read caches, not write sources.
 
-- **Terraform File-Optional Operations (Critical):** Always wrap `filemd5()` and `file()` calls on optional artifacts with `try()`. BAD: `source_code_hash = filemd5("build/lambda.zip")`. GOOD: `source_code_hash = try(filemd5("build/lambda.zip"), md5(file("module_file.tf")))`.
+Current ops substrate:
 
-- **Athena/Iceberg Limitations:** `ALTER TABLE ADD COLUMNS` has no `IF NOT EXISTS` -- issue one column per statement, ignore "already exists". `VACUUM` requires engine v3 -- always use `WorkGroup='agent-platform-production'`. `CREATE TABLE IF NOT EXISTS` does not update TBLPROPERTIES -- use `ALTER TABLE SET TBLPROPERTIES` for existing tables.
+- `ops_recommendations`: DuckLake-on-Neon, SCD2, written through `ducklake_writer` via `scripts.ops_data_portal`, read through `ducklake_reader`.
+- `ops_decisions`: DuckLake-on-Neon, sourced from `DECISIONS.md` / archive ETL and portal decision paths; decision numbering remains `DECISIONS.md` authority.
+- `ops_priority_queue`: DuckLake-on-Neon, dormant until executor/scheduled-agent producer work resumes; current-state read uses its named verb semantics.
+- `ops_execution_plans`: DuckLake-on-Neon, empty or dormant until executor resumes.
+- `ops_session_log`: still Iceberg/Athena pending CD.40/T3.20 disposition.
+- telemetry tables: dead Athena/Iceberg draft retired in favor of T2.36 four-table DuckLake rebuild.
 
-- **Path Migration Completeness (Medium):** When moving files, grep for ALL references before migrating. Update prompt files, agent files, script path constants. Verify post-migration with grep. Audit both input and output sides of test mocks.
+### Portal discipline
 
-- **File deletion reference sweep (Important):** Grep for all references BEFORE deleting a file. Update all `.prompt.md`, `.agent.md`, and script path constants in the same session. Verify post-deletion with grep.
+Agent-facing operations are only:
 
-- **Browser content fetching:** `open_browser_page` opens browser but does not return content. Always follow with `fetch_webpage`.
+- `file_rec`
+- `update_rec`
+- `sync`
 
-- **replace_string_in_file context boundary:** Include 3-5 lines of unchanged code before and after target text. Weak boundaries cause wrong-occurrence matches or silent formatting changes.
+All recommendation and decision writes go through `scripts.ops_data_portal`. Never append to `logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`, pending outboxes, or S3 staging as a substitute. Recommendation IDs are allocated by the writer atomically. There is no offline outbox for migrated tables; failed writes fail loudly and must be retried after restoring the `agent_platform` credential chain.
 
-- **multi_replace_string_in_file anchor uniqueness:** Ensure each `oldString` has unique anchor text. Increase context lines (5-7) or split into single-replacement calls if ambiguous.
+### Data modeling default
 
-- **Git worktrees for parallel development:** Setup: `git worktree add ../agent-platform-{slug} agent/{slug}`. Remove after merge: `git worktree remove ../agent-platform-{slug}`.
+For any new table or warehouse write path, state the grain first: one row per what. Then choose write mode:
 
-- **validate.py: Import validation requires sys.path injection (Medium):** Inject `str(ROOT)` into `sys.path` at start of `validate_imports()` execution; remove in finally block.
+- SCD2 for mutable operational entities with current/history projections.
+- append_only for event/telemetry journals.
 
-- **ruff E501 and multi-line section builders (Medium):** Define intermediate `_header`, `_footer`, `_section` variables for long f-strings to stay under 127 chars.
+Use boundary-minted ULIDs, business-key merges for SCD2, explicit partitioning, and contract-backed field semantics. Never design a table as CRUD by default.
 
-- **State machine exit path completeness (Important):** Every exit path from a state machine must call the state-clearing function. Test all paths. See Decision 34.
+## Telemetry and verification end-state
 
-- **Known failure mode documentation lag (Important):** When a documented failure actually occurs, update the prompt/agent file with observed details in the same session.
+Telemetry end-state is the canonical four-table DuckLake model:
 
-- **Test Isolation Patterns (Critical):** Never spawn `pytest tests/` (full suite) from a script any test imports -- recursion risk. Three-layer defense: `_VALIDATE_DEPTH` env var in `validate.py`, `_COVERAGE_SUBPROCESS` env var, `tests/conftest.py` sets both. Always mock both `subprocess.Popen` AND `subprocess.run` in tests for subprocess-spawning functions. Mock `pathlib.Path.exists()` for tests that assume files don't exist. Use `missing_ok=True` for `Path.unlink()` in cleanup paths. After removing a test class, run `ruff check --fix` (F401); after adding one, verify all modules used in `side_effect=` or assertions are imported at module scope.
+- `telemetry_sessions`
+- `telemetry_observations`
+- `telemetry_transcripts`
+- `telemetry_agents`
 
-- **test_coverage_checker requires test files for ALL modified source files (Medium):** Every source file modified on a branch must have a corresponding test file with 100% coverage. Plan test stub creation when modifying pre-existing scripts without test files.
+T2.36 creates the storage and write/read paths. T3.2 proves PRODUCE -> TRANSPORT -> PERSIST -> QUERY -> ASSERT. T3.3 analyzes telemetry for anomalies and cost/failure trends. T3.20 routes agent-turn/session capture into the same model and coordinates retirement or rewiring of legacy session-log surfaces.
 
-- **ruff format duplicate import consolidation (Critical):** Never split the same module's imports across two blocks -- ruff silently drops symbols from the second block during format. Use one consolidated block with `# noqa: F401`.
+Verification doctrine: `scripts.validate` is the single source of truth for CI checks. PRs run the fast `--pre` tier; full validation runs before handoff and on main. New CI checks must be added to `scripts.validate` first.
 
-- **Monolith-to-package refactor: Test namespace migration (Important):** All `@patch("module.symbol")` calls must be updated to new submodule locations. Enumerate via grep before refactoring; use a bulk replacement script for large test suites.
+## Agent and executor architecture
 
-- **Batch file modification + ruff linting cascade (Medium):** Modify 1-2 files, run `ruff check --fix` immediately, then proceed. Never batch-modify multiple files before running ruff.
+### Interactive workflow today
 
-- **S3 backend + local mocking pattern (Medium):** Use a `get_backend()` switch so local mode preserves original file paths that tests mock. Bypassing mocked paths via absolute paths causes silent test failures.
+```text
+/orient -> /plan -> /implement
+```
 
-- **CI runner credential pattern (Important):** GitHub-hosted runners (CD.21) assume the OIDC role `agent-platform-github-ci-branch` (or `-pr` on pull requests) via `aws-actions/configure-aws-credentials`, which exports standard AWS credential env vars. There is no `~/.aws/config` on the runner, so code resolving a named SSO profile (`agent_platform`) must fall back to boto3's default credential chain when those env vars are present. The CC-web container resolves via the named profile.
+- `/orient` is read-only: preflight, roadmap state, CI-RCA triage, ranked work, and plan prompts.
+- `/plan` produces `docs/plans/PLAN-{slug}.yaml`, with affected-file analysis, verification-tier selection, decision-scout gate, and critique.
+- `/implement` executes an approved plan, runs verification and code review, then validates, commits, opens a PR, and follows the event-driven CI/merge flow.
+- `/develop-executor` diagnoses executor failures and files RCA recommendations; it does not patch inline.
 
-- **Terraform workflow integration (Important):** Plans with `.tf` files require `terraform plan` output presented to human before applying. Apply is human-gated EXCEPT the sandbox PLATFORM environment, where push-to-main auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`, which fails closed on any destroy/IAM/trust change) plus a subagent plan review, per Decision 77 and `docs/contracts/environment-taxonomy.md`. SIT/PROD stay human-gated (and are future-state). See `.claude/skills/planning/SKILL.md` ("Infrastructure & Lambda Assessment") for the live workflow-step methodology.
+### Local executor status
 
-- **Lambda deployment pipeline -- per-Lambda gating (Important, Decision 79 + CD.16 + CD.24):** Lambda packaging is manifest-driven. Use `bin/venv-python -m scripts.lambda_manifest --list-patterns` to identify Lambda-packaged files and `compute_affected_artifacts(changed_files)` (from `scripts/lambda_manifest`) to determine which active artifact slugs are affected. If any affected artifact is `status: active` (in `src/lambdas/<slug>/manifest.yaml`): (1) build with `bin/venv-python -m scripts.build_lambda` (builds all artifacts; add `--skip-upload` to build without uploading), (2) deploy with the `--deploy` flag (uploads to S3 and updates Lambda function code), (3) post-deploy verification using `run_scheduled_agent.py --smoke-test NAME`. Use `--list-bundle <slug>` to emit a single artifact's staged file list (VP file-list-equivalence diffs). Stub artifacts (`status: stub`) need no deploy step. `config/agent/` is NOT Lambda-packaged. The blanket `build_lambda.py --deploy` for all functions is retired; build only the affected artifact(s). Copilot SDK model IDs (e.g., `claude-haiku-4.5`, `claude-sonnet-4.6`) differ from Bedrock format (revoked) and GitHub Models IDs. See `docs/contracts/inference-provider.yaml` and Decision 116 (supersedes Decision 49).
+`scripts/execute_recommendation.py` and `config/agent/executor/prompts/*.prompt.md` preserve the older local executor loop: select rec, branch, plan, critique/refine, implement steps, validate, review, PR, CI, merge. This surface is frozen pending Decision 67 reversal and is not the routine development path.
 
-- **Acceptance command format in executor planning prompts (Important):** Write a SINGLE inline backtick command. No trailing prose after the backtick. Use relative paths from repo root. Write `python -m scripts.MODULE` not `python scripts/MODULE.py`. No fenced code blocks. No `###` inside `grep -E` patterns.
+Executor self-modification boundary is enforced by `config/agent/executor/capabilities.yaml`: executor internals, prompts, LLM/tool runtime, tests, Terraform, workflows, scheduled-agent surfaces, decision/plan docs, and Lambda build/deploy scripts are non-automatable targets.
 
-- **Copilot CLI `@file` vs user message (Critical for executor):** `-p @filepath` as a standalone argument injects file contents as **document context**, not as a user instruction. Agentic models receiving context ask "what should I do with this?" and act on it -- they implement the spec instead of planning against it. This is the root cause of agentic planning loops. Correct pattern: put the `@filepath` **inside** the `-p` quoted argument so the CLI expands it inline as user-message content: `copilot -p "Generate a step-by-step plan for the attached spec. Do not write any code. @spec.txt"`. In `copilot_call()`, this means the `-p` arg must be `f"{inline_instruction} @{context_file_path}"`. Using `--share` does NOT inject content (it only sets transcript output path). `_PLAN_EXCLUDED_TOOLS` is a safety net, not the fix. See rec-119, rec-252.
+### Executor end-state
 
-- **postflight.py function mock exhaustion (Important):** When adding `subprocess.run` calls to any function in `scripts/executor/postflight.py` (e.g., `cleanup_after_merge()`, `finalize()`), count the total call sequence and update the mock `side_effect` counts in the corresponding tests in `tests/test_execute_recommendation.py`. A missing mock entry causes silent `StopIteration` failures that only surface in CI. See rec-117, rec-325.
+T4 decomposes the interactive workflow into cloud states:
 
-- **Lambda tag values must use ASCII-safe characters (Medium):** Use plain ASCII hyphens (`-`) instead of em dashes in all Terraform tag values.
+```text
+DuckLake queue
+  -> pick_rec admission guard
+  -> Step Functions orchestration
+  -> prepare_workspace
+  -> plan_agent
+  -> plan_critic + decision_scout
+  -> critique_gate
+  -> implement_agent
+  -> code_reviewer
+  -> file_pr
+  -> GitHub Actions verdict callback
+  -> merge
+  -> deploy_dispatch
+  -> emit_telemetry
+  -> autonomy gate ratchet
+```
 
-- **Lambda zipped deployment size limit (Important):** AWS Lambda has a hard zipped package limit (~262144000 bytes). If a built zip plus layers exceeds this, split functionality into a minimal handler zip (small deploy) and separate support zips, or move heavy deps to layers that fit the account limits. Add a build check in `scripts/build_lambda.py` to assert the final zip size and fail with a clear diagnostic early.
+T4.1 owns Step Functions and deterministic glue Lambdas. T4.2 owns Lambda Durable Function personas and LiteLLM transport. T4.9a owns the MVP GitHub Actions callback handshake. T4.10a owns persona contracts. T4.13/T4.14 add prompt-injection threat modeling and offline prompt/model regression tests.
 
-- **awswrangler 3.x API rename (Medium):** awswrangler 3.x renamed `temp_s3_dir` → `temp_path`. Verify `awswrangler.__version__` before calling APIs or pin the version in `requirements.txt` and document the expected parameter name in plans involving Iceberg writes.
+## Scheduled agents and CI-RCA
 
-- **awswrangler `fill_missing_columns_in_df=True` behaviour (Medium):** When True awswrangler will re-add missing Iceberg schema columns as `object`/null-typed columns which can break writes for `array<>` or typed array columns. For Iceberg tables with `array<string>` / `array<int>` types, prefer explicit per-table dtype overrides (e.g., `_TABLE_DTYPES`) or set `fill_missing_columns_in_df=False` and provide the full column set to avoid ambiguous `object` dtypes.
+Scheduled agents are currently disabled. The future split is:
 
-- **Iceberg integer promotion (Medium):** Iceberg/engine writes may have previously promoted `int` columns to `long`/`bigint`. Attempts to re-declare these as `int` will fail with "Cannot change column type: long -> int". When writing schema/dtype overrides, detect and honor existing promoted types (use bigint/long where present).
+- T4.3 first repoints rec-curator/priority-queue producer writes to DuckLake so generated work is visible to the executor.
+- T4.12 then re-enables/repoints doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, and rec-curator surfaces.
 
-- **build_lambda S3 bucket vs Terraform bucket (Low):** Ensure `scripts/build_lambda.py` uploads to the same S3 bucket referenced by Terraform (compare against `terraform output` or repo config). A mismatch (e.g., a stale config referencing a retired bucket vs `agent-platform-data-lake`) causes deployed Lambdas to reference the wrong artifact bucket; validate and fail early in the build step.
+CI-RCA is the failure-to-work-item bridge. Red main workflows generate evidence, deduplicate, invoke the CI-RCA agent, and file recommendations through the ops portal. `/orient` surfaces CI-RCA items; `/plan` treats unresolved CI-RCA as a hard planning constraint.
 
-- **Pytest `-k` selector gotcha (Important):** Avoid using `-k` selectors in acceptance commands for test steps. LLM-generated test names are unpredictable and may change between runs, causing brittle or failing acceptance checks. Instead, use `grep` to verify the test exists, and run tests using the `python -m pytest tests/test_file.py::ClassName` format to ensure robust validation.
+## AWS and deployment facts
 
-- **File rewrite pattern (Important):** To safely rewrite a file's entire contents, use rename-create-delete: rename `file.py` to `file-old.py`, create new `file.py` with desired contents, delete `file-old.py`. This works because `edit` (replace_string_in_file) only replaces matching text (doesn't truncate) and `create` refuses to overwrite. Never use `edit` to replace an entire file's contents in one operation -- partial matches or whitespace differences cause silent failures.
+- Region: `eu-west-2`.
+- Account: personal platform account; account ID and account-specific values remain gitignored or in AWS.
+- Agent profile: `agent_platform`. Admin profile is human-gated only for rare break-glass provisioning.
+- Credential model: static-key assume-role chain. Verify with `aws sts get-caller-identity --profile agent_platform`; refresh the local static key only if rotated.
+- Lambda runtime: Python 3.12.
+- CI runner: GitHub-hosted `ubuntu-latest` with OIDC roles.
+- LLM substrate for future executor: LiteLLM with DeepSeek-direct Tier 1 and Anthropic-direct Tier 2. Bedrock is retired for this dev surface unless a contract explicitly says otherwise.
+- DuckLake/prod Lambda routine deploys go through governed GitHub workflows named by `docs/contracts/build-lambda.yaml`; local `build_lambda --deploy` variants are break-glass only.
 
-- **Gemini CLI version required (Important):** Stable (0.39.x) runs Gemini 1.5 Pro -- NOT Gemini 3. Preview (0.40.0+) is required for Gemini 3 models (`gemini-3-pro-preview`, `gemini-3-flash-preview`). Install: `npm install -g @google/gemini-cli@preview`. The `--model` flag does NOT override sub-agent model selection in multi-turn mode. Executor uses Auto mode (no `--model` flag) for XS/S/M tasks; explicit `--model gemini-3-pro-preview` for L/XL and executor/prompt files. See Decision 53 and `scripts/llm/model_registry.py`.
+## File routing and placement
 
-- **Executor provider resolution (Important):** `scripts.llm.client._resolve_provider()` delegates to `scripts.llm.model_registry.resolve_provider()` which defaults to `"gemini"`. `execute_recommendation.py` also sets `os.environ.setdefault("LLM_PROVIDER", "gemini")` as a safety net. Lambda handlers route by `schedule.yaml` provider field, not by `LLM_PROVIDER` env var.
+Use `docs/contracts/file-router.yaml` as the discovery and ownership index. Its validators enforce root docs allowlists and prose placement. Do not create a new standing prose companion document when a contract or existing machine-readable artifact can carry the semantics.
 
----
+## Recommendation schema quick reference
 
-## Platform End-State (derived from ROADMAP-PLATFORM.yaml)
+Recommendations are operational work items, not local JSONL edits. Required conceptual fields include title, source, effort, priority, status, automatable, risk, file, context, acceptance, optional verification, verification tier, dependencies, tags, and resolution/execution metadata when closing.
 
-Derived from ROADMAP-PLATFORM.yaml @ e588678 (2026-06-28). NON-AUTHORITATIVE cache: a materialized query of the roadmap, NOT a source of truth; re-synthesize via a fresh subagent to refresh. roadmap_tier_id_set sha256: f5072e405c65dee3c5cd216d11ef6bf1e9fedfe80bf628b63cf1c4be7db946c6
+Canonical status values: `open`, `closed`, `failed`, `declined`, `superseded`. Never use `done`, `complete`, or `implemented`.
 
-This is the destination: what the platform looks like once the entire ROADMAP-PLATFORM.yaml
-work-list is implemented. PLATFORM = the infrastructure/governance/automation substrate
-underneath the trading system (ROADMAP-PRODUCT.yaml is the sibling product axis). Present tense
-describes the target; "[future]" marks parts not yet live.
+Acceptance proves the structural change landed. Verification proves behavior end-to-end and may be warning-only depending on tier. Prefer command scripts or focused pytest targets over opaque one-liners.
 
-North Star (NS.1-NS.5): storage durable / compute interchangeable; personal AWS account (IP
-ownership); hybrid compute (cloud orchestration + local rig for CPU-bound batch); the repo is for
-agents; the agent surface is self-describing typed verbs over HTTPS with Pydantic schema-as-code.
+## Known gotchas
 
-### 1. Self-improvement / recursive loop
-The four-tier workflow (Decision 90) runs end-to-end with no human in the critical path of one
-iteration (the Platform-MVP boundary, Decision 93):
-- /orient (read-only) surfaces eligible work, CI-RCA triage, and ranked /plan prompts -> /plan
-  produces a schema-validated PLAN-{slug}.yaml (PlanDocument, Decision 85/CD.22) -> /implement
-  executes or scopes -> /develop-executor supervises the autonomous executor [future].
-- Recommendations and decisions are the loop's currency. Findings (code review, scheduled agents,
-  CI-RCA, telemetry analysis) become ops_recommendations rows via the portal; architectural
-  commitments become ops_decisions rows.
-- The autonomous executor (T4) is the end-state consumer of the rec queue. Today it is FROZEN
-  (Decision 67 STRATEGIC-plan clause, reversed only by CD.17 when T4.2 is stable +14d, T3.2
-  verifier PASS, T3.3 +7d). In the end-state, recs flow queue -> executor -> plan/critique/
-  revision -> GitHub Actions verification -> merge, with RCA-on-failure (Decision 55: stop
-  cleanly, diagnose, file a permanent-fix rec; never inline-patch).
-- Plans, plan-critiques, and revisions graduate to first-class warehouse entities (ops_plans,
-  ops_plan_revisions; T4.5/T4.6, Decision 87), with git authoritative until the autonomous
-  producer flips authority [future]. Autonomy escalates through maturity gates A0-A5 (T4.4) keyed
-  to verifier pass-rates and drift silence.
-
-### 2. Operational data backbone
-- ops_recommendations, ops_decisions, ops_priority_queue live on DuckLake-on-Neon as the SOLE
-  backend (Decision 84/CD.31/CD.33/CD.34). No Athena path, no rollback flag. Neon serverless
-  Postgres is the DuckLake catalog (replaced RDS, ~$0; egress budgeted per Decision 88).
-- Closed reader/writer boundary: reads transit ducklake_reader via NAMED VERBS only (no caller
-  SQL); writes transit ducklake_writer with OCC-retry, writer-owned rec-ID keyspace (file_ops
-  allocates rec-NNNN in-transaction), and a "current" projection replacing SCD2 _current views.
-  Append-only/event-journal write mode coexists with SCD2 per table (T1.14).
-- Agent surface = typed Lambda verbs (CD.10, shape per Decision 91): the verb set fronts the
-  closed boundary (extensible; not a fixed six). Agents call file_rec/update_rec/sync (and query
-  verbs) via boto3+sigv4 over Function URLs with AWS_IAM auth, through the agent_platform
-  (PlatformDev) role; PlatformAdmin handles import-mode/break-glass. An agent SDK shim (T0.8)
-  hides URL discovery, signing, retry, and idempotency (T1.10).
-- Single Portal Invariant + warehouse-as-source-of-truth: all ops writes go through the portal;
-  local logs/*.jsonl are read-only caches rebuilt downstream via sync. Writes FAIL LOUDLY (no
-  offline outbox, Decision 84 I-4).
-- Telemetry: canonical 4-table trace/observation model (Decisions 95-97: ULID keys minted at the
-  boundary, event-time day(started_at) UTC partitioning, no downstream re-derivation). Telemetry
-  tables migrate onto DuckLake; Phase E (cloud analysis agent, T3.3) reads them. ops_session_log
-  / ops_execution_plans are the last Athena/Iceberg holdouts, retired/migrated by T2.26
-  (ops_compaction retires with them); docs/DECISIONS.md (T5.4) and docs/SESSION_LOG.md retire
-  once ops_decisions is canonical.
-- DQ-as-code (CD.12): Annotated-Pydantic models (DqNotNull, DqUnique, ...) are the single source
-  of schema + DQ; Iceberg DDL is generated by walking model_fields (T0.13). The DQ runner is a
-  SCHEDULED DRIFT ALARM that files recs (T1.6), NOT a merge gate; stateful invariants
-  (uniqueness/FK/status-DAG) run in-handler pre-commit and return typed 4xx.
-
-### 3. Trading data / compute pipeline and lakehouse
-- S3 + open table formats at every scale (NS.1): Iceberg for market-data/product tables; DuckLake
-  for ops/telemetry (Decision 78). Every table is partitioned (CD.9: day(trade_date) market
-  data, day(...) event-time ops/telemetry). No unpartitioned-table path.
-- DuckDB is the default operational read engine (CD.8, CD.15): embedded, sub-second, queries
-  snapshots/DuckLake directly inside the query Lambda; agents see verbs, not SQL or the engine.
-  Athena _current views are retired in the personal account; in the DuckLake end-state there is
-  no Athena escape hatch (OQ.7 option a) -- ad-hoc scans live behind ducklake_reader; break-glass
-  = the audited PlatformAdmin / Neon credential.
-- Compute is hybrid (NS.3): PySR formula discovery runs overnight on the local compute node
-  (VPN+SSH; T2.6, deferred post-MVP), writing to S3; cloud holds orchestration and state.
-- Workflow orchestration is Step Functions (Decision 39), with TCA/cost-curve aggregation Lambdas
-  (T3.5) feeding product cost models. Glue database agent_platform, bucket agent-platform-data-lake,
-  region eu-west-2.
-
-### 4. Environments and promotion (two-axis taxonomy, Decision 77)
-- Platform axis (infrastructure): bootstrap (admin-only, owns the CI/CD role's own IAM, never
-  auto-applies) -> sandbox (current personal account, mocked externals, auto-apply on
-  push-to-main behind the deterministic guard) -> SIT [future account, manual apply] -> PROD
-  [future account, real capital, second approver]. Same code path everywhere; only externals
-  (mocked vs real) and apply-gate differ. Single-account until the product axis reaches live_full
-  nearing full capital -- that event triggers standing up SIT then PROD.
-- Product axis (strategy lifecycle): research -> backtest_canonical -> paper -> live_small ->
-  live_full. Advancement is a capital_allocation config change (single-account, never a
-  deploy/infra spin-up).
-- "promotion" is always axis-qualified; environment and phase are reserved, lint-enforced vocabulary.
-
-### 5. Infrastructure-as-code and convergence (CD.35 waves, Decision 92/94)
-- All infra is Terraform under terraform/personal/ (full re-deploy in personal account, not state
-  migration; CD.6). Apply is agent-native CI/CD, never from a laptop:
-  - PRs run a speculative terraform plan under the planner's PR-sub (refs/pull/* trust,
-    read-only state, fork-safe).
-  - Routine merges to main auto-apply the SAVED plan.bin behind a deterministic guard
-    (scripts/terraform_apply_guard.py, fail-closed on any IAM/trust/destroy diff) plus
-    subagent plan review.
-  - Guard-flagged (fail-closed) applies route to a gated-apply job under the tf-gated-apply GitHub
-    Environment, blocking on a required reviewer; on approval it applies the same reviewed plan
-    (no re-plan, no TOCTOU).
-  - A durable S3 convergence record (green/red, always-written, pipeline-identity-only) makes
-    apply outcomes sticky and observed; a scheduled drift detector runs terraform plan
-    (alarm-only, exit-code-typed); a convergence-health staleness sensor (T2.35) re-fires if the
-    latch goes quiet.
-  - Privilege tiering / bootstrap root (T2.23): the CI/CD role's OWN IAM (permissions boundary +
-    authority budget) lives in terraform/bootstrap/, breaking the self-grant; in-budget IAM
-    auto-apply (guard-consumption) is pending T2.25. CI-role IAM is DRY-composed with
-    invoke-implies-permission to prevent drift (T2.34).
-- IAM/OIDC roles: runtime agent_platform / agent_platform_admin; CI agent-platform-github-ci-branch
-  / -pr; apply-path github_ci_apply / github_ci_planner (T2.49 merged plan+drift; main-sub is
-  convergence-writer) / github_ci_deploy. Lambda deploys decouple from infra applies
-  (ignore_changes = [source_code_hash]).
-
-### 6. CI/CD and governance
-- Two-tier presubmit (Decision 60/73): validate.py --pre (diff-aware, authoritative on PR CI) +
-  full validate.py post-merge. validate.py is the single source of truth -- no CI check exists
-  without it.
-- CI runs on GitHub-hosted ubuntu-latest + OIDC (self-hosted EC2 runner retired, CD.21). Branch
-  protection is live (Decision 83): main-protection ruleset (required: pr-validate +
-  terraform-validate), Dependabot, GHAS secret-scanning/push-protection/CodeQL.
-- CI-RCA forward-fix (Decision 72): a failed main CI auto-files a source=ci_rca, priority=critical
-  rec and hard-blocks /plan until reviewed; fixes are forward-only, never auto-revert, never
-  inline-patched ahead of architectural review.
-- Merge flow: harness claude/* branch -> push -> GitHub MCP create_pull_request ->
-  subscribe_pr_activity + end turn -> CI-green-comment wake -> confirm check runs -> squash-merge
-  with Resolves: rec-NNNN trailer (triggers rec-autoclose).
-- Validation is a curated asset (CD.29/CD.30): graduated/deduplicated, hard-gate behind a
-  hermeticity precondition (T3.6 audit), diff-line-coverage ratchet (CD.30), and meta-validated by
-  scheduled mutation testing + deterministic dead-test detection (T3.7).
-
-### 7. Verifier harness / typed checks / graduation registry (T3)
-- Filesystem-as-registry verifiers in scripts/verifiers/, exit-code-as-verdict, with a same-PR
-  guard (an author cannot weaken their own verifier) and a graduation registry where proven
-  verifiers graduate into validation (T3.1, CD.29).
-- A causal-chain verifier (T3.2) proves a telemetry record flows PRODUCE -> TRANSPORT -> PERSIST
-  -> QUERY -> ASSERT atomically; its latest-run PASS is the gate (G.8) that unblocks the Phase E
-  cloud analysis agent (T3.3) and is a precondition for executor autonomy (CD.17).
-- Recommendation relevance is a governed lifecycle state (CD.36): a freshness/relevance gate
-  prevents starting stale recs (T3.8) and post-merge reconciliation prevents stale recs
-  accumulating (T3.9).
-
-### 8. Agent / instruction architecture end-state
-- 5-layer instruction model (docs/contracts/instruction-architecture.yaml): L1 universal rules
-  (AGENTS.md/CLAUDE.md, ambient) / L2 project knowledge (docs/PROJECT_CONTEXT.md, on-demand) / L3
-  slash commands (.claude/commands/) / L4 skills (.claude/skills/) / L5 executor prompts
-  (config/agent/executor/prompts/). .claude/ is canonical (Decision 76); legacy top-level
-  .github/prompts/*.prompt.md + .github/agents/*.agent.md + .agents/ were deleted at T-1.13;
-  .github/prompts/scheduled/ + .github/agents/schedule.yaml survive for scheduled agents;
-  full directory deletion remains owned by T5.3 pending scheduled-agent decoupling.
-- Agent-first repository (NS.4, CD.13): all artefacts machine-parseable. Standing
-  prose-architecture docs are forbidden (Decision 86) -- intent routes to tier_items, rationale to
-  Decisions, field semantics to contracts (Class A data schemas, Class B Lambda-verb, Class C
-  cross-system). INTENT-*.md docs are fully extracted and deleted (T5.5). Contracts are converted
-  to .yaml and wired to their code consumers (T-1.13..T-1.19).
-- LLM substrate (CD.28): DeepSeek-direct via LiteLLM (Tier 1) + Anthropic-direct Claude (Tier 2
-  warm-fetched escape hatch); Bedrock fully retired. Keys in Secrets Manager (T0.4). Precision
-  Context Injection (Decision 66): field semantics surfaced at agent write time.
-- Multi-product topology (CD.32): a unified project_id data plane with an IP-boundary-only repo
-  axis [future]. Dev surface is Claude Code on the web only (CD.2; Windows VM decommissioned at
-  T5.1, legacy dev account retired at T5.2 after 30d grace).
-
----
-
-**Last Updated**: June 28, 2026
+- Do not write read caches or outboxes as if they were source of truth.
+- Do not bypass missing AWS credentials by silently falling back to stale data. Loudly surface degraded warehouse access.
+- Do not run routine Terraform apply or local Lambda deploys. Check deploy-path contracts first.
+- Do not raise SLOC/prose budgets casually. Decompose or ratchet down unless a Decision-authorized raise exists.
+- Terraform optional artifacts need `try(filemd5(...), ...)` or `try(file(...), ...)` wrappers.
+- Athena/Iceberg limitations still matter for remaining legacy paths: use engine v3 workgroups for Iceberg DML and avoid assuming `ALTER TABLE ADD COLUMNS IF NOT EXISTS` exists.
+- Test isolation: never spawn the full pytest suite from code imported by tests; mock both `subprocess.Popen` and `subprocess.run` for subprocess-spawning functions.
+- Path migration and deletion require reference sweeps across prompts, workflows, scripts, docs, tests, and manifests.
+- Windows subprocess code must pass `encoding="utf-8", errors="replace"` with `text=True` and use `sys.executable`.
