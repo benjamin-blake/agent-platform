@@ -20,6 +20,52 @@
 # NOT a precedent, so the PR installing the ratchet is not punished by its own rule.
 # Touch-it-fix-it binds from the NEXT edit onward: a behavioural edit to a baselined body must
 # extract it (r1) or extract-or-raise-with-marker (r3).
+#
+# HEADER EXTENSION (audit finding SGE-03 / PLAN-workflow-body-ratchet). The block above describes
+# this file as it stood at Decision 162 and is left byte-identical on purpose (the installing PR
+# proves its own edit is append-only). Everything below AMENDS it; where the two disagree, this
+# block wins.
+#
+#   TWO GOVERNED SURFACES, THREE SECTIONS. R3 -- and only R3 -- now also governs every inline
+#   `run:` body under .github/workflows/ whose effective shell is absent or begins with bash/sh.
+#   That is one rule gaining scope, not a second rule: no second registered check name exists, and
+#   the workflow leg's violations carry an `R3-workflow:` prefix so a workflow finding is never
+#   read as a composite-action one (Decision 104). R1 and R2 stay COMPOSITE-ONLY -- R1 keys on a
+#   manifest's top-level `outputs.<id>.value` block and R2 on a `.sh` delegate under the action
+#   directory, and neither construct has a workflow analogue.
+#
+#   FILENAME. It names one surface and governs two. Retained deliberately: renaming would churn
+#   the guard's baseline path constant, both contracts and Decision 162's named artifact for no
+#   functional gain. This header, not the filename, is the authoritative description.
+#
+#   KEY GRAMMARS, one per section.
+#     r1, r3        -- "<action-relative-dir>::<step-id>", positional "#<index>" fallback.
+#     r3_workflows  -- "<workflow-rel-path>::<job-id>::<step-identity>", where step-identity is the
+#                      step's own `id`, else a lowercase hyphen-slug of its `name` (every run of
+#                      non-alphanumerics collapsed to one hyphen, so no YAML-unsafe character
+#                      survives), else a positional "#<index>" over the job's FULL steps list, with
+#                      a deterministic "~N" suffix on collision inside one job. The extra job-id
+#                      segment is why this diverges from r3's grammar: workflow jobs are long
+#                      (reconcile.yml's apply-reconcile job alone carries 26 steps) and mostly
+#                      id-less, so a purely positional key would renumber every subsequent entry in
+#                      a job whenever one unrelated step was inserted.
+#
+#   SECTION ALLOWLIST, ENFORCED not asserted. The set of top-level sections in this file is frozen
+#   at exactly {r1, r3, r3_workflows}; an unrecognised top-level section FAILS the guard. Admitting
+#   a fourth grandfather roster HERE requires editing _KNOWN_BASELINE_SECTIONS in
+#   scripts/checks/ci_guards/_workflow_shell_bodies.py in a reviewed code change -- never a config
+#   drop-in. Scope stated precisely: this bars a roster smuggled into THIS file, and cannot bar one
+#   minted somewhere else.
+#
+#   r3_workflows SEEDING. Seeded one-time at the state PLAN-workflow-body-ratchet leaves the repo
+#   in -- 128 bodies across 17 workflow files, 1,220 effective lines, re-censused by structural
+#   YAML parse at implement HEAD -- each entry at its exactly-measured count, no padding, no
+#   headroom, no markers, exactly matching how Decision 162 seeded r3. Decision 130 clause 2's
+#   "ONE-TIME grandfather, NOT a precedent" bars a grandfathered ENTRY from growing; it is not a
+#   bar on seeding a further surface, which is why this needs no new numbered Decision (Decision
+#   166's Related section already anticipates SGE-03 as post-landing implementation work).
+#   Touch-it-fix-it binds from the next edit onward here too: extract to scripts/ci/, or raise the
+#   ceiling with a marker citing a Decision that names the entry or its workflow file path.
 
 r1:
   ".github/actions/deterministic-guard::guard": 13
@@ -39,3 +85,133 @@ r3:
   # post-merge) scopes its extraction separately, write-convergence-record last per the r1
   # extraction-order rationale.
   ".github/actions/write-convergence-record::#0": 97
+
+r3_workflows:
+  ".github/workflows/ci-rca-inactivity-sweep.yml::sweep::install-dependencies": 2
+  ".github/workflows/ci-rca-inactivity-sweep.yml::sweep::run-ci-rca-inactivity-sweep": 5
+  ".github/workflows/ci-rca.yml::rca::activate-venv": 3
+  ".github/workflows/ci-rca.yml::rca::comment-on-originating-pr": 5
+  ".github/workflows/ci-rca.yml::rca::dedup": 46
+  ".github/workflows/ci-rca.yml::rca::designed_refusal": 5
+  ".github/workflows/ci-rca.yml::rca::evidence": 44
+  ".github/workflows/ci-rca.yml::rca::fetch-failed-run-logs": 5
+  ".github/workflows/ci-rca.yml::rca::fetch-junit-report-v2-fingerprint-substrate": 4
+  ".github/workflows/ci-rca.yml::rca::fetch-merged-pr-s-selection-manifest-decision-135-escape-attribution": 23
+  ".github/workflows/ci-rca.yml::rca::fetch-validation-result-artifact-ci-rca-attribution-substrate": 4
+  ".github/workflows/ci-rca.yml::rca::fp_dedup": 8
+  ".github/workflows/ci-rca.yml::rca::install-claude-code-cli": 4
+  ".github/workflows/ci-rca.yml::rca::jobs_json": 3
+  ".github/workflows/ci-rca.yml::rca::mark_rca": 14
+  ".github/workflows/ci-rca.yml::rca::meta": 27
+  ".github/workflows/ci-rca.yml::rca::rca_agent": 29
+  ".github/workflows/ci.yml::main-validate::install-dependencies": 3
+  ".github/workflows/ci.yml::main-validate::validate-full-tier-ruff-mypy-pytest-dq-runner-verifier-harness": 1
+  ".github/workflows/ci.yml::pr-validate::install-fast-tier-dependencies-only": 3
+  ".github/workflows/ci.yml::pr-validate::validate-fast-tier-ruff-lint-ruff-format-mypy-prompt-checks": 1
+  ".github/workflows/ci.yml::signal-green::signal-green-ci-wake-a-watching-session": 5
+  ".github/workflows/ci.yml::terraform-validate::install-validate-py-import-time-deps": 1
+  ".github/workflows/ci.yml::terraform-validate::mirror_gate": 37
+  ".github/workflows/ci.yml::terraform-validate::provider-mirror-fail-closed-consistency-invariant-decision-55-83": 6
+  ".github/workflows/ci.yml::terraform-validate::terraform-validate-fmt-both-roots-via-validate-py": 1
+  ".github/workflows/ci.yml::terraform-validate::tfver": 1
+  ".github/workflows/convergence-health.yml::health-check::assess-convergence-health-and-escalate": 2
+  ".github/workflows/convergence-health.yml::health-check::detect-ducklake-code-drift-t2-38-decision-125-126": 2
+  ".github/workflows/convergence-health.yml::health-check::detect-prod-class-code-drift-t2-43-decision-125-126": 2
+  ".github/workflows/convergence-health.yml::health-check::install-python-dependencies-venv": 3
+  ".github/workflows/cost-reconciliation.yml::reconcile::download": 9
+  ".github/workflows/cost-reconciliation.yml::reconcile::install-dependencies": 3
+  ".github/workflows/cost-reconciliation.yml::reconcile::resolve": 10
+  ".github/workflows/cost-reconciliation.yml::reconcile::run-cost-reconciliation": 6
+  ".github/workflows/cost-reconciliation.yml::reconcile::upload-private-report-to-s3": 2
+  ".github/workflows/dedup-probe.yml::probe::activate-venv": 3
+  ".github/workflows/dedup-probe.yml::probe::run-dedup-live-probe-loud-fail": 93
+  ".github/workflows/deploy-ducklake-lambdas.yml::deploy-maintenance::classify-assume-role-outcome-scope-the-tolerance-to-the-genuinely-absent-role": 6
+  ".github/workflows/deploy-ducklake-lambdas.yml::deploy-maintenance::deploy_code": 5
+  ".github/workflows/deploy-ducklake-lambdas.yml::deploy-maintenance::install-build-lambda-runtime-deps": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::deploy-serving::classify-assume-role-outcome-scope-the-tolerance-to-the-genuinely-absent-role": 6
+  ".github/workflows/deploy-ducklake-lambdas.yml::deploy-serving::deploy_code": 5
+  ".github/workflows/deploy-ducklake-lambdas.yml::deploy-serving::install-build-lambda-runtime-deps": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::maintenance-smoke::assert-deploy-record-freshness-source-git-sha-github-sha-maintenance-functions-only": 10
+  ".github/workflows/deploy-ducklake-lambdas.yml::maintenance-smoke::install-python-dependencies-venv": 3
+  ".github/workflows/deploy-ducklake-lambdas.yml::maintenance-smoke::resolve-ducklake-maintenance-smoke-function-url": 9
+  ".github/workflows/deploy-ducklake-lambdas.yml::maintenance-smoke::smoke-test-maintenance-breaker-t2-18-c9-autonomous-gate": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::maintenance-smoke::smoke-test-maintenance-gc-t2-18-c9-autonomous-gate": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::maintenance-smoke::smoke-test-maintenance-hot-merge-t2-18-c9-autonomous-gate": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::maintenance-smoke::smoke-test-maintenance-merge-t2-18-c9-autonomous-gate": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::reconcile-gate::install-gate-runtime-deps": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::reconcile-gate::reconcile-pending-deploy-gate-static-zero-egress-decision-88": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::smoke::assert-deploy-record-freshness-source-git-sha-github-sha-serving-functions-only": 10
+  ".github/workflows/deploy-ducklake-lambdas.yml::smoke::install-python-dependencies-venv": 3
+  ".github/workflows/deploy-ducklake-lambdas.yml::smoke::resolve-ducklake-writer-reader-function-urls": 11
+  ".github/workflows/deploy-ducklake-lambdas.yml::smoke::smoke-test-lambda-attach-ec1-in-lambda-attach-proof": 1
+  ".github/workflows/deploy-ducklake-lambdas.yml::smoke::smoke-test-lambda-reader-ec1-boundary-closed-reader-path": 1
+  ".github/workflows/deploy-prod-lambdas.yml::deploy::classify-assume-role-outcome-scope-the-tolerance-to-the-genuinely-absent-role": 6
+  ".github/workflows/deploy-prod-lambdas.yml::deploy::deploy_code": 3
+  ".github/workflows/deploy-prod-lambdas.yml::deploy::install-build-lambda-runtime-deps": 1
+  ".github/workflows/deploy-prod-lambdas.yml::smoke::assert-deploy-record-freshness-source-git-sha-github-sha": 10
+  ".github/workflows/deploy-prod-lambdas.yml::smoke::smoke-invoke-findings-processor-expect-skipped-comparison-true-no-live-pat-value": 6
+  ".github/workflows/deploy-prod-lambdas.yml::smoke::smoke-invoke-ops-compaction-expect-a-well-formed-handled-error-response": 6
+  ".github/workflows/deploy-prod-lambdas.yml::smoke::smoke-invoke-scheduled-agent-dispatcher-expect-status-disabled-schedule-stays-off": 6
+  ".github/workflows/ghas-probe.yml::probe::run-ghas-live-probe-loud-fail": 1
+  ".github/workflows/main-canary.yml::canary::install-dependencies": 3
+  ".github/workflows/main-canary.yml::canary::validate-full-tier-against-main": 1
+  ".github/workflows/pr-conflict-signal.yml::detect-conflicts::poll-open-claude-prs-and-wake-conflicted-ones": 36
+  ".github/workflows/rec-autoclose.yml::autoclose::backfill-decisions-to-warehouse": 11
+  ".github/workflows/rec-autoclose.yml::autoclose::close-resolved-recs-from-resolves-trailer": 63
+  ".github/workflows/rec-autoclose.yml::autoclose::detect-decisions": 7
+  ".github/workflows/rec-autoclose.yml::autoclose::install-dependencies": 3
+  ".github/workflows/reconcile.yml::apply-reconcile::apply": 19
+  ".github/workflows/reconcile.yml::apply-reconcile::apply_fresh": 1
+  ".github/workflows/reconcile.yml::apply-reconcile::artifact_sha": 7
+  ".github/workflows/reconcile.yml::apply-reconcile::best-effort-wake-comment-on-the-red-commit-s-originating-pr": 24
+  ".github/workflows/reconcile.yml::apply-reconcile::convergence-precondition-refuse-on-red-record": 2
+  ".github/workflows/reconcile.yml::apply-reconcile::recheck": 12
+  ".github/workflows/reconcile.yml::apply-reconcile::replan": 2
+  ".github/workflows/reconcile.yml::apply-reconcile::resolved": 20
+  ".github/workflows/reconcile.yml::apply-reconcile::route": 13
+  ".github/workflows/reconcile.yml::apply-reconcile::tfver": 1
+  ".github/workflows/reconcile.yml::apply-reconcile::upload_fresh_plan_sha256": 1
+  ".github/workflows/reconcile.yml::file-reconcile-starved-rec::file-reconcile-starved-rec-decision-55-anti-masking-observability": 36
+  ".github/workflows/reconcile.yml::file-reconcile-starved-rec::install-dependencies": 3
+  ".github/workflows/reconcile.yml::gated-apply-reconcile::apply": 1
+  ".github/workflows/reconcile.yml::gated-apply-reconcile::artifact_sha": 7
+  ".github/workflows/reconcile.yml::gated-apply-reconcile::best-effort-wake-comment-on-the-red-commit-s-originating-pr": 10
+  ".github/workflows/reconcile.yml::gated-apply-reconcile::tfver": 1
+  ".github/workflows/reconcile.yml::gated-apply-reconcile::verify-downloaded-fresh-plan-bin-sha256-reconcile-fresh-plan-artifact-sha256-download-side-verify": 7
+  ".github/workflows/reconcile.yml::resolve-target::install-reconcile-target-s-runtime-deps": 1
+  ".github/workflows/reconcile.yml::resolve-target::summarise": 5
+  ".github/workflows/reconcile.yml::resolve-target::target": 6
+  ".github/workflows/terraform-apply-sandbox.yml::advisory-status::read-convergence-record-and-post-advisory-terraform-converged-status": 26
+  ".github/workflows/terraform-apply-sandbox.yml::apply-sandbox::apply": 1
+  ".github/workflows/terraform-apply-sandbox.yml::apply-sandbox::artifact_sha": 11
+  ".github/workflows/terraform-apply-sandbox.yml::apply-sandbox::best-effort-post-merge-sha-pr-wake": 13
+  ".github/workflows/terraform-apply-sandbox.yml::apply-sandbox::plan": 2
+  ".github/workflows/terraform-apply-sandbox.yml::apply-sandbox::precond": 36
+  ".github/workflows/terraform-apply-sandbox.yml::apply-sandbox::self-dispatch-ci-rca-on-re-run-failure-workflow-run-re-run-gap": 1
+  ".github/workflows/terraform-apply-sandbox.yml::apply-sandbox::tfver": 1
+  ".github/workflows/terraform-apply-sandbox.yml::gated-apply::apply": 1
+  ".github/workflows/terraform-apply-sandbox.yml::gated-apply::artifact_sha": 7
+  ".github/workflows/terraform-apply-sandbox.yml::gated-apply::best-effort-post-merge-sha-pr-wake": 11
+  ".github/workflows/terraform-apply-sandbox.yml::gated-apply::self-dispatch-ci-rca-on-re-run-failure-workflow-run-re-run-gap": 1
+  ".github/workflows/terraform-apply-sandbox.yml::gated-apply::tfver": 1
+  ".github/workflows/terraform-apply-sandbox.yml::speculative-plan::build-and-post-pr-comment-redacted-plan-predicted-verdict": 33
+  ".github/workflows/terraform-apply-sandbox.yml::speculative-plan::digest": 10
+  ".github/workflows/terraform-apply-sandbox.yml::speculative-plan::persist-saved-plan-to-s3": 3
+  ".github/workflows/terraform-apply-sandbox.yml::speculative-plan::pred_guard": 11
+  ".github/workflows/terraform-apply-sandbox.yml::speculative-plan::spec_plan": 2
+  ".github/workflows/terraform-apply-sandbox.yml::speculative-plan::tfver": 1
+  ".github/workflows/terraform-drift.yml::drift-detect::assert-tfvars-file-is-non-empty-fail-closed": 4
+  ".github/workflows/terraform-drift.yml::drift-detect::handle-drift-ec-2-flip-record-red-and-file-rec": 89
+  ".github/workflows/terraform-drift.yml::drift-detect::install-python-dependencies-venv": 3
+  ".github/workflows/terraform-drift.yml::drift-detect::mask-secret-sourced-tfvars-values-in-logs": 14
+  ".github/workflows/terraform-drift.yml::drift-detect::materialise-tfvars-from-secrets-manager": 5
+  ".github/workflows/terraform-drift.yml::drift-detect::plan": 24
+  ".github/workflows/terraform-drift.yml::drift-detect::prior_status": 23
+  ".github/workflows/terraform-drift.yml::drift-detect::terraform-init-s3-backend-sandbox": 24
+  ".github/workflows/terraform-drift.yml::drift-detect::tfver": 1
+  ".github/workflows/terraform-provider-mirror-seed.yml::seed-mirror::assert-the-neon-provider-package-is-present-fail-closed-before-publishing": 5
+  ".github/workflows/terraform-provider-mirror-seed.yml::seed-mirror::mirror-third-party-providers-native-terraform-subcommand-decision-100": 5
+  ".github/workflows/terraform-provider-mirror-seed.yml::seed-mirror::publish-mirror-to-s3-provider-bytes-are-public-nothing-to-redact": 3
+  ".github/workflows/terraform-provider-mirror-seed.yml::seed-mirror::terraform-init-egress-works-here-unrelated-to-the-mirror-being-seeded": 1
+  ".github/workflows/terraform-provider-mirror-seed.yml::seed-mirror::tfver": 1
+  ".github/workflows/tf-gated-apply-prototype.yml::gate-smoke-test::verify-assumed-identity-gate-smoke-test-no-apply": 1

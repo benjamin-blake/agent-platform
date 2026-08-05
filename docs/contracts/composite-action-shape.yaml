@@ -52,17 +52,47 @@ rules:
   r3:
     name: ratcheted_inline_body_ceiling
     scope: >-
-      Every OTHER inline `shell: bash`/`sh` body: non-output-producing bodies, and
-      output-producing bodies that already fail R1 (an R1 violation is checked against R1's own
-      baseline section, never double-counted against r3). A non-output-producing body that IS
-      already a thin adapter (the R1-conformant shape) is excluded entirely -- never ratcheted,
-      never penalized for being conformant.
+      TWO SURFACES, ONE RULE (widened by audit finding SGE-03; R3 only). (a) COMPOSITE ACTIONS,
+      `.github/actions/**/action.yml` -- every OTHER inline `shell: bash`/`sh` body:
+      non-output-producing bodies, and output-producing bodies that already fail R1 (an R1
+      violation is checked against R1's own baseline section, never double-counted against r3). A
+      non-output-producing body that IS already a thin adapter (the R1-conformant shape) is
+      excluded entirely -- never ratcheted, never penalized for being conformant. (b) WORKFLOWS,
+      `.github/workflows/*.yml` and `*.yaml` -- every inline `run:` body on a
+      `jobs.<job>.steps[]` entry whose EFFECTIVE shell (the step's own `shell`, else the job's,
+      else the workflow's `defaults.run.shell`) is absent or begins with bash/sh. The dual glob is
+      prophylactic: the directory holds only .yml today, and the .yaml spelling is covered on the
+      Decision 166 precedent rather than because a .yaml workflow exists.
+    surface_split_rationale: >-
+      R1 and R2 remain COMPOSITE-ONLY and are never evaluated against a workflow step, because
+      each keys on a construct with no workflow analogue: R1 on a manifest's top-level
+      `outputs.<id>.value` binding (a workflow job's `outputs:` are expressions over step outputs,
+      not a composite-step output contract, and no `outputs.<id>.value` block exists to classify
+      against), and R2 on a `.sh` delegate living under the action directory (a workflow has no
+      action directory; its extraction target is scripts/ci/, already exercised -- reconcile.yml
+      invokes reconcile_target.py, ducklake_artifacts.py and review_verdict.py). Widening either
+      to workflows would be a rule without a referent. R3 is the one rule whose referent -- an
+      inline bash body measured by size -- exists identically on both surfaces, which is why it is
+      the only one that widened, and why this is one rule gaining scope rather than a second rule:
+      no second registered check name is minted and no second Decision is required.
+    naming_residual: >-
+      One registered check name (validate_composite_action_shell_bodies) now enforces two
+      surfaces, so the name under-describes its own scope (Decision 104 debt, accepted knowingly
+      and carried by a follow-on recommendation rather than a 17-file rename inside an
+      incident-class ratchet install). Mitigated in-band: every violation the workflow leg emits
+      is prefixed `R3-workflow:` and names the `.github/workflows` surface, so CI failure text is
+      never ambiguous. The check's `failed.append` label is deliberately UNCHANGED -- it is the
+      sole such value (see marker-grammar.yaml's RegistrySpec.label semantics), and existing
+      consumer-test substring assertions match on it.
     measurement: >-
       Effective (non-blank, non-comment) line count, identical counting rule to
-      scripts/checks/sloc/sloc_limits.py's SLOC measurement.
+      scripts/checks/sloc/sloc_limits.py's SLOC measurement -- shared verbatim by both surfaces.
     requirement: >-
-      A live body's measured line count must not exceed its config/composite_action_body_baseline.yaml
-      r3: entry's declared ceiling.
+      A live body's measured line count must not exceed the declared ceiling of its entry in the
+      baseline section owning its surface (composite bodies -> `r3:`, workflow bodies ->
+      `r3_workflows:`). The comparison is strict `>` on both surfaces: a body sitting at EXACTLY
+      its declared ceiling passes, which is what lets an install-time seeding be green by
+      construction. A live body with no entry in its section fails outright.
     escape: >-
       An inline `# raise-approved: dec-NNN <reason>` marker (Decision 128 grammar, reused
       verbatim) on the baseline entry's own line, naming a real `## Decision N:` header in
@@ -75,10 +105,68 @@ rules:
 
 baseline_file:
   path: config/composite_action_body_baseline.yaml
-  seeded_at: >-
-    The state PLAN-ci-rca-starved-surface (Decision 162) leaves the repo in (2026-08-02) -- a
-    ONE-TIME grandfather in the sense of Decision 130 clause 2, explicitly not a precedent.
-  key_form: '"<action-relative-dir>::<step-id>"' # a positional "#<index>" fallback when a step declares no id.
+  name_note: >-
+    The filename names ONE surface and the file governs TWO. Retained deliberately -- renaming
+    would churn the guard's baseline path constant, both contracts and Decision 162's named
+    artifact for no functional gain. The file's own header comment, not its name, is the
+    authoritative description.
+  section_allowlist:
+    sections: [r1, r3, r3_workflows]
+    rule: >-
+      ENFORCED, not documented: an unrecognised top-level section in this file FAILS the guard.
+      Admitting a fourth grandfather roster HERE requires editing `_KNOWN_BASELINE_SECTIONS` in
+      scripts/checks/ci_guards/_workflow_shell_bodies.py in a reviewed code change -- never a
+      config drop-in. Same frozen-constant-in-source shape as `_R1_KNOWN_VIOLATORS` (Decision 162)
+      and `_marker_guard.RETRO_SCAN_GRANDFATHER` (Decision 165), and deliberately NOT the weaker
+      config-edit shape of `generated_pinned` in config/structural_size_budgets.yaml. Scope stated
+      precisely: it bars a roster smuggled into THIS file; it cannot bar one minted elsewhere, and
+      it does not gate new ENTRIES within `r3_workflows:`, which is the ratchet's ordinary
+      registration path.
+  sections:
+    - key: r1
+      surface: .github/actions/**
+      rule: R1
+      key_form: '"<action-relative-dir>::<step-id>"' # positional "#<index>" fallback when a step declares no id.
+      marker_escape: false
+      seeded_at: >-
+        The state PLAN-ci-rca-starved-surface (Decision 162) leaves the repo in (2026-08-02) -- a
+        ONE-TIME grandfather in the sense of Decision 130 clause 2, explicitly not a precedent.
+    - key: r3
+      surface: .github/actions/**
+      rule: R3
+      key_form: '"<action-relative-dir>::<step-id>"' # positional "#<index>" fallback when a step declares no id.
+      marker_escape: true
+      seeded_at: >-
+        The state PLAN-ci-rca-starved-surface (Decision 162) leaves the repo in (2026-08-02) -- a
+        ONE-TIME grandfather in the sense of Decision 130 clause 2, explicitly not a precedent.
+    - key: r3_workflows
+      surface: .github/workflows/*.yml + *.yaml
+      rule: R3
+      key_form: '"<workflow-rel-path>::<job-id>::<step-identity>"'
+      key_form_detail: >-
+        step-identity is the step's own `id`; else a slug of its `name` (lowercased, every run of
+        non-alphanumerics collapsed to a single hyphen, so no YAML-unsafe character survives into a
+        key); else a positional "#<index>" over the job's FULL steps list, never over the
+        run-bearing subset -- an index counted over a filtered subset would shift whenever an
+        unrelated `uses:` step was inserted. Collisions inside one job (two id-less steps sharing a
+        name) take a deterministic "~N" suffix in step order; without it the two bodies would
+        collide on one key and the smaller body's ceiling would silently govern the larger.
+      key_form_divergence_rationale: >-
+        The extra job-id segment and the name-slug tier are a deliberate divergence from the
+        composite grammar, justified by measured population shape rather than taste: composite
+        actions carry at most 4 steps each, while reconcile.yml's apply-reconcile job alone carries
+        26 and 83 of the 128 seeded workflow bodies declare no `id`. Under a purely positional
+        scheme, inserting one unrelated step would renumber every subsequent key in that job and
+        red the build on bodies nobody touched.
+      marker_escape: true
+      seeded_at: >-
+        The state PLAN-workflow-body-ratchet (audit finding SGE-03) leaves the repo in
+        (2026-08-04): 128 bodies across 17 workflow files, 1,220 effective lines, re-censused by
+        structural YAML parse at implement HEAD, each entry at its exactly-measured count with no
+        padding and no markers -- the same seeding shape Decision 162 used for `r3:`. No new
+        numbered Decision was minted: Decision 130 clause 2 glosses its own "ONE-TIME grandfather"
+        as barring a grandfathered ENTRY from growing, not as barring a further seeding, and
+        Decision 166's Related section already names SGE-03 as post-landing implementation work.
 
 known_r1_violators:
   # `pinned_lines` is an ENFORCED CEILING, not a record of the current size: exceeding it fails

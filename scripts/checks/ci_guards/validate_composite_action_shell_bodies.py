@@ -23,6 +23,17 @@ R3 (ratchet): every OTHER inline bash/sh body (non-output-producing, or an outpu
     marker-guard consolidation upgraded this from existence to authorization) -- the escape is
     scoped to R3 only.
 
+R3 SPANS TWO SURFACES (audit finding SGE-03). The rule above is applied to composite-action
+manifests here, and -- with its own `r3_workflows:` baseline section and its own
+"<workflow-rel-path>::<job-id>::<step-identity>" key grammar -- to every inline `run:` body in
+`.github/workflows/` by scripts/checks/ci_guards/_workflow_shell_bodies.py, whose
+check_workflow_bodies() this check calls. That is one rule gaining scope, not a second rule: no
+second registered check name is minted, and the workflow leg's violation strings carry an
+`R3-workflow:` prefix so a workflow finding is never read as a composite-action one (Decision 104).
+R1 and R2 remain COMPOSITE-ONLY and are never evaluated against a workflow step -- R1 keys on a
+manifest's top-level `outputs.<id>.value` block and R2 on a `.sh` delegate under the action
+directory, and neither construct has a workflow analogue.
+
 Filesystem-only, no network, no subprocess (Decision 153 fast-tier budget) -- unlike
 validate_sloc_budget_raises.py's git-diff pattern, this guard never shells out; R3's marker
 exempts an entry from its OWN declared ceiling entirely rather than diffing against origin/main.
@@ -39,6 +50,7 @@ from typing import Any, Optional
 import yaml
 
 from scripts.checks import _common, _marker_guard, registry
+from scripts.checks.ci_guards import _workflow_shell_bodies
 
 _MANIFEST_GLOBS = ("action.yml", "action.yaml")
 _BASELINE_REL_PATH = "config/composite_action_body_baseline.yaml"
@@ -334,6 +346,8 @@ def validate_composite_action_shell_bodies(failed: list[str]) -> None:
                 "`# raise-approved: dec-NNN <reason>` marker on its baseline entry -- extract it, or bump "
                 "the ceiling with a marker citing a real Decision (Decision 162/128)."
             )
+
+    violations.extend(_workflow_shell_bodies.check_workflow_bodies(bodies))
 
     if violations:
         for v in violations:
