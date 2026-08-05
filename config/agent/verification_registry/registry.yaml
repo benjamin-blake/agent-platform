@@ -4355,3 +4355,102 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/test_ci_rca_fetch_logs.py::test_end_to_end_oversized_log_retains_tail_anchor_in_published_envelope
+  - check_id: structural-class-ceiling-pinned-to-guard-source
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/size_limits.py
+    guard_symbol: escape_violations
+    plan_slug: roadmap-size-ceiling
+    graduated_at: '2026-08-05'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "import copy\nfrom scripts.checks.structural.size_limits import escape_violations\nfrom scripts.checks.structural._classify\
+        \ import load_registry\nL = load_registry()\nassert escape_violations(L) == [], \"live class table is not clean: \"\
+        \ + str(escape_violations(L))\ndef legs(m):\n    return {x.split(\":\")[0] for x in escape_violations(m)}\nm = copy.deepcopy(L)\n\
+        [r for r in m[\"classes\"] if r[\"slug\"] == \"roadmaps\"][0][\"limit\"] = 6000\nassert \"E2\" in legs(m), \"E2 must\
+        \ reject a raised class-row limit\"\nm2 = copy.deepcopy(L)\n[r for r in m2[\"classes\"] if r[\"slug\"] == \"roadmaps\"\
+        ][0][\"max_line_chars\"] = 8000\nassert \"E2\" in legs(m2), \"E2 must reject a raised class-row max_line_chars\"\nm3\
+        \ = copy.deepcopy(L)\nm3[\"classes\"][-1][\"limit\"] = 2000\nassert \"E1\" in legs(m3), \"E1 must reject a raised residual\
+        \ floor\"\nm4 = copy.deepcopy(L)\nm4[\"classes\"] = [r for r in m4[\"classes\"] if r[\"slug\"] != \"residual\"]\nassert\
+        \ \"E1\" in legs(m4), \"E1 must reject a missing residual row\"\nm5 = copy.deepcopy(L)\n[r for r in m5[\"classes\"]\
+        \ if r[\"slug\"] == \"workflow_outputs\"][0][\"governed\"] = True\nassert \"E2\" in legs(m5), \"E2 must REPORT a non-integer\
+        \ limit on a governed row, never raise\"\nimport scripts.checks.structural.size_limits as sl\nsl._PERMITTED_MAXIMA[\"\
+        roadmaps\"] = (6000, 2000)\nm6 = copy.deepcopy(L)\n[r for r in m6[\"classes\"] if r[\"slug\"] == \"roadmaps\"][0][\"\
+        limit\"] = 6000\nassert escape_violations(m6) == [], \"a slug PRESENT in the mapping must permit its granted ceiling\"\
+        \nm7 = copy.deepcopy(L)\n[r for r in m7[\"classes\"] if r[\"slug\"] == \"roadmaps\"][0][\"limit\"] = 6001\nassert \"\
+        E2\" in legs(m7), \"one over the granted ceiling must still red\"\ndel sl._PERMITTED_MAXIMA[\"roadmaps\"]\nprint(\"\
+        CLASS_CEILING_PINNED_OK\")"
+  - check_id: structural-deferral-accountability
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/size_limits.py
+    guard_symbol: escape_violations
+    plan_slug: roadmap-size-ceiling
+    graduated_at: '2026-08-05'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "import copy\nfrom scripts.checks.structural.size_limits import escape_violations\nfrom scripts.checks.structural._classify\
+        \ import load_registry\nP = \"docs/ROADMAP-PLATFORM.yaml\"\nL = load_registry()\nassert escape_violations(L) == [],\
+        \ \"live deferral table is not clean\"\ndef mutated(fn):\n    m = copy.deepcopy(L)\n    fn([r for r in m[\"classes\"\
+        ] if r[\"slug\"] == \"roadmaps\"][0][\"defer_to_incumbent\"])\n    return [x for x in escape_violations(m) if x.startswith(\"\
+        E3:\")]\nassert mutated(lambda d: d[P].__setitem__(\"authorized_by\", \"dec-114\")), \"dec-114 must FAIL\"\nassert mutated(lambda\
+        \ d: d[P].__setitem__(\"authorized_by\", \"dec-147\")) == [], \"dec-147 must PASS\"\nassert mutated(lambda d: d[P].__setitem__(\"\
+        incumbent\", \"validate_no_such_gate\")), \"dead gate must FAIL\"\nassert mutated(lambda d: d[P].pop(\"authorized_by\"\
+        )), \"a missing authorized_by must FAIL\"\ng = mutated(lambda d: d.__setitem__(\"docs/ROADMAP-*.yaml\", dict(d[P])))\n\
+        assert any(\"glob\" in x for x in g), \"a glob must FAIL on the glob rule, not on non-existence: \" + str(g)\nprint(\"\
+        DEFERRAL_ACCOUNTABILITY_OK\")"
+  - check_id: structural-frozen-budget-note-integrity
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/size_limits.py
+    guard_symbol: escape_violations
+    plan_slug: roadmap-size-ceiling
+    graduated_at: '2026-08-05'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "import copy\nfrom scripts.checks.structural.size_limits import escape_violations\nfrom scripts.checks.structural._classify\
+        \ import load_registry\nK = \"docs/ROADMAP-PRODUCT.yaml\"\nL = load_registry()\nassert L[\"budget_notes\"][K][\"frozen\"\
+        ] is True, \"the freeze record is absent or not frozen\"\nassert L[\"budgets\"][K] == 4707, \"the frozen pin moved off\
+        \ 4707\"\nassert escape_violations(L) == [], \"live frozen state is not clean\"\ndef e4(m):\n    return [x for x in\
+        \ escape_violations(m) if x.startswith(\"E4:\")]\nm = copy.deepcopy(L)\nm[\"budget_notes\"][\"docs/NOT-A-REAL-FILE.yaml\"\
+        ] = dict(m[\"budget_notes\"][K])\nassert e4(m), \"E4 must reject a budget_notes key with no budgets entry\"\nm2 = copy.deepcopy(L)\n\
+        m2[\"budgets\"].pop(K)\nassert e4(m2), \"E4 must reject a frozen note whose budgets entry was removed\"\nm3 = copy.deepcopy(L)\n\
+        GONE = \"docs/GONE-AFTER-MIGRATION.yaml\"\nm3[\"budgets\"][GONE] = 100\nm3[\"budget_notes\"][GONE] = dict(m3[\"budget_notes\"\
+        ][K])\nv3 = e4(m3)\nassert any(\"exist\" in x for x in v3), \"E4 must REPORT a missing frozen path, never raise: \"\
+        \ + str(v3)\nm4 = copy.deepcopy(L)\n[r for r in m4[\"classes\"] if r[\"slug\"] == \"roadmaps\"][0][\"defer_to_incumbent\"\
+        ][K] = {\n    \"incumbent\": \"validate_product_roadmap\", \"authorized_by\": \"dec-166\"}\nassert e4(m4), \"E4 must\
+        \ reject deferring a FROZEN path -- measured: that un-governs it entirely\"\nprint(\"FROZEN_NOTE_INTEGRITY_OK\")"
+  - check_id: structural-frozen-base-side-legs
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/structural/budget_raises.py
+    guard_symbol: frozen_base_violations
+    plan_slug: roadmap-size-ceiling
+    graduated_at: '2026-08-05'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "import pathlib\nfrom scripts.checks.structural.budget_raises import frozen_base_violations\nLINE = \"docs/ROADMAP-PRODUCT.yaml:\
+        \ 4707\"\nbase = pathlib.Path(\"config/structural_size_budgets.yaml\").read_text(encoding=\"utf-8\")\nassert LINE in\
+        \ base, \"the frozen pin line moved -- re-anchor this probe before trusting it\"\ndef e4(cur):\n    return [x for x\
+        \ in frozen_base_violations(base, cur) if x.startswith(\"E4:\")]\nassert frozen_base_violations(base, base) == [], \"\
+        a no-op diff must be clean\"\nassert e4(base.replace(LINE, \"docs/ROADMAP-PRODUCT.yaml: 9999\")), \"leg 1: an INCREASE\
+        \ must red even with the committed marker\"\nassert frozen_base_violations(base, base.replace(LINE, \"docs/ROADMAP-PRODUCT.yaml:\
+        \ 4000\")) == [], \"a SHRINK must pass\"\nunfrozen = base.replace(\"frozen: true\", \"frozen: false\")\nassert \"frozen:\
+        \ false\" in unfrozen, \"probe anchor failed -- the frozen flag is not written as expected\"\nassert e4(unfrozen.replace(LINE,\
+        \ \"docs/ROADMAP-PRODUCT.yaml: 9999\")), \"legs 1+2: a one-commit unfreeze-and-raise must red\"\nassert e4(unfrozen),\
+        \ \"leg 2: un-freezing while the entry survives must red\"\nretired = \"\\n\".join([x for x in unfrozen.splitlines()\
+        \ if not x.startswith(\"  \" + LINE)])\nassert frozen_base_violations(base, retired) == [], \"retirement (unfreeze plus\
+        \ entry removal) must stay clean\"\nANCHOR = \"      docs/ROADMAP-PLATFORM.yaml:\\n        incumbent: validate_platform_roadmap\\\
+        n        authorized_by: dec-166\\n\"\nassert ANCHOR in base, \"the deferral block shape changed -- re-anchor this probe\"\
+        \nADDED = ANCHOR + \"      docs/ROADMAP-PRODUCT.yaml:\\n        incumbent: validate_product_roadmap\\n        authorized_by:\
+        \ dec-166\\n\"\nbypass = \"\\n\".join([x for x in unfrozen.replace(ANCHOR, ADDED).splitlines() if not x.startswith(\"\
+        \  \" + LINE)])\nassert e4(bypass), \"leg 3: a path frozen in BASE that is newly deferred must red even with its note\
+        \ deleted\"\nprint(\"FROZEN_BASE_LEGS_OK\")"

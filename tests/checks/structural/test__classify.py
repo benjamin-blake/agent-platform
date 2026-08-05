@@ -42,7 +42,10 @@ classes:
     unit: effective-lines
     limit: 500
     max_line_chars: 2000
-    defer_to_incumbent: [docs/ROADMAP-PLATFORM.yaml]
+    defer_to_incumbent:
+      docs/ROADMAP-PLATFORM.yaml:
+        incumbent: validate_platform_roadmap
+        authorized_by: dec-166
   - slug: residual
     include: []
     governed: true
