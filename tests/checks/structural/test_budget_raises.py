@@ -4,10 +4,17 @@ scripts.checks._marker_guard (SGE-01/SGE-02/SGE-04, Decision 166).
 
 from __future__ import annotations
 
+import contextlib
+import io
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.checks.structural.budget_raises import _BUDGET_SPEC, _LONG_LINE_SPEC, validate_structural_size_budget_raises
+from scripts.checks.structural.budget_raises import (
+    _BUDGET_SPEC,
+    _LONG_LINE_SPEC,
+    frozen_base_violations,
+    validate_structural_size_budget_raises,
+)
 
 
 def _write_current(tmp_path: Path, body: str) -> None:
@@ -165,3 +172,191 @@ class TestValidateStructuralSizeBudgetRaises:
         assert _LONG_LINE_SPEC.token == "raise-approved"
         assert _LONG_LINE_SPEC.gated_direction == "up"
         assert _BUDGET_SPEC.rel_path == _LONG_LINE_SPEC.rel_path
+
+
+_FROZEN_LINE = "  docs/ROADMAP-PRODUCT.yaml: 4707  # raise-approved: dec-166 grandfather at measured size\n"
+_PLATFORM_DEFERRAL = (
+    "    defer_to_incumbent:\n"
+    "      docs/ROADMAP-PLATFORM.yaml:\n"
+    "        incumbent: validate_platform_roadmap\n"
+    "        authorized_by: dec-166\n"
+)
+_FROZEN_NOTE = (
+    "budget_notes:\n"
+    "  docs/ROADMAP-PRODUCT.yaml:\n"
+    "    frozen: true\n"
+    "    rationale: operator freeze pending the warehouse-graph migration\n"
+    "    retires_when: the migration has shrunk or deleted the file\n"
+)
+_FROZEN_BASE = (
+    "schema_version: 1\n"
+    "classes:\n"
+    "  - slug: roadmaps\n"
+    '    include: ["docs/ROADMAP-*.yaml"]\n'
+    "    governed: true\n"
+    "    limit: 500\n"
+    "    max_line_chars: 2000\n"
+    + _PLATFORM_DEFERRAL
+    + "budgets:\n"
+    + _FROZEN_LINE
+    + "  config/heavy.yaml: 800\n"
+    + _FROZEN_NOTE
+    + "long_line_budgets: {}\n"
+)
+
+
+def _e4(base: str, current: str) -> list[str]:
+    return [v for v in frozen_base_violations(base, current) if v.startswith("E4:")]
+
+
+class TestFrozenBaseViolations:
+    """Mirror tests for the base-aware half of E4. Every leg reads frozen-ness from BASE."""
+
+    def test_no_op_diff_is_clean(self) -> None:
+        assert frozen_base_violations(_FROZEN_BASE, _FROZEN_BASE) == []
+
+    def test_increase_on_a_frozen_entry_reds_despite_its_committed_marker(self) -> None:
+        """Proof B: _marker_guard.authorization_failure matches the entry KEY, never its
+        VALUE, so one committed marker would otherwise authorize every future raise."""
+        current = _FROZEN_BASE.replace("4707  #", "9999  #")
+        assert _e4(_FROZEN_BASE, current)
+
+    def test_shrink_on_a_frozen_entry_passes(self) -> None:
+        """Direction, not equality: compaction is this class's own first-listed relief valve
+        and the engine has no --update-sloc-budgets equivalent to absorb a re-pin."""
+        current = _FROZEN_BASE.replace("4707  #", "4000  #")
+        assert frozen_base_violations(_FROZEN_BASE, current) == []
+
+    def test_non_frozen_entry_is_unaffected_by_the_frozen_legs(self) -> None:
+        current = _FROZEN_BASE.replace("config/heavy.yaml: 800", "config/heavy.yaml: 9000")
+        assert frozen_base_violations(_FROZEN_BASE, current) == []
+
+    def test_one_commit_unfreeze_and_raise_reds(self) -> None:
+        """Leg 1 reads frozen-ness from BASE, so deleting the freeze in the same commit that
+        raises the pin does not make the raise invisible."""
+        current = _FROZEN_BASE.replace("frozen: true", "frozen: false").replace("4707  #", "9999  #")
+        assert _e4(_FROZEN_BASE, current)
+
+    def test_unfreeze_at_an_unchanged_value_reds_while_the_entry_survives(self) -> None:
+        """Leg 2 closes the two-PR escape: PR 1 unfreezes at an unchanged value (no increase,
+        clean under leg 1 alone), PR 2 then raises against an already-innocent base."""
+        current = _FROZEN_BASE.replace("frozen: true", "frozen: false")
+        violations = _e4(_FROZEN_BASE, current)
+        assert any("un-freezing is itself the escape" in v for v in violations)
+
+    def test_unfreeze_with_the_entry_removed_together_is_the_clean_retirement(self) -> None:
+        """The prescribed retirement shape. Deliberately NOT collapsed into the leg-2 test:
+        the two are the same edit, distinguished only by whether the entry survives."""
+        current = _FROZEN_BASE.replace("frozen: true", "frozen: false").replace(_FROZEN_LINE, "")
+        assert frozen_base_violations(_FROZEN_BASE, current) == []
+
+    def test_frozen_in_base_and_newly_deferred_reds_even_with_the_note_deleted(self) -> None:
+        """Leg 3 closes the MEASURED bypass: a deferred path is dropped before measurement,
+        so deferring a frozen file to a size-less incumbent un-governs it and reports green."""
+        added = _PLATFORM_DEFERRAL + (
+            "      docs/ROADMAP-PRODUCT.yaml:\n        incumbent: validate_product_roadmap\n        authorized_by: dec-166\n"
+        )
+        current = _FROZEN_BASE.replace(_PLATFORM_DEFERRAL, added).replace(_FROZEN_NOTE, "").replace(_FROZEN_LINE, "")
+        violations = _e4(_FROZEN_BASE, current)
+        assert any("NEWLY deferred" in v for v in violations)
+
+    def test_already_deferred_in_base_is_not_reported_as_newly_deferred(self) -> None:
+        assert frozen_base_violations(_FROZEN_BASE, _FROZEN_BASE) == []
+
+    def test_unparseable_current_text_reports_never_raises(self) -> None:
+        violations = frozen_base_violations(_FROZEN_BASE, "budgets:\n  - [unbalanced\n")
+        assert violations and violations[0].startswith("E4:")
+
+    def test_non_mapping_registry_text_yields_no_frozen_state(self) -> None:
+        """A registry that parses to a list or a scalar carries no budgets and no notes, so
+        there is nothing frozen to guard -- report nothing rather than raising on .get()."""
+        assert frozen_base_violations("- a\n- b\n", _FROZEN_BASE) == []
+
+    def test_absent_registry_file_evaluates_no_frozen_leg(self, tmp_path: Path) -> None:
+        """Mirrors check_diff's own not-found contract: with no current registry on disk
+        there is nothing to diff, and the base_reader is never consulted."""
+        _write_decisions(tmp_path, [166], mentions={166: "docs/ROADMAP-PRODUCT.yaml"})
+        calls: list[str] = []
+
+        def _recording_reader(rel: str) -> str:
+            calls.append(rel)
+            return _FROZEN_BASE
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            with contextlib.redirect_stdout(io.StringIO()):
+                validate_structural_size_budget_raises(failed, base_reader=_recording_reader)
+
+        assert failed == []
+        assert calls == []
+
+    def test_wired_into_the_check_and_reds_the_gate(self, tmp_path: Path) -> None:
+        current = _FROZEN_BASE.replace("4707  #", "9999  #")
+        _write_current(tmp_path, current)
+        _write_decisions(tmp_path, [166], mentions={166: "docs/ROADMAP-PRODUCT.yaml"})
+        base_reader = lambda rel: _FROZEN_BASE  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                validate_structural_size_budget_raises(failed, base_reader=base_reader)
+
+        assert len(failed) == 1
+        assert "is frozen in the base config" in buf.getvalue()
+
+
+class TestBaseUnreachableContract:
+    def test_unreachable_base_skips_and_evaluates_no_frozen_leg(self, tmp_path: Path) -> None:
+        """The pure-text signature moves check_diff's base_text-is-None contract onto the
+        caller, so the caller must propagate None as a SKIP rather than coercing it to "".
+
+        THE THIRD ASSERTION IS THE ONE THAT BITES. check_diff prints its SKIP line
+        unconditionally off its own base_text-is-None branch, so the SKIP-line assertion
+        still passes under a `reader(rel) or ""` implementation -- and an empty base text
+        yields an empty base map, which makes every frozen leg silently vacuous and leaves
+        `failed` empty too. Only proving that NO frozen leg ran distinguishes an unreachable
+        base from a genuine pass.
+        """
+        _write_current(tmp_path, _FROZEN_BASE)
+        _write_decisions(tmp_path, [166], mentions={166: "docs/ROADMAP-PRODUCT.yaml"})
+
+        calls: list[tuple[str, str]] = []
+
+        def _sentinel(base_text: str, current_text: str) -> list[str]:
+            # Returns CLEAN deliberately, so `failed` stays empty in both worlds and the
+            # call record is the sole discriminator -- exactly the asymmetry being pinned.
+            calls.append((base_text, current_text))
+            return []
+
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks.structural.budget_raises.frozen_base_violations", _sentinel),
+        ):
+            failed: list[str] = []
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                validate_structural_size_budget_raises(failed, base_reader=lambda rel: None)
+
+        output = buf.getvalue()
+        assert "SKIP: origin/main unreachable" in output
+        assert failed == []
+        assert calls == [], "a frozen leg was evaluated on an unreachable base"
+
+    def test_a_genuine_clean_pass_prints_no_skip_line(self, tmp_path: Path) -> None:
+        """Both outcomes leave `failed` empty, so the SKIP line is the only thing that tells
+        an unreachable base apart from a real pass."""
+        _write_current(tmp_path, _FROZEN_BASE)
+        _write_decisions(tmp_path, [166], mentions={166: "docs/ROADMAP-PRODUCT.yaml"})
+        base_reader = lambda rel: _FROZEN_BASE  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                validate_structural_size_budget_raises(failed, base_reader=base_reader)
+
+        output = buf.getvalue()
+        assert failed == []
+        assert "SKIP" not in output
+        assert "No unauthorized structural-size budget raises." in output
