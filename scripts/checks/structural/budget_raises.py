@@ -46,23 +46,30 @@ _LONG_LINE_SPEC = _marker_guard.RegistrySpec(
 )
 
 
+def _mapping(value: object) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _sections(text: str) -> tuple[dict[str, Any], dict[str, Any], set[str]]:
     """(budgets, budget_notes, deferred paths) parsed from one registry text."""
     data = yaml.safe_load(text) or {}
     if not isinstance(data, dict):
         return {}, {}, set()
-    budgets = data.get("budgets") if isinstance(data.get("budgets"), dict) else {}
-    notes = data.get("budget_notes") if isinstance(data.get("budget_notes"), dict) else {}
     deferred: set[str] = set()
     for row in data.get("classes") or []:
-        entry = row.get("defer_to_incumbent") if isinstance(row, dict) else None
-        if isinstance(entry, dict):
-            deferred |= set(entry)
-    return dict(budgets), dict(notes), deferred
+        if isinstance(row, dict):
+            deferred |= set(_mapping(row.get("defer_to_incumbent")))
+    return _mapping(data.get("budgets")), _mapping(data.get("budget_notes")), deferred
 
 
 def _frozen(notes: dict[str, Any]) -> set[str]:
     return {key for key, note in notes.items() if isinstance(note, dict) and note.get("frozen") is True}
+
+
+def _numeric(value: object) -> float | None:
+    """A comparable budget value, or None for a missing entry or a non-numeric one -- so the
+    direction leg never compares a string (or a bool) against an integer."""
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def frozen_base_violations(base_text: str, current_text: str) -> list[str]:
@@ -91,8 +98,9 @@ def frozen_base_violations(base_text: str, current_text: str) -> list[str]:
     for key in sorted(_frozen(base_notes)):
         base_value = base_budgets.get(key)
         current_value = cur_budgets.get(key)
-        numeric = isinstance(base_value, (int, float)) and isinstance(current_value, (int, float))
-        if numeric and not isinstance(base_value, bool) and current_value > base_value:
+        base_number = _numeric(base_value)
+        current_number = _numeric(current_value)
+        if base_number is not None and current_number is not None and current_number > base_number:
             violations.append(
                 f"E4: `{key}` is frozen in the base config -- {base_value} -> {current_value} is an INCREASE. "
                 "A committed raise-approved marker does not authorize it; the freeze is a direction rule, and "
