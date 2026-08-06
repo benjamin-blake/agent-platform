@@ -277,8 +277,9 @@ of these should not, that is Q7 material.) Decidable means: two competent author
 stated rule, reach the same home without further judgment.
 
 This question carries an **EXTERNAL CHECKLIST**. Rate each property `met` | `partial` | `missed`
-with evidence, in `question_answers[].external_checklist`. This field is the SOLE source the
-`frontier` maturity tier reads. `partial` requires an argued, property-matched compensating
+with evidence, in `question_answers[].external_checklist`. This field is the SOLE source for the
+`frontier` tier's EXTERNAL-PRACTICE condition; that tier also reads per-surface critical/high
+finding counts (see SEVERITY + MATURITY). Both conditions must hold. `partial` requires an argued, property-matched compensating
 control in its evidence. EX1-EX13 is a CLOSED list -- do not add properties.
 
 | ID | External property |
@@ -827,9 +828,10 @@ audit:
     - {surface: S1|S2|S3|S4|S5, maturity: frontier|strong|solid|nascent,
        strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
+    # `evidence` accepts three shapes: "file:line", "item-id", or "aggregate:<path>" for a
+    # scripted corpus-wide computation, which has no single line. Same three shapes on findings[].
     - {surface: S1..S5, dimension: VD1..VD6, rating: strong|adequate|weak|absent|n/a,
-       evidence: "file:line|item-id|aggregate:<path>"   # `aggregate:docs/DECISIONS.md` for a
-                                      # scripted corpus-wide computation, which has no single line, note: ""}
+       evidence: "file:line|item-id|aggregate:<path>", note: ""}
   findings:
     - id: CFG-01                      # CFG-NN, zero-padded to two digits, sequential from CFG-01
       surface: S1|S2|S3|S4|S5|shared
@@ -839,7 +841,7 @@ audit:
       question: Q1..Q9                 # the PRIMARY question; name any others in `gap`
       dimension: VD1..VD6              # the PRIMARY dimension; name any others in `gap`
       title: ""
-      evidence: "file:line|item-id"
+      evidence: "file:line|item-id|aggregate:<path>"
       evidence_kind: static|observed
       current_behavior: ""
       ideal_behavior: ""
