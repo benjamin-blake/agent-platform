@@ -103,6 +103,14 @@ why prior fixes to it did not hold.
 | S4 | The authoring/routing instruction layer: `AGENTS.md`, `.claude/skills/planning/SKILL.md`, `docs/contracts/decision-entry.yaml`, `docs/contracts/instruction-architecture.yaml`, `docs/contracts/file-router.yaml`, `docs/PROJECT_CONTEXT.md` | built |
 | S5 | The change-record surface: the commit-message conventions table in `AGENTS.md`, `.github/pull_request_template.md`, and `scripts/checks/_common.py::feat_commit_slugs` | built |
 
+**S3/S4 overlap, pinned.** Three files sit in both lists -- `decision-entry.yaml`,
+`file-router.yaml`, `instruction-architecture.yaml` -- because they are free-form contracts that
+happen to carry routing content. S4 is a ROLE, not a disjoint file set. Attribute by the property
+the finding is about: a finding about the file's own governance as a contract (schema, status,
+size, amendment log) is **S3**; a finding about the routing rule it states or fails to state is
+**S4**. If a finding genuinely spans both properties, use `surface: shared` and list both in
+`surfaces_affected`.
+
 Out of scope, one line each: the warehouse ETL's field-level fidelity (prior audit owns it); the
 correctness of any individual past architectural choice; the roadmap's own sequencing; anything
 under `terraform/`; the trading product.
@@ -137,9 +145,9 @@ finding.
 
 Two boundaries are NOT open, because they govern how you write rather than what you may conclude:
 
-- **Public-repo content boundary** (Decision 101): never write AWS account IDs or ARNs, IAM
-  ExternalIds, credentials, internal hostnames, or trading-strategy performance into your
-  deliverables.
+- **Public-repo content boundary** (`AGENTS.md`, "PUBLIC repository / confidential-data
+  boundary"; Decision 101): never write AWS account IDs or ARNs, IAM ExternalIds, credentials,
+  internal hostnames, or trading-strategy performance into your deliverables.
 - **Single Portal Invariant** (Decision 84): do not write to `logs/.recommendations-log.jsonl`,
   `logs/.decisions-index.jsonl`, or any warehouse staging path. You file no recommendations.
 
@@ -156,6 +164,13 @@ Two distinct escape hatches, used differently:
   different) -> keep working from YOUR number and record the drift in `meta.contract_notes`.
 
 Where your re-derivation disagrees with this prompt, YOUR measurement is the evidence.
+
+**Scripted aggregate scans are permitted and expected.** Several grounding figures (G6, G7, G9,
+G10, G11, and DD-A's numerator) are corpus-wide aggregates that can only be re-derived by
+processing all of `docs/DECISIONS.md`. Do that -- via a `bin/venv-python` script that computes and
+prints the aggregate. The bounded-retrieval rule under METHOD P1 restricts what you load into
+CONTEXT, not what a script may compute over. Reading a scripted count of the corpus is not
+reading the corpus.
 
 ## SETUP
 
@@ -184,7 +199,7 @@ Degraded paths -- never abort, never improvise:
   traced finding remains CONFIRMED in degraded mode.
 - **IF `logs/.recommendations-log.jsonl` is absent entirely:** same flag, same note.
 - **IF web access is unavailable** when rating Q2's external checklist: set
-  `meta.degraded_external: true` and rate against the pinned EX1-EX12 list without claiming
+  `meta.degraded_external: true` and rate against the pinned EX1-EX13 list without claiming
   anything about prevalence or industry frequency.
 - **IF `bin/venv-python -m scripts.validate --pre` fails on something unrelated to your two
   deliverables:** record it in `meta.contract_notes` and do NOT fix it -- outside your write
@@ -221,17 +236,23 @@ Each question gets a first-class entry in `question_answers[]` with the verdict 
 **Population, pinned:** `intervention_erosion[]` carries exactly two row kinds, and both are
 required.
 
-- **Kind `decision`** -- one row for each of the 8 numbered entries named in EMPIRICAL PASS E1.
+- **Kind `decision`** -- one row for each of the 9 numbered entries named in EMPIRICAL PASS E1.
 - **Kind `audit_round`** -- one row for each of the 5 prior audits named in DEDUP DISCIPLINE
   (DAF, DPI, DCG, SGE, ACG), treating the audit and its landed follow-ups as one round.
 
-That is 13 rows. Do not add rows for interventions outside these two populations; if you find one
+That is 14 rows. Do not add rows for interventions outside these two populations; if you find one
 that matters, name it in `meta.contract_notes` rather than extending the population.
 
 For each row: what did it change, what relief did it produce, how long did that relief hold, and
 what specifically ended it? Classify the ending with `ending_class`:
 `ceiling-raised` | `mechanism-unused` | `superseded-by-larger-entry` | `cost-exceeded-benefit` |
 `relief-still-holding` | `other`.
+
+**A `relief-still-holding` row is a first-class outcome, and costs no more to write than any
+other.** On such a row, `held_until` is the literal string `still-holding` and `note` carries the
+evidence that it is still holding. Do not treat the row shape as pressure toward an erosion
+verdict; if the honest answer is that most or all interventions still hold, say so and let Q1's
+verdict be `undetermined`.
 
 Then the aggregate question: **is there a single recurring mechanism that causes interventions in
 this territory to erode, or is each erosion independent?**
@@ -251,7 +272,7 @@ stated rule, reach the same home without further judgment.
 This question carries an **EXTERNAL CHECKLIST**. Rate each property `met` | `partial` | `missed`
 with evidence, in `question_answers[].external_checklist`. This field is the SOLE source the
 `frontier` maturity tier reads. `partial` requires an argued, property-matched compensating
-control in its evidence. EX1-EX12 is a CLOSED list -- do not add properties.
+control in its evidence. EX1-EX13 is a CLOSED list -- do not add properties.
 
 | ID | External property |
 |---|---|
@@ -267,6 +288,7 @@ control in its evidence. EX1-EX12 is a CLOSED list -- do not add properties.
 | EX10 | **Single semantic authority with generated projections**: derived surfaces are generated from one authority rather than maintained as parallel authorities. |
 | EX11 | **Preservation of rejected alternatives and reversal conditions**: what was considered and rejected, and what would reverse the choice, survive as first-class recoverable content. |
 | EX12 | **Governed retention**: archival, compaction, and deletion are defined lifecycle operations with stated triggers, not ad-hoc relief actions. |
+| EX13 | **Versioned, testable contracts**: a specification artifact carries a version, and a test or gate can fail against it -- the contract is exercisable, not merely declarative. |
 
 If web access exists, you MAY consult at most 6 primary or authoritative sources on ADR practice,
 architecture knowledge management, or specification/rationale separation; record title + URL in
@@ -344,6 +366,18 @@ A pinned starting option set for the corpus-shape sub-question -- choose one or 
 `wrong_end_state` with respect to T1.5, in `end_state.t15_verdict`. An end-state that ignores
 T1.5 is incomplete.
 
+To ground that verdict you need the consumer inventory -- who reads the corpus today and would
+have to be repointed. Derive it with this bounded command rather than by inspection:
+
+```bash
+rg -l -e 'DECISIONS\.md' -e 'decisions-index' -e 'parse_decisions_md' \
+      -e 'iter_decision_headings' -e 'decision_header_numbers' -e 'ops_decisions' \
+      .claude scripts src docs/contracts
+```
+
+Classify each hit as a planning-agent consumer, a CI guard, a generator, or a warehouse path, and
+state which class T1.5's read portal does and does not cover.
+
 Constraints on the ANSWER, not its content: it must state (i) the routing rule in decidable form,
 (ii) the forcing function that makes each routing happen, (iii) which Q1 `ending_class` each
 forcing function survives, and (iv) what it costs -- in authoring effort, agent context, and
@@ -388,6 +422,10 @@ What did the requester not think to ask? Seeded below -- ANSWER these AND extend
 - Is there a class of content that belongs in NONE of the six homes and is being forced into one?
 - If the corpus were rebuilt from scratch today with full knowledge, how many current live
   entries would exist at all?
+- Audit prompts and audit outputs are themselves durable governance content -- `docs/audit-prompts/`
+  and `audits/` -- carrying no contract, no size governance, and no home in the six-home routing
+  rule. THIS PROMPT is an instance of the class. Does the routing rule you propose in Q7 account
+  for it, and should it?
 
 Uses the `answers[]` shape, not a verdict.
 
@@ -411,14 +449,22 @@ Rate every dimension for every surface S1-S5. Pinned enum: `strong` | `adequate`
 ### DD-A -- The growth-governance lineage (feeds Q1, VD5, NS6)
 
 Trace the E1 interventions end to end: trigger, mechanism, size, date, what each amended or
-superseded, and what happened next. Then compute the aggregate with these denominators pinned, so
-the arithmetic is comparable:
+superseded, and what happened next. Then compute the aggregate with numerator and denominator
+both pinned, so the arithmetic is comparable:
 
-- Byte share: lineage bytes / **live-file bytes** (`docs/DECISIONS.md` alone, not live+archive).
-- Header share: lineage header count / the **live-header ceiling** in G12 (not the current count).
+- **Byte share** = (sum of the E1 entries' own body bytes in `docs/DECISIONS.md`, header line
+  through the byte before the next `## Decision` header -- the ENTRY BODIES ONLY, excluding any
+  guard code, contract, config, or test each intervention also produced) / **live-file bytes**
+  (`docs/DECISIONS.md` alone, not live+archive).
+- **Header share** = (count of E1 entries) / the **live-header ceiling** in G12 (not the current
+  header count).
 
-Report both figures and the arithmetic. Then answer NS6 for this lineage: was the cure cheaper
-than the disease? Do not assert the conclusion without showing the numbers.
+Report both figures and the arithmetic. If you judge that excluding each intervention's
+implementing code understates its true cost, say so and report a second figure alongside -- but
+report the pinned one first, so it is comparable to any later run.
+
+Then answer NS6 for this lineage: was the cure cheaper than the disease? Do not assert the
+conclusion without showing the numbers.
 
 ### DD-B -- A blocked draft, classified (feeds Q2, Q3, Q7)
 
@@ -445,6 +491,11 @@ Plus a reciprocal > **Amended by Decision 167** blockquote on 162, and a Signifi
 Decision 162 carries one of those itself, so that's the corpus convention.
 ```
 
+**Point count, pinned:** the specimen's own text announces "four points" and then carries FIVE
+body paragraphs -- the fifth being the trailing paragraph beginning "Plus a reciprocal". Classify
+all five, treating that trailing paragraph as point 5. The gap between the draft's self-count and
+its content is itself worth one line of comment.
+
 Classify each of its five points against the routing rule as it exists today (Q2) and against
 your proposed end-state (Q7). For each point, name the home it takes under each. Then:
 
@@ -457,12 +508,24 @@ your proposed end-state (Q7). For each point, name the home it takes under each.
 
 ### DD-C -- Migration feasibility, traced (feeds Q4, Q8)
 
-Select THREE live entries spanning different candidate classes -- do not exceed three. Trace each
-end-to-end through every mechanism the repository offers for moving content off S1: archival,
-compact-in-place, and any migrate-then-rehome path described. For each, report what blocks it,
-which mechanism (if any) can process it, and what a successful migration costs. If none of the
-three can be processed by any existing mechanism, that is the finding. These three entries also
-get `sampled_entry_dispositions[]` rows.
+Select THREE entries -- do not exceed three. **Selection criteria, pinned** (these are structural
+and available at this phase; they do not require the Q8 class taxonomy, which is authored later):
+
+1. One entry carrying `**Status:** Superseded` in the live file.
+2. One entry whose body is predominantly mechanism specification -- shapes, enums, grammars,
+   thresholds -- rather than rationale, by your E2 partitioning rule.
+3. One entry cited by name from live code or a contract outside `docs/DECISIONS.md` and
+   `docs/DECISIONS_ARCHIVE.md`.
+
+If a single entry satisfies more than one criterion, pick a different entry for the others so the
+three are distinct. You MAY draw one from `docs/DECISIONS_ARCHIVE.md` if it makes criterion 3
+sharper; record `corpus: archive` on that row.
+
+Trace each end-to-end through every mechanism the repository offers for moving content off S1:
+archival, compact-in-place, and any migrate-then-rehome path described. For each, report what
+blocks it, which mechanism (if any) can process it, and what a successful migration costs. If
+none of the three can be processed by any existing mechanism, that is the finding. These three
+entries also get `sampled_entry_dispositions[]` rows.
 
 ### DD-D -- The two contract populations, compared (feeds Q4, Q5)
 
@@ -493,7 +556,7 @@ observation awaiting your adjudication.
 | G11 | 4 live entries carried `**Status:** Superseded`. Live `## Decision` headers numbered 119. Live file 573,726 B + archive 111,070 B = 684,796 B combined. | `docs/DECISIONS.md`, `docs/DECISIONS_ARCHIVE.md` |
 | G12 | The size guard's constants are `_DECISIONS_LIVE_MAX_H2 = 120` and `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. The committed-index test pins `_COMMITTED_INDEX_MAX_BYTES = 131_000`, annotated as a Decision 166 re-derivation of a prior 110,000-byte pin. `docs/decisions-index.json` measured 110,582 B. | `scripts/checks/decisions/validate_decisions_size.py:20-21`; `tests/test_decisions_index.py:450` |
 | G13 | `decision-entry.yaml` carries a `significance:` section with four routing rows -- `numbered_decision`, `cd_state_flip`, `operational_fact`, `field_semantics` -- of which `field_semantics` is the row naming a contract as destination. It separately carries an `amendment_forms:` section describing two dated in-place annotation shapes. | `docs/contracts/decision-entry.yaml:114-143`, `:68-81` |
-| G14 | `decision-entry.yaml` states "~12,103 unguarded inbound 'Decision N' citations across the repo". A `git grep -oIE 'Decision [0-9]+'` over tracked files measured 19,349 occurrences (19,331 excluding this prompt's own self-references). Counting matching LINES rather than occurrences gives a materially smaller number. The two sources disagree by more than 7,000; re-derive both and state your method and unit. | `docs/contracts/decision-entry.yaml:192` |
+| G14 | `decision-entry.yaml` states "~12,103 unguarded inbound 'Decision N' citations across the repo". A compose-time occurrence count over tracked files was materially larger -- by more than 7,000. **No figure is quoted here deliberately:** this prompt file itself contains such citations, so any number pinned here is self-referentially unstable. Derive it yourself with `git grep -oIE 'Decision [0-9]+' -- .` (occurrences) and note that `git grep -IE` (matching LINES) gives a materially smaller number. State your command, your unit, and your result. | `docs/contracts/decision-entry.yaml:192` |
 | G15 | The commit-message surface is a 5-row prefix table (`feat`, `plan`, `roadmap`, `scope`, `audit`) in `AGENTS.md`. The PR template's comment block names 4 of those 5 -- `audit({slug})` is absent from it. One check DOES read commit subjects for content: `feat_commit_slugs()` runs `git log origin/main..HEAD --format=%s` and matches `_FEAT_COMMIT_RE = ^feat\(([^)]+)\):`, consumed by `validate_vp_replay` and `validate_graduation_completeness`. No check under `scripts/checks/` references the PR template. | `AGENTS.md:190`; `.github/pull_request_template.md`; `scripts/checks/_common.py:25`, `:208-226` |
 | G16 | The planning skill carries two relevant sections: "Documentation Artefact Design", restating the Decision 86 routing rule, and "Decision Significance Gate", instructing a check of the `significance:` section before drafting any numbered Decision. | `.claude/skills/planning/SKILL.md:225`, `:371` |
 | G17 | `validate_decision_entry_conformance` reads `required_markers` from the contract at check time and enforces them on entries whose number is absent from the `origin/main` baseline; historical entries are grandfathered. It advisory-skips when `origin/main` is unreachable. | `scripts/checks/decisions/validate_decision_entry_conformance.py` |
@@ -507,16 +570,20 @@ Four bounded samples. Tag findings drawn from a sample `evidence_kind: observed`
 reading a rule alone are `static`. **At equal severity, an observed finding outranks a static
 one.** Do NOT exceed any bound.
 
-- **E1 -- the growth-governance lineage: exactly Decisions 134, 145, 146, 149, 150, 151, 152, 160.
-  Do not extend.** For each: date, size, trigger, mechanism, what it amended, what superseded or
-  reversed it. DD-A's input and Q1's primary evidence.
+- **E1 -- the growth-governance lineage: exactly Decisions 134, 145, 146, 149, 150, 151, 152, 160,
+  166. Do not extend.** For each: date, size, trigger, mechanism, what it amended, what superseded
+  or reversed it. DD-A's input and Q1's primary evidence. (166 is included because it re-derived a
+  decision-corpus byte pin -- whether that constitutes the same pattern as the other eight is
+  yours to judge, not a premise.)
 - **E2 -- the 10 highest-numbered live entries; do NOT exceed 10.** Partition each body by content
   type: rationale / specification / change-record / other. Report approximate byte or paragraph
   shares, and state your partitioning rule before applying it. Each gets a
   `sampled_entry_dispositions[]` row.
-- **E3 -- at most 8 free-form contracts.** Does each declare its subject? Could two be
-  mechanically compared for overlap or contradiction? What would a comparison key be?
-- **E4 -- at most 6 ritual contracts.** The comparison arm for E3 and DD-D.
+- **E3 -- at most 8 free-form contracts. Selection rule, pinned:** the 7 named in G19, plus one of
+  your choosing. State why you picked the eighth.
+- **E4 -- at most 6 ritual contracts. Selection rule, pinned:** two Class A, two Class B, two
+  Class C, each pair being the largest two of its class by byte size. The comparison arm for E3
+  and DD-D.
 
 Apply this counterfactual to every mechanism you assess: **would this check still pass if the
 behavior it governs were removed entirely?** If yes, the check does not exercise the property.
@@ -525,29 +592,30 @@ function that would pass on an empty repository is not a forcing function.
 
 ## METHOD
 
-Phases in order. Synthesis and maturity LAST.
+Ordering only -- each phase's content is defined by the questions, deep-dives, and samples it
+names. Synthesis and maturity LAST.
 
-- **P1 -- Read.** Every S1-S5 surface named in SCOPE. **Bounded for S1:** read
-  `docs/decisions-index.json` plus targeted reads of the entries named in E1, E2, and DD-C -- do
-  NOT load `docs/DECISIONS.md` whole. That bound is the repository's own retrieval model (G18) and
-  NS5, and it takes precedence over any reading of P1 that would imply a wholesale load. Re-resolve
-  every GROUNDING MAP anchor.
-- **P2 -- Trace (Arc A).** Run E1 and DD-A. Answer Q1 before anything downstream -- its failure
-  modes are an input to every later phase.
-- **P3 -- Trace (routing).** Run DD-B and DD-D. Answer Q2, Q3, Q5.
-- **P4 -- Trace (destination).** Run E3, E4, DD-C. Answer Q4, Q6.
-- **P5 -- Rate.** Fill every VD x S cell. Then run E2.
-- **P6 -- Design (Arcs B and C).** Answer Q7, then Q8. Populate `end_state`, `migration_sequence`,
+- **P1 -- Read.** Every S1-S5 surface in SCOPE; re-resolve every GROUNDING MAP anchor.
+  **Bounded for S1:** load `docs/decisions-index.json` plus targeted reads of the entries named in
+  E1, E2, and DD-C -- do NOT load `docs/DECISIONS.md` whole into context. This is the repository's
+  own retrieval model (G18) and NS5. It does NOT restrict scripted aggregate computation over the
+  corpus -- see SCOPE / Trust nothing.
+- **P2 -- Arc A.** E1, DD-A -> Q1. Answer Q1 before anything downstream; its failure modes feed
+  every later phase.
+- **P3 -- Routing.** DD-B, DD-D -> Q2, Q3, Q5.
+- **P4 -- Destination.** E3, E4, DD-C -> Q4, Q6.
+- **P5 -- Rate.** Every VD x S cell; then E2.
+- **P6 -- Arcs B and C.** Q7, then Q8 -> `end_state`, `migration_sequence`,
   `content_class_routing`, `sampled_entry_dispositions`.
 - **P7 -- Adversarial convergence. MANDATORY.** For every finding AND for your Q7 end-state,
   attempt to REFUTE it: state the strongest argument that the finding is not a defect, or that
   the end-state is the ninth intervention rather than the last. Where refutation succeeds, move
   the item to `rejected_candidates[]` or revise the design. Where it fails, record the attempt in
-  `refutation`. Then re-run this phase on whatever changed. Repeat until a round changes nothing,
-  **to a maximum of 3 rounds**; record the count in `meta.convergence_rounds` and, if you exit on
-  the cap rather than on convergence, say what remained unsettled in `meta.contract_notes`.
+  `refutation`. Then re-run on whatever changed. Repeat until a pass changes nothing, **to a
+  maximum of 3 passes**; record the count in `meta.convergence_rounds` and, if you exit on the cap
+  rather than on convergence, say what remained unsettled in `meta.contract_notes`.
 - **P8 -- Dedup.** Apply DEDUP DISCIPLINE to every surviving finding.
-- **P9 -- Synthesize.** Answer Q9. Compute severities, then maturity. Write both deliverables.
+- **P9 -- Synthesize.** Q9; severities; then maturity. Write both deliverables.
 
 ## DEDUP DISCIPLINE
 
@@ -648,7 +716,7 @@ audit:
     - {q: Q1, verdict: primary-mechanism-identified|contributing-factors-only|undetermined,
        basis: [<finding ids>], prose: ""}
     - {q: Q2, verdict: sufficient|partial|insufficient, basis: [], prose: "",
-       external_checklist: [{property: EX1..EX12, rating: met|partial|missed, evidence: ""}]}
+       external_checklist: [{property: EX1..EX13, rating: met|partial|missed, evidence: ""}]}
     - {q: Q3, verdict: primary-cause-established|contributing-only|undetermined, basis: [], prose: ""}
     - {q: Q4, verdict: ready|ready-with-gaps|not-ready, basis: [], prose: ""}
     - {q: Q5, verdict: sufficient|partial|insufficient, basis: [], prose: "",
@@ -660,7 +728,7 @@ audit:
     - {q: Q8, verdict: ordered-sequence-with-abort-criteria|partial-sequence|insufficient-evidence,
        basis: [], prose: ""}
     - {q: Q9, answers: [{question: "", answer: "", basis: [<finding ids>]}]}
-  intervention_erosion:               # exactly 13 rows: 8 kind=decision, 5 kind=audit_round
+  intervention_erosion:               # exactly 14 rows: 9 kind=decision, 5 kind=audit_round
     - kind: decision|audit_round
       intervention: "<Decision NNN or audit prefix>"
       date: <ISO or null>
@@ -687,8 +755,10 @@ audit:
       worked_exemplar: "Decision NN"
       blocker: ""
       confidence: CONFIRMED|HYPOTHESIS
-  sampled_entry_dispositions:         # only entries sampled in E2 and DD-C; <= 13 rows
-    - {decision: "Decision NN", corpus: live|archive, sampled_in: E2|DD-C,
+  sampled_entry_dispositions:         # only entries sampled in E2 and DD-C; <= 13 rows.
+                                      # An entry sampled by BOTH gets ONE row listing both tags.
+                                      # Fewer than 13 rows is expected when the samples overlap.
+    - {decision: "Decision NN", corpus: live|archive, sampled_in: [E2, DD-C],
        disposition: <same enum as content_class_routing.disposition>,
        remains_authoritative: "", history_preserved: "", counterfactual_loss: ""}
   migration_sequence:
@@ -700,15 +770,18 @@ audit:
       survives_failure_mode: ""
       derived_surface_effects: ""     # index regeneration, ops_decisions backfill, archive moves
       requires_human_ruling: ""       # "" if none
-  per_surface_assessment:
+  per_surface_assessment:             # the SOLE home for maturity; summary does not repeat it
     - {surface: S1|S2|S3|S4|S5, maturity: frontier|strong|solid|nascent,
        strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
     - {surface: S1..S5, dimension: VD1..VD6, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
   findings:
-    - id: CFG-01
+    - id: CFG-01                      # CFG-NN, zero-padded to two digits, sequential from CFG-01
       surface: S1|S2|S3|S4|S5|shared
+      surfaces_affected: [S1]         # REQUIRED. The surfaces this finding's maturity counts
+                                      # against. One element for a single-surface finding; two or
+                                      # more when surface is `shared`. Never empty.
       question: Q1..Q9
       dimension: VD1..VD6
       title: ""
@@ -741,26 +814,45 @@ audit:
     planned_unbuilt_count: <int>
     top_improvements: [<finding ids>]
     highest_leverage_change: <finding id>
-    maturity_S1: frontier|strong|solid|nascent
-    maturity_S2: frontier|strong|solid|nascent
-    maturity_S3: frontier|strong|solid|nascent
-    maturity_S4: frontier|strong|solid|nascent
-    maturity_S5: frontier|strong|solid|nascent
 ```
 
-**`survives_failure_mode`, pinned.** Legal values: any `ending_class` token EXCEPT
-`relief-still-holding` (surviving a mode that never failed is incoherent); OR a free-text named
-mechanism when the fix survives something outside that enum; OR `""` for a finding filed under
-Q1 itself, which diagnoses rather than remedies. The same rule applies to the field on
-`migration_sequence[]` and `end_state.forcing_functions[]`.
+**Field semantics for the five disposal-support fields**, so nothing is written without a reader
+-- the human disposing of this audit is that reader:
+
+- `effort` -- T-shirt size of implementing `proposed_change`: XS < 1h, S < 1d, M < 1w, L >= 1w.
+- `depends_on` -- finding ids that must land BEFORE this one is implementable; `[]` if none.
+- `sequencing.safe_to_queue_now` -- true iff every `depends_on` is empty or already satisfied.
+- `sequencing.blocked_behind` -- finding ids or roadmap item ids blocking it; `[]` if none.
+- `per_surface_assessment.strengths` -- what that surface does well, in one or two sentences;
+  required, because a rubric of gaps alone misrepresents a surface.
+- `per_surface_assessment.top_gaps` -- the finding ids that most drove that surface's maturity.
+
+**`survives_failure_mode`, pinned.** Legal values, in order of preference:
+
+1. Any `ending_class` token EXCEPT `relief-still-holding` -- surviving a mode that never failed is
+   incoherent.
+2. The literal `no-erosion-established` -- REQUIRED when Q1's verdict is `undetermined`, or when
+   every `intervention_erosion` row is `relief-still-holding`. This exists so a no-erosion finding
+   is expressible; without it the honest no-erosion outcome would have no legal value.
+3. A free-text named mechanism, when the fix survives something outside that enum.
+4. `""` -- ONLY for a finding filed under Q1 itself, which diagnoses rather than remedies.
+
+The same rule applies to the field on `migration_sequence[]` and `end_state.forcing_functions[]`.
+
+**Ranking, pinned.** "An observed finding outranks a static one at equal severity" governs the
+ORDER of `top_improvements` and the choice of `highest_leverage_change`. It does not reorder
+`findings[]`, which stays in id order.
+
+**Convergence counting, pinned.** `convergence_rounds` counts refutation passes RUN, including the
+final pass that changed nothing. A single pass that changes nothing is `1`.
 
 **COUNTING INVARIANT.** `findings[]` is the SOLE enumerated list. `total_findings =
 len(findings) = novel_count + planned_insufficient_count + planned_unbuilt_count`. Candidates
 fully covered by an existing owner live in `rejected_candidates[]`, NOT `findings[]`.
 `rubric_ratings`, `question_answers`, `intervention_erosion`, `end_state`,
-`content_class_routing`, `sampled_entry_dispositions`, and `migration_sequence` are
-systems-of-record referenced FROM findings, never re-counted into the total. `top_improvements`
-and `highest_leverage_change` MUST be finding ids.
+`content_class_routing`, `sampled_entry_dispositions`, `per_surface_assessment`, and
+`migration_sequence` are systems-of-record referenced FROM findings, never re-counted into the
+total. `top_improvements` and `highest_leverage_change` MUST be finding ids.
 
 **`control_property_match` is REQUIRED** whenever a compensating control is the reason for
 dismissal: name the property the control exercises, cite where it operates (mechanism or
@@ -782,20 +874,20 @@ Severity is assigned AFTER judgment, by defect class:
 - **medium** -- redundancy, ambiguity, or inconsistency with a clear fix.
 - **low** -- clarity or wording.
 
-**Surface attribution, pinned.** A finding with `surface: shared` counts toward the maturity of
-every surface named in its `evidence` field. If its evidence names no surface, it counts toward
-no surface's maturity and MUST instead be listed in `summary.top_improvements` or explained in
-the companion report -- it is never silently dropped.
+**Surface attribution, pinned.** A finding counts toward the maturity of every surface listed in
+its `surfaces_affected` array -- not its `surface` scalar, and not whatever its `evidence` string
+happens to mention. `surfaces_affected` is never empty, so no finding escapes attribution.
 
-Maturity is computed LAST, per surface, top-down, first match wins:
+Maturity is computed LAST, per surface, top-down, first match wins. It is written in exactly one
+place: `per_surface_assessment[].maturity`.
 
 - **frontier** -- 0 open critical AND 0 open high findings attributed to that surface, AND every
-  EX1-EX12 property in Q2's `external_checklist` rated `met` or `partial` -- never `missed`.
+  EX1-EX13 property in Q2's `external_checklist` rated `met` or `partial` -- never `missed`.
 - **strong** -- 0 critical AND <= 1 high.
 - **solid** -- <= 1 critical.
 - **nascent** -- otherwise.
 
-The EX clause is deliberately REPO-WIDE, not per-surface: EX1-EX12 rate the routing architecture
+The EX clause is deliberately REPO-WIDE, not per-surface: EX1-EX13 rate the routing architecture
 as a whole, so a single `missed` forecloses `frontier` for every surface simultaneously. That is
 intended -- `frontier` here means the architecture is exemplary, not that one corner of it is.
 `frontier` remains reachable where you argued a property-matched compensating control; this
@@ -829,15 +921,15 @@ prompt's framing forecloses no rating.
 
 ## GUARDRAILS
 
-- **Write boundary, closed list.** The only files you create or modify in the repository tree are
-  `audits/contract-first-governance-<sha>.yaml` and `audits/contract-first-governance-<sha>.md`.
-  Not `docs/DECISIONS.md`. Not any contract. Not the roadmap. Not a recommendation. Not a fix to
-  a failing check. If you believe a file needs changing, that belief is a finding.
+- **Write boundary.** Restated once here as a closed list, because it is the one rule whose breach
+  cannot be undone by the human: the ONLY files you create or modify in the repository tree are
+  the two deliverables named in TASK. Not `docs/DECISIONS.md`. Not any contract. Not the roadmap.
+  Not a recommendation. Not a fix to a failing check. If you believe a file needs changing, that
+  belief is a finding.
 - **Precision over volume.** Fewer than ~8 surviving findings is a valid result -- state it
   plainly and do not pad. A padded finding costs more than a missing one, because the human
-  disposes of every row you write.
-- **A run that merely confirms this prompt's candidates has failed.** Rejections are output.
-  `rejected_candidates[]` longer than `findings[]` is a good outcome, not a weak one.
+  disposes of every row you write. Rejections are output: `rejected_candidates[]` longer than
+  `findings[]` is a good outcome, not a weak one.
 - **You are the sixth audit in this territory.** Five prior audits produced findings that were
   implemented and produced relief. The default expected value of another taxonomy is low. If,
   after Arc A, the honest answer is "the problem is not where the previous five looked", say that
