@@ -32,8 +32,9 @@ candidates below has failed.**
 
 One framing exception, stated openly so you can discount it: this prompt's TASK asserts that
 prior interventions eroded. That assertion was supplied by the requester, not established by you.
-Q1 exists to test it. The `relief-still-holding` ending class and Q1's `undetermined` verdict are
-the routes by which you reject it, and using them is a fully successful outcome.
+Q1 exists to test it, and rejecting it is a fully successful outcome. The single authority on how
+to record that rejection is the THE NO-EROSION PATH section below -- this paragraph names no
+tokens, deliberately, so there is one place to change and one place to read.
 
 Adjudicate each candidate to exactly one of:
 
@@ -399,6 +400,11 @@ value for each forcing function (see OUTPUT for the legality rule -- `no-erosion
 legal here and is the correct value if Q1 found no erosion), and (iv) what it costs -- in authoring effort, agent context, and
 migration. An end-state with no forcing function is a restatement of the problem.
 
+**Both sub-verdicts judge the ROADMAP ITEM, not your own end-state.** Read `t15_verdict` as "T1.5
+is _____ as a plan, measured against what I concluded"; likewise `t256_verdict`. So
+`wrong_end_state` means the roadmap item aims at the wrong target -- never that your own answer is
+wrong.
+
 **Verdict enum:** `single-end-state-recommended` | `options-with-tradeoffs` | `insufficient-evidence`
 
 ### Q8 -- Transition (Arc C)
@@ -413,7 +419,8 @@ Content classification has two layers, both required:
 
 - **Class layer** (`content_class_routing[]`) -- named classes of live entry, each with a
   disposition, a worked exemplar, and a count. Classes need NOT partition the corpus; state your
-  `count_method` and use `null` where you cannot estimate.
+  `count_method` and use `null` where you cannot estimate. `blocker: ""` means "nothing blocks
+  this class" and is legal on any row.
 - **Entry layer** (`sampled_entry_dispositions[]`) -- one row per entry sampled in E2 and DD-C
   ONLY (at most 13 rows total). No ledger over all live entries; a full enumeration is owned
   elsewhere (see DEDUP DISCIPLINE, rec-2822).
@@ -437,7 +444,8 @@ What did the requester not think to ask? Seeded below -- ANSWER these AND extend
   for?
 - Is corpus growth a symptom of decision-log design, or of something upstream -- how work is
   decomposed, how plans are scoped, or how amendments are triggered?
-- Is there a class of content that belongs in NONE of the six homes and is being forced into one?
+- Is there a class of content that belongs in NONE of Q2's seven homes and is being forced
+  into one?
 - If the corpus were rebuilt from scratch today with full knowledge, how many current live
   entries would exist at all?
 - Audit prompts and audit outputs are themselves durable governance content. `file-router.yaml`
@@ -520,9 +528,10 @@ your proposed end-state (Q7). For each point, name the home it takes under each.
 1. Under today's rule, would this draft have been correctly ROUTED, correctly BLOCKED, or is the
    rule silent? If the rule is silent, that silence is the finding.
 2. The work this draft describes did land in the repository. Locate what actually shipped and
-   where the content went; state whether the outcome matches either routing. **If you cannot
-   locate it within a bounded search, say so and set this sub-answer to `not-located`** -- that
-   is a valid result, not a failure, and does not block the rest of DD-B.
+   where the content went; state whether the outcome matches either routing, in the companion
+   report. **If you cannot locate it within a bounded search, set `meta.dd_b_shipped_outcome` to
+   the literal `not-located`** -- that is a valid result, not a failure, and does not block the
+   rest of DD-B. Leave that field `""` when you did locate it and described it in the report.
 
 ### DD-C -- Migration feasibility, traced (feeds Q4, Q8)
 
@@ -534,7 +543,8 @@ and available at this phase; they do not require the Q8 class taxonomy, which is
    thresholds -- rather than rationale. **Author your rationale/specification/change-record
    partitioning rule HERE, at this phase, and record it once**; E2 later reuses that same rule
    rather than defining its own. There is no forward dependency: you write the rule, then apply
-   it to three entries now and to E2's ten later.
+   it to three entries now and to E2's ten later. Record the rule verbatim in
+   `meta.partition_rule`; E2 does not restate it.
 3. One entry cited by name from live code or a contract outside `docs/DECISIONS.md` and
    `docs/DECISIONS_ARCHIVE.md`.
 
@@ -575,7 +585,7 @@ observation awaiting your adjudication.
 | G9 | 28 of 119 live entries contained the string `docs/contracts/`. | `docs/DECISIONS.md` |
 | G10 | The exact string `**Significance:**` appeared in 6 of 119 live entries. `decision-entry.yaml` lists `required_markers` as Status, Date, Decision, and 6 `optional_markers_fixed_spelling`; neither list contains Significance. See trap 6 on near-miss spellings. | `docs/contracts/decision-entry.yaml:39-57`; `docs/DECISIONS.md` |
 | G11 | 2 live entries carry `**Status:** Superseded` as their status marker. A naive contains-anywhere count returns 4, because two other entries QUOTE that literal string while specifying the compaction stub grammar -- count the status marker, not the substring. Live `## Decision` headers numbered 119. Live file 573,726 B + archive 111,070 B = 684,796 B combined. | `docs/DECISIONS.md`, `docs/DECISIONS_ARCHIVE.md` |
-| G12 | The size guard's constants are `_DECISIONS_LIVE_MAX_H2 = 120` and `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. The committed-index test pins `_COMMITTED_INDEX_MAX_BYTES = 131_000`, annotated as a Decision 166 re-derivation of a prior 110,000-byte pin. `docs/decisions-index.json` measured 110,582 B. **These three constants are expected to have MOVED by the time you run:** a raise was in flight at compose time to unblock concurrent work. Re-derive all three. A changed value is not a stale anchor -- record the new value, and note that a ceiling raise dated at or after this prompt's composition is live evidence for Q1 even though it is not an E1 row (E1's population stays fixed at nine; put the observation in `meta.contract_notes` under `out_of_population` and cite it in Q1's prose). | `scripts/checks/decisions/validate_decisions_size.py:20-21`; `tests/test_decisions_index.py:450` |
+| G12 | The size guard's constants are `_DECISIONS_LIVE_MAX_H2 = 120` and `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. The committed-index test pins `_COMMITTED_INDEX_MAX_BYTES = 131_000`, annotated as a Decision 166 re-derivation of a prior 110,000-byte pin. `docs/decisions-index.json` measured 110,582 B. **These three constants are expected to have MOVED by the time you run:** a raise was in flight at compose time to unblock concurrent work. Re-derive all three. A changed value is not a stale anchor -- record the new value, and note that a ceiling raise dated at or after `meta.compose_date` is live evidence for Q1 even though it is not an E1 row (E1's population stays fixed at nine; put the observation in `meta.contract_notes` under `out_of_population` and cite it in Q1's prose). | `scripts/checks/decisions/validate_decisions_size.py:20-21`; `tests/test_decisions_index.py:450` |
 | G13 | `decision-entry.yaml` carries a `significance:` section with four routing rows -- `numbered_decision`, `cd_state_flip`, `operational_fact`, `field_semantics` -- of which `field_semantics` is the row naming a contract as destination. It separately carries an `amendment_forms:` section describing two dated in-place annotation shapes. | `docs/contracts/decision-entry.yaml:114-143`, `:68-81` |
 | G14 | `decision-entry.yaml` states "~12,103 unguarded inbound 'Decision N' citations across the repo". A compose-time occurrence count over tracked files was materially larger -- by more than 7,000. **No figure is quoted here deliberately:** this prompt file itself contains such citations, so any number pinned here is self-referentially unstable. Derive it yourself with `git grep -oIE 'Decision [0-9]+' -- .` (occurrences) and note that `git grep -IE` (matching LINES) gives a materially smaller number. State your command, your unit, and your result. | `docs/contracts/decision-entry.yaml:192` |
 | G15 | The commit-message surface is a 5-row prefix table (`feat`, `plan`, `roadmap`, `scope`, `audit`) in `AGENTS.md`. The PR template's comment block names 4 of those 5 -- `audit({slug})` is absent from it. One check DOES read commit subjects for content: `feat_commit_slugs()` runs `git log origin/main..HEAD --format=%s` and matches `_FEAT_COMMIT_RE = ^feat\(([^)]+)\):`, consumed by `validate_vp_replay` and `validate_graduation_completeness`. No check under `scripts/checks/` references the PR template. | `AGENTS.md:190`; `.github/pull_request_template.md`; `scripts/checks/_common.py:25`, `:208-226` |
@@ -598,8 +608,9 @@ one.** Do NOT exceed any bound.
   decision-corpus byte pin -- whether that constitutes the same pattern as the other eight is
   yours to judge, not a premise.)
 - **E2 -- the 10 highest-numbered live entries; do NOT exceed 10.** Partition each body by content
-  type: rationale / specification / change-record / other. Report approximate byte or paragraph
-  shares, and state your partitioning rule before applying it. Each gets a
+  type: rationale / specification / change-record / other. Report approximate byte or paragraph shares
+  (say which unit; use the same unit for all ten rows), applying the rule already recorded in
+  `meta.partition_rule`. Each gets a
   `sampled_entry_dispositions[]` row.
 - **E3 -- at most 8 free-form contracts. Selection rule, pinned:** the 7 named in G19, plus one of
   your choosing. State why you picked the eighth.
@@ -651,7 +662,10 @@ Record on every finding: `roadmap_crossref.dedup_search_terms` (what you searche
 `classification: novel` ONLY** -- a `novel` finding asserts nothing owns the territory, so an
 unrecorded search leaves that assertion unevidenced and the finding is `HYPOTHESIS`. A
 `planned-insufficient` or `planned-unbuilt` finding has a POSITIVE hit by construction; its
-confidence follows the ordinary file:line rule and is unaffected.
+confidence follows the ordinary file:line rule and is unaffected. **Under `degraded_dedup`, this
+rule is suspended entirely** -- the recommendations surface was unreadable, so its absence is not
+evidence against a `novel` finding; confidence follows the ordinary file:line rule for every
+classification.
 
 **`dedup_hit_count` counts DISTINCT MATCHING ITEMS** --
 recommendation ids plus tier_item ids plus decision numbers plus prior-audit finding ids -- not
@@ -714,7 +728,8 @@ recommendation to fit.
 Two files, exact paths, where `<sha>` is the `<base-short-sha>` derived once in SETUP:
 
 - `audits/contract-first-governance-<sha>.yaml`
-- `audits/contract-first-governance-<sha>.md` -- prose companion, **<= 2500 words**, the
+- `audits/contract-first-governance-<sha>.md` -- prose companion, **<= 2500 words of prose** (table cells and
+  code/YAML blocks do not count toward it), the
   executive layer a human reads first. Lead with Arc A. Include DD-D's comparison table.
 
 **Deep-dive and sample output has no YAML block, deliberately.** DD-A's arithmetic, DD-B's
@@ -742,6 +757,12 @@ audit:
     convergence_rounds: <int, 1-3>
     contract_notes: ""
     stale_anchors: []                 # [{anchor, expected, found}]
+    compose_date: "2026-08-06"        # this prompt's composition date; do not change it. Used by
+                                      # G12's out-of-population test for ceiling raises.
+    partition_rule: ""                # the rationale/specification/change-record rule authored at
+                                      # DD-C and reused by E2. Stated ONCE, here.
+    dd_b_shipped_outcome: ""          # "" if located and described in the report; the literal
+                                      # `not-located` if a bounded search did not find it.
   question_answers:
     - {q: Q1, verdict: primary-mechanism-identified|contributing-factors-only|no-erosion-established|undetermined,
        basis: [<finding ids>], prose: ""}
@@ -807,7 +828,8 @@ audit:
        strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
     - {surface: S1..S5, dimension: VD1..VD6, rating: strong|adequate|weak|absent|n/a,
-       evidence: "file:line|item-id", note: ""}
+       evidence: "file:line|item-id|aggregate:<path>"   # `aggregate:docs/DECISIONS.md` for a
+                                      # scripted corpus-wide computation, which has no single line, note: ""}
   findings:
     - id: CFG-01                      # CFG-NN, zero-padded to two digits, sequential from CFG-01
       surface: S1|S2|S3|S4|S5|shared
@@ -868,9 +890,13 @@ without a reader
   (two surfaces collapse to one), `persist` (ephemeral content gains a durable home), `clarify`
   (wording only, no behavior change), `retune_gate` (a threshold moves), `retire` (a surface or
   rule is removed). Pick the one that dominates; note the second in `proposed_change`.
+- `end_state.t15_verdict` / `t256_verdict` -- your judgment OF that roadmap item as a plan,
+  measured against your own end-state. Never a self-assessment.
 - `question_answers[].basis` -- finding ids supporting the verdict; `[]` is legal when the answer
   rests on grounding facts alone rather than on any filed finding.
-- `question_answers[].prose` -- the answer itself, <= 300 words per question.
+- `question_answers[].prose` -- the answer itself, <= 300 words per question, EXCEPT Q1, Q7 and
+  Q8, which carry deep-dive output and are capped at 600. The full arithmetic, tables and traces
+  live in the companion report; `prose` carries the answer and the figures it turns on.
 - `intervention_erosion[].held_until` -- an ISO date where one is determinable, else a short event
   name (e.g. `"Decision 160"`), else the literal `still-holding`.
 - `intervention_erosion[].date` / `size_bytes` on a `kind: audit_round` row -- the audit output
@@ -920,6 +946,11 @@ expensive to write than the conclusion, here is the whole path in one place:
 
 Nothing on this path requires a hedge, a null, or an apology. If you reach it, say so in the
 first line of the companion report.
+
+**Precedence: this table WINS.** Where any other section of this prompt gives a different value
+for a field listed above, this table governs. In particular it overrides `survives_failure_mode`
+option 4 -- on a no-erosion run, every finding uses `no-erosion-established`, including diagnostic
+findings that would otherwise take `""`.
 
 **Ranking, pinned.** "An observed finding outranks a static one at equal severity" governs the
 ORDER of `top_improvements` and the choice of `highest_leverage_change`. It does not reorder
