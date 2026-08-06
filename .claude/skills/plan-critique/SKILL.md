@@ -45,9 +45,17 @@ Reject a plan that invents a third validation tier, treats mapped coverage or re
 
 12. **Check Constraints for contradictions:** Do the Constraints conflict with rules in `docs/PROJECT_CONTEXT.md` or prior decisions in `docs/DECISIONS.md`?
 
-12b. **Lambda deployment completeness (IMPLEMENTATION plans only):** Use `bin/venv-python -m scripts.lambda_manifest --list-patterns` to determine which scope files are Lambda-packaged and `compute_affected_artifacts()` to identify the affected artifact slug(s). For each affected artifact with `status: active` in its `src/lambdas/<slug>/manifest.yaml`, the Ordered Execution Steps MUST include: (a) a per-Lambda build step, (b) a per-Lambda deploy step, (c) a smoke-test step using `run_scheduled_agent.py --smoke-test`, and (d) model ID validation against `docs/contracts/inference-provider.yaml` if model IDs are changed. Blanket `build_lambda.py --deploy` (all artifacts) is acceptable only when the plan modifies all active artifacts; per-Lambda scoping is preferred. If any active-artifact deploy step is missing, recommend REVISE. Exception: stub artifacts (status: stub) require no deploy step -- V1 verification suffices. The blanket `DEFERRED: build_lambda.py --deploy` exception for Decision 67 is withdrawn; Decision 67's Lambda-deploy clause was lifted by Decision 79 (CD.16 + CD.24). Reference: Decision 47, Decision 67 (Lambda-deploy clause lifted), Decision 79, Step 4 (Lambda Deployment Assessment) of plan.prompt.md.
+12b. **Lambda deployment completeness (IMPLEMENTATION only):** Run `lambda_manifest --list-patterns`
+and `compute_affected_artifacts()`. Each active artifact needs per-Lambda build, deploy, smoke test,
+and model-ID validation when applicable; all-artifact deploy is allowed only when all are modified.
+Missing active steps => REVISE. Stubs need no deploy. Decision 79 lifted the old Decision 67 freeze.
 
 12c. **Verification Plan executable command check (IMPLEMENTATION plans only):** Every `verification_plan` entry MUST have a `command` field containing a literal executable shell command or Python one-liner (the `PlanDocument` schema rejects empty commands; your job is to judge whether the command actually exercises the feature rather than being a structural-only check). FAIL if any VP step is prose-only with no executable command. For V3 plans, every VP step's `phase` must be `pre-deploy` or `post-deploy`. If either check fails, recommend REVISE with the specific VP steps that need commands or tags added.
+
+12c-1. **Test-obligation adequacy:** For schema-version-4 IMPLEMENTATION plans, recommend REVISE
+when a behavior-changing scope file lacks a linked obligation, its test is structural-only or
+does not assert the named behavior, its red/green expectation is absent, or its waiver is thin.
+Presence/link validators are deterministic; adequacy is this fresh-context judgement.
 
 12d. **STRATEGIC plan gate:** If the plan's `## Plan Type` is `STRATEGIC` AND the executor freeze is still active per AGENTS.md Temporary Operational Constraints (pending CD.17 reversal), recommend REVISE with: "STRATEGIC plans are suspended while the executor freeze holds (CD.17): the autonomous executor has no consumer for STRATEGIC-decomposed recommendations. Convert to an IMPLEMENTATION plan, or split into multiple atomic IMPLEMENTATION plans, or wait for CD.17 reversal."
 

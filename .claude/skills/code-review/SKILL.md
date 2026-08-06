@@ -79,14 +79,17 @@ Evaluate the repository across each of the following dimensions. For every issue
 
 ### 3. Testing
 
-Any finding that claims a command or validation gate fails must include the exact command, observed exit code, and final owning-validator summary. Informational child diagnostics alone are not failure evidence.
+Failure findings require the exact command, exit code, and owning-validator summary.
 
 - **Coverage gaps** — Which modules, classes, or functions lack test coverage?
 - **Test quality** — Testing behaviour or implementation details? Are edge cases covered?
 - **Test isolation** — Do tests depend on external services or execution order?
 - **Test naming** — Do names describe the scenario and expected outcome?
 - **Fixtures and mocking** — Are mocks used appropriately?
-- **Mock Exhaustion (postflight.py)** — If `scripts/executor/postflight.py` is modified, verify that `subprocess.run` calls match the `MagicMock` side-effect counts in `tests/test_executor_postflight.py` (see Check 2 in `scripts/validate.py`).
+- **Test obligations** — Raise High when behavior-changing code lacks executed obligation
+  evidence, the test does not assert the declared behavior, or a waiver does not name a real
+  deterministic limit. Presence alone is not adequacy; inspect the linked test and VP evidence.
+- **Mock Exhaustion** — For postflight.py changes, match subprocess calls to test side effects.
 
 ### 4. Maintainability and Scalability
 

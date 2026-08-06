@@ -309,17 +309,20 @@ Classify deterministically. Highest tier wins.
 - **V2 (Unit):** Python source with no external integration. Must exercise real code paths.
 - **V3 (Integration):** External systems, Terraform, Lambdas. Must tag steps as `[pre-deploy]` or `[post-deploy]`.
 
-**Provider-init egress (terraform roots only):** a terraform root using a third-party
-(github.com-hosted) provider (e.g. `kislerdm/neon` in `terraform/personal`) cannot `terraform
-init`/`validate`/`plan` from a stock CC-web session -- the outbound proxy blocks the provider's
-github.com checksum fetch. Author local terraform VP steps as grep-only, plus `terraform fmt
--check` ONLY when terraform is present (fmt needs no provider install); delegate `terraform
-validate`/`plan` to CI -- name the required `terraform-validate` check and the speculative-plan job
-as the authoritative verifiers, never a local `terraform validate`/`init`/`plan` invocation. See
-`terraform/CLAUDE.md` and Decision 119 for the constraint and CI-delegation contract.
+**Provider-init egress (terraform roots only):** CC-web cannot fetch third-party provider checksums.
+Use grep and provider-free `terraform fmt -check` locally; delegate validate/plan to the named CI
+checks. Never author local init/validate/plan VP commands. See `terraform/CLAUDE.md`, Decision 119.
 
 **VP Design Rationale:**
 When writing Verification Plan steps, ask: "If this feature had a subtle bug (wrong column name, missing permission, off-by-one filter), would this step catch it?" If no, the step is too shallow.
+
+**Test Obligation Assessment:** New behavior-changing IMPLEMENTATION plans use schema version 4.
+For every behavior-capable scope file, author a `test_obligations` row naming `source`, the exact
+`behavior`, one executable `test_selector` or `command`, its `verification_step`, and either a
+red/green expectation or substantive waiver. A whole-plan deterministic-limit waiver uses
+`test_obligation_waiver_reason`. Obligations are part of verification, not a parallel checklist;
+graduate rows reuse the linked VP step and existing registry primitive slots. Test adequacy is
+judged by fresh-context plan critique, not inferred by the schema validator.
 
 **Anti-patterns to reject:** structural-only (`grep -q "def my_function" src/module.py` proves
 existence, not function); test-only ("Run pytest" proves mocked paths, not real integration);
@@ -362,13 +365,8 @@ at plan-authoring time:
   human/LLM judgement, live infrastructure (a V3 deploy/invoke), or wall-clock/credential state.
   No extra field required.
 
-Classification is a judgement call with a known non-deterministic seam (a command's
-kernel-expressibility is not mechanically decidable in general) -- the plan-critique gate is the
-honesty check on this call, applied before the fix exists (so there is no pressure to wave
-through a finished implementation). When genuinely unsure between `graduate` and
-`not-applicable`, prefer `not-applicable` and let plan-critique push back if it disagrees --
-a false `not-applicable` is a missed regression guard; a false `graduate` becomes a mandatory
-`waive`-with-reason detour at implement time (harmless, but adds a step).
+Plan critique judges kernel expressibility. When unsure, prefer `not-applicable`; critique can
+push back without creating an accidental registry obligation.
 
 ## Decision Significance Gate (before drafting any numbered Decision -- fresh or CD ratification)
 

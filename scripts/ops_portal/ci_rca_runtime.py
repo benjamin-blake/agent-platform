@@ -6,6 +6,9 @@ recs (bundle load/verify, S3 existence, bundle-wins comparisons), the fingerprin
 read path, the back-validation batch report, and the occurrence-bump helper. Schema
 definition/shape validation lives in ci_rca_schema.py; portal CRUD (file_rec/update_rec)
 stays in the facade.
+
+Runtime measurements arrive as structured bundle fields; this module never parses interleaved
+stdout with splitlines, so unrelated prose cannot corrupt a numeric marker.
 """
 
 from __future__ import annotations

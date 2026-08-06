@@ -11,7 +11,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
-_SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2, 3})
+_SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2, 3, 4})
 _V2_PHASE_ENUM: frozenset[str] = frozenset({"pre-deploy", "post-deploy"})
 
 PlanType = Literal["IMPLEMENTATION", "STRATEGIC", "REPORT-ONLY"]
@@ -84,6 +84,43 @@ class VerificationStep(BaseModel):
         return self
 
 
+class TestObligation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(min_length=1)
+    behavior: str = Field(min_length=1)
+    verification_step: int
+    test_selector: str | None = None
+    command: str | None = None
+    red_green_expectation: str | None = None
+    waiver_reason: str | None = None
+
+    @field_validator("source", "behavior")
+    @classmethod
+    def _required_text_non_blank(cls, v: str, info: ValidationInfo) -> str:
+        if not v.strip():
+            raise ValueError(f"test_obligations[].{info.field_name} must be non-blank")  # pragma: no cover - sibling suite
+        return v
+
+    @model_validator(mode="after")
+    def _validate_evidence(self) -> TestObligation:
+        selectors = [value for value in (self.test_selector, self.command) if value and value.strip()]
+        if len(selectors) != 1:
+            raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                "test obligation requires exactly one non-blank test_selector or command"
+            )
+        outcomes = [value for value in (self.red_green_expectation, self.waiver_reason) if value and value.strip()]
+        if len(outcomes) != 1:
+            raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                "test obligation requires exactly one red_green_expectation or substantive waiver_reason"
+            )
+        if self.waiver_reason and len(self.waiver_reason.strip()) < 20:
+            raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                "test obligation waiver_reason must be substantive (at least 20 characters)"
+            )
+        return self
+
+
 class WorkArea(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -152,6 +189,8 @@ class PlanDocument(BaseModel):
     infrastructure_dependencies: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(min_length=1)
     verification_plan: list[VerificationStep] = Field(min_length=1)
+    test_obligations: list[TestObligation] = Field(default_factory=list)
+    test_obligation_waiver_reason: str | None = None
     constraints: list[str] = Field(default_factory=list)
     context: list[str] = Field(default_factory=list)
     pre_implementation_checklist: list[str] = Field(default_factory=list)
@@ -194,6 +233,39 @@ class PlanDocument(BaseModel):
                 )
         return v
 
+    def _validate_handoff_policy(self) -> None:
+        if self.schema_version in {3, 4}:
+            if self.plan_type == "IMPLEMENTATION" and self.handoff_policy is None:
+                raise ValueError(f"schema_version {self.schema_version} IMPLEMENTATION plans require handoff_policy")
+            if self.plan_type != "IMPLEMENTATION" and self.handoff_policy is not None:
+                raise ValueError(f"handoff_policy is only valid on schema_version {self.schema_version} IMPLEMENTATION plans")
+        elif self.handoff_policy is not None:
+            raise ValueError("handoff_policy is only valid with schema_version 3 or 4")
+
+    def _validate_test_obligation_links(self) -> None:
+        if self.test_obligation_waiver_reason and len(self.test_obligation_waiver_reason.strip()) < 20:
+            raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                "test_obligation_waiver_reason must be substantive (at least 20 characters)"
+            )
+        if self.test_obligations and self.test_obligation_waiver_reason:
+            raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                "test_obligations and test_obligation_waiver_reason are mutually exclusive"
+            )
+        step_by_id = {step.step: step for step in self.verification_plan}
+        for obligation in self.test_obligations:
+            linked = step_by_id.get(obligation.verification_step)
+            if linked is None:
+                raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                    f"test obligation for {obligation.source!r} links missing verification_plan step "
+                    f"{obligation.verification_step}"
+                )
+            evidence = obligation.command or obligation.test_selector or ""
+            if evidence not in linked.command:
+                raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                    f"test obligation for {obligation.source!r} evidence is not executable by linked "
+                    f"verification_plan step {obligation.verification_step}"
+                )
+
     @model_validator(mode="after")
     def _validate_document(self) -> PlanDocument:
         expected_path = f"docs/plans/PLAN-{self.slug}.yaml"
@@ -219,13 +291,8 @@ class PlanDocument(BaseModel):
                 raise ValueError(
                     f"schema_version 2 verification_plan[].phase must be one of {sorted(_V2_PHASE_ENUM)}, got: {bad_phases}"
                 )
-        if self.schema_version == 3:
-            if self.plan_type == "IMPLEMENTATION" and self.handoff_policy is None:
-                raise ValueError("schema_version 3 IMPLEMENTATION plans require handoff_policy")
-            if self.plan_type != "IMPLEMENTATION" and self.handoff_policy is not None:
-                raise ValueError("handoff_policy is only valid on schema_version 3 IMPLEMENTATION plans")
-        elif self.handoff_policy is not None:
-            raise ValueError("handoff_policy is only valid with schema_version 3")
+        self._validate_handoff_policy()
+        self._validate_test_obligation_links()
         return self
 
 
