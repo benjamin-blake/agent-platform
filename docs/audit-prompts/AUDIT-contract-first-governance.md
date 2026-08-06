@@ -259,20 +259,46 @@ verdict; if the honest answer is that most or all interventions still hold, say 
 Then the aggregate question: **is there a single recurring mechanism that causes interventions in
 this territory to erode, or is each erosion independent?**
 
-**One candidate mechanism to adjudicate, not to accept.** G21 and G22 record that the corpus has
-two independent ceilings (live headers; committed-index bytes) and two named relief levers
-(Decision 149 compaction; Decision 146 archival), and that compaction preserves the header line
-the counting regex matches, while archived rows retain full-cap index excerpts. The hypothesis --
-yours to confirm, refine, or refute -- is that the levers are DISJOINT with respect to the
-ceilings, so no single relief action can move both, and every intervention therefore delivers
-partial relief by construction. Test it: for each ceiling, determine which lever moves it, by how
-much, and whether any lever moves both. If the hypothesis holds it is a candidate answer to the
-aggregate question; if it does not, say so and show the arithmetic. A related open recommendation
-(rec-2968) reports that Decision 160's own stated binding-order for these ceilings did not match
-what bound in practice -- assess whether the corpus states anywhere which ceiling binds first.
+**Two candidate mechanisms, both to adjudicate, neither to accept.** They are offered as a
+matched pair -- one for each branch of the aggregate question -- so the question is not answered
+by which one this prompt happened to describe.
 
-Every finding you file in Arc B or Arc C must populate `survives_failure_mode` -- see the field's
-definition under OUTPUT for what is legal there.
+**Candidate A (single recurring mechanism).** G21, G22 and G27 record that the corpus has THREE
+ceilings -- live headers, combined bytes, committed-index bytes (G12) -- and that its named relief
+levers are compaction (Decision 149), archival (Decision 146) and a per-entry authoring size norm
+(named in `_RELIEF_VALVES`, G27). The hypothesis is that levers and ceilings are DISJOINT, so no
+lever moves all three and every relief action is partial by construction. Test it by building the
+lever-by-ceiling matrix yourself: for each of the three ceilings, which levers move it, by how
+much, and does any lever move all three?
+
+**Read this before classifying Candidate A.** Part of it is already stated in the repository, so
+it is NOT wholly novel and must not be filed as such. `decision-entry.yaml:236-239` states that
+"archiving a live entry does NOT relieve combined_max_bytes (it only moves bytes between the two
+counted files)", and `_RELIEF_VALVES` (G27) states the same, adding that "only compaction and a
+leaner per-entry authoring size norm actually reduce combined bytes". What the repository does NOT
+appear to state anywhere is the full matrix, nor which ceiling binds first. Your dedup obligation
+is to establish which cells are already documented and which are not, and to classify accordingly.
+
+**Candidate B (erosions are independent).** The rival hypothesis is that each intervention ended
+for its own unrelated reason -- a stopgap that was always labelled a stopgap, a mechanism that
+went unused because its call site was rare, an entry superseded on the merits -- and that the
+appearance of a pattern comes from reading eight entries authored in one fifteen-day window as a
+sequence rather than as a cluster. Test it by asking, per row, whether the ending is explained by
+that row's own circumstances without reference to any other row.
+
+**Two constraints on how far Candidate A can reach.** First, it speaks to roughly 4 of the 14
+pinned rows (Decisions 146, 149, 160, 166) and to NO `audit_round` row -- so even if it holds
+completely it is not by itself an answer to the aggregate question. Second, this prompt's SCOPE
+defines erosion as relief that "later reverses"; partial-relief-by-construction is INCOMPLETENESS,
+which is a different thing. If you argue that incompleteness causes erosion, supply the connecting
+step (for instance, that exhausting a partial lever forces a ceiling raise) rather than treating
+the two as synonyms.
+
+A related open recommendation, rec-2968, bears on the binding order. Characterise it from the rec
+itself, not from this sentence: it concerns whether Decision 160's stated ordering remains true as
+the corpus grows, and Decision 160's own text orders a different pair of ceilings than the pair
+rec-2968 discusses. Its acceptance command may not match the corpus text as written. Assess
+whether any surface states which ceiling binds first.
 
 **Verdict enum:** `primary-mechanism-identified` | `contributing-factors-only` |
 `no-erosion-established` (you established the interventions largely hold -- a positive finding) |
@@ -315,6 +341,13 @@ architecture knowledge management, or specification/rationale separation; record
 `meta.external_sources`. Do not add checklist properties from them. If browsing is unavailable,
 follow the `degraded_external` path in SETUP.
 
+**One observation for this question, unadjudicated.** G26 records that a block-separator
+convention flipped off across Decisions 152-163 and back on at 164, with the declared
+shape-authority stating no rule for it. Its open recommendation (rec-2991) attributes the drift to
+authors imitating different neighbours. Whether that is the same phenomenon as the routing
+question, a rival mechanism, or unrelated is yours to judge -- it is placed here rather than under
+Q5 because a convention with no typed projection is a decidability question, not a detection one.
+
 **Verdict enum:** `sufficient` | `partial` | `insufficient`
 
 ### Q3 -- Why an author reaches for a Decision
@@ -352,15 +385,20 @@ pinned enum `detected` | `partially-detected` | `undetected`:
 - **(c) `contract-code-drift`** -- a contract's stated semantics no longer matching the code.
 
 **One candidate mechanism to adjudicate, not to accept.** G24 and G25 record two cases where a
-typed projection disagrees with the prose it derives from: an amends-edge extractor that drops
-targets on two of five continuation forms, and a related-decisions extractor that absorbs a
-following amendment trailer. G26 records a third: an authoring convention that flipped off and
-back on with no rule stating it. The hypothesis -- yours to confirm, refine, or refute -- is that
-these are one root cause rather than three defects: the typed projections and the human-authored
-prose are derived from the same text by separate regexes, each encoding a slightly different
-grammar, with no single grammar either binds to. Note that `decision-entry.yaml` names
-`scripts/decisions_md.py` as the shared parser precisely to prevent this; assess whether that
-binding holds in practice.
+typed projection and the prose it derives from disagree: an amends-edge extractor that returns a
+subset of the targets its input title names, and a related-decisions extractor whose capture
+extends into a following amendment trailer. The hypothesis is that these share one cause rather
+than being two independent bugs -- that the typed projections and the human-authored prose are
+derived from the same text by separate regexes, each encoding a slightly different grammar. Adopt
+no view on whether either behaviour is a defect until you have traced it; both may be intended.
+
+Two things to establish before crediting the hypothesis. `decision-entry.yaml` does name
+`scripts/decisions_md.py` as a shared parser, but scopes that clause to `iter_decision_headings`
+and `decision_header_numbers` -- HEADER grammar, per audit finding DAF-03. G24 and G25 concern
+field extractors inside the same module, which that clause does not appear to cover; determine
+whether the shared-parser obligation reaches them at all. And both behaviours already have open
+recommendations (rec-2971, rec-2990), so a merged root-cause finding is a sufficiency assessment
+of those, not a fresh discovery.
 
 For each: is it detectable today, by what, over what subset of the population, and what is the
 minimum mechanism that would detect it? Where you propose a mechanism, state its false-positive
@@ -620,12 +658,13 @@ observation awaiting your adjudication.
 | G18 | The decision-scout gate triages from `docs/decisions-index.json` plus targeted reads of shortlisted entries, and describes the whole-corpus load as the cost it avoids. Its skill file names the arrangement as interim pending a portal cutover owned by roadmap item T1.5. | `.claude/skills/decision-scout/SKILL.md` |
 | G19 | The ritual population spanned Class A (7 files), Class B (3, all `provisional_v0`), and Class C (6). The free-form population included `decision-entry.yaml`, `file-router.yaml`, `deploy-paths.yaml`, `data-modeling-standard.yaml`, `candidate-decision-ratification.yaml`, `instruction-architecture.yaml`, and `marker-grammar.yaml`. | `docs/contracts/` |
 | G20 | `decision-entry.yaml` opens with a comment stating it is not a Class A/B/C ritual contract and that the drift gate therefore skips it, citing `file-router.yaml`, `deploy-paths.yaml`, and `read-engine.yaml` as precedent and Decision 118 for the free-form registry pattern. | `docs/contracts/decision-entry.yaml:1-5` |
-| G21 | `validate_decisions_size` counts live headers with `_LIVE_H2_RE = ^## Decision \d+:`. `decision-entry.yaml`'s `compaction.stub_grammar.never_remove_headers` requires a compacted stub to keep its `## Decision N:` header line unchanged. A compacted entry therefore still matches the counting regex. | `scripts/checks/decisions/validate_decisions_size.py:30,45`; `docs/contracts/decision-entry.yaml` `compaction.stub_grammar.never_remove_headers` |
-| G22 | In `docs/decisions-index.json`, the 27 rows with `live: false` carry `triage_excerpt` values averaging 292 characters (max 320), totalling 7,879 excerpt characters -- 17.8% of the index's total excerpt characters. Archived entries retain excerpts at the same cap as live ones. | `docs/decisions-index.json`; `scripts/decisions_index.py` |
-| G23 | Decision 37 carries `**Superseded by: Decision 116**`. Decision 116's body contains 0 occurrences of the string `Secrets Manager`; Decision 37's contains 2. Excluding `docs/plans/`, `audits/`, `docs/audit-prompts/`, `logs/`, and the two DECISIONS files, 18 files contain the string `Decision 37`, among them `terraform/personal/secrets_manager_brokers.tf`, `terraform/personal/oidc.tf`, `terraform/bootstrap/github_ci_apply.tf`, `src/common/ducklake_runtime.py`, and `src/lambdas/ducklake_catalog_dr/handler.py`. Decision 37 also uses a fused `**Decision status:** Decided -- April 2026` line rather than the contract's `**Status:**` marker. | `docs/DECISIONS.md`; the named files |
-| G24 | `scripts.decisions_md.extract_amends_edges(raw_title)` returns these results: `"amends Decision 1, Decision 2"` -> `[1]`; `"amends Decision 1, 2"` -> `[1, 2]`; `"amends Decisions 1/2"` -> `[1, 2]`; `"amends Decision 1 and Decision 2"` -> `[1, 2]`; `"amends Decision 1 and 2"` -> `[1]`. Decision 160's raw title names amendments to Decision 145, Decision 134, and Decision 146; the function returns `[145]`, and the committed index row for 160 records `amends: [145]`. The index schema has `amends`, `supersedes`, and `superseded_by` keys but no `amended_by` key. | `scripts/decisions_md.py`; `docs/decisions-index.json` |
-| G25 | `scripts.decisions_md._extract_related_decisions` returns `[49, 52, 117, 164, 122]` for Decision 116. Its `**Related:**` line names 49, 52 and 117; 164 and 122 appear in a following `[Amendment 2026-08-03: ...]` trailer, which falls inside the capture because the extractor terminates only on a following bold marker, `---`, or end-of-block. | `scripts/decisions_md.py`; `docs/DECISIONS.md` |
-| G26 | 99 of 119 live entries end with a `---` block separator; 20 do not. The 20 are Decisions 48, 64, 65, 76, 94, 102, 103, 118, and the contiguous run 152-163. Decisions 164, 165 and 166 carry the separator again. `decision-entry.yaml` states no rule for the separator. | `docs/DECISIONS.md`; `docs/contracts/decision-entry.yaml` |
+| G21 | `validate_decisions_size` counts live headers with `_LIVE_H2_RE = ^## Decision \d+:`. Two sibling keys constrain a compacted stub's header: `compaction.stub_grammar.never_remove_headers` forbids removing the heading, and `compaction.stub_grammar.header` requires the line to be UNCHANGED including its parenthetical. Both are needed for the inference; verify each. | `scripts/checks/decisions/validate_decisions_size.py:30,45`; `docs/contracts/decision-entry.yaml:169-177` and `:188-199` |
+| G22 | In `docs/decisions-index.json`, the 27 rows with `live: false` carry `triage_excerpt` values averaging 292 characters (max 320), totalling 7,879 excerpt characters -- 17.8% of the index's total excerpt characters. The excerpt cap `_TRIAGE_EXCERPT_MAX_CHARS = 320` has no `live` branch. Percentages here are of EXCERPT characters, not of total index bytes -- if you quote an index-byte share instead, say so, because the two differ. | `docs/decisions-index.json`; `scripts/decisions_index.py` |
+| G23 | Decision 37 carries `**Superseded by: Decision 116**`. Decision 116's body contains 0 occurrences of the string `Secrets Manager`; Decision 37's contains 2. Excluding `docs/plans/`, `audits/`, `docs/audit-prompts/`, `logs/`, and the two DECISIONS files, 18 files contain the string `Decision 37`, among them `terraform/personal/secrets_manager_brokers.tf`, `terraform/personal/oidc.tf`, `terraform/bootstrap/github_ci_apply.tf`, `src/common/ducklake_runtime.py`, and `src/lambdas/ducklake_catalog_dr/handler.py`. Decision 37 carries no `**Status:**` marker; it uses a fused `**Decision status:**` line whose date is separated by a U+2014 em dash, so a grep written with an ASCII double-hyphen will not match it. The 18-file count depends on the exclusion set stated above -- change the exclusions and the number changes; state yours. | `docs/DECISIONS.md`; the named files | <!-- pragma: allowlist secret -- the flagged tokens are an AWS service name and a terraform filename, not a credential -->
+| G24 | `scripts.decisions_md.extract_amends_edges(raw_title)` returns these results: `"amends Decision 1, Decision 2"` -> `[1]`; `"amends Decision 1, 2"` -> `[1, 2]`; `"amends Decisions 1/2"` -> `[1, 2]`; `"amends Decision 1 and Decision 2"` -> `[1, 2]`; `"amends Decision 1 and 2"` -> `[1]`. Decision 160's raw title names amendments to Decision 145, Decision 134, and Decision 146; the function returns `[145]`, and the committed index row for 160 records `amends: [145]`. Across all 146 index rows the key union contains `amends`, `supersedes`, `superseded_by` and no `amended_by`. These five probe strings are synthetic; run them yourself rather than trusting the table, and check whether other continuation forms exist in real titles. | `scripts/decisions_md.py`; `docs/decisions-index.json` |
+| G25 | `scripts.decisions_md._extract_related_decisions` returns `[49, 52, 117, 164, 122]` for Decision 116. Its `**Related:**` line names 49, 52 and 117; 164 and 122 appear in a following `[Amendment 2026-08-03: ...]` trailer, which falls inside the capture because the extractor terminates only on a following bold marker, `---`, or end-of-block. Whether the two absorbed numbers are in fact related to 116 is a separate question from whether the field captured them deliberately. | `scripts/decisions_md.py`; `docs/DECISIONS.md` |
+| G26 | 99 of 119 live entries end with a `---` block separator; 20 do not. The 20 are Decisions 48, 64, 65, 76, 94, 102, 103, 118, and the contiguous run 152-163. Decisions 164, 165 and 166 carry the separator again. `decision-entry.yaml` states no rule for the separator, though `:218` presupposes one ("everything between the header line and the closing '---'") -- a procedure whose behaviour is undefined for the 20 entries lacking it. | `docs/DECISIONS.md`; `docs/contracts/decision-entry.yaml` |
+| G27 | `validate_decisions_size` emits the constant `_RELIEF_VALVES` verbatim in BOTH of its failure messages -- the header-count failure and the combined-byte failure. That constant reads: "compact superseded decision bodies to pointer stubs (Decision 149) -- archiving a live entry to docs/DECISIONS_ARCHIVE.md does NOT relieve the combined ceiling, since it only moves bytes between the two counted files; only compaction and a leaner per-entry authoring size norm actually reduce combined bytes". `decision-entry.yaml`'s `size_governance` comment states the same archival point. | `scripts/checks/decisions/validate_decisions_size.py:23-29`; `docs/contracts/decision-entry.yaml:236-239` |
 
 ## EMPIRICAL PASS
 
