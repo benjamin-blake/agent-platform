@@ -259,6 +259,18 @@ verdict; if the honest answer is that most or all interventions still hold, say 
 Then the aggregate question: **is there a single recurring mechanism that causes interventions in
 this territory to erode, or is each erosion independent?**
 
+**One candidate mechanism to adjudicate, not to accept.** G21 and G22 record that the corpus has
+two independent ceilings (live headers; committed-index bytes) and two named relief levers
+(Decision 149 compaction; Decision 146 archival), and that compaction preserves the header line
+the counting regex matches, while archived rows retain full-cap index excerpts. The hypothesis --
+yours to confirm, refine, or refute -- is that the levers are DISJOINT with respect to the
+ceilings, so no single relief action can move both, and every intervention therefore delivers
+partial relief by construction. Test it: for each ceiling, determine which lever moves it, by how
+much, and whether any lever moves both. If the hypothesis holds it is a candidate answer to the
+aggregate question; if it does not, say so and show the arithmetic. A related open recommendation
+(rec-2968) reports that Decision 160's own stated binding-order for these ceilings did not match
+what bound in practice -- assess whether the corpus states anywhere which ceiling binds first.
+
 Every finding you file in Arc B or Arc C must populate `survives_failure_mode` -- see the field's
 definition under OUTPUT for what is legal there.
 
@@ -338,6 +350,17 @@ pinned enum `detected` | `partially-detected` | `undetected`:
 - **(a) `parallel-contracts`** -- two artifacts asserting the same semantics in different places.
 - **(b) `contradictory-contracts`** -- two artifacts asserting incompatible semantics.
 - **(c) `contract-code-drift`** -- a contract's stated semantics no longer matching the code.
+
+**One candidate mechanism to adjudicate, not to accept.** G24 and G25 record two cases where a
+typed projection disagrees with the prose it derives from: an amends-edge extractor that drops
+targets on two of five continuation forms, and a related-decisions extractor that absorbs a
+following amendment trailer. G26 records a third: an authoring convention that flipped off and
+back on with no rule stating it. The hypothesis -- yours to confirm, refine, or refute -- is that
+these are one root cause rather than three defects: the typed projections and the human-authored
+prose are derived from the same text by separate regexes, each encoding a slightly different
+grammar, with no single grammar either binds to. Note that `decision-entry.yaml` names
+`scripts/decisions_md.py` as the shared parser precisely to prevent this; assess whether that
+binding holds in practice.
 
 For each: is it detectable today, by what, over what subset of the population, and what is the
 minimum mechanism that would detect it? Where you propose a mechanism, state its false-positive
@@ -547,7 +570,9 @@ and available at this phase; they do not require the Q8 class taxonomy, which is
    it to three entries now and to E2's ten later. Record the rule verbatim in
    `meta.partition_rule`; E2 does not restate it.
 3. One entry cited by name from live code or a contract outside `docs/DECISIONS.md` and
-   `docs/DECISIONS_ARCHIVE.md`.
+   `docs/DECISIONS_ARCHIVE.md`. Decision 37 (see G23) satisfies this and additionally carries a
+   supersession marker whose superseder does not restate its content -- a sharper case than a
+   plain citation. Use it or a better one you find; it is offered, not mandated.
 
 If a single entry satisfies more than one criterion, pick a different entry for the others so the
 three are distinct. You MAY draw one from `docs/DECISIONS_ARCHIVE.md` if it makes criterion 3
@@ -595,6 +620,12 @@ observation awaiting your adjudication.
 | G18 | The decision-scout gate triages from `docs/decisions-index.json` plus targeted reads of shortlisted entries, and describes the whole-corpus load as the cost it avoids. Its skill file names the arrangement as interim pending a portal cutover owned by roadmap item T1.5. | `.claude/skills/decision-scout/SKILL.md` |
 | G19 | The ritual population spanned Class A (7 files), Class B (3, all `provisional_v0`), and Class C (6). The free-form population included `decision-entry.yaml`, `file-router.yaml`, `deploy-paths.yaml`, `data-modeling-standard.yaml`, `candidate-decision-ratification.yaml`, `instruction-architecture.yaml`, and `marker-grammar.yaml`. | `docs/contracts/` |
 | G20 | `decision-entry.yaml` opens with a comment stating it is not a Class A/B/C ritual contract and that the drift gate therefore skips it, citing `file-router.yaml`, `deploy-paths.yaml`, and `read-engine.yaml` as precedent and Decision 118 for the free-form registry pattern. | `docs/contracts/decision-entry.yaml:1-5` |
+| G21 | `validate_decisions_size` counts live headers with `_LIVE_H2_RE = ^## Decision \d+:`. `decision-entry.yaml`'s `compaction.stub_grammar.never_remove_headers` requires a compacted stub to keep its `## Decision N:` header line unchanged. A compacted entry therefore still matches the counting regex. | `scripts/checks/decisions/validate_decisions_size.py:30,45`; `docs/contracts/decision-entry.yaml` `compaction.stub_grammar.never_remove_headers` |
+| G22 | In `docs/decisions-index.json`, the 27 rows with `live: false` carry `triage_excerpt` values averaging 292 characters (max 320), totalling 7,879 excerpt characters -- 17.8% of the index's total excerpt characters. Archived entries retain excerpts at the same cap as live ones. | `docs/decisions-index.json`; `scripts/decisions_index.py` |
+| G23 | Decision 37 carries `**Superseded by: Decision 116**`. Decision 116's body contains 0 occurrences of the string `Secrets Manager`; Decision 37's contains 2. Excluding `docs/plans/`, `audits/`, `docs/audit-prompts/`, `logs/`, and the two DECISIONS files, 18 files contain the string `Decision 37`, among them `terraform/personal/secrets_manager_brokers.tf`, `terraform/personal/oidc.tf`, `terraform/bootstrap/github_ci_apply.tf`, `src/common/ducklake_runtime.py`, and `src/lambdas/ducklake_catalog_dr/handler.py`. Decision 37 also uses a fused `**Decision status:** Decided -- April 2026` line rather than the contract's `**Status:**` marker. | `docs/DECISIONS.md`; the named files |
+| G24 | `scripts.decisions_md.extract_amends_edges(raw_title)` returns these results: `"amends Decision 1, Decision 2"` -> `[1]`; `"amends Decision 1, 2"` -> `[1, 2]`; `"amends Decisions 1/2"` -> `[1, 2]`; `"amends Decision 1 and Decision 2"` -> `[1, 2]`; `"amends Decision 1 and 2"` -> `[1]`. Decision 160's raw title names amendments to Decision 145, Decision 134, and Decision 146; the function returns `[145]`, and the committed index row for 160 records `amends: [145]`. The index schema has `amends`, `supersedes`, and `superseded_by` keys but no `amended_by` key. | `scripts/decisions_md.py`; `docs/decisions-index.json` |
+| G25 | `scripts.decisions_md._extract_related_decisions` returns `[49, 52, 117, 164, 122]` for Decision 116. Its `**Related:**` line names 49, 52 and 117; 164 and 122 appear in a following `[Amendment 2026-08-03: ...]` trailer, which falls inside the capture because the extractor terminates only on a following bold marker, `---`, or end-of-block. | `scripts/decisions_md.py`; `docs/DECISIONS.md` |
+| G26 | 99 of 119 live entries end with a `---` block separator; 20 do not. The 20 are Decisions 48, 64, 65, 76, 94, 102, 103, 118, and the contiguous run 152-163. Decisions 164, 165 and 166 carry the separator again. `decision-entry.yaml` states no rule for the separator. | `docs/DECISIONS.md`; `docs/contracts/decision-entry.yaml` |
 
 ## EMPIRICAL PASS
 
@@ -710,8 +741,8 @@ Open recommendations in this territory. Each is a hit; assess sufficiency:
 `rec-3015` (justify why a contract was rejected before minting an entry), `rec-3016` (route
 single-call-site tweaks to `amendment_forms`), `rec-2822` (enumerate citation-stranded entries
 into a manifest -- **this owns the full per-entry ledger**), `rec-2823` (migrate-then-archive
-branch), `rec-2984` (move runbooks out of ambient prose into contracts), `rec-2991` (contract
-silent on block separator), `rec-3001` / `rec-3012` (index byte pin), `rec-2200` (standing-prose
+branch), `rec-2984` (move runbooks out of ambient prose into contracts), `rec-2971` (amends-edge continuation forms under-extracted), `rec-2991` (contract
+silent on block separator), `rec-2968` (Decision 160's binding-order claim), `rec-3001` / `rec-3012` (index byte pin), `rec-2200` (standing-prose
 guard underscopes Decision 86).
 
 ### Do-not-flag
