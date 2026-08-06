@@ -167,8 +167,9 @@ Where your re-derivation disagrees with this prompt, YOUR measurement is the evi
 
 **Scripted aggregate scans are permitted and expected.** Several grounding figures (G6, G7, G9,
 G10, G11, and DD-A's numerator) are corpus-wide aggregates that can only be re-derived by
-processing all of `docs/DECISIONS.md`. Do that -- via a `bin/venv-python` script that computes and
-prints the aggregate. The bounded-retrieval rule under METHOD P1 restricts what you load into
+processing all of `docs/DECISIONS.md`. Do that -- via `bin/venv-python -c`, a heredoc, or a script
+written OUTSIDE the repository tree (e.g. under `/tmp`). Never create a scratch `.py` inside the
+tree; that would breach the write boundary. The bounded-retrieval rule under METHOD P1 restricts what you load into
 CONTEXT, not what a script may compute over. Reading a scripted count of the corpus is not
 reading the corpus.
 
@@ -260,7 +261,9 @@ this territory to erode, or is each erosion independent?**
 Every finding you file in Arc B or Arc C must populate `survives_failure_mode` -- see the field's
 definition under OUTPUT for what is legal there.
 
-**Verdict enum:** `primary-mechanism-identified` | `contributing-factors-only` | `undetermined`
+**Verdict enum:** `primary-mechanism-identified` | `contributing-factors-only` |
+`no-erosion-established` (you established the interventions largely hold -- a positive finding) |
+`undetermined` (you could not establish either way). Do not use `undetermined` for the former.
 
 ### Q2 -- Routing decidability, against external practice
 
@@ -308,7 +311,9 @@ self-certified and by what evidence; whether any contract exists whose declared 
 "mechanism" as opposed to "field semantics"; and the relative discoverability of the two
 destinations.
 
-**Verdict enum:** `primary-cause-established` | `contributing-only` | `undetermined`
+**Verdict enum:** `primary-cause-established` | `contributing-only` | `no-structural-cause`
+(you established the routing surfaces do not bias the choice) | `undetermined` (you could not
+establish either way)
 
 ### Q4 -- Destination readiness
 
@@ -366,6 +371,12 @@ A pinned starting option set for the corpus-shape sub-question -- choose one or 
 `wrong_end_state` with respect to T1.5, in `end_state.t15_verdict`. An end-state that ignores
 T1.5 is incomplete.
 
+**Second required sub-answer:** roadmap item T2.56 already states an end-state for the corpus
+SHAPE -- `docs/DECISIONS.md` as a retrieved-by-id ADR log, with the header ceiling and index pin
+retired as no longer necessary. Read it and record `end_state.t256_verdict` on the SAME four-value
+enum. T2.56 is the closer owner of Q7's `corpus_shape` question than T1.5 is; if your end-state
+simply restates T2.56, say so plainly -- that is a finding about ownership, not a weakness.
+
 To ground that verdict you need the consumer inventory -- who reads the corpus today and would
 have to be repointed. Derive it with this bounded command rather than by inspection:
 
@@ -379,8 +390,9 @@ Classify each hit as a planning-agent consumer, a CI guard, a generator, or a wa
 state which class T1.5's read portal does and does not cover.
 
 Constraints on the ANSWER, not its content: it must state (i) the routing rule in decidable form,
-(ii) the forcing function that makes each routing happen, (iii) which Q1 `ending_class` each
-forcing function survives, and (iv) what it costs -- in authoring effort, agent context, and
+(ii) the forcing function that makes each routing happen, (iii) a legal `survives_failure_mode`
+value for each forcing function (see OUTPUT for the legality rule -- `no-erosion-established` is
+legal here and is the correct value if Q1 found no erosion), and (iv) what it costs -- in authoring effort, agent context, and
 migration. An end-state with no forcing function is a restatement of the problem.
 
 **Verdict enum:** `single-end-state-recommended` | `options-with-tradeoffs` | `insufficient-evidence`
@@ -408,7 +420,9 @@ Both layers use the same pinned disposition enum: `retain_full_decision` |
 what remains authoritative, what historical material survives, and the counterfactual loss if the
 move is made incorrectly.
 
-**Verdict enum:** `ordered-sequence-with-abort-criteria` | `partial-sequence` | `insufficient-evidence`
+**Verdict enum:** `ordered-sequence-with-abort-criteria` | `partial-sequence` |
+`no-migration-required` (the current architecture should stand; a confident answer, not a weak
+one) | `insufficient-evidence`
 
 ### Q9 -- Questions not asked
 
@@ -513,7 +527,10 @@ and available at this phase; they do not require the Q8 class taxonomy, which is
 
 1. One entry carrying `**Status:** Superseded` in the live file.
 2. One entry whose body is predominantly mechanism specification -- shapes, enums, grammars,
-   thresholds -- rather than rationale, by your E2 partitioning rule.
+   thresholds -- rather than rationale. **Author your rationale/specification/change-record
+   partitioning rule HERE, at this phase, and record it once**; E2 later reuses that same rule
+   rather than defining its own. There is no forward dependency: you write the rule, then apply
+   it to three entries now and to E2's ten later.
 3. One entry cited by name from live code or a contract outside `docs/DECISIONS.md` and
    `docs/DECISIONS_ARCHIVE.md`.
 
@@ -544,7 +561,7 @@ observation awaiting your adjudication.
 | ID | Observed fact | Anchor |
 |---|---|---|
 | G1 | The drift gate iterates every `docs/contracts/*.yaml` and `continue`s past any file whose parsed data lacks a `contract` mapping containing a `class` key. Files taking that branch receive `yaml.safe_load` and a mapping-type check only. | `scripts/checks/contracts/validate_contract_drift.py:64-72` |
-| G2 | 16 of 39 contract files (37 `.yaml` + 2 `.md`) carried a `contract:` block with `class:`; 23 did not. | `docs/contracts/` |
+| G2 | 16 of 39 contract files (37 `.yaml` + 2 `.md`) carried a `contract:` block with `class:`; 23 did not. The 23 include the 2 `.md` files (`delegate-cli.md`, `environment-taxonomy.md`), which the drift gate cannot see at all -- it globs `*.yaml` only (G1). For S3 membership and every population-relative count, treat all 23 as free-form and say whether you are counting the `.md` pair. | `docs/contracts/` |
 | G3 | `file-router.yaml` carried 82 route entries; 8 of the 39 contract files appeared as a `targets` value; 31 did not. | `docs/contracts/file-router.yaml:24` |
 | G4 | Contract files with no filename match under `scripts/`, `src/`, `config/`. **This count is method-dependent** -- `grep -rIlF` on the bare basename gives 15; on the stem without extension, 10; on the full `docs/contracts/<name>` path, 17. State your method before quoting a number. Further caveat: `load_all_contracts` (`scripts/contracts.py`) globs the directory, so any filename-grep undercounts glob-loaded consumers. | `docs/contracts/`, `scripts/contracts.py` |
 | G5 | `instruction-architecture.yaml` defines 5 layers (universal rules, project knowledge base, slash commands, skills, executor prompts), each with a `content_locations` list. Neither `docs/contracts/` nor `docs/DECISIONS.md` appears in any layer's locations. The file also carries a 7-entry `anti_patterns` list. | `docs/contracts/instruction-architecture.yaml` |
@@ -553,7 +570,7 @@ observation awaiting your adjudication.
 | G8 | Eight numbered entries governing decision-log growth carry dates from 2026-07-16 to 2026-07-31: D134 (7,182 B), D145 (6,465 B), D146 (4,175 B), D149 (8,210 B), D150 (5,899 B), D151 (11,272 B), D152 (7,587 B), D160 (18,879 B). D160, whose title begins "Retire the DECISIONS.md live-byte ceiling", was the largest live entry measured. D166 (17,240 B, dated 2026-08-04) was the second largest. | `docs/DECISIONS.md` |
 | G9 | 28 of 119 live entries contained the string `docs/contracts/`. | `docs/DECISIONS.md` |
 | G10 | The exact string `**Significance:**` appeared in 6 of 119 live entries. `decision-entry.yaml` lists `required_markers` as Status, Date, Decision, and 6 `optional_markers_fixed_spelling`; neither list contains Significance. See trap 6 on near-miss spellings. | `docs/contracts/decision-entry.yaml:39-57`; `docs/DECISIONS.md` |
-| G11 | 4 live entries carried `**Status:** Superseded`. Live `## Decision` headers numbered 119. Live file 573,726 B + archive 111,070 B = 684,796 B combined. | `docs/DECISIONS.md`, `docs/DECISIONS_ARCHIVE.md` |
+| G11 | 2 live entries carry `**Status:** Superseded` as their status marker. A naive contains-anywhere count returns 4, because two other entries QUOTE that literal string while specifying the compaction stub grammar -- count the status marker, not the substring. Live `## Decision` headers numbered 119. Live file 573,726 B + archive 111,070 B = 684,796 B combined. | `docs/DECISIONS.md`, `docs/DECISIONS_ARCHIVE.md` |
 | G12 | The size guard's constants are `_DECISIONS_LIVE_MAX_H2 = 120` and `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. The committed-index test pins `_COMMITTED_INDEX_MAX_BYTES = 131_000`, annotated as a Decision 166 re-derivation of a prior 110,000-byte pin. `docs/decisions-index.json` measured 110,582 B. | `scripts/checks/decisions/validate_decisions_size.py:20-21`; `tests/test_decisions_index.py:450` |
 | G13 | `decision-entry.yaml` carries a `significance:` section with four routing rows -- `numbered_decision`, `cd_state_flip`, `operational_fact`, `field_semantics` -- of which `field_semantics` is the row naming a contract as destination. It separately carries an `amendment_forms:` section describing two dated in-place annotation shapes. | `docs/contracts/decision-entry.yaml:114-143`, `:68-81` |
 | G14 | `decision-entry.yaml` states "~12,103 unguarded inbound 'Decision N' citations across the repo". A compose-time occurrence count over tracked files was materially larger -- by more than 7,000. **No figure is quoted here deliberately:** this prompt file itself contains such citations, so any number pinned here is self-referentially unstable. Derive it yourself with `git grep -oIE 'Decision [0-9]+' -- .` (occurrences) and note that `git grep -IE` (matching LINES) gives a materially smaller number. State your command, your unit, and your result. | `docs/contracts/decision-entry.yaml:192` |
@@ -625,7 +642,13 @@ Surfaces: `docs/ROADMAP-PLATFORM.yaml` (`tier_items[]`, `candidate_decisions[]`)
 `docs/DECISIONS.md`, `logs/.recommendations-log.jsonl`, and the prior audit outputs below.
 
 Record on every finding: `roadmap_crossref.dedup_search_terms` (what you searched),
-`dedup_hit_count`, and `classification`. **`dedup_hit_count` counts DISTINCT MATCHING ITEMS** --
+`dedup_hit_count`, and `classification`. **The negative-search requirement applies to
+`classification: novel` ONLY** -- a `novel` finding asserts nothing owns the territory, so an
+unrecorded search leaves that assertion unevidenced and the finding is `HYPOTHESIS`. A
+`planned-insufficient` or `planned-unbuilt` finding has a POSITIVE hit by construction; its
+confidence follows the ordinary file:line rule and is unaffected.
+
+**`dedup_hit_count` counts DISTINCT MATCHING ITEMS** --
 recommendation ids plus tier_item ids plus decision numbers plus prior-audit finding ids -- not
 search terms and not surfaces. **A hit means sufficiency-assessment or rejection, never a fresh
 discovery.** A finding with no recorded negative search is `confidence: HYPOTHESIS`.
@@ -646,10 +669,9 @@ corpora they audited:
 All five are Q1 `audit_round` rows. ACG is marked adjacent because its subject is ambient context
 cost rather than record routing; assess whether that boundary holds.
 
-**Superseded prompt.** An earlier audit prompt covering overlapping territory was composed and
-then superseded by this one; it was never executed and has been removed. If you find any
-reference to a "decision knowledge persistence scalability" audit, it has no output and is not an
-owner -- note it in `meta.contract_notes` and move on.
+**Superseded prompt.** A "decision knowledge persistence scalability" audit prompt covering
+overlapping territory was superseded by this one and removed; it was never executed and has no
+output. Stale references to it survive in a few files. It is not an owner.
 
 Roadmap items owning adjacent territory -- read each and judge whether its remedy is sufficient,
 unbuilt, or off-target:
@@ -674,10 +696,8 @@ guard underscopes Decision 86).
 
 ### Do-not-flag
 
-Only two, both about how you write rather than what you may conclude: the public-repo content
-boundary (Decision 101) and the Single Portal Invariant (Decision 84). Everything else in this
-repository's decision architecture is inside the blast radius -- see SCOPE / Constraints you MAY
-challenge, and price what you challenge.
+Only the two write-boundaries named in SCOPE. Everything else in this repository's decision
+architecture is inside the blast radius -- price what you challenge.
 
 One planning-time constraint to NOTE (not an audit boundary): a temporary freeze makes all plans
 IMPLEMENTATION-type. If your Arc-C sequence is naturally a multi-phase programme, say so plainly
@@ -713,11 +733,12 @@ audit:
     contract_notes: ""
     stale_anchors: []                 # [{anchor, expected, found}]
   question_answers:
-    - {q: Q1, verdict: primary-mechanism-identified|contributing-factors-only|undetermined,
+    - {q: Q1, verdict: primary-mechanism-identified|contributing-factors-only|no-erosion-established|undetermined,
        basis: [<finding ids>], prose: ""}
     - {q: Q2, verdict: sufficient|partial|insufficient, basis: [], prose: "",
        external_checklist: [{property: EX1..EX13, rating: met|partial|missed, evidence: ""}]}
-    - {q: Q3, verdict: primary-cause-established|contributing-only|undetermined, basis: [], prose: ""}
+    - {q: Q3, verdict: primary-cause-established|contributing-only|no-structural-cause|undetermined,
+       basis: [], prose: ""}
     - {q: Q4, verdict: ready|ready-with-gaps|not-ready, basis: [], prose: ""}
     - {q: Q5, verdict: sufficient|partial|insufficient, basis: [], prose: "",
        detection_ratings: [{property: parallel-contracts|contradictory-contracts|contract-code-drift,
@@ -725,7 +746,7 @@ audit:
     - {q: Q6, verdict: governance-warranted|absence-correct|partial, basis: [], prose: ""}
     - {q: Q7, verdict: single-end-state-recommended|options-with-tradeoffs|insufficient-evidence,
        basis: [], prose: ""}
-    - {q: Q8, verdict: ordered-sequence-with-abort-criteria|partial-sequence|insufficient-evidence,
+    - {q: Q8, verdict: ordered-sequence-with-abort-criteria|partial-sequence|no-migration-required|insufficient-evidence,
        basis: [], prose: ""}
     - {q: Q9, answers: [{question: "", answer: "", basis: [<finding ids>]}]}
   intervention_erosion:               # exactly 14 rows: 9 kind=decision, 5 kind=audit_round
@@ -741,8 +762,20 @@ audit:
   end_state:
     corpus_shape: keep_monolith|extract_machine_semantics_only|extract_multiple_typed_fields|generate_curated_index|accelerate_portal_transition|other
     t15_verdict: sufficient_as_planned|sufficient_with_specific_amendments|materially_incomplete|wrong_end_state
-    routing_rule: ""
+    routing_rule: ""                  # the decidable rule itself, stated so two authors agree
     forcing_functions: [{mechanism: "", survives_failure_mode: "", cost: ""}]
+  deep_dive_outputs:                  # the machine-readable home for DD-A, DD-B and E2
+    dd_a: {lineage_bytes: <int>, live_file_bytes: <int>, byte_share: "",
+           lineage_headers: <int>, header_ceiling: <int>, header_share: "",
+           ns6_verdict: cure-cheaper|cure-costlier|indeterminate, arithmetic_note: ""}
+    dd_b: {points: [{point: 1|2|3|4|5, home_today: "", home_end_state: ""}],
+           routing_verdict: correctly-routed|correctly-blocked|rule-silent,
+           self_count_note: "",
+           shipped_outcome: ""}         # "" if located and described; `not-located` if not
+    e2_partition: {rule: "",            # authored at DD-C, reused here
+                   rows: [{decision: "Decision NN", rationale_pct: <int>,
+                           specification_pct: <int>, change_record_pct: <int>,
+                           other_pct: <int>}]}
   content_class_routing:
     - class_name: ""
       description: ""
@@ -826,6 +859,22 @@ audit:
 - `per_surface_assessment.strengths` -- what that surface does well, in one or two sentences;
   required, because a rubric of gaps alone misrepresents a surface.
 - `per_surface_assessment.top_gaps` -- the finding ids that most drove that surface's maturity.
+- `question_answers[].basis` -- finding ids supporting the verdict; `[]` is legal when the answer
+  rests on grounding facts alone rather than on any filed finding.
+- `question_answers[].prose` -- the answer itself, <= 300 words per question.
+- `intervention_erosion[].held_until` -- an ISO date where one is determinable, else a short event
+  name (e.g. `"Decision 160"`), else the literal `still-holding`.
+- `intervention_erosion[].date` / `size_bytes` on a `kind: audit_round` row -- the audit output
+  file's own date and byte size, NOT its landed follow-ups. Never null for an audit_round row;
+  both are readable from `audits/`.
+- `rubric_ratings[].evidence` on an `n/a` rating -- the literal `n/a`, not a file:line. The
+  file:line format is required only for `strong|adequate|weak|absent`.
+- `content_class_routing[].confidence` -- same rule as on findings: CONFIRMED requires the class
+  traced to named entries; anything less is HYPOTHESIS.
+- `summary.top_improvements` -- 3 to 5 finding ids, most leverage first.
+- `meta.contract_notes` -- free text, but write it as newline-separated `key: value` lines so a
+  later run can diff it. Expected keys where applicable: `drift`, `preflight`, `superseded_prompt`,
+  `out_of_population`, `unsettled_at_cap`, `significance_marker_counted`, `validate_pre`.
 
 **`survives_failure_mode`, pinned.** Legal values, in order of preference:
 
@@ -835,7 +884,9 @@ audit:
    every `intervention_erosion` row is `relief-still-holding`. This exists so a no-erosion finding
    is expressible; without it the honest no-erosion outcome would have no legal value.
 3. A free-text named mechanism, when the fix survives something outside that enum.
-4. `""` -- ONLY for a finding filed under Q1 itself, which diagnoses rather than remedies.
+4. `""` -- for any DIAGNOSTIC finding: one filed under Q1-Q6 that names a defect without
+   proposing a mechanism that must survive anything. Findings under Q7 and Q8, and any finding
+   whose `change_type` proposes a new mechanism, MUST use option 1, 2, or 3.
 
 The same rule applies to the field on `migration_sequence[]` and `end_state.forcing_functions[]`.
 
@@ -886,6 +937,11 @@ place: `per_surface_assessment[].maturity`.
 - **strong** -- 0 critical AND <= 1 high.
 - **solid** -- <= 1 critical.
 - **nascent** -- otherwise.
+
+If `meta.degraded_external` is true, the EX ratings were made without source access: append
+`" (rated without external sources)"` to each `external_checklist[].evidence` string, and say so
+in the companion report. The `frontier` gate is otherwise unchanged -- degraded sourcing does not
+relax it.
 
 The EX clause is deliberately REPO-WIDE, not per-surface: EX1-EX13 rate the routing architecture
 as a whole, so a single `missed` forecloses `frontier` for every surface simultaneously. That is
