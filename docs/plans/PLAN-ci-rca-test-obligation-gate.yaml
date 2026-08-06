@@ -1,0 +1,437 @@
+schema_version: 3
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "ci-rca-test-obligation-gate"
+intent: >-
+  Restore the current main canary to green by fixing the concrete coverage regression in
+  validate_composite_action_shell_bodies.py, then close the recurrent CI-RCA escape by making
+  behavior-changing implementation work declare executable test obligations that participate in
+  the existing verification and graduation lifecycle rather than living as prose-only policy.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-test-obligation-gate.yaml
+phase: >-
+  ci_rca rec-driven forward fix under Decision 55/72/73. Claims no tier_item alignment and uses the
+  ci_rca soft-warn exception because unresolved CI-RCA recs hard-block unrelated planning. This
+  plan is related work by same-rec and same-failure-category: it bundles rec-3044, rec-3043,
+  rec-2996, rec-2995, and rec-2970.
+scope:
+  - file: tests/checks/ci_guards/test_validate_composite_action_shell_bodies_r2.py
+    action: Create
+    purpose: >-
+      Add a focused sibling test module for _r2_test_covers rather than growing the already-large
+      existing test file. Cover the read-error continuation behavior: one tests/**/*.py path raises
+      from Path.read_text, scanning continues, and a later readable test proves the literal GitHub
+      composite shell argv.
+  - file: scripts/checks/ci_guards/validate_composite_action_shell_bodies.py
+    action: Modify
+    purpose: >-
+      Optional only if the implementation chooses fail-loud simplification over testing the
+      defensive fallback. Preferred path is no production-code change here; if changed, preserve the
+      R1/R2/R3 guard semantics and add the automated test that fails without the behavior change.
+  - file: scripts/roadmap/plan_document.py
+    action: Modify
+    purpose: >-
+      Extend the schema with first-class test obligation models. The field must be optional for
+      historical plans but strict when present: source path, guarded behavior, test selector or
+      command, linked verification step, and red/green expectation or waiver. Preserve
+      extra="forbid" semantics and avoid widening unrelated plan fields.
+  - file: scripts/checks/roadmap/validate_plan_documents.py
+    action: Modify
+    purpose: >-
+      Add deterministic plan validation for test obligations without creating a separate check or
+      touching scripts/validate.py. Enforce that each obligation links to a real verification_plan
+      step, that the linked command is executable text, and that implementation plans with
+      behavior-changing Python/script/workflow/config scope either declare obligations or carry an
+      explicit waiver.
+  - file: scripts/checks/verification/validate_graduation_completeness.py
+    action: Modify
+    purpose: >-
+      Reuse the existing verification graduation linkage for deterministic test obligations: when
+      a linked VP step is marked graduation: graduate, the implement PR must still produce the
+      matching (plan_slug, graduation_check_id) registry row. Add only obligation-aware diagnostics;
+      do not create a second registry.
+  - file: docs/contracts/verification-registry.yaml
+    action: Modify
+    purpose: >-
+      Add an amendment note documenting that deterministic test obligations graduate through the
+      existing primitive slots, especially test_selector and command_exit_zero, and that mutation
+      testing remains out of scope until its future tier item and upstream dependencies land.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Add the admitted graduated check rows for this plan's deterministic test-obligation VP steps.
+      This is the single durable verification registry; rows must use existing primitive slots and
+      match the plan's (slug, graduation_check_id) pairs exactly.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Add Test Obligation Assessment to planning: every behavior-changing scope row must identify
+      the behavior under change, the automated test that fails without it, the exact command, and
+      whether the obligation is graduate, waive, or not-applicable. Make clear that this is part of
+      verification, not a parallel prose checklist.
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a zero-context adequacy check that recommends REVISE when a behavior-changing plan lacks
+      a linked test obligation, uses a structural-only test, omits a red/green expectation, or
+      carries a thin waiver.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Add implementation-time obligation handling: execute each declared obligation after code
+      changes and before code review, record positive evidence, run differential admission for
+      graduate obligations via the existing verification graduation path, and stop on nondeterminism
+      rather than retrying into green.
+  - file: .claude/skills/code-review/SKILL.md
+    action: Modify
+    purpose: >-
+      Add review criteria that raise High when behavior-changing code lacks test-obligation
+      evidence, when the added test does not assert the guarded behavior, or when a waiver is not
+      justified by deterministic limits.
+  - file: scripts/ci_rca/log_evidence.py
+    action: Modify
+    purpose: >-
+      Verify or finish the rec-2995/rec-2996 prevention path so oversized validate logs preserve a
+      failure-relevant tail window. Prefer using the existing bound_text_windowed implementation;
+      only modify this file if production call sites or validation still use head-only truncation.
+  - file: scripts/ci_rca/fetch_logs.py
+    action: Modify
+    purpose: >-
+      Verify or finish the production log-fetch side of rec-2995/rec-2996: full-tier canary logs
+      must retain tail failure summaries under byte limits. Keep any change bounded and covered by
+      targeted tests; do not add mutation testing.
+  - file: scripts/ops_portal/ci_rca_runtime.py
+    action: Modify
+    purpose: >-
+      Harden the runtime marker parser only if local inspection confirms rec-2996's interleaved
+      non-numeric stdout parser defect remains live. If already fixed, leave this file unchanged
+      and document the deterministic no-op evidence in the implementation summary.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Close rec-2970's pre/post gate-placement gap without promoting the current per-changed-file
+      100 percent coverage floor into --pre. CD.30's roadmap sequencing is authoritative: this
+      plan may add deterministic test-obligation/no-op-honesty checks in --pre, but must not
+      implement the diff-line coverage ratchet or reorder CD.30 by moving validate_test_coverage
+      wholesale into the fast tier.
+  - file: tests/test_plan_document_test_obligations.py
+    action: Create
+    purpose: >-
+      Cover the new TestObligation schema in a focused sibling module rather than growing the
+      already-large tests/test_plan_document.py: valid selector obligation, valid command obligation,
+      linked verification step, missing link failure, missing behavior failure, graduate linkage,
+      waiver reason requirement, and backwards compatibility for historical plans without the field.
+  - file: tests/checks/roadmap/test_validate_plan_documents.py
+    action: Create
+    purpose: >-
+      Cover deterministic obligation validation in the existing plan-document validator: behavior
+      scope without obligation fails for new implementation plans, non-behavior or explicit waiver
+      passes, malformed links fail, and all diagnostics name the plan and source path.
+  - file: tests/checks/verification/test_validate_graduation_completeness.py
+    action: Modify
+    purpose: >-
+      Cover obligation-aware graduation diagnostics while preserving the existing (plan_slug,
+      check_id) enforcement behavior for ordinary verification_plan graduate steps.
+  - file: tests/test_ci_rca_log_evidence.py
+    action: Modify
+    purpose: >-
+      Add or confirm coverage for oversized validate logs retaining the final failed-check summary
+      through the windowed evidence path, including metadata that reports truncation honestly.
+  - file: tests/test_ci_rca_fetch_logs.py
+    action: Modify
+    purpose: >-
+      Add or confirm coverage for production log fetch retaining head and tail under byte limits,
+      and for timeout/drain behavior if fetch_logs.py still needs a code change.
+  - file: tests/ops_data_portal/test_ci_rca_runtime.py
+    action: Modify
+    purpose: >-
+      Add parser tolerance coverage only if scripts/ops_portal/ci_rca_runtime.py still contains the
+      interleaved-output bug cited by rec-2996. Otherwise omit this scope row from the actual
+      implementation diff and explain why the rec closure evidence is satisfied elsewhere.
+  - file: tests/test_checks_registry_test_obligations.py
+    action: Create
+    purpose: >-
+      Cover registry/pre-tier placement for the rec-2970 prevention path in a focused sibling
+      module rather than growing the already-budgeted tests/test_checks_registry.py. Existing
+      registry tests may be read for fixtures, but new SLOC lands in this file unless the
+      implementer records explicit no-growth evidence.
+bundled_recommendations:
+  - rec-3044
+  - rec-3043
+  - rec-2996
+  - rec-2995
+  - rec-2970
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The immediate CI failure is fixed: the focused pytest/coverage command for
+    tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py plus the new focused
+    R2 sibling test exits 0 with 100 percent coverage for scripts.checks.ci_guards.validate_composite_action_shell_bodies.
+  - >-
+    Plan documents can express test obligations as machine-readable schema: each obligation names
+    the guarded source, guarded behavior, test selector or command, linked verification_plan step,
+    and either a red/green expectation or a substantive waiver.
+  - >-
+    validate_plan_documents deterministically rejects new IMPLEMENTATION plans that modify
+    behavior-capable files without linked test obligations or explicit waivers, while historical
+    plans without the new field remain valid.
+  - >-
+    Deterministic test obligations integrate with existing verification graduation: graduate
+    obligations use existing primitive slots and the implement PR still fails if the declared
+    (plan_slug, graduation_check_id) registry row is missing.
+  - >-
+    The workflow skills instruct planning, plan critique, implementation, and code review to treat
+    test obligations as part of verification and to reserve test adequacy judgement for
+    zero-context critique/review rather than deterministic validators.
+  - >-
+    rec-2995 and rec-2996 are either fixed by verified production use of the windowed evidence path
+    or explicitly proven already satisfied with tests and closure evidence; future oversized
+    full-tier validate logs retain the failure-relevant tail summary under byte limits.
+  - >-
+    rec-2970's post-merge-only coverage escape receives a bounded prevention path that does not
+    reorder CD.30: deterministic test-obligation/no-op-honesty checks may run in --pre, but the
+    current per-changed-file 100 percent coverage floor is not promoted wholesale and the diff-line
+    coverage ratchet is left to its pending tier item.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Reproduce and then fix the immediate coverage regression.
+    command: >-
+      bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_shell_bodies.py tests/checks/ci_guards/test_validate_composite_action_shell_bodies_r2.py --cov=scripts.checks.ci_guards.validate_composite_action_shell_bodies --cov-fail-under=100 --cov-report=term-missing
+    expected: >-
+      Exits 0 after implementation, with validate_composite_action_shell_bodies.py at 100 percent
+      coverage and no missing lines 254-255.
+    fix_if: >-
+      If coverage remains below 100 percent, add a behavior-focused test for the uncovered branch
+      or remove the unreachable defensive branch with an explicit fail-loud rationale.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: composite-action-r2-read-error-continues
+  - step: 2
+    phase: pre-deploy
+    action: Validate the new plan schema and test-obligation validators.
+    command: >-
+      bin/venv-python -m pytest tests/test_plan_document.py tests/test_plan_document_test_obligations.py tests/checks/roadmap/test_validate_plan_documents.py
+    expected: >-
+      Exits 0 and includes failing-fixture coverage for missing obligation, malformed link, thin
+      waiver, and backwards-compatible historical plans.
+    fix_if: >-
+      If schema or validator tests fail, repair the TestObligation model or validation diagnostics
+      before touching workflow instructions.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: plan-test-obligations-schema-validation
+  - step: 3
+    phase: pre-deploy
+    action: Validate obligation integration with verification graduation.
+    command: >-
+      bin/venv-python -m pytest tests/checks/verification/test_validate_graduation_completeness.py tests/test_verification_checks.py
+    expected: >-
+      Exits 0; graduate obligations still require matching registry rows and ordinary graduated VP
+      checks are unchanged.
+    fix_if: >-
+      If ordinary graduation behavior regresses, back out obligation-specific coupling and keep the
+      registry as the single durable check surface.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: test-obligation-graduation-linkage
+  - step: 4
+    phase: pre-deploy
+    action: Validate CI-RCA evidence-window prevention for rec-2995 and rec-2996.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; log=Path('scripts/ci_rca/log_evidence.py').read_text(encoding='utf-8'); fetch=Path('scripts/ci_rca/fetch_logs.py').read_text(encoding='utf-8'); runtime=Path('scripts/ops_portal/ci_rca_runtime.py').read_text(encoding='utf-8'); assert 'bound_text_windowed' in log and 'head_tail_window' in log; assert 'tail' in fetch or 'bound_text_windowed' in fetch; assert 'ValueError' not in runtime or 'splitlines' in runtime" && bin/venv-python -m pytest tests/test_ci_rca_log_evidence.py tests/test_ci_rca_fetch_logs.py tests/ops_data_portal/test_ci_rca_runtime.py
+    expected: >-
+      Exits 0 and provides executable evidence for both branches: source inspection proves the
+      windowed/tail-retention and parser-tolerance hooks are present when code is already fixed, and
+      the targeted tests prove oversized validate logs retain the failure tail and runtime parsing
+      tolerates interleaved non-numeric stdout when that parser path is still live.
+    fix_if: >-
+      If the runtime parser test is out of scope because the file is already fixed, keep an executable
+      source-inspection assertion in this VP step and record its output beside the targeted passing
+      tests; do not replace the proof with prose-only summary.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Conditional CI-RCA evidence command includes executable no-op source inspection plus tests, but it
+      is not a stable single guard target until implementation determines which cited defects remain live.
+  - step: 5
+    phase: pre-deploy
+    action: Validate pre-tier placement and CD.30-safe registry behavior for the rec-2970 prevention path.
+    command: >-
+      bin/venv-python -m pytest tests/test_checks_registry.py tests/test_checks_registry_test_obligations.py tests/checks/roadmap/test_validate_plan_documents.py
+    expected: >-
+      Exits 0; the prevention path is cost-bounded in --pre, cannot silently no-op as if
+      coverage had been enforced, and does not promote validate_test_coverage or the current
+      per-changed-file coverage floor wholesale into --pre.
+    fix_if: >-
+      If the check is too expensive, unbounded, or effectively implements CD.30 out of order, narrow it
+      to plan/test-obligation structure and leave full coverage enforcement in the full tier with
+      explicit no-op honesty.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: cd30-safe-pre-tier-obligation-guard
+  - step: 6
+    phase: pre-deploy
+    action: Validate all touched plan and instruction surfaces.
+    command: >-
+      bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-ci-rca-test-obligation-gate.yaml && bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exits 0; the new plan validates, prompt/instruction checks pass, and the fast tier remains
+      within its budget without --ignore-budget.
+    fix_if: >-
+      If --pre breaches budget, do not bypass by default; narrow the new deterministic checks or
+      split heavyweight proof into full-tier verification with explicit fast-tier diagnostics.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Full --pre validation is an aggregate handoff gate with many unrelated validators and budget
+      sensitivity; graduate the narrower obligation validators instead.
+  - step: 7
+    phase: pre-deploy
+    action: Run the full handoff validation required before commit.
+    command: >-
+      bin/venv-python -m scripts.validate
+    expected: >-
+      Exits 0, including full coverage and all CI-RCA, plan, graduation, and workflow checks.
+    fix_if: >-
+      If full validation fails, diagnose and fix the owning validator or implementation; do not
+      downgrade the failure to a warning or use --ignore-budget for final handoff.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Full validation is the required handoff gate and intentionally aggregates the entire repository;
+      it is not a narrow durable regression guard for the test-obligation feature.
+  - step: 8
+    phase: post-deploy
+    action: Verify bundled CI-RCA recommendations closed after the squash merge Resolves trailer or fallback portal updates run.
+    command: >-
+      bin/venv-python -m scripts.sync.ops sync >/dev/null && bin/venv-python -c "import json; from pathlib import Path; ids={'rec-3044','rec-3043','rec-2996','rec-2995','rec-2970'}; rows=[json.loads(line) for line in Path('logs/.recommendations-log.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]; latest={row.get('id'): row for row in rows if row.get('id') in ids}; missing=sorted(ids-set(latest)); open_ids=sorted(rid for rid,row in latest.items() if row.get('status')!='closed'); assert not (missing or open_ids), f'missing={missing} open={open_ids}'; print('all bundled CI-RCA recs closed')"
+    expected: >-
+      Exits 0 after merge/closure, proving rec-3044, rec-3043, rec-2996, rec-2995, and rec-2970
+      are closed in the synced recommendation cache.
+    fix_if: >-
+      If any rec remains open after merge, run the sanctioned ops_data_portal update-rec fallback
+      with closure evidence from the merged PR and rerun this command.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Post-merge ops-portal state check depends on warehouse connectivity and merge-side Resolves
+      automation, so it is closure evidence rather than a durable pre-merge regression guard.
+constraints:
+  - >-
+    Mutation testing is explicitly out of scope for this plan because it belongs to a future tier
+    item with unfinished upstream dependencies. Use existing differential admission and red/green
+    expectations only, and do not claim to complete or ratify CD.29.
+  - >-
+    Do not create a parallel test-obligation registry or expand the closed verification-kernel
+    vocabulary. Deterministic obligations that become durable checks must add admitted rows to
+    config/agent/verification_registry/registry.yaml using existing primitive slots, and any
+    behavioral hard-gate semantics
+    remain bounded by the already-ratified graduation enforcement, not a new CD.29 completion claim.
+  - >-
+    Every behavior-changing edit in this implementation must add or update an automated test that
+    fails without the change; running an existing suite is not a substitute.
+  - >-
+    Keep scripts/validate.py changes out of scope unless absolutely necessary; prefer riding the
+    existing validate_plan_documents check to avoid SLOC pressure and duplicate registry entries.
+  - >-
+    SLOC decomposition is explicit for already-large test files: add focused sibling tests for
+    _r2_test_covers, PlanDocument test obligations, and registry/test-obligation placement instead
+    of growing the existing large test modules. If any other scoped source or test file would cross its budget, decompose into a
+    helper module or sibling test file rather than raising the budget.
+  - >-
+    No Terraform or Lambda deployment is in scope; verification tier is V2.
+context:
+  - >-
+    Preflight on 2026-08-05 reported five unresolved CI-RCA recs and zero likely-resolved recs:
+    rec-3044, rec-3043, rec-2996, rec-2995, and rec-2970. This plan is therefore related work and
+    not blocked by the CI-RCA hard-block rule.
+  - >-
+    rec-3044 is the precise immediate failure: validate_composite_action_shell_bodies.py is at
+    98.74 percent coverage because lines 254-255 in _r2_test_covers are uncovered. rec-3043 is an
+    earlier less precise report for the same coverage regression.
+  - >-
+    rec-2995 and rec-2996 are evidence-quality failures: CI-RCA could not name failed pytest nodes
+    because oversized full-tier logs were truncated before failure summaries or parser evidence.
+  - >-
+    rec-2970 is the structural prevention gap: validate_test_coverage currently catches changed-file
+    coverage regressions only after merge/full-tier, so a sub-100 percent regression can land before
+    canary reports it. Decision-scout flagged that this plan must not reorder CD.30 by promoting the
+    existing whole-file coverage floor into --pre; the scoped fix is obligation/no-op honesty plus
+    immediate coverage repair.
+  - >-
+    Existing verification graduation already performs red/green style differential admission for
+    eligible deterministic checks: pass on HEAD, fail in a real origin/main worktree. This plan may
+    reuse that mechanism and must scope config/agent/verification_registry/registry.yaml for the
+    admitted rows, but must not claim to complete CD.29 or introduce mutation testing.
+  - >-
+    Test adequacy remains agent judgement. Deterministic validators prove obligation presence,
+    linkage, executable commands, and differential evidence; plan-critique and code-review judge
+    whether the test actually asserts the guarded behavior. Schema-compatible test-obligation map
+    for this plan: (1) validate_composite_action_shell_bodies.py/_r2_test_covers read-error
+    continuation -> VP step 1 -> graduate composite-action-r2-read-error-continues; (2)
+    plan_document.py TestObligation schema -> VP step 2 -> graduate
+    plan-test-obligations-schema-validation; (3) validate_graduation_completeness obligation linkage
+    -> VP step 3 -> graduate test-obligation-graduation-linkage; (4) CD.30-safe pre-tier
+    obligation/no-op honesty -> VP step 5 using tests/test_checks_registry_test_obligations.py ->
+    graduate cd30-safe-pre-tier-obligation-guard; (5)
+    CI-RCA evidence-window/parser no-op-or-fix branch -> VP step 4 -> waive until implementation
+    identifies stable live defect targets; (6) aggregate validate --pre/full gates -> VP steps 6-7
+    -> waive because they are handoff gates, not narrow durable regression guards.
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND, incorporated before plan-critique. Flags: (1) do
+    not promote the current per-changed-file 100 percent coverage floor to --pre or reorder CD.30;
+    (2) do not implement CD.29-style mutation/hard-gate semantics as if ratified or complete. CITE:
+    AGENTS.md automated-test rule and IMPLEMENTATION-only freeze; planning skill CI-RCA related-work
+    rule and executable VP rules; docs/ROADMAP-PLATFORM.yaml CD.29/CD.30 sequencing; docs/DECISIONS.md
+    Decision 73 forward-fix governance and Decision 48 V2 coverage baseline.
+  - >-
+    gates: decision-scout=FLAGS_FOUND incorporated; plan-critique=PROCEED after 4 round(s)
+pre_implementation_checklist:
+  - Branch confirmed not main before editing implementation files.
+  - docs/PROJECT_CONTEXT.md read in full during planning.
+  - Review open CI-RCA recs from logs/.recommendations-log.jsonl and confirm no newer likely-resolved state before implementing.
+  - Inspect current SLOC budgets for each scoped source and test file before editing.
+  - Confirm mutation testing remains out of scope and do not add mutation-test commands.
+  - Confirm no Terraform or active Lambda-packaged file is touched; planning critique verified lambda_manifest --list-patterns found no scoped active Lambda artifact.
+  - Confirm every behavior-changing implementation edit has a linked automated test obligation or substantive waiver.
+execution_steps:
+  - >-
+    Fix the immediate coverage failure first. Add a behavior-focused test for _r2_test_covers that
+    simulates an unreadable tests/**/*.py path and proves scanning continues to a later readable
+    literal-argv test. Run verification step 1 before broader workflow edits.
+  - >-
+    Add TestObligation schema support to scripts/roadmap/plan_document.py with backwards-compatible
+    optionality for historical plans and strict validation when obligations are present.
+  - >-
+    Extend validate_plan_documents with deterministic obligation checks, colocated with plan schema
+    validation so no new validate.py import is required.
+  - >-
+    Integrate deterministic obligations with verification graduation diagnostics and add admitted
+    rows to config/agent/verification_registry/registry.yaml for each graduate VP step, preserving
+    it as the single durable check registry.
+  - >-
+    Update planning, plan-critique, implement, and code-review skills so agents author, critique,
+    execute, and judge test obligations consistently as part of verification.
+  - >-
+    Re-check rec-2995 and rec-2996 against current log_evidence/fetch_logs/runtime code. If a cited
+    defect remains live, fix it with targeted tests; if already fixed, include executable no-op
+    proof (source-inspection assertion plus existing/passing tests) in the implementation summary and do not
+    churn unrelated files.
+  - >-
+    Implement the rec-2970 prevention path as a bounded pre-tier obligation/no-op-honesty check. Do
+    not move validate_test_coverage wholesale into --pre, do not implement the CD.30 diff-line
+    ratchet, and do not treat this plan as ratifying CD.30.
+  - >-
+    Execute all verification_plan commands in order, then trigger zero-context code-review per the
+    implement skill. Resolve Critical/High findings and rerun verification.
+  - >-
+    Commit with feat(ci-rca-test-obligation-gate): ..., include Resolves: rec-3044, rec-3043,
+    rec-2996, rec-2995, rec-2970 in the merge body, and follow the PR/CI flow.
+work_areas: []
+rollback: >-
+  Revert the implementation PR. This restores the prior implicit test-obligation policy and current
+  verification schema; if the immediate coverage fix must be retained independently, cherry-pick only
+  the focused test or fail-loud production simplification into a smaller follow-up PR.
