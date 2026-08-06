@@ -159,6 +159,17 @@ def _new_registry_rows(root: Path, baseline_registry_reader: BaselineRegistryRea
     return [e for e in current if isinstance(e, dict) and e.get("check_id") not in baseline_ids]
 
 
+def _obligation_sources_for_step(doc: object, step_id: int) -> list[str]:
+    """Sources whose schema-v4 test obligation is proven by this verification_plan step.
+
+    Obligation-aware diagnostics only -- graduation keeps its single registry and its existing
+    (plan_slug, graduation_check_id) linkage. Naming the sources turns "registry row missing"
+    into "these declared behaviors are about to lose their durable guard".
+    """
+    obligations = getattr(doc, "test_obligations", None) or []
+    return sorted({o.source for o in obligations if o.verification_step == step_id})
+
+
 def _implement_pr_leg(
     root: Path,
     failed: list[str],
@@ -206,10 +217,13 @@ def _implement_pr_leg(
             cid = step.graduation_check_id
             match = next((row for row in added_rows if row.get("check_id") == cid and row.get("plan_slug") == doc.slug), None)
             if match is None:
+                sources = _obligation_sources_for_step(doc, step.step)
+                obligations_note = f" [test obligation(s) losing their guard: {', '.join(sources)}]" if sources else ""
                 failed.append(
                     f"graduation-completeness (implement-PR leg) {plan_rel}: step {step.step} declared graduate "
                     f"(check_id={cid!r}) but no matching new-in-diff registry row found (plan_slug={doc.slug!r}) -- "
                     "add the registry row, or flip this step to waive with a reason if it proved un-graduatable"
+                    f"{obligations_note}"
                 )
             else:
                 print(f"  PASS (implement-PR leg): {plan_rel}:{step.step} -- registry row {cid!r} present.")

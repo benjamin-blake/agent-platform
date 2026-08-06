@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 handoff_policy:
   full_validation_required_before_commit: true
   timeout_disposition: blocked
@@ -116,13 +116,13 @@ scope:
       plan may add deterministic test-obligation/no-op-honesty checks in --pre, but must not
       implement the diff-line coverage ratchet or reorder CD.30 by moving validate_test_coverage
       wholesale into the fast tier.
-  - file: tests/test_plan_document_test_obligations.py
-    action: Create
+  - file: tests/test_plan_document.py
+    action: Modify
     purpose: >-
-      Cover the new TestObligation schema in a focused sibling module rather than growing the
-      already-large tests/test_plan_document.py: valid selector obligation, valid command obligation,
-      linked verification step, missing link failure, missing behavior failure, graduate linkage,
-      waiver reason requirement, and backwards compatibility for historical plans without the field.
+      Cover the new TestObligation schema in the module map_source_to_test maps plan_document.py to.
+      A focused sibling module was tried first and rejected: check_per_file_coverage runs only the
+      mapped test file, so sibling coverage counts for nothing and every new validator branch would
+      need a pragma suppression - exactly the escape class rec-2970 is about. Stays under 500 SLOC.
   - file: tests/checks/roadmap/test_validate_plan_documents.py
     action: Create
     purpose: >-
@@ -194,6 +194,65 @@ acceptance_criteria:
     reorder CD.30: deterministic test-obligation/no-op-honesty checks may run in --pre, but the
     current per-changed-file 100 percent coverage floor is not promoted wholesale and the diff-line
     coverage ratchet is left to its pending tier item.
+test_obligations:
+  - source: scripts/checks/ci_guards/validate_composite_action_shell_bodies.py
+    behavior: R2 scanning continues after an unreadable test file.
+    test_selector: tests/checks/ci_guards/test_validate_composite_action_shell_bodies_r2.py
+    verification_step: 1
+    red_green_expectation: The focused test fails without read-error continuation coverage and passes afterward.
+  - source: scripts/roadmap/plan_document.py
+    behavior: Test-obligation schema validation and exclusion-aware verification-step linkage.
+    test_selector: tests/test_plan_document.py
+    verification_step: 2
+    red_green_expectation: >-
+      Tests fail before schema version 4 and pass with strict obligation validation. They live in the
+      coverage-mapped home so the new branches need no pragma suppression.
+  - source: scripts/checks/roadmap/validate_plan_documents.py
+    behavior: >-
+      Behavior-capable implementation scope requires a per-source obligation, newly-added plans must
+      declare the current schema version, and prompt Markdown never inherits the documentation exemption.
+    test_selector: tests/checks/roadmap/test_validate_plan_documents.py
+    verification_step: 2
+    red_green_expectation: Missing obligations, v3 new plans, and behavior-capable formats fail before the gate and pass when covered.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: Graduate obligation steps preserve the existing registry identity linkage.
+    test_selector: tests/checks/verification/test_validate_graduation_completeness.py
+    verification_step: 3
+    red_green_expectation: The linkage test fails when a declared graduate step produces no matching registry row.
+  - source: scripts/checks/verification/validate_graduation_completeness.py
+    behavior: >-
+      Graduate steps still require matching registry identities, and a missing row names the declared
+      obligation sources that lose their durable guard.
+    test_selector: tests/checks/verification/test_validate_graduation_completeness.py
+    verification_step: 3
+    red_green_expectation: The diagnostics test fails without obligation-aware messaging and passes with it.
+  - source: docs/contracts/verification-registry.yaml
+    behavior: Test obligations reuse existing registry primitive slots without mutation testing.
+    test_selector: tests/checks/verification/test_validate_graduation_completeness.py
+    verification_step: 3
+    waiver_reason: Contract wording has no independent runtime path; linked schema and registry tests are the deterministic proof.
+  - source: scripts/checks/registry.py
+    behavior: >-
+      The obligation guard is reachable from the pre sequence and rejects an unobligated plan when
+      dispatched there, without promoting whole-file coverage enforcement into pre.
+    test_selector: tests/test_checks_registry_test_obligations.py
+    verification_step: 5
+    red_green_expectation: Pre-tier dispatch of a behavior-scope plan with no obligation fails; placement alone cannot satisfy the test.
+  - source: scripts/ops_portal/ci_rca_runtime.py
+    behavior: Runtime evidence uses structured bundle fields rather than parsing interleaved numeric stdout.
+    test_selector: tests/ops_data_portal/test_ci_rca_runtime.py
+    verification_step: 4
+    waiver_reason: No live parser remains to red-test; source inspection and the existing runtime suite prove the no-op branch.
+  - source: scripts/ci_rca/log_evidence.py
+    behavior: Oversized evidence retains the failure-relevant tail within declared bounds.
+    test_selector: tests/test_ci_rca_log_evidence.py
+    verification_step: 4
+    waiver_reason: The production behavior predates this branch; the linked source assertion and regression suite prove the no-op branch.
+  - source: scripts/ci_rca/fetch_logs.py
+    behavior: Production log transport preserves head and tail under byte limits.
+    test_selector: tests/test_ci_rca_fetch_logs.py
+    verification_step: 4
+    waiver_reason: The production behavior predates this branch; the linked source assertion and regression suite prove the no-op branch.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -213,7 +272,7 @@ verification_plan:
     phase: pre-deploy
     action: Validate the new plan schema and test-obligation validators.
     command: >-
-      bin/venv-python -m pytest tests/test_plan_document.py tests/test_plan_document_test_obligations.py tests/checks/roadmap/test_validate_plan_documents.py
+      bin/venv-python -m pytest tests/test_plan_document.py tests/checks/roadmap/test_validate_plan_documents.py
     expected: >-
       Exits 0 and includes failing-fixture coverage for missing obligation, malformed link, thin
       waiver, and backwards-compatible historical plans.
@@ -241,16 +300,16 @@ verification_plan:
     phase: pre-deploy
     action: Validate CI-RCA evidence-window prevention for rec-2995 and rec-2996.
     command: >-
-      bin/venv-python -c "from pathlib import Path; log=Path('scripts/ci_rca/log_evidence.py').read_text(encoding='utf-8'); fetch=Path('scripts/ci_rca/fetch_logs.py').read_text(encoding='utf-8'); runtime=Path('scripts/ops_portal/ci_rca_runtime.py').read_text(encoding='utf-8'); assert 'bound_text_windowed' in log and 'head_tail_window' in log; assert 'tail' in fetch or 'bound_text_windowed' in fetch; assert 'ValueError' not in runtime or 'splitlines' in runtime" && bin/venv-python -m pytest tests/test_ci_rca_log_evidence.py tests/test_ci_rca_fetch_logs.py tests/ops_data_portal/test_ci_rca_runtime.py
+      bin/venv-python -c "from pathlib import Path; log=Path('scripts/ci_rca/log_evidence.py').read_text(encoding='utf-8'); fetch=Path('scripts/ci_rca/fetch_logs.py').read_text(encoding='utf-8'); runtime=Path('scripts/ops_portal/ci_rca_runtime.py').read_text(encoding='utf-8'); assert 'bound_text_windowed' in log and 'head_tail_window' in log; assert 'tail' in fetch or 'bound_text_windowed' in fetch; assert 'splitlines' not in runtime and 'stdout' not in runtime" && bin/venv-python -m pytest tests/test_ci_rca_log_evidence.py tests/test_ci_rca_fetch_logs.py tests/ops_data_portal/test_ci_rca_runtime.py
     expected: >-
-      Exits 0 and provides executable evidence for both branches: source inspection proves the
-      windowed/tail-retention and parser-tolerance hooks are present when code is already fixed, and
-      the targeted tests prove oversized validate logs retain the failure tail and runtime parsing
-      tolerates interleaved non-numeric stdout when that parser path is still live.
+      Exits 0. The source assertion is falsifiable in both directions: it fails if the windowed
+      tail-retention hooks disappear from log_evidence/fetch_logs, and it fails if ci_rca_runtime
+      reintroduces any stdout/splitlines marker parsing. The targeted tests prove oversized validate
+      logs retain the failure tail.
     fix_if: >-
-      If the runtime parser test is out of scope because the file is already fixed, keep an executable
-      source-inspection assertion in this VP step and record its output beside the targeted passing
-      tests; do not replace the proof with prose-only summary.
+      If the ci_rca_runtime leg fails, a live stdout marker parser was reintroduced - fix the parser
+      rather than relaxing the assertion. Never satisfy a source assertion by writing its own search
+      token into a comment or docstring; that makes the evidence self-fulfilling.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -338,8 +397,11 @@ constraints:
     existing validate_plan_documents check to avoid SLOC pressure and duplicate registry entries.
   - >-
     SLOC decomposition is explicit for already-large test files: add focused sibling tests for
-    _r2_test_covers, PlanDocument test obligations, and registry/test-obligation placement instead
-    of growing the existing large test modules. If any other scoped source or test file would cross its budget, decompose into a
+    _r2_test_covers and registry/test-obligation placement instead of growing the existing large
+    test modules. The one exception is PlanDocument's obligation tests: check_per_file_coverage
+    measures only the map_source_to_test home, so a sibling there would force pragma suppressions
+    on the very branches this plan adds - they land in tests/test_plan_document.py, which must stay
+    under 500 SLOC. If any other scoped source or test file would cross its budget, decompose into a
     helper module or sibling test file rather than raising the budget.
   - >-
     No Terraform or Lambda deployment is in scope; verification tier is V2.

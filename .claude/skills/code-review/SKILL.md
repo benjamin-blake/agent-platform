@@ -86,6 +86,8 @@ Any finding that claims a command or validation gate fails must include the exac
 - **Test isolation** — Do tests depend on external services or execution order?
 - **Test naming** — Do names describe the scenario and expected outcome?
 - **Fixtures and mocking** — Are mocks used appropriately?
+- **Test obligations** — Raise High when a behavior change lacks executed obligation evidence, an
+  asserting test, or a deterministic-limit waiver.
 - **Mock Exhaustion (postflight.py)** — If `scripts/executor/postflight.py` is modified, verify that `subprocess.run` calls match the `MagicMock` side-effect counts in `tests/test_executor_postflight.py` (see Check 2 in `scripts/validate.py`).
 
 ### 4. Maintainability and Scalability
