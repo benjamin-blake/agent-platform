@@ -310,19 +310,17 @@ Classify deterministically. Highest tier wins.
 - **V3 (Integration):** External systems, Terraform, Lambdas. Must tag steps as `[pre-deploy]` or `[post-deploy]`.
 
 **Provider-init egress (terraform roots only):** CC-web cannot fetch third-party provider checksums.
-Use grep and provider-free `terraform fmt -check` locally; delegate validate/plan to the named CI
-checks. Never author local init/validate/plan VP commands. See `terraform/CLAUDE.md`, Decision 119.
+Use grep and provider-free `terraform fmt -check` locally; delegate validate/plan to CI's required
+`terraform-validate` check and the speculative-plan job as the authoritative verifiers. Never
+author a local init/validate/plan VP command. See `terraform/CLAUDE.md`, Decision 119.
 
 **VP Design Rationale:**
 When writing Verification Plan steps, ask: "If this feature had a subtle bug (wrong column name, missing permission, off-by-one filter), would this step catch it?" If no, the step is too shallow.
 
-**Test Obligation Assessment:** New behavior-changing IMPLEMENTATION plans use schema version 4.
-For every behavior-capable scope file, author a `test_obligations` row naming `source`, the exact
-`behavior`, one executable `test_selector` or `command`, its `verification_step`, and either a
-red/green expectation or substantive waiver. A whole-plan deterministic-limit waiver uses
-`test_obligation_waiver_reason`. Obligations are part of verification, not a parallel checklist;
-graduate rows reuse the linked VP step and existing registry primitive slots. Test adequacy is
-judged by fresh-context plan critique, not inferred by the schema validator.
+**Test Obligation Assessment:** new IMPLEMENTATION plans are schema 4 with one `test_obligations`
+row per behavior-capable scope file (shape below); waivers are per-source, never plan-wide.
+Graduate rows reuse the linked VP step and existing registry slots; adequacy is plan-critique's
+judgement, not schema inference.
 
 **Anti-patterns to reject:** structural-only (`grep -q "def my_function" src/module.py` proves
 existence, not function); test-only ("Run pytest" proves mocked paths, not real integration);
@@ -365,8 +363,10 @@ at plan-authoring time:
   human/LLM judgement, live infrastructure (a V3 deploy/invoke), or wall-clock/credential state.
   No extra field required.
 
-Plan critique judges kernel expressibility. When unsure, prefer `not-applicable`; critique can
-push back without creating an accidental registry obligation.
+Plan critique is the honesty check on this call, applied before the fix exists (so there is no
+pressure to wave through a finished implementation). When unsure, prefer `not-applicable`: a false
+`not-applicable` is a missed regression guard, a false `graduate` only a mandatory
+`waive`-with-reason detour at implement time.
 
 ## Decision Significance Gate (before drafting any numbered Decision -- fresh or CD ratification)
 
@@ -472,7 +472,7 @@ Derive the plan slug from the task, not the branch. Author only `docs/plans/PLAN
 ## PLAN-{slug}.yaml Template (Workflow Step 8)
 The plan is a YAML document validated against the `PlanDocument` Pydantic schema (`scripts/roadmap/plan_document.py`, enforced by `validate.py` in both tiers). Unknown keys FAIL validation (`extra="forbid"`). Use exactly this structure -- comments document field semantics:
 ```yaml
-schema_version: 3 # new plans; historical schema versions 1 and 2 remain valid
+schema_version: 4 # required on every NEW plan; historical versions 1-3 stay valid
 handoff_policy:
   full_validation_required_before_commit: true # exact literal; commit/PR waits for completed full exit 0
   timeout_disposition: blocked # exact literal; resume later and rerun full from the start
@@ -481,7 +481,7 @@ intent: >- # 1-2 sentences: how this work contributes toward the North Star
   ...
 plan_type: IMPLEMENTATION # IMPLEMENTATION | STRATEGIC | REPORT-ONLY
 verification_tier: V2 # V1 | V2 | V3
-plan_path: docs/plans/PLAN-{slug}.yaml # must equal docs/plans/PLAN-{slug}.yaml (slug consistency)
+plan_path: docs/plans/PLAN-{slug}.yaml # must match the filename slug exactly
 phase: >- # product phase from docs/ROADMAP-PRODUCT.yaml and/or platform tier_item id
   ...
 scope: # min 1 entry; only files listed here may be modified
@@ -499,6 +499,12 @@ verification_plan: # min 1 step; step ids must be unique
     command: executable shell command # REQUIRED non-empty -- prose-only VP steps fail the schema
     expected: specific expected result
     fix_if: what failure looks like
+test_obligations: # v4 IMPLEMENTATION: one row per behavior-capable scope file
+  - source: path/to/file.py # must equal a scope[].file
+    behavior: what must stay guarded
+    verification_step: 1 # an existing step id that runs the evidence
+    test_selector: tests/test_x.py::test_y # exactly one of test_selector | command
+    red_green_expectation: red before, green after # or waiver_reason (>=20 chars)
 constraints:
   - limits from PROJECT_CONTEXT.md, DECISIONS.md
   - No rescue agents or workaround loops (Decision 55)
@@ -519,8 +525,8 @@ execution_steps: # REQUIRED non-empty for IMPLEMENTATION plans
 work_areas: [] # STRATEGIC plans only (required there, forbidden otherwise);
   # entry shape: {area, scope, rationale, complexity: XS|S|M|L|XL}
 rollback: optional rollback note # optional str; omit if not applicable
-# fallback_reevaluation: OPTIONAL -- fill only if this plan names a CD.27-gated tier item
-# (validate_fallback_reevaluation). Never fill on an ordinary plan (extra=forbid, 4 fields required):
+# fallback_reevaluation: OPTIONAL, only if this plan names a CD.27-gated tier item
+# (validate_fallback_reevaluation); never on an ordinary plan. 4 fields, extra=forbid:
 # {reevaluated_on, substrate_status, verdict: continue_on_current_substrate|fallback_triggered|obligation_lapsed, basis}
 ```
 

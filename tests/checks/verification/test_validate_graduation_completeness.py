@@ -13,9 +13,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts.checks.verification.validate_graduation_completeness import (
+    _current_registry_entries,
+    _default_baseline_registry_entries,
     validate_graduation_completeness,
 )
 
@@ -41,8 +44,8 @@ def _commit_all(repo: Path, message: str) -> str:
     return _git(repo, ["rev-parse", "HEAD"]).stdout.strip()
 
 
-def _plan_dict(slug: str, steps: list[dict]) -> dict:
-    return {
+def _plan_dict(slug: str, steps: list[dict], overrides: dict | None = None) -> dict:
+    plan = {
         "schema_version": 1,
         "slug": slug,
         "intent": "Test fixture plan.",
@@ -55,13 +58,15 @@ def _plan_dict(slug: str, steps: list[dict]) -> dict:
         "verification_plan": steps,
         "execution_steps": ["Create scripts/example.py."],
     }
+    plan.update(overrides or {})
+    return plan
 
 
-def _write_plan(root: Path, slug: str, steps: list[dict]) -> str:
+def _write_plan(root: Path, slug: str, steps: list[dict], overrides: dict | None = None) -> str:
     rel = f"docs/plans/PLAN-{slug}.yaml"
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(_plan_dict(slug, steps), sort_keys=False), encoding="utf-8")
+    path.write_text(yaml.safe_dump(_plan_dict(slug, steps, overrides), sort_keys=False), encoding="utf-8")
     return rel
 
 
@@ -154,14 +159,21 @@ class _ImplementFixture:
     """Shared repo builder for the implement-PR leg: a git repo with a feat({slug}) commit
     ahead of a refs/remotes/origin/main ref, plus the plan file and registry state."""
 
-    def build(self, tmp_path: Path, slug: str, steps: list[dict], registry_entries: list[dict] | None = None) -> Path:
+    def build(
+        self,
+        tmp_path: Path,
+        slug: str,
+        steps: list[dict],
+        registry_entries: list[dict] | None = None,
+        plan_overrides: dict | None = None,
+    ) -> Path:
         repo = tmp_path / "repo"
         _init_repo(repo)
         (repo / "README.md").write_text("base\n", encoding="utf-8")
         base_sha = _commit_all(repo, "base")
         _git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
 
-        _write_plan(repo, slug, steps)
+        _write_plan(repo, slug, steps, plan_overrides)
         if registry_entries is not None:
             _write_registry(repo, registry_entries)
         _commit_all(repo, f"feat({slug}): implement fixture")
@@ -272,3 +284,162 @@ class TestWaiver:
         failed: list[str] = []
         validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
         assert failed == []
+
+
+class TestObligationAwareDiagnostics:
+    """Schema-v4 obligations reuse the existing (plan_slug, check_id) linkage -- the only
+    addition is naming which declared behaviors lose their guard when the row is missing."""
+
+    fixture = _ImplementFixture()
+    _SELECTOR = "tests/test_example.py::test_behavior"
+
+    def _overrides(self, sources: list[str]) -> dict:
+        return {
+            "schema_version": 4,
+            "handoff_policy": {"full_validation_required_before_commit": True, "timeout_disposition": "blocked"},
+            "test_obligations": [
+                {
+                    "source": source,
+                    "behavior": "stays guarded by the graduated check",
+                    "test_selector": self._SELECTOR,
+                    "verification_step": 1,
+                    "red_green_expectation": "fails before the change and passes after it",
+                }
+                for source in sources
+            ],
+        }
+
+    def _steps(self) -> list[dict]:
+        return [
+            _step(
+                1,
+                command=f"bin/venv-python -m pytest {self._SELECTOR}",
+                graduation="graduate",
+                graduation_check_id="gc-obligation-check",
+            )
+        ]
+
+    def test_missing_row_names_the_obligation_sources_losing_their_guard(self, tmp_path: Path) -> None:
+        repo = self.fixture.build(
+            tmp_path,
+            "gc-obligation-named",
+            self._steps(),
+            registry_entries=[],
+            plan_overrides=self._overrides(["scripts/example.py", "scripts/other.py"]),
+        )
+        failed: list[str] = []
+        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        assert any("test obligation(s) losing their guard: scripts/example.py, scripts/other.py" in f for f in failed)
+
+    def test_missing_row_without_obligations_keeps_the_original_diagnostic(self, tmp_path: Path) -> None:
+        repo = self.fixture.build(
+            tmp_path,
+            "gc-obligation-absent",
+            self._steps(),
+            registry_entries=[],
+            plan_overrides=self._overrides([]),
+        )
+        failed: list[str] = []
+        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        assert any("no matching new-in-diff registry row" in f for f in failed)
+        assert not any("losing their guard" in f for f in failed)
+
+
+class TestLoadErrorHandling:
+    """A schema-invalid plan is validate_plan_documents' verdict to report, not this check's;
+    an import failure is a genuine error and stays fail-loud (Decision 55)."""
+
+    fixture = _ImplementFixture()
+
+    @staticmethod
+    def _raiser(exc: Exception):
+        def _loader(plan_rel: str, root: Path) -> object:
+            raise exc
+
+        return _loader
+
+    def test_plan_leg_import_error_is_fail_loud(self, tmp_path: Path) -> None:
+        rel = _write_plan(tmp_path, "gc-plan-import", [_step(1)])
+        failed: list[str] = []
+        validate_graduation_completeness(
+            failed, changed_files=[rel], root=tmp_path, load_plan=self._raiser(ImportError("no module"))
+        )
+        assert any("could not import scripts.roadmap.plan_document" in f for f in failed)
+
+    def test_plan_leg_schema_error_skips_without_double_reporting(self, tmp_path: Path, capsys) -> None:
+        rel = _write_plan(tmp_path, "gc-plan-schema", [_step(1)])
+        failed: list[str] = []
+        validate_graduation_completeness(
+            failed, changed_files=[rel], root=tmp_path, load_plan=self._raiser(ValueError("bad schema"))
+        )
+        assert failed == []
+        assert "SKIP (plan-PR leg)" in capsys.readouterr().out
+
+    def test_implement_leg_import_error_is_fail_loud(self, tmp_path: Path) -> None:
+        repo = self.fixture.build(tmp_path, "gc-impl-import", [_step(1)], registry_entries=[])
+        failed: list[str] = []
+        validate_graduation_completeness(
+            failed,
+            changed_files=[],
+            root=repo,
+            load_plan=self._raiser(ImportError("no module")),
+            baseline_registry_reader=lambda r: [],
+        )
+        assert any("could not import scripts.roadmap.plan_document" in f for f in failed)
+
+    def test_implement_leg_schema_error_skips_without_double_reporting(self, tmp_path: Path, capsys) -> None:
+        repo = self.fixture.build(tmp_path, "gc-impl-schema", [_step(1)], registry_entries=[])
+        failed: list[str] = []
+        validate_graduation_completeness(
+            failed,
+            changed_files=[],
+            root=repo,
+            load_plan=self._raiser(ValueError("bad schema")),
+            baseline_registry_reader=lambda r: [],
+        )
+        assert failed == []
+        assert "SKIP (implement-PR leg)" in capsys.readouterr().out
+
+
+_MALFORMED_REGISTRIES = ["{", "- not a mapping\n", "entries: 5\n"]
+
+
+class TestRegistryReaders:
+    """Both readers degrade to an empty list rather than raising -- a missing or malformed
+    registry must not wedge the check, it must simply contribute no baseline rows."""
+
+    def test_current_entries_missing_file_is_empty(self, tmp_path: Path) -> None:
+        assert _current_registry_entries(tmp_path) == []
+
+    @pytest.mark.parametrize("body", _MALFORMED_REGISTRIES)
+    def test_current_entries_malformed_is_empty(self, tmp_path: Path, body: str) -> None:
+        path = tmp_path / _REGISTRY_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        assert _current_registry_entries(tmp_path) == []
+
+    def test_baseline_without_origin_main_is_empty(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        _commit_all(repo, "base")
+        assert _default_baseline_registry_entries(repo) == []
+
+    def test_baseline_reads_entries_from_origin_main(self, tmp_path: Path) -> None:
+        repo = self._repo_with_baseline(tmp_path, yaml.safe_dump({"entries": [{"check_id": "baseline-row"}]}))
+        assert _default_baseline_registry_entries(repo) == [{"check_id": "baseline-row"}]
+
+    @pytest.mark.parametrize("body", _MALFORMED_REGISTRIES)
+    def test_malformed_baseline_is_empty(self, tmp_path: Path, body: str) -> None:
+        assert _default_baseline_registry_entries(self._repo_with_baseline(tmp_path, body)) == []
+
+    @staticmethod
+    def _repo_with_baseline(tmp_path: Path, body: str) -> Path:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = repo / _REGISTRY_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        sha = _commit_all(repo, "base")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", sha])
+        return repo

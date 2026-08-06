@@ -334,15 +334,15 @@ verdict.
 
 Fires in the same window as Tier_item bookkeeping (after the VP Compliance Gate shows all rows
 PASS, before the commit flow in Step 7) but is a distinct action: it tries to promote this
-session's own VP steps into standing regression guards, not roadmap bookkeeping.
+session's own VP steps into standing regression guards, not roadmap bookkeeping. Execute each
+declared `test_obligations` selector/command first; record evidence on its VP step.
 
-Before this walk, execute every declared `test_obligations` selector or command after its code
-change and record positive evidence with the linked VP step. A failure or an empty-diff rerun that
-turns green follows the VP nondeterminism stop rule. Graduate obligations use this existing
-differential admission path and registry; never create a parallel obligation registry.
-
-**T3.21:** `validate_graduation_completeness` fails unless every declared graduate step produces
-its matching registry row. Plans with zero dispositions retain the legacy best-effort walk below.
+**T3.21 (enforced, amends T3.18):** graduation is not optional. If this plan's `verification_plan`
+steps carry `graduation` dispositions (mandatory on pre-deploy steps for any plan authored after
+T3.21 -- see the planning skill), `validate_graduation_completeness`'s implement-PR leg (both
+tiers) FAILS the PR unless every step declared `graduate` produced a matching registry row. A plan
+authored before the field existed (no dispositions anywhere) is exempt -- treat its graduation as
+the legacy best-effort walk in step 1 below.
 
 ### Protocol
 1. **Enumerate candidates from the plan's declared dispositions.** Walk this plan's
@@ -380,8 +380,11 @@ its matching registry row. Plans with zero dispositions retain the legacy best-e
    disposition requires no registry row. A legacy-fallback candidate (step 1's fallback path) that
    is rejected is simply dropped, unchanged from pre-T3.21 behaviour -- there is no disposition
    field to flip.
-6. **Errors are fail-loud (Decision 55).** A graduation error STOPS and surfaces; it never becomes
-   "none graduated". Only an empty candidate set is a real "none graduated" outcome.
+6. **Errors are fail-loud (Decision 55).** A `scripts.verification_graduation.GraduationError`
+   (worktree add/remove failure, materialization error, missing check_spec key) STOPS this
+   step and surfaces to the human -- never a silent "none graduated". Only a
+   legitimately empty candidate set (no `graduate`-disposition steps, and -- under the legacy
+   fallback -- nothing kernel-expressible) is a real "none graduated" outcome.
 7. **Record the outcome ephemerally.** Whether rows were admitted, some were flipped to waive, or
    the candidate set was legitimately empty, record an explicit note in the PR body (a
    `## Verification Graduation` section: which check_ids were admitted, which were flipped to

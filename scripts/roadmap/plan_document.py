@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,52 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 _SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2, 3, 4})
 _V2_PHASE_ENUM: frozenset[str] = frozenset({"pre-deploy", "post-deploy"})
+_MIN_WAIVER_CHARS = 20
+
+# pytest arguments whose VALUE names something the run will NOT execute. A linked step that
+# excludes an obligation's own selector is worse than one that never mentions it: the plan reads
+# as covered while the run demonstrably skips the proof.
+_EXCLUSION_FLAGS: frozenset[str] = frozenset({"--ignore", "--ignore-glob", "--deselect"})
+
+
+def _partition_command(command: str) -> tuple[list[str], list[str]]:
+    """Split a shell command into (selectable arguments, explicitly excluded values)."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    selectable: list[str] = []
+    excluded: list[str] = []
+    pending_exclusion = False
+    for token in tokens:
+        if pending_exclusion:
+            excluded.append(token)
+            pending_exclusion = False
+            continue
+        flag, separator, value = token.partition("=")
+        if flag in _EXCLUSION_FLAGS:
+            if separator:
+                excluded.append(value)
+            else:
+                pending_exclusion = True
+            continue
+        selectable.append(token)
+    return selectable, excluded
+
+
+def _argument_selects(argument: str, evidence: str) -> bool:
+    """True if pytest argument `argument` would collect `evidence`.
+
+    Covers the three ways a step legitimately hosts a selector without repeating it verbatim:
+    the exact node id, a file hosting a `::node` beneath it, and a directory hosting the file.
+    """
+    if not argument:
+        return False
+    if evidence == argument or evidence.startswith(f"{argument}::"):
+        return True
+    directory = argument if argument.endswith("/") else f"{argument}/"
+    return evidence.startswith(directory)
+
 
 PlanType = Literal["IMPLEMENTATION", "STRATEGIC", "REPORT-ONLY"]
 VerificationTier = Literal["V1", "V2", "V3"]
@@ -99,25 +146,24 @@ class TestObligation(BaseModel):
     @classmethod
     def _required_text_non_blank(cls, v: str, info: ValidationInfo) -> str:
         if not v.strip():
-            raise ValueError(f"test_obligations[].{info.field_name} must be non-blank")  # pragma: no cover - sibling suite
+            raise ValueError(f"test_obligations[].{info.field_name} must be non-blank")
         return v
+
+    @property
+    def evidence(self) -> str:
+        """The single selector or command this obligation is proven by."""
+        return (self.test_selector or self.command or "").strip()
 
     @model_validator(mode="after")
     def _validate_evidence(self) -> TestObligation:
         selectors = [value for value in (self.test_selector, self.command) if value and value.strip()]
         if len(selectors) != 1:
-            raise ValueError(  # pragma: no cover - covered by focused sibling suite
-                "test obligation requires exactly one non-blank test_selector or command"
-            )
+            raise ValueError("test obligation requires exactly one non-blank test_selector or command")
         outcomes = [value for value in (self.red_green_expectation, self.waiver_reason) if value and value.strip()]
         if len(outcomes) != 1:
-            raise ValueError(  # pragma: no cover - covered by focused sibling suite
-                "test obligation requires exactly one red_green_expectation or substantive waiver_reason"
-            )
-        if self.waiver_reason and len(self.waiver_reason.strip()) < 20:
-            raise ValueError(  # pragma: no cover - covered by focused sibling suite
-                "test obligation waiver_reason must be substantive (at least 20 characters)"
-            )
+            raise ValueError("test obligation requires exactly one red_green_expectation or substantive waiver_reason")
+        if self.waiver_reason and len(self.waiver_reason.strip()) < _MIN_WAIVER_CHARS:
+            raise ValueError(f"test obligation waiver_reason must be substantive (at least {_MIN_WAIVER_CHARS} characters)")
         return self
 
 
@@ -190,7 +236,6 @@ class PlanDocument(BaseModel):
     acceptance_criteria: list[str] = Field(min_length=1)
     verification_plan: list[VerificationStep] = Field(min_length=1)
     test_obligations: list[TestObligation] = Field(default_factory=list)
-    test_obligation_waiver_reason: str | None = None
     constraints: list[str] = Field(default_factory=list)
     context: list[str] = Field(default_factory=list)
     pre_implementation_checklist: list[str] = Field(default_factory=list)
@@ -243,25 +288,35 @@ class PlanDocument(BaseModel):
             raise ValueError("handoff_policy is only valid with schema_version 3 or 4")
 
     def _validate_test_obligation_links(self) -> None:
-        if self.test_obligation_waiver_reason and len(self.test_obligation_waiver_reason.strip()) < 20:
-            raise ValueError(  # pragma: no cover - covered by focused sibling suite
-                "test_obligation_waiver_reason must be substantive (at least 20 characters)"
-            )
-        if self.test_obligations and self.test_obligation_waiver_reason:
-            raise ValueError(  # pragma: no cover - covered by focused sibling suite
-                "test_obligations and test_obligation_waiver_reason are mutually exclusive"
-            )
+        """Every obligation must name a verification_plan step that actually runs its evidence.
+
+        A whole-selector substring test is not enough on its own: `pytest --ignore=tests/x.py`
+        contains the selector while demonstrably skipping it, and `pytest tests/` runs a node id
+        it never spells out. Exclusion is therefore a hard reject, and selector hosting is decided
+        by pytest argument semantics rather than by text containment.
+        """
         step_by_id = {step.step: step for step in self.verification_plan}
         for obligation in self.test_obligations:
             linked = step_by_id.get(obligation.verification_step)
             if linked is None:
-                raise ValueError(  # pragma: no cover - covered by focused sibling suite
+                raise ValueError(
                     f"test obligation for {obligation.source!r} links missing verification_plan step "
                     f"{obligation.verification_step}"
                 )
-            evidence = obligation.command or obligation.test_selector or ""
-            if evidence not in linked.command:
-                raise ValueError(  # pragma: no cover - covered by focused sibling suite
+            evidence = obligation.evidence
+            selectable, excluded = _partition_command(linked.command)
+            if any(_argument_selects(value, evidence) for value in excluded):
+                raise ValueError(
+                    f"test obligation for {obligation.source!r} names evidence {evidence!r} that linked "
+                    f"verification_plan step {obligation.verification_step} explicitly excludes"
+                )
+            hosted = (
+                evidence in linked.command
+                if obligation.command
+                else any(_argument_selects(argument, evidence) for argument in selectable)
+            )
+            if not hosted:
+                raise ValueError(
                     f"test obligation for {obligation.source!r} evidence is not executable by linked "
                     f"verification_plan step {obligation.verification_step}"
                 )
