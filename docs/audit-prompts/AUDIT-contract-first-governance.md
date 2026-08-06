@@ -136,7 +136,7 @@ finding.
 
 | Constraint | Owner | Cost of challenging it |
 |---|---|---|
-| Never remove a `## Decision N:` heading; never retire or reuse a number | Decision 149; `decision-entry.yaml` `compaction.stub_grammar.never_remove_headers` | Inbound `Decision N` citations repo-wide (see G14 -- two disagreeing counts, both to be re-derived). A retirement mechanism must state how each is resolved. |
+| Never remove a `## Decision N:` heading; never retire or reuse a number | Decision 149; `decision-entry.yaml` `compaction.stub_grammar.never_remove_headers` | Inbound `Decision N` citations repo-wide (see G14 -- the contract's figure vs. a live count you derive; they disagree materially). A retirement mechanism must state how each is resolved. |
 | Numbered entries are immutable; later changes come as new entries or dated in-place annotations | Decision 149; `decision-entry.yaml` `amendment_forms` | Provenance, and the `ops_decisions` SCD2 history model, assume append-not-rewrite. |
 | The significance bar gates what may become a Decision | Decision 150 | It is the only stated front-door control; removing it without a replacement removes the only one. |
 | Fully-superseded entries move to the archive | Decision 146 | Archived entries leave the file most agents read by default. |
@@ -252,8 +252,8 @@ what specifically ended it? Classify the ending with `ending_class`:
 **A `relief-still-holding` row is a first-class outcome, and costs no more to write than any
 other.** On such a row, `held_until` is the literal string `still-holding` and `note` carries the
 evidence that it is still holding. Do not treat the row shape as pressure toward an erosion
-verdict; if the honest answer is that most or all interventions still hold, say so and let Q1's
-verdict be `undetermined`.
+verdict; if the honest answer is that most or all interventions still hold, say so and use the
+`no-erosion-established` verdict (NOT `undetermined` -- see the enum below).
 
 Then the aggregate question: **is there a single recurring mechanism that causes interventions in
 this territory to erode, or is each erosion independent?**
@@ -269,7 +269,10 @@ definition under OUTPUT for what is legal there.
 
 Is there a sound, **decidable** rule today that assigns a unit of durable content to exactly one
 of {numbered Decision, ritual contract, free-form contract, change record, roadmap tier_item,
-recommendation}? Decidable means: two competent authors, given the same content and only the
+recommendation, candidate-decision ratification record}? (The seventh is the destination
+`decision-entry.yaml`'s `cd_state_flip` row routes to -- `candidate-decision-ratification.yaml`.
+Treat the set as closed at seven for this question; if you believe an eighth home exists or one
+of these should not, that is Q7 material.) Decidable means: two competent authors, given the same content and only the
 stated rule, reach the same home without further judgment.
 
 This question carries an **EXTERNAL CHECKLIST**. Rate each property `met` | `partial` | `missed`
@@ -365,7 +368,8 @@ A pinned starting option set for the corpus-shape sub-question -- choose one or 
 `generate_curated_index` | `accelerate_portal_transition` | `other`. Record it as
 `end_state.corpus_shape`.
 
-**Required sub-answer:** roadmap item T1.5 (exit criterion c1) already owns retiring
+**Required sub-answer:** roadmap item T1.5 (its FIRST exit criterion -- the list is bare strings, not id-keyed)
+already owns retiring
 `docs/DECISIONS.md` behind a decisions read portal. State whether your end-state is
 `sufficient_as_planned` | `sufficient_with_specific_amendments` | `materially_incomplete` |
 `wrong_end_state` with respect to T1.5, in `end_state.t15_verdict`. An end-state that ignores
@@ -436,10 +440,10 @@ What did the requester not think to ask? Seeded below -- ANSWER these AND extend
 - Is there a class of content that belongs in NONE of the six homes and is being forced into one?
 - If the corpus were rebuilt from scratch today with full knowledge, how many current live
   entries would exist at all?
-- Audit prompts and audit outputs are themselves durable governance content -- `docs/audit-prompts/`
-  and `audits/` -- carrying no contract, no size governance, and no home in the six-home routing
-  rule. THIS PROMPT is an instance of the class. Does the routing rule you propose in Q7 account
-  for it, and should it?
+- Audit prompts and audit outputs are themselves durable governance content. `file-router.yaml`
+  routes `docs/audit-prompts/` and the prose allowlist covers it, but neither carries size
+  governance, and neither has a home in the routing rule Q2 assesses. THIS PROMPT is an instance
+  of the class. Does the rule you propose in Q7 account for it, and should it?
 
 Uses the `answers[]` shape, not a verdict.
 
@@ -571,7 +575,7 @@ observation awaiting your adjudication.
 | G9 | 28 of 119 live entries contained the string `docs/contracts/`. | `docs/DECISIONS.md` |
 | G10 | The exact string `**Significance:**` appeared in 6 of 119 live entries. `decision-entry.yaml` lists `required_markers` as Status, Date, Decision, and 6 `optional_markers_fixed_spelling`; neither list contains Significance. See trap 6 on near-miss spellings. | `docs/contracts/decision-entry.yaml:39-57`; `docs/DECISIONS.md` |
 | G11 | 2 live entries carry `**Status:** Superseded` as their status marker. A naive contains-anywhere count returns 4, because two other entries QUOTE that literal string while specifying the compaction stub grammar -- count the status marker, not the substring. Live `## Decision` headers numbered 119. Live file 573,726 B + archive 111,070 B = 684,796 B combined. | `docs/DECISIONS.md`, `docs/DECISIONS_ARCHIVE.md` |
-| G12 | The size guard's constants are `_DECISIONS_LIVE_MAX_H2 = 120` and `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. The committed-index test pins `_COMMITTED_INDEX_MAX_BYTES = 131_000`, annotated as a Decision 166 re-derivation of a prior 110,000-byte pin. `docs/decisions-index.json` measured 110,582 B. | `scripts/checks/decisions/validate_decisions_size.py:20-21`; `tests/test_decisions_index.py:450` |
+| G12 | The size guard's constants are `_DECISIONS_LIVE_MAX_H2 = 120` and `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. The committed-index test pins `_COMMITTED_INDEX_MAX_BYTES = 131_000`, annotated as a Decision 166 re-derivation of a prior 110,000-byte pin. `docs/decisions-index.json` measured 110,582 B. **These three constants are expected to have MOVED by the time you run:** a raise was in flight at compose time to unblock concurrent work. Re-derive all three. A changed value is not a stale anchor -- record the new value, and note that a ceiling raise dated at or after this prompt's composition is live evidence for Q1 even though it is not an E1 row (E1's population stays fixed at nine; put the observation in `meta.contract_notes` under `out_of_population` and cite it in Q1's prose). | `scripts/checks/decisions/validate_decisions_size.py:20-21`; `tests/test_decisions_index.py:450` |
 | G13 | `decision-entry.yaml` carries a `significance:` section with four routing rows -- `numbered_decision`, `cd_state_flip`, `operational_fact`, `field_semantics` -- of which `field_semantics` is the row naming a contract as destination. It separately carries an `amendment_forms:` section describing two dated in-place annotation shapes. | `docs/contracts/decision-entry.yaml:114-143`, `:68-81` |
 | G14 | `decision-entry.yaml` states "~12,103 unguarded inbound 'Decision N' citations across the repo". A compose-time occurrence count over tracked files was materially larger -- by more than 7,000. **No figure is quoted here deliberately:** this prompt file itself contains such citations, so any number pinned here is self-referentially unstable. Derive it yourself with `git grep -oIE 'Decision [0-9]+' -- .` (occurrences) and note that `git grep -IE` (matching LINES) gives a materially smaller number. State your command, your unit, and your result. | `docs/contracts/decision-entry.yaml:192` |
 | G15 | The commit-message surface is a 5-row prefix table (`feat`, `plan`, `roadmap`, `scope`, `audit`) in `AGENTS.md`. The PR template's comment block names 4 of those 5 -- `audit({slug})` is absent from it. One check DOES read commit subjects for content: `feat_commit_slugs()` runs `git log origin/main..HEAD --format=%s` and matches `_FEAT_COMMIT_RE = ^feat\(([^)]+)\):`, consumed by `validate_vp_replay` and `validate_graduation_completeness`. No check under `scripts/checks/` references the PR template. | `AGENTS.md:190`; `.github/pull_request_template.md`; `scripts/checks/_common.py:25`, `:208-226` |
@@ -583,8 +587,9 @@ observation awaiting your adjudication.
 
 ## EMPIRICAL PASS
 
-Four bounded samples. Tag findings drawn from a sample `evidence_kind: observed`; findings from
-reading a rule alone are `static`. **At equal severity, an observed finding outranks a static
+Four bounded samples. Tag findings drawn from a sample `evidence_kind: observed`; so are findings
+drawn from a scripted corpus-wide aggregate you computed. Findings from reading a rule alone are
+`static`. **At equal severity, an observed finding outranks a static
 one.** Do NOT exceed any bound.
 
 - **E1 -- the growth-governance lineage: exactly Decisions 134, 145, 146, 149, 150, 151, 152, 160,
@@ -680,8 +685,8 @@ unbuilt, or off-target:
   Judge specifically whether its framing (ambient-load cost, retrieval-by-id) covers the
   authoring-time ROUTING question or is orthogonal to it.
 - **T2.54** "Bidirectional clause-to-check traceability" -- EX5's territory.
-- **T1.5** (exit criterion c1) -- DECISIONS.md retirement behind a decisions read portal. Q7's
-  required sub-answer.
+- **T1.5** (first exit criterion) -- DECISIONS.md retirement behind a decisions read portal.
+  Q7's required sub-answer.
 - **T1.17** -- premise-integrity follow-ups.
 
 Open recommendations in this territory. Each is a hit; assess sufficiency:
@@ -711,6 +716,11 @@ Two files, exact paths, where `<sha>` is the `<base-short-sha>` derived once in 
 - `audits/contract-first-governance-<sha>.yaml`
 - `audits/contract-first-governance-<sha>.md` -- prose companion, **<= 2500 words**, the
   executive layer a human reads first. Lead with Arc A. Include DD-D's comparison table.
+
+**Deep-dive and sample output has no YAML block, deliberately.** DD-A's arithmetic, DD-B's
+per-point classification, DD-C's three traces, DD-D's comparison table, and E2's partition all
+live in the companion report and in the `prose` of the question each feeds. Only enumerable
+records get YAML. This keeps one enumerated list and one schema; do not invent a block for them.
 
 Volume caps on the YAML, so anti-padding is enforceable and not merely urged: `findings` <= 20,
 `rejected_candidates` <= 25, `content_class_routing` <= 10, `sampled_entry_dispositions` <= 13,
@@ -762,20 +772,9 @@ audit:
   end_state:
     corpus_shape: keep_monolith|extract_machine_semantics_only|extract_multiple_typed_fields|generate_curated_index|accelerate_portal_transition|other
     t15_verdict: sufficient_as_planned|sufficient_with_specific_amendments|materially_incomplete|wrong_end_state
+    t256_verdict: sufficient_as_planned|sufficient_with_specific_amendments|materially_incomplete|wrong_end_state
     routing_rule: ""                  # the decidable rule itself, stated so two authors agree
     forcing_functions: [{mechanism: "", survives_failure_mode: "", cost: ""}]
-  deep_dive_outputs:                  # the machine-readable home for DD-A, DD-B and E2
-    dd_a: {lineage_bytes: <int>, live_file_bytes: <int>, byte_share: "",
-           lineage_headers: <int>, header_ceiling: <int>, header_share: "",
-           ns6_verdict: cure-cheaper|cure-costlier|indeterminate, arithmetic_note: ""}
-    dd_b: {points: [{point: 1|2|3|4|5, home_today: "", home_end_state: ""}],
-           routing_verdict: correctly-routed|correctly-blocked|rule-silent,
-           self_count_note: "",
-           shipped_outcome: ""}         # "" if located and described; `not-located` if not
-    e2_partition: {rule: "",            # authored at DD-C, reused here
-                   rows: [{decision: "Decision NN", rationale_pct: <int>,
-                           specification_pct: <int>, change_record_pct: <int>,
-                           other_pct: <int>}]}
   content_class_routing:
     - class_name: ""
       description: ""
@@ -815,8 +814,8 @@ audit:
       surfaces_affected: [S1]         # REQUIRED. The surfaces this finding's maturity counts
                                       # against. One element for a single-surface finding; two or
                                       # more when surface is `shared`. Never empty.
-      question: Q1..Q9
-      dimension: VD1..VD6
+      question: Q1..Q9                 # the PRIMARY question; name any others in `gap`
+      dimension: VD1..VD6              # the PRIMARY dimension; name any others in `gap`
       title: ""
       evidence: "file:line|item-id"
       evidence_kind: static|observed
@@ -838,18 +837,23 @@ audit:
       depends_on: []
       sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}
   rejected_candidates:
-    - {candidate: "", why_dismissed: "", compensating_control: "",
-       control_property_match: "", decision_or_item_id: ""}
+    - {candidate: "", dismissal_basis: owned|compensating-control|self-refuted,
+       why_dismissed: "", compensating_control: "", control_property_match: "",
+       decision_or_item_id: ""}
+      # dismissal_basis `self-refuted` = killed by your own P7 refutation, not by an owner or a
+      # control. On such a row the last three fields are "" and that is correct -- do not invent
+      # a control or an id to fill them.
   summary:
     total_findings: <int>
     novel_count: <int>
     planned_insufficient_count: <int>
     planned_unbuilt_count: <int>
     top_improvements: [<finding ids>]
-    highest_leverage_change: <finding id>
+    highest_leverage_change: <finding id|null>   # null iff findings[] is empty
 ```
 
-**Field semantics for the five disposal-support fields**, so nothing is written without a reader
+**Field semantics** for every field whose content is not self-evident, so nothing is written
+without a reader
 -- the human disposing of this audit is that reader:
 
 - `effort` -- T-shirt size of implementing `proposed_change`: XS < 1h, S < 1d, M < 1w, L >= 1w.
@@ -859,6 +863,11 @@ audit:
 - `per_surface_assessment.strengths` -- what that surface does well, in one or two sentences;
   required, because a rubric of gaps alone misrepresents a surface.
 - `per_surface_assessment.top_gaps` -- the finding ids that most drove that surface's maturity.
+- `change_type` -- `add` (a mechanism that does not exist), `rescope` (an existing mechanism's
+  coverage widens or narrows), `enforce` (an existing stated rule gains an evaluator), `unify`
+  (two surfaces collapse to one), `persist` (ephemeral content gains a durable home), `clarify`
+  (wording only, no behavior change), `retune_gate` (a threshold moves), `retire` (a surface or
+  rule is removed). Pick the one that dominates; note the second in `proposed_change`.
 - `question_answers[].basis` -- finding ids supporting the verdict; `[]` is legal when the answer
   rests on grounding facts alone rather than on any filed finding.
 - `question_answers[].prose` -- the answer itself, <= 300 words per question.
@@ -871,7 +880,8 @@ audit:
   file:line format is required only for `strong|adequate|weak|absent`.
 - `content_class_routing[].confidence` -- same rule as on findings: CONFIRMED requires the class
   traced to named entries; anything less is HYPOTHESIS.
-- `summary.top_improvements` -- 3 to 5 finding ids, most leverage first.
+- `summary.top_improvements` -- UP TO 5 finding ids, most leverage first. `[]` is legal and
+  correct when `findings[]` is empty; never pad it to reach a count.
 - `meta.contract_notes` -- free text, but write it as newline-separated `key: value` lines so a
   later run can diff it. Expected keys where applicable: `drift`, `preflight`, `superseded_prompt`,
   `out_of_population`, `unsettled_at_cap`, `significance_marker_counted`, `validate_pre`.
@@ -880,15 +890,36 @@ audit:
 
 1. Any `ending_class` token EXCEPT `relief-still-holding` -- surviving a mode that never failed is
    incoherent.
-2. The literal `no-erosion-established` -- REQUIRED when Q1's verdict is `undetermined`, or when
-   every `intervention_erosion` row is `relief-still-holding`. This exists so a no-erosion finding
-   is expressible; without it the honest no-erosion outcome would have no legal value.
+2. The literal `no-erosion-established` -- use whenever Q1's verdict is `no-erosion-established`
+   or `undetermined`, or when no `intervention_erosion` row carries an erosion `ending_class`.
 3. A free-text named mechanism, when the fix survives something outside that enum.
 4. `""` -- for any DIAGNOSTIC finding: one filed under Q1-Q6 that names a defect without
    proposing a mechanism that must survive anything. Findings under Q7 and Q8, and any finding
    whose `change_type` proposes a new mechanism, MUST use option 1, 2, or 3.
 
 The same rule applies to the field on `migration_sequence[]` and `end_state.forcing_functions[]`.
+
+## THE NO-EROSION PATH
+
+This prompt's TASK asserts that prior interventions eroded; that assertion came from the
+requester, and Q1 exists to test it. Concluding it is FALSE is a complete, confident, successful
+audit -- not a weak or failed one. So that the schema never makes the counter-conclusion more
+expensive to write than the conclusion, here is the whole path in one place:
+
+| Field | Value when you find no erosion |
+|---|---|
+| `question_answers` Q1 `verdict` | `no-erosion-established` |
+| every `intervention_erosion` row | `ending_class: relief-still-holding`, `held_until: still-holding`, evidence in `note` |
+| `question_answers` Q3 `verdict` | `no-structural-cause`, if the routing surfaces also do not bias the choice |
+| `end_state.corpus_shape` | `keep_monolith` is a legitimate value; argue it like any other |
+| Q7 constraint (iii) | `no-erosion-established` for every forcing function |
+| `question_answers` Q8 `verdict` | `no-migration-required` |
+| `migration_sequence` | `[]` -- an empty list is LEGAL and correct here; do not emit a synthetic "no action" step |
+| `survives_failure_mode` on every finding | `no-erosion-established`, per option 2 above |
+| PR title | use the neutral variant in COMMIT / PR MECHANICS |
+
+Nothing on this path requires a hedge, a null, or an apology. If you reach it, say so in the
+first line of the companion report.
 
 **Ranking, pinned.** "An observed finding outranks a static one at equal severity" governs the
 ORDER of `top_improvements` and the choice of `highest_leverage_change`. It does not reorder
@@ -932,7 +963,8 @@ happens to mention. `surfaces_affected` is never empty, so no finding escapes at
 Maturity is computed LAST, per surface, top-down, first match wins. It is written in exactly one
 place: `per_surface_assessment[].maturity`.
 
-- **frontier** -- 0 open critical AND 0 open high findings attributed to that surface, AND every
+- **frontier** -- 0 critical AND 0 high findings attributed to that surface ("open" is not a
+  state here -- every finding you file counts, regardless of its `roadmap_crossref`), AND every
   EX1-EX13 property in Q2's `external_checklist` rated `met` or `partial` -- never `missed`.
 - **strong** -- 0 critical AND <= 1 high.
 - **solid** -- <= 1 critical.
@@ -969,9 +1001,20 @@ prompt's framing forecloses no rating.
 5. Open the PR via `mcp__github__create_pull_request` (base `main`, ready for review, not a
    draft), title:
 
-   `audit: decision / contract / change-record content routing and prior-intervention erosion (S1-S5)`
+   - If Q1's verdict is `primary-mechanism-identified` or `contributing-factors-only`:
+     `audit: decision / contract / change-record content routing and prior-intervention erosion (S1-S5)`
+   - If Q1's verdict is `no-erosion-established` or `undetermined`:
+     `audit: decision / contract / change-record content routing and prior-intervention analysis (S1-S5)`
+
+   Pick by your own verdict. Never publish under a title that asserts a conclusion you did not reach.
 
    Body: a 2-3 sentence lede plus the `summary:` block in a yaml fence.
+   **IF the push or the PR call fails** (auth, network, protected branch): do NOT retry more than
+   twice and do NOT alter the branch or the deliverables to work around it. Leave the commit in
+   place locally, and state plainly in your final message that the deliverables are committed on
+   branch `audit/contract-first-governance-<sha>` but unpushed, with the error text. A stranded
+   commit a human can push is a complete audit; an improvised workaround is not.
+
 6. **END THE TURN.** Do not poll for CI. Do not merge. Do not subscribe to PR activity. Do not
    self-approve. The human disposes.
 
