@@ -44,7 +44,11 @@ acceptance_criteria:
     constants that fail against the pre-change values, and every pre-existing relative boundary
     test in that module still passes unmodified.
   - >-
-    Neither FAIL message in validate_decisions_size.py attributes a raised value to Decision 134.
+    Neither FAIL message in validate_decisions_size.py attributes a raised VALUE to Decision 134.
+    Scoped deliberately to the two f-string messages: the module docstring (line 8) and the
+    validate_decisions_size docstring (line 63) keep their Decision 134 references, because those
+    describe the ceilings as an INSTRUMENT (which Decision 134 did create) rather than asserting
+    the numbers, which after this change trace to no Decision at all. Do not edit either docstring.
   - >-
     docs/decisions-index.json stays under the existing 131,000-byte pin and
     tests/test_decisions_index.py is not modified by this plan.
@@ -211,8 +215,9 @@ verification_plan:
       old=subprocess.run(['git','show','origin/main:tests/checks/decisions/test_validate_decisions_size.py'],
       capture_output=True, text=True).stdout;
       new=Path('tests/checks/decisions/test_validate_decisions_size.py').read_text(encoding='utf-8');
-      names=set(re.findall(r'^\s*(?:class|def) (\w+)', old, re.M)); missing=sorted(n for n in names if
-      n not in new); assert not missing, missing; print('preserved', len(names), 'pre-existing test symbols')"
+      pat=r'^\s*(?:class|def) (\w+)'; names=set(re.findall(pat, old, re.M));
+      new_names=set(re.findall(pat, new, re.M)); missing=sorted(names - new_names); assert not
+      missing, missing; print('preserved', len(names), 'pre-existing test symbols')"
     expected: "Exit 0, printing the count of preserved symbols (22 on the current baseline)."
     fix_if: >-
       A non-empty missing list names a pre-existing test class or function that was renamed or
@@ -255,7 +260,7 @@ test_obligations:
       detector. (b) Absolute pins on the two constants, retained as a cheap locator so a future
       reader sees which values are deliberate. (c) The string '134' appears in neither FAIL message,
       covering behavior change (2) -- red before, since both messages carry '(Decision 134)' today.
-      These absolute assertions are necessary because all 21 pre-existing symbols in the module
+      These absolute assertions are necessary because all 22 pre-existing symbols in the module
       express their boundaries RELATIVE to the constants (_DECISIONS_LIVE_MAX_H2 - 1, + 1, and so
       on) and so pass identically before and after the raise; they cannot detect this change at all.
 constraints:
@@ -292,7 +297,10 @@ context:
     Decision 127, Decision 102, Decision 130, Decision 152, Decision 151, Decision 105."
   - >-
     "gates: decision-scout=BLOCK (overridden by explicit human direction at Step 6b, after the
-    verdict and all three quoted reversal conditions were surfaced in full); plan-critique=PENDING"
+    verdict and all three quoted reversal conditions were surfaced in full); plan-critique=PROCEED
+    after 2 round(s) -- round 1 REVISE on four blocking findings (missing full-tier VP step, an
+    over-claimed graduation, an unverified acceptance criterion, and a change-detector test
+    obligation), all fixed and independently re-verified in round 2"
   - >-
     HUMAN OVERRIDE OF A BLOCK VERDICT, recorded deliberately. Three ratified reversal conditions
     are knowingly overridden: (1) Decision 160 -- "the response is to re-derive the runway and
@@ -396,8 +404,11 @@ execution_steps:
     returns exactly one byte issue. (b) Absolute pins on both constants. (c) An assertion that the
     literal '134' appears in neither FAIL message produced by a breaching corpus. Update the module
     docstring's stale "(120)" and "(700_000)" figures and the _LIVE_SIZE comment's reference to
-    700_000. Do not rename, delete, weaken, or re-express any of the 21 pre-existing test symbols
-    (verification step 9 enforces this by name).
+    700_000. Do not rename, delete, weaken, or re-express any of the 22 pre-existing test symbols
+    (verification step 9 enforces this by name). AUTHORING TRAP for assertion group (c): build the
+    breaching corpus from 133 headers and 780,001 bytes, never from 134 headers -- the header FAIL
+    message interpolates the live count, so a 134-header corpus puts the literal '134' into the
+    message and fails the no-134 assertion spuriously.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop
     and RCA (Decision 55)
