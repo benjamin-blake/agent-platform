@@ -1,4 +1,4 @@
-# Machine Learning Trading System - Project Context
+# Agentic Software Engineering Platform - Project Context
 
 Canonical Layer 2 project knowledge base for Claude Code. This file is loaded on demand by workflows; keep rules in `CLAUDE.md` / `AGENTS.md`, workflow method in `.claude/commands/` and `.claude/skills/`, and machine semantics in `docs/contracts/*.yaml`.
 
@@ -6,46 +6,84 @@ Source stamp: ROADMAP-PLATFORM.yaml @ working tree; roadmap_tier_id_set sha256: 
 
 ## Operating contract
 
-- Repository visibility: public. Never commit credentials, API keys, AWS account IDs, IAM ExternalIds, account-specific ARNs, internal hostnames, trading alpha, strategy performance, or confidential market research. Safe content is platform engineering, infra patterns, CI/CD design, tooling, and general LLM-agent architecture.
+- Repository visibility: public. Never commit credentials, API keys, AWS account IDs, IAM ExternalIds, account-specific ARNs, internal hostnames, trading alpha, strategy performance, or confidential market research. Safe content is platform engineering, infrastructure patterns, CI/CD design, tooling, and general LLM-agent architecture.
 - Runtime surface: Ubuntu 24.04 / bash / Python 3.12+. Invoke Python with `bin/venv-python`, never `python` or `python3`. Do not rely on `source .venv/bin/activate` between shell calls.
-- Code and docs style: type hints for Python, async for I/O, ruff formatting, no emojis in code/scripts/docs, plain ASCII hyphens, no `eval()` or `exec()`, and no exceptions during module import.
-- Branching: never edit or commit on `main`. Use the harness-assigned `claude/...` session branch. Routine handoff is commit -> PR -> CI -> merge, not direct pushes to `main`.
+- Branching: never edit or commit on `main`. Routine handoff is commit -> PR -> CI -> merge.
 - Terraform and Lambda deploys: agents do not routinely run `terraform apply` or local Lambda deploy commands. Use `docs/contracts/deploy-paths.yaml` and `docs/contracts/build-lambda.yaml` to choose the governed path. Local apply/deploy is break-glass only after explicit human direction.
-- External integrations: when a plan step relies on an external API/tool, cite the source defining its input semantics, explain why the delivery mechanism is correct, and describe what breaks if the assumed semantics are wrong.
 
-## North star
+## Platform thesis
 
-Build a self-improving automated trading system. Product work creates the trading stack; platform work creates the governed agent/warehouse/CI substrate that lets the repository improve itself without losing safety, provenance, or human auditability.
+This repository is primarily an agentic software-engineering platform. Its purpose is to let LLM agents plan, build, verify, deploy, monitor, and improve software safely and reliably with minimal human oversight. Trading is an initial hosted product and proving ground, not the identity or commercial boundary of the platform.
+
+The platform is the governed harness around model intelligence. Models, compute providers, tools, and hosted products are replaceable. The durable product is the control plane that gives agents bounded authority, typed capabilities, reliable state, independent verification, deployment controls, operational memory, and evidence-backed feedback loops.
 
 The platform end-state is a public, agent-first automation platform with:
 
-1. durable data as the source of truth;
-2. compute that is swappable by workload;
-3. typed HTTPS tool surfaces instead of ad hoc scripts;
-4. governed CI/CD and deployment channels;
-5. warehouse-backed recommendations, decisions, queue state, and telemetry;
-6. a future autonomous improvement loop that can complete one bounded iteration without a human in the critical path.
+1. durable operational data as the source of truth;
+2. swappable models and compute selected by workload;
+3. typed tool and agent surfaces instead of ad hoc scripts;
+4. specialised planning, critique, implementation, review, and analysis personas;
+5. governed CI/CD, deployment, and progressive authority controls;
+6. warehouse-backed recommendations, decisions, queue state, execution evidence, and telemetry;
+7. causal verification connecting an agent action to its persisted and observed outcome;
+8. a closed improvement loop that can complete one bounded iteration without a human in the critical path;
+9. portability across repositories, products, infrastructure, and regulated domains.
+
+## Recursive self-improvement model
+
+The platform is a governed, recursively self-improving software-engineering system. Verification recursively improves, but verification is not the only improvement target.
+
+The complete loop is:
+
+```text
+observe development and runtime behavior
+  -> identify defects, friction, cost, latency, risk, and opportunity
+  -> create a bounded, evidence-linked recommendation
+  -> prioritise and admit work under explicit policy
+  -> plan, critique, implement, and review the change
+  -> obtain an independent CI/CD verdict
+  -> deploy through the governed channel
+  -> measure the resulting behavior
+  -> retain evidence and improve the next iteration
+```
+
+Telemetry provides learning signals about the whole engineering system: agent behavior, planning quality, review churn, tool failures, context quality, model cost and latency, CI performance, deployment outcomes, monitoring gaps, incidents, and hosted-product behavior. Analysis agents convert those signals into bounded recommendations that may improve:
+
+- tests, invariants, monitors, and verification gates;
+- prompts, personas, context selection, and model routing;
+- planning, critique, decomposition, prioritisation, and review;
+- tool contracts, orchestration, workspace handling, and recovery;
+- CI/CD, deployment controls, observability, and incident diagnosis;
+- data architecture, platform implementation, and hosted products.
+
+At maturity, outcome telemetry and product metrics also drive changes to the system itself. The platform can therefore improve both the process that produces software and the software produced by that process.
+
+Recursive improvement remains bounded. A signal is not proof, a recommendation is not authority, and a metric movement is not automatically a beneficial outcome. Observation, analysis, recommendation, implementation, verification, admission, and post-deployment evaluation are distinct stages. Agents may propose and implement changes, but changes gain authority only through explicit policy and independent evidence. Verification is the safety envelope and admission mechanism for recursive self-improvement, not its scope limit.
+
+## Commercial and product boundary
+
+The primary category is agentic software-engineering infrastructure, adjacent to AI assurance, autonomous operations, and regulated AI control planes.
+
+The core value proposition is not an agent that writes code. It is the harness that makes code-writing and operations agents governable, inspectable, testable, portable, and safe enough for production-adjacent work. It provides traceability from work selection and authority through agent action, independent verification, deployment, observed outcome, and the next improvement.
+
+Hosted products consume but do not define the platform. Trading exercises high-consequence data, operations, and verification. Other products reuse the substrate without inheriting trading logic. Product-specific IP, data, and risk controls stay behind their product boundary.
 
 ## Roadmap sources
 
-- Product capability roadmap: `docs/ROADMAP-PRODUCT.yaml` for trading-system phases, market features, alpha/portfolio/execution/operations layers, and environment-as-config bundles.
-- Platform roadmap: `docs/ROADMAP-PLATFORM.yaml` for tier_items, platform sequencing, infra governance, candidate decisions, DuckLake/Lambda topology, executor substrate, and bootstrap work.
+- Platform roadmap: `docs/ROADMAP-PLATFORM.yaml` for platform sequencing, governance, data, telemetry, and executor work.
+- Hosted-product roadmap: `docs/ROADMAP-PRODUCT.yaml` for the initial trading product. It is a consumer and proving ground.
 - Decision rationale: `docs/DECISIONS.md` plus `docs/DECISIONS_ARCHIVE.md`. Pending candidate decisions in the roadmap are binding until ratified or superseded.
 - Contracts: `docs/contracts/*.yaml` and selected `.md` contracts are the preferred source for machine semantics. Do not duplicate contract truth in prose.
 
-Roadmap disambiguation: use PRODUCT for trading capabilities, PLATFORM for agent/infrastructure/control-plane capabilities, and both only when a task spans product intent plus platform machinery.
+Use PLATFORM for the harness and PRODUCT for hosted-domain capabilities; use both only when product intent requires platform machinery.
 
 ## Platform roadmap end-state map
 
 ### Foundation already shipped
 
-The repo has shipped enough foundation that the platform is in convergence and hardening rather than bootstrap: CC-web branch workflow, public-repo boundary, GitHub-hosted CI with OIDC, pre-commit secret guards, two-tier validation, Single Portal Invariant, DuckLake reader/writer functions, schema-as-code, field semantics, CI-RCA, candidate-decision ratification lane, governed code-deploy channels, and Terraform guard classification.
-
-T0 is effectively complete. T-1 has only a small deferred packaging tail. T2 is the active center of gravity because storage, deploy, IAM, and guard hardening are the blocking substrate for telemetry and executor work.
+The platform is in convergence and hardening rather than bootstrap. Its foundation includes the agent branch workflow, public-repo boundary, GitHub-hosted CI, secret guards, two-tier validation, the Single Portal Invariant, DuckLake reader/writer functions, schema-as-code, CI-RCA, governed deployment, and infrastructure guard classification. T2 is the active center of gravity because durable state and guard hardening block telemetry and executor work.
 
 ### Critical path to the autonomous loop
-
-Current critical path from the roadmap and audits:
 
 ```text
 T2.18 DuckLake maintenance
@@ -74,84 +112,48 @@ T2.26 migrated ops queue substrate
   -> T4.12 scheduled-agent re-enable/repoint
 ```
 
-### Current blockers
-
-- Strategic/executor freeze: STRATEGIC plans are suspended. Work continues as IMPLEMENTATION plans, but executor unfreeze requires T4.2 stability, T3.2 PASS evidence, and T3.3 grace.
-- T1.5/CD.18: ops_decisions graduation cannot start until its gating candidate decision is ratified.
-- Telemetry gap: the improvement loop is still effectively blind until telemetry storage, causal verification, and cloud analysis are rebuilt.
-- Queue feed gap: rec-curator/priority-queue production must be repointed to DuckLake before autonomous pick-rec has a reliable source.
-- DQ gate shape: live DuckLake-reader checks must move out of the blocking merge gate into scheduled monitoring without weakening write-path structural enforcement.
-- Executor substrate evidence: the incumbent Step Functions + Lambda Durable Functions design leads, but workspace/resume and persona contract evidence must stay explicit.
+Current constraints are the temporary strategic/executor freeze, telemetry blindness before T2.36/T3.2/T3.3, the queue producer gap before T4.3, and missing executor evidence. Work remains IMPLEMENTATION-only until the documented reversal conditions hold.
 
 ## Operational data architecture
 
 ### Source of truth
 
-Warehouse state is authoritative. Local JSONL files under `logs/` are read caches, not write sources.
-
-Current ops substrate:
-
-- `ops_recommendations`: DuckLake-on-Neon, SCD2, written through `ducklake_writer` via `scripts.ops_data_portal`, read through `ducklake_reader`.
-- `ops_decisions`: DuckLake-on-Neon, sourced from `DECISIONS.md` / archive ETL and portal decision paths; decision numbering remains `DECISIONS.md` authority.
-- `ops_priority_queue`: DuckLake-on-Neon, dormant until executor/scheduled-agent producer work resumes; current-state read uses its named verb semantics.
-- `ops_execution_plans`: DuckLake-on-Neon, empty or dormant until executor resumes.
-- `ops_session_log`: still Iceberg/Athena pending CD.40/T3.20 disposition.
-- telemetry tables: dead Athena/Iceberg draft retired in favor of T2.36 four-table DuckLake rebuild.
+Warehouse state is authoritative. Local JSONL files under `logs/` are read caches, not write sources. Recommendations, decisions, priority queue, and execution plans use DuckLake-on-Neon. Session log remains on its legacy path pending disposition; telemetry re-lands as the T2.36 four-table DuckLake model. Mutable operational entities use SCD2; event journals are append-only.
 
 ### Portal discipline
 
-Agent-facing operations are only:
-
-- `file_rec`
-- `update_rec`
-- `sync`
-
-All recommendation and decision writes go through `scripts.ops_data_portal`. Never append to `logs/.recommendations-log.jsonl`, `logs/.decisions-index.jsonl`, pending outboxes, or S3 staging as a substitute. Recommendation IDs are allocated by the writer atomically. There is no offline outbox for migrated tables; failed writes fail loudly and must be retried after restoring the `agent_platform` credential chain.
+Agent-facing operations are only `file_rec`, `update_rec`, and `sync`. All recommendation and decision writes go through `scripts.ops_data_portal`. Never append to `logs/.recommendations-log.jsonl` or other read caches, pending outboxes, or S3 staging as a substitute. IDs are writer-allocated. Migrated tables have no offline outbox; failed writes fail loudly.
 
 ### Data modeling default
 
-For any new table or warehouse write path, state the grain first: one row per what. Then choose write mode:
+For any table, state the grain first. Use SCD2 for mutable entities and append_only for events. Use boundary-minted ULIDs, business-key merges, explicit partitioning, and contract-backed field semantics. Never default to CRUD.
 
-- SCD2 for mutable operational entities with current/history projections.
-- append_only for event/telemetry journals.
+## Telemetry, learning, and verification
 
-Use boundary-minted ULIDs, business-key merges for SCD2, explicit partitioning, and contract-backed field semantics. Never design a table as CRUD by default.
-
-## Telemetry and verification end-state
-
-Telemetry end-state is the canonical four-table DuckLake model:
+The canonical telemetry model is:
 
 - `telemetry_sessions`
 - `telemetry_observations`
 - `telemetry_transcripts`
 - `telemetry_agents`
 
-T2.36 creates the storage and write/read paths. T3.2 proves PRODUCE -> TRANSPORT -> PERSIST -> QUERY -> ASSERT. T3.3 analyzes telemetry for anomalies and cost/failure trends. T3.20 routes agent-turn/session capture into the same model and coordinates retirement or rewiring of legacy session-log surfaces.
+T2.36 creates storage and write/read paths. T3.2 proves PRODUCE -> TRANSPORT -> PERSIST -> QUERY -> ASSERT. T3.3 analyzes anomalies, friction, cost, and failure trends. T3.4 turns verified analysis into control-plane work. T3.20 routes agent-turn/session capture into the same model and coordinates retirement or rewiring of legacy session-log surfaces.
 
-Verification doctrine: `scripts.validate` is the single source of truth for CI checks. PRs run the fast `--pre` tier; full validation runs before handoff and on main. New CI checks must be added to `scripts.validate` first.
+Telemetry is evidence, not merely logging. Every meaningful stage should emit enough identity and lineage to connect recommendation, plan, agent invocation, code change, CI verdict, deployment, observation, and measured outcome. Analysis must distinguish correlation from causal evidence and preserve uncertainty rather than converting every anomaly into an automatic change.
+
+Verification is recursively improvable. Escaped defects, weak tests, missing guards, and monitoring gaps can generate recommendations for stronger verifiers. A proposed verifier must itself demonstrate useful discrimination before becoming authoritative, including differential or mutation evidence where appropriate. `scripts.validate` remains the single source of truth for CI checks: PRs run `--pre`; full validation runs before handoff and on main; new CI checks enter `scripts.validate` first.
 
 ## Agent and executor architecture
 
 ### Interactive workflow today
 
-```text
-/orient -> /plan -> /implement
-```
-
-- `/orient` is read-only: preflight, roadmap state, CI-RCA triage, ranked work, and plan prompts.
-- `/plan` produces `docs/plans/PLAN-{slug}.yaml`, with affected-file analysis, verification-tier selection, decision-scout gate, and critique.
-- `/implement` executes an approved plan, runs verification and code review, then validates, commits, opens a PR, and follows the event-driven CI/merge flow.
-- `/develop-executor` diagnoses executor failures and files RCA recommendations; it does not patch inline.
+`/orient -> /plan -> /implement`: orient ranks work read-only; plan creates a schema-validated implementation plan with decision and critique gates; implement changes, verifies, reviews, validates, and hands off through PR/CI. `/develop-executor` diagnoses executor failures and files RCA recommendations.
 
 ### Local executor status
 
-`scripts/execute_recommendation.py` and `config/agent/executor/prompts/*.prompt.md` preserve the older local executor loop: select rec, branch, plan, critique/refine, implement steps, validate, review, PR, CI, merge. This surface is frozen pending Decision 67 reversal and is not the routine development path.
-
-Executor self-modification boundary is enforced by `config/agent/executor/capabilities.yaml`: executor internals, prompts, LLM/tool runtime, tests, Terraform, workflows, scheduled-agent surfaces, decision/plan docs, and Lambda build/deploy scripts are non-automatable targets.
+The older local executor is frozen pending Decision 67 reversal. `config/agent/executor/capabilities.yaml` prevents unrestricted self-modification: sensitive runtime, verification, infrastructure, workflow, governance, and deployment targets remain protected until policy delegates them.
 
 ### Executor end-state
-
-T4 decomposes the interactive workflow into cloud states:
 
 ```text
 DuckLake queue
@@ -168,51 +170,26 @@ DuckLake queue
   -> merge
   -> deploy_dispatch
   -> emit_telemetry
+  -> analyze outcome
   -> autonomy gate ratchet
 ```
 
 T4.1 owns Step Functions and deterministic glue Lambdas. T4.2 owns Lambda Durable Function personas and LiteLLM transport. T4.9a owns the MVP GitHub Actions callback handshake. T4.10a owns persona contracts. T4.13/T4.14 add prompt-injection threat modeling and offline prompt/model regression tests.
 
-## Scheduled agents and CI-RCA
+Authority increases only when evidence supports it. The end-state minimises routine oversight while preserving human policy control, auditability, escape hatches, and explicit boundaries for high-consequence actions.
 
-Scheduled agents are currently disabled. The future split is:
+## Scheduled analysis and CI-RCA
 
-- T4.3 first repoints rec-curator/priority-queue producer writes to DuckLake so generated work is visible to the executor.
-- T4.12 then re-enables/repoints doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, and rec-curator surfaces.
+Scheduled agents are currently disabled. T4.3 first repoints rec-curator/priority-queue writes to DuckLake so generated work is visible to the executor. T4.12 then re-enables or repoints doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, and rec-curator surfaces.
 
-CI-RCA is the failure-to-work-item bridge. Red main workflows generate evidence, deduplicate, invoke the CI-RCA agent, and file recommendations through the ops portal. `/orient` surfaces CI-RCA items; `/plan` treats unresolved CI-RCA as a hard planning constraint.
+CI-RCA is one failure-to-work bridge. Red main workflows generate evidence, deduplicate, analyze the failure, and file recommendations through the ops portal. More generally, telemetry analysis should turn recurring friction and outcome evidence into prioritised work rather than only reacting to CI failures. `/orient` surfaces CI-RCA items; `/plan` treats unresolved CI-RCA as a hard planning constraint.
 
-## AWS and deployment facts
+## Infrastructure and deployment
 
-- Region: `eu-west-2`.
-- Account: personal platform account; account ID and account-specific values remain gitignored or in AWS.
-- Agent profile: `agent_platform`. Admin profile is human-gated only for rare break-glass provisioning.
-- Credential model: static-key assume-role chain. Verify with `aws sts get-caller-identity --profile agent_platform`; refresh the local static key only if rotated.
-- Lambda runtime: Python 3.12.
-- CI runner: GitHub-hosted `ubuntu-latest` with OIDC roles.
-- LLM substrate for future executor: LiteLLM with DeepSeek-direct Tier 1 and Anthropic-direct Tier 2. Bedrock is retired for this dev surface unless a contract explicitly says otherwise.
-- DuckLake/prod Lambda routine deploys go through governed GitHub workflows named by `docs/contracts/build-lambda.yaml`; local `build_lambda --deploy` variants are break-glass only.
+The platform currently uses AWS `eu-west-2`, Python 3.12 Lambdas, GitHub-hosted CI with OIDC, DuckLake-on-Neon, and LiteLLM transport. These are replaceable implementation choices, not product identity. Routine production changes use governed GitHub workflows; admin access and local deployment are human-gated, break-glass only.
 
-## File routing and placement
+## File routing and operational quick reference
 
-Use `docs/contracts/file-router.yaml` as the discovery and ownership index. Its validators enforce root docs allowlists and prose placement. Do not create a new standing prose companion document when a contract or existing machine-readable artifact can carry the semantics.
+Use `docs/contracts/file-router.yaml` as the discovery and ownership index. Do not create a standing prose companion when a contract or existing machine-readable artifact can carry the semantics.
 
-## Recommendation schema quick reference
-
-Recommendations are operational work items, not local JSONL edits. Required conceptual fields include title, source, effort, priority, status, automatable, risk, file, context, acceptance, optional verification, verification tier, dependencies, tags, and resolution/execution metadata when closing.
-
-Canonical status values: `open`, `closed`, `failed`, `declined`, `superseded`. Never use `done`, `complete`, or `implemented`.
-
-Acceptance proves the structural change landed. Verification proves behavior end-to-end and may be warning-only depending on tier. Prefer command scripts or focused pytest targets over opaque one-liners.
-
-## Known gotchas
-
-- Do not write read caches or outboxes as if they were source of truth.
-- Do not bypass missing AWS credentials by silently falling back to stale data. Loudly surface degraded warehouse access.
-- Do not run routine Terraform apply or local Lambda deploys. Check deploy-path contracts first.
-- Do not raise SLOC/prose budgets casually. Decompose or ratchet down unless a Decision-authorized raise exists.
-- Terraform optional artifacts need `try(filemd5(...), ...)` or `try(file(...), ...)` wrappers.
-- Athena/Iceberg limitations still matter for remaining legacy paths: use engine v3 workgroups for Iceberg DML and avoid assuming `ALTER TABLE ADD COLUMNS IF NOT EXISTS` exists.
-- Test isolation: never spawn the full pytest suite from code imported by tests; mock both `subprocess.Popen` and `subprocess.run` for subprocess-spawning functions.
-- Path migration and deletion require reference sweeps across prompts, workflows, scripts, docs, tests, and manifests.
-- Windows subprocess code must pass `encoding="utf-8", errors="replace"` with `text=True` and use `sys.executable`.
+Recommendations are operational work items, not local JSONL edits. Required concepts include title, source, effort, priority, status, automatable, risk, file, context, acceptance, optional verification, verification tier, dependencies, tags, and resolution/execution metadata when closing. Canonical status values are `open`, `closed`, `failed`, `declined`, and `superseded`. Acceptance proves structural change; verification proves behavior and may be warning-only depending on tier.
