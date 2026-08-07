@@ -77,6 +77,30 @@ _SUPERSEDED_BY_RE = re.compile(
 _DECISION_MARKER_BODY = r"Decision\b[^:]*"
 
 
+# Terminator sets for typed-field extraction, named per docs/contracts/decision-entry.yaml's
+# field_grammar section (CFG-06 class fix, audits/contract-first-governance-33c8667.yaml): the
+# contract is the authoritative statement of these regexes -- tests/test_decision_field_grammar.py
+# pins both constants against it, so a future divergence fails CI instead of silently corrupting a
+# warehouse column.
+#
+# _MARKER_SECTION_TERMINATOR is the PROSE set (Problem/Intent/Rationale/Reversal conditions, via
+# _extract_by_marker_pattern and _extract_section): a following bold marker, a --- block
+# separator, or end-of-block/file. It deliberately does NOT stop at an amendment-annotation
+# opener (Decision 151 clause 3(ii)): a dated in-section accretion inside an Intent (or other
+# prose) section must remain part of the typed value, or a future clarification is silently
+# truncated out of the corpus.
+_MARKER_SECTION_TERMINATOR = r"(?=\n\*\*\w|\n---|\Z)"
+
+# _TYPED_ID_LIST_TERMINATOR is the prose set PLUS the two amendment-trailer openers -- the
+# non-blockquote "[Amendment " form and the GENERAL blockquote-bold-annotation form "\n> \*\*"
+# (never a closed list of observed openers: enumerating spellings is the anti-pattern CFG-06
+# closes -- two enumeration attempts during planning each missed a further shape). Used ONLY by
+# _extract_related_decisions, so a trailer placed after a typed id-list field never contributes
+# its cited ids to that field (Decision 146's own trailer naming Decision 160 is a live
+# regression case this closes -- rec-2990).
+_TYPED_ID_LIST_TERMINATOR = r"(?=\n\*\*\w|\n---|\n\[Amendment |\n> \*\*|\Z)"
+
+
 def _extract_by_marker_pattern(text: str, marker_body_pattern: str) -> str:
     """Extract the text following a bold marker whose inner span matches marker_body_pattern.
 
@@ -86,10 +110,10 @@ def _extract_by_marker_pattern(text: str, marker_body_pattern: str) -> str:
     form first, then the inline (marker and body on the same line) form.
     """
     full_marker = rf"\*\*{marker_body_pattern}:\*\*"
-    multi = re.search(full_marker + r"\s*\n(.*?)(?=\n\*\*\w|\n---|\.?\Z)", text, re.DOTALL)
+    multi = re.search(full_marker + r"\s*\n(.*?)" + _MARKER_SECTION_TERMINATOR, text, re.DOTALL)
     if multi:
         return multi.group(1).strip()
-    inline = re.search(full_marker + r"\s*(.+?)(?=\n\*\*\w|\n---|\.?\Z)", text, re.DOTALL)
+    inline = re.search(full_marker + r"\s*(.+?)" + _MARKER_SECTION_TERMINATOR, text, re.DOTALL)
     if inline:
         return inline.group(1).strip()
     return ""
@@ -98,7 +122,7 @@ def _extract_by_marker_pattern(text: str, marker_body_pattern: str) -> str:
 def _extract_section(text: str, *keys: str) -> str:
     for key in keys:
         single = re.search(
-            rf"\*\*{re.escape(key)}:\*\*\s*(.+?)(?=\n\*\*|\n---|\.?$)",
+            rf"\*\*{re.escape(key)}:\*\*\s*(.+?)" + _MARKER_SECTION_TERMINATOR,
             text,
             re.DOTALL,
         )
@@ -127,7 +151,7 @@ def _extract_related_decisions(text: str) -> list[int]:
     fix -- the plural form was previously invisible to the singular-only regex, e.g.
     "Decisions 69/78" in Decision 87's Related line).
     """
-    m = re.search(r"\*\*Related:\*\*(.+?)(?=\n\*\*|\n---|\Z)", text, re.DOTALL)
+    m = re.search(r"\*\*Related:\*\*(.+?)" + _TYPED_ID_LIST_TERMINATOR, text, re.DOTALL)
     if not m:
         return []
     related_text = m.group(1)
@@ -179,22 +203,26 @@ _extract_superseded_by = extract_superseded_by
 # continuation grammar, not a relation-keyword blocklist: after the relation word, the FIRST
 # target must be an immediately-adjacent "Decision(s) N" (_TITLE_RELATION_SEED_RE) -- so a
 # non-Decision target (CD.N, KG.N, prose like "Identity Center") never matches, with no need
-# to enumerate every non-target word. A further target is accepted ONLY as an explicit ", N"
-# (_TITLE_RELATION_COMMA_RE) / "/N" (_TITLE_RELATION_SLASH_RE) plural-list continuation, an
-# "and Decision(s) N" (_TITLE_RELATION_AND_RE) continuation, or a "+ Decision(s) N"
-# (_TITLE_RELATION_PLUS_RE) continuation (dec-153: "amends Decision 73 enforcement + Decision
-# 135") -- optionally preceded by a qualifier on the prior target
+# to enumerate every non-target word. A further target is accepted ONLY as an explicit ", N" or
+# ", Decision(s) N" (_TITLE_RELATION_COMMA_RE) / "/N" (_TITLE_RELATION_SLASH_RE) plural-list
+# continuation, an "and N" or "and Decision(s) N" (_TITLE_RELATION_AND_RE) continuation, or a
+# "+ Decision(s) N" (_TITLE_RELATION_PLUS_RE) continuation (dec-153: "amends Decision 73
+# enforcement + Decision 135") -- optionally preceded by a qualifier on the prior target
 # (_TITLE_RELATION_QUALIFIER_RE: "point P"/"cl.N"/"clause N", or a single bare descriptive word
 # like "enforcement"; a qualifier is consumed but is never itself a number source, and the bare
 # word alternative explicitly excludes "and" so it never steals that continuation's own
-# keyword). Any other following text -- a semicolon, a different relation word ("mirrors",
-# "extends", "builds on"), an ordinal like "2nd amendment" -- is not a valid continuation and
-# silently ends the scan for that anchor occurrence.
+# keyword). CFG-06 widened the comma and "and" continuations to accept BOTH the bare-number and
+# repeated-Decision-token spellings (dec-160's real title, "amends Decision 145, Decision 134
+# clause 2, and Decision 146", mixes both in one title) -- the repeated "Decision(s)" token is
+# always optional, never required, on either continuation. Any other following text -- a
+# semicolon, a different relation word ("mirrors", "extends", "builds on"), an ordinal like "2nd
+# amendment" -- is not a valid continuation and silently ends the scan for that anchor
+# occurrence.
 _TITLE_RELATION_SEED_RE = re.compile(r"\s+Decisions?\s+(\d+)\b", re.IGNORECASE)
 _TITLE_RELATION_QUALIFIER_RE = re.compile(r"\s*(?:point\s+\d+|cl\.\s*\d+|clause\s+\d+|(?!and\b)[A-Za-z]+)", re.IGNORECASE)
-_TITLE_RELATION_AND_RE = re.compile(r"\s*,?\s*and\s+Decisions?\s+(\d+)\b", re.IGNORECASE)
+_TITLE_RELATION_AND_RE = re.compile(r"\s*,?\s*and\s+(?:Decisions?\s+)?(\d+)\b", re.IGNORECASE)
 _TITLE_RELATION_PLUS_RE = re.compile(r"\s*\+\s*Decisions?\s+(\d+)\b", re.IGNORECASE)
-_TITLE_RELATION_COMMA_RE = re.compile(r"\s*,\s*(\d+)\b")
+_TITLE_RELATION_COMMA_RE = re.compile(r"\s*,\s*(?:Decisions?\s+)?(\d+)\b", re.IGNORECASE)
 _TITLE_RELATION_SLASH_RE = re.compile(r"\s*/\s*(\d+)\b")
 
 

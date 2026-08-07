@@ -66,30 +66,65 @@ decision_marker_tolerance: >-
   used in unheaded candidate-decision sections, never collides).
 
 amendment_forms:
-  # Two annotation shapes appear in the historical band; both are tolerated read-side, neither
-  # is required. A NEW entry never predicts its own amendment -- these forms only apply when an
-  # EXISTING ratified entry is later amended in place.
+  # GENERAL form, not a closed list of observed openers (CFG-06 class fix,
+  # audits/contract-first-governance-33c8667.yaml) -- kept as a LIST (not restructured to a
+  # dict) so the pre-existing tests/esb_text_fix/test_decision_scope_notes.py pin on the
+  # blockquote_update entry's exact "example" prefix keeps working unchanged. The first entry
+  # (form: general_rule) states the mechanical rule scripts.decisions_md._TYPED_ID_LIST_TERMINATOR
+  # actually enforces; every entry after it is an ILLUSTRATIVE, NON-EXHAUSTIVE example, not a
+  # closed enumeration. Enumerating spellings failed TWICE during CFG-06 planning -- a
+  # two-opener list missed rows 89/105 ("> **Amended by Decision N (DATE):**"); a three-opener
+  # list still missed rows 60/62/68/71 ("> **DATE amendment (...):**") -- and is rejected as a
+  # design: the next unlisted annotation spelling is covered automatically by the general rule,
+  # with no contract edit required. trailing_bracket and blockquote_update remain the two PINNED
+  # spellings for a NEW trailer (test_decision_scope_notes.py pins blockquote_update's exact
+  # prefix); the remaining entries are additional OBSERVED spellings recorded for illustration
+  # only, never individually enforced.
+  - form: general_rule
+    description: >-
+      A blockquote-bold annotation line ("> **...:**") terminates a typed id-list field (e.g.
+      Related). The one NON-blockquote form, a trailing bracketed "[Amendment DATE: ...]"
+      annotation, needs its own opener ("[Amendment ") because it does not share the blockquote
+      prefix. Widening this vocabulary also widens the Decision 151 clause 3(ii) sanctioned
+      in-Intent accretion vocabulary (see intent_accretion_note below) -- an Intent-section
+      accretion may use any of these shapes and must NOT be truncated by the prose terminator
+      (field_grammar.prose_terminator). _extract_section has no production caller in
+      scripts/decisions_md.py; it is exercised only by tests/test_decisions_md.py, retained as
+      public surface for completeness.
   - form: trailing_bracket
     example: "[Amendment 2026-07-03: ...]"
     description: >-
       A trailing bracketed annotation appended after the entry's original body, dated, prefixed
-      "[Amendment ".
+      "[Amendment ". PINNED spelling for a new non-blockquote trailer.
   - form: blockquote_update
     example: "> **Update (2026-05-01):** ..."
     description: >-
-      A blockquote-prefixed dated update line, prefixed "> **Update (".
+      A blockquote-prefixed dated update line, prefixed "> **Update (". PINNED spelling for a
+      new blockquote trailer.
+  - form: amended_by_decision
+    example: "> **Amended by Decision N (DATE):** ..."
+    description: "Illustrative only, matches general_rule above -- not individually enforced."
+  - form: dated_amendment
+    example: "> **DATE amendment (...):** ..."
+    description: "Illustrative only, matches general_rule above -- not individually enforced."
+  - form: supersession_note
+    example: "> **Supersession note:** ..."
+    description: "Illustrative only, matches general_rule above -- not individually enforced."
 
 intent_accretion_note: >-
   The optional Intent marker (docs/DECISIONS.md Decision 151 / PLAN-dcg-intent-capture, audit
   finding DCG-06) is draft-until-merge, then follows this SAME amendment_forms dated-append
   accretion model post-ratification: the original Intent text is never rewritten -- clarifications,
   caveats, and exceptions accrue as dated, source-cited, append-only annotations inside the Intent
-  section, using the two forms above (trailing_bracket / blockquote_update), capped at roughly 3
-  clarifications or ~120-150 words before escalating to a superseding Decision plus a Decision 149
-  compaction of the superseded entry. See Decision 151 for the full convention (including the
-  `<source>`-citation and inside-the-Intent-section refinements layered on the two base forms
-  above). Enforcement is convention-only (Decision 146 operator-disposed stance) -- no validator,
-  no stored guard.
+  section, using any shape matching amendment_forms.general_rule (or the non_blockquote_opener
+  form), capped at roughly 3 clarifications or ~120-150 words before escalating to a superseding
+  Decision plus a Decision 149 compaction of the superseded entry. See Decision 151 for the full
+  convention (including the `<source>`-citation and inside-the-Intent-section refinements layered
+  on the base forms above). Enforcement is convention-only (Decision 146 operator-disposed stance)
+  -- no validator, no stored guard. Load-bearing on the PARSER side: field_grammar.prose_terminator
+  deliberately does not stop at any amendment_forms opener, so this in-section accretion stays
+  part of the typed intent value (Decision 151 clause 3(ii); see tests/test_decision_field_grammar.py
+  ::test_intent_retains_dated_in_section_accretion).
 
 supersession_marker: "**Superseded by: Decision N**"
 supersession_marker_note: >-
@@ -110,6 +145,127 @@ decided_date_form: >-
   suffix is itself ISO-shaped -- a non-date clause (e.g. "Status: Active -- remove when reversal
   condition is met") is never harvested as a date (DAF-01 fix). New entries should always carry
   an explicit "**Date:**" marker rather than relying on the fallback.
+
+block_separator:
+  # rec-2991 (CFG-06 class fix): the contract was previously silent on the trailing "---" block
+  # separator, so two authoring sessions for the same remediation resolved the ambiguity in
+  # opposite directions by imitating different neighbours -- exactly the folklore this contract
+  # exists to eliminate. Forward-enforced on new-in-diff entries only by
+  # scripts/checks/decisions/validate_decision_entry_conformance.py's block_separator sub-check,
+  # reading this section at check time; the historical band is grandfathered (same posture as
+  # required_markers above).
+  form: "---"
+  required_on: new-in-diff entries only (a header number absent from the origin/main baseline)
+  historical_band: >-
+    Grandfathered, not retro-enforced. Census over the 146-entry corpus at CFG-06 plan time: 125
+    entries carry the trailing "---", 21 do not (20 live, 1 archive) -- numbers 23, 48, 64, 65,
+    76, 94, 102, 103, 118, and the contiguous 152-163 drift band. A follow-on rec tracks eventual
+    retro-standardisation.
+  reason: >-
+    Majority convention (125/146) AND current practice (Decisions 164-166 carry it again) agree,
+    so forward enforcement is the low-risk resolution -- nothing mechanical depends on the
+    separator today (blocks are heading-delimited by _iter_decision_sections, and the string
+    appears only as one alternative in field-terminator lookaheads where end-of-block already
+    covers the no-separator case identically), so this is purely an authoring-consistency gap.
+
+field_grammar:
+  # CFG-06 class fix (audits/contract-first-governance-33c8667.yaml): states each typed
+  # extractor's continuation forms and terminator set explicitly, per-extractor, so the next
+  # divergence between this contract and scripts/decisions_md.py fails
+  # tests/test_decision_field_grammar.py instead of silently corrupting a warehouse column. This
+  # section governs the FIELD extractors; header_form / header_grammar_note above governs the
+  # header grammar (see shared_parser_note for how the mandate spans both).
+  title_relation_continuation:
+    # extract_amends_edges() / _extract_title_borne_supersedes(), both built on
+    # scripts.decisions_md._extract_title_relation_targets.
+    extractor: extract_amends_edges
+    relation_word: amends
+    accepted_forms:
+      - example: "amends Decision 145, Decision 134 clause 2, and Decision 146"
+        expected: [145, 134, 146]
+        reason: >-
+          dec-160's real title -- mixes a ", Decision N" repeated-token comma continuation with
+          an "and Decision N" repeated-token continuation in the same title.
+      - example: "amends Decision 122, 116"
+        expected: [122, 116]
+        reason: "comma continuation accepts a bare number (no repeated 'Decision' token)."
+      - example: "amends Decision 122 and Decision 116"
+        expected: [122, 116]
+        reason: "'and' continuation accepts a repeated 'Decision' token."
+      - example: "amends Decision 122 and 116"
+        expected: [122, 116]
+        reason: "'and' continuation also accepts a bare number (CFG-06 widening)."
+    rejected_forms:
+      - example: "amends Decision 104, mirrors Decision 132"
+        expected: [104]
+        reason: "a different relation word ('mirrors') after a comma is not a plural-list continuation."
+      - example: "amends Decision 73, 2nd amendment; builds on 80/104/124/131"
+        expected: [73]
+        reason: >-
+          an ordinal ('2nd') fails the \b word-boundary digit check; 'builds on' names no
+          'Decision' token at all.
+      - example: "as amended by Decision 116"
+        expected: []
+        reason: "'amended' is a different whole word from 'amends' -- the inverse direction never matches."
+      - example: "amends CD.28 clause 3"
+        expected: []
+        reason: "CD.28 is not 'Decision N' -- the seed regex requires an immediately-adjacent Decision(s) N token."
+  prose_terminator:
+    used_by:
+      - _extract_by_marker_pattern
+      - _extract_section
+    regex: '(?=\n\*\*\w|\n---|\Z)'
+    justification: >-
+      Stops at a following bold marker, a --- block separator, or end-of-block/file --
+      DELIBERATELY does not stop at an amendment_forms opener (Decision 151 clause 3(ii)): a
+      dated in-section accretion inside Problem/Intent/Rationale must remain part of the typed
+      value, so a future clarification is never silently truncated out of the corpus. See
+      intent_accretion_note above.
+  typed_id_list_terminator:
+    used_by:
+      - _extract_related_decisions
+    regex: '(?=\n\*\*\w|\n---|\n\[Amendment |\n> \*\*|\Z)'
+    justification: >-
+      The prose_terminator set PLUS the two amendment_forms openers (the non-blockquote
+      "[Amendment " form and the GENERAL blockquote-bold-annotation form "\n> **" -- never a
+      closed list of observed openers, per amendment_forms.general_rule above), so a trailer
+      placed after a typed id-list field (e.g. Related) never contributes its cited ids to that
+      field. Decision 146's own trailer naming Decision 160 is a live regression case this
+      terminator closes (rec-2990).
+    accepted_forms:
+      - example: "**Related:** Decision 60 (...).\n\n> **Amended by Decision 164 (2026-07-01):** ...\n\n---"
+        expected: [60]
+        reason: "the general blockquote-bold-annotation rule stops the capture before the trailer."
+      - example: "**Related:** Decision 84 (...).\n\n[Amendment 2026-08-07: Decision 160 ...]\n\n---"
+        expected: [84]
+        reason: "the non-blockquote '[Amendment ' opener also stops the capture."
+    rejected_forms:
+      - example: "**Related:** Decision 60 (...).\n\n**Superseded by: Decision 164**\n\n---"
+        expected: [60]
+        reason: >-
+          a following bold marker (not an amendment_forms opener) already terminates via the
+          shared prose_terminator set -- not a case the widened terminator changes.
+  projection_residue:
+    # Decision 134 clause 5(b) forward-note (Decision 55 spirit-flag, accepted during CFG-06
+    # planning): recorded machine-readably here, not only in plan prose, so a future
+    # content-parity gate inherits the exact set.
+    description: >-
+      The typed_id_list_terminator's GENERAL blockquote-bold-annotation rule ("\n> **") drops
+      trailer-borne ids the PRE-CFG-06 parser previously included in related_decisions on these
+      eleven entries. Because the ops_decisions backfill is content-hash gated on
+      sha256(raw_block) (Decision 84), and this parser fix changes no markdown byte on these
+      eleven entries, these rows will NOT re-project into the warehouse until each entry's
+      raw_block next changes for an unrelated reason -- a fidelity lag, not a source-of-truth
+      inversion. A follow-on rec tracks eventual reconciliation.
+    row_count: 11
+    rows: [60, 62, 68, 71, 74, 87, 89, 103, 105, 116, 122]
+  known_divergent_grammars:
+    - grammar: scripts.checks.decisions.validate_supersession_annotations._EDGE_RE
+      description: >-
+        A third, deliberately-unaligned whole-block grammar (verb + immediately-adjacent
+        "Decision N", scanning the ENTIRE block rather than just the title) that still reads
+        only the first citation per relation word. Not brought into alignment by CFG-06 -- a
+        follow-on rec tracks it.
 
 significance:
   # Decision-log growth DIRECTION mechanism (audit finding DCG-05, Decision 150; upstream sibling
@@ -247,4 +403,11 @@ shared_parser_note: >-
   decision_header_numbers(paths=None) for the set of decision numbers across one or more files.
   Both are built on the module's single _DECISION_HEADING_RE ('#{2,3}' grammar) -- a consumer
   that hand-rolls its own header regex instead of importing these two functions is exactly the
-  divergence this contract exists to close (DAF-03).
+  divergence this contract exists to close (DAF-03). CFG-06 extends the mandate to the FIELD
+  extractors, not only the header grammar: every typed field extractor --
+  _extract_by_marker_pattern, _extract_section, and _extract_related_decisions -- must use one
+  of the two terminator constants field_grammar states above (_MARKER_SECTION_TERMINATOR for
+  prose sections, _TYPED_ID_LIST_TERMINATOR for _extract_related_decisions' typed id-list),
+  never a hand-rolled lookahead. tests/test_decision_field_grammar.py pins both constants
+  against field_grammar's stated regexes, so a divergence between either terminator constant
+  and this contract fails CI.
