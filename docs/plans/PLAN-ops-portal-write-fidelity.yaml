@@ -148,7 +148,7 @@ verification_plan:
       measuring pre-existing argument validation instead of the guard -- see the discriminating-test
       constraint. If stderr is asserted only to contain "ERROR", the assertion is satisfiable by the
       missing-required-field path and must be tightened to name --dry-run.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: portal-cli-dry-run-rejected-outside-purge
   - step: 2
@@ -174,7 +174,7 @@ verification_plan:
       argparse dest -- note --file maps to dest target_file and --context maps to dest rec_context. If
       a rejection test passes against unfixed code, it was written without the paired --status closed
       and is vacuous. If this step is ever reduced back to a -k selector, it stops verifying anything.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: portal-cli-update-rec-field-fidelity
   - step: 3
@@ -197,7 +197,7 @@ verification_plan:
       unconditionally whenever file and effort are present and both are required on --file-rec; the
       conditional-assignment edit removes a misleading required argument, it does not change persisted
       output.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: portal-cli-file-rec-risk-optional
   - step: 4
@@ -441,6 +441,18 @@ context:
   - >-
     Baseline before any change: tests/ops_data_portal/test_cli.py has 6 passing tests, and cli.py
     measures 200 statements with 103 covered (51.5%, displayed as 52%).
+  - >-
+    Implement-time correction: VP steps 1-3 were drafted hermetic: true, but their tests live in
+    tests/ops_data_portal/test_cli.py, which carries a module-level pytest.importorskip("duckdb")
+    guard -- duckdb is absent from the fast pr-validate tier (requirements-fast.txt +
+    requirements-dev.txt only, not the full requirements.txt), so validate_vp_replay.py's
+    Interactive VP Replay (T3.15 c2, VF-01) cannot collect the explicit node ids there and reds
+    the PR (exit 4, "found no collectors"). PLAN-portal-update-rec-context.yaml already marks its
+    own tests/ops_data_portal/test_cli.py VP step hermetic: false for this identical reason;
+    corrected all three steps to hermetic: false to match established precedent. This does not
+    affect the Verification Graduation admission (scripts.verification_graduation.run_differential
+    does not gate on the hermetic flag) -- all three checks were already admitted and registered
+    before this correction.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
