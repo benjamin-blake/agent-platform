@@ -1,0 +1,325 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "ops-portal-write-fidelity"
+intent: >-
+  Close three write-fidelity defects on the ops data portal CLI, the single sanctioned agent write
+  path to the operational warehouse, so that the CLI never reports success for a write it did not
+  perform and never performs a write the caller asked it to preview. Every advertised-but-unhonoured
+  flag becomes a loud failure instead of a silent no-op.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ops-portal-write-fidelity.yaml
+phase: >-
+  Ad-hoc recommendation-driven forward fix on the Single Portal write surface (Decision 84). Claims
+  no tier_item alignment and uses the ad_hoc_rec soft-warn exception category, so the Tier Item
+  Freshness Gate does not fire. Bundles rec-2945, rec-2866 and rec-2826; rec-3034, rec-2808 and
+  rec-2972 are closed as human-confirmed duplicates of rec-2866.
+scope:
+  - file: scripts/ops_portal/cli.py
+    action: Modify
+    purpose: >-
+      Three defect fixes plus one docstring correction. (1) Reject --dry-run for every action except
+      --purge-postmortems-for, the only action that implements it, so a caller who reads --dry-run as
+      a global preview flag can never silently obtain a permanent warehouse write. (2) Replace the
+      hardcoded six-field --update-rec allowlist with an explicit dest-to-rec-field map that threads
+      every genuinely mutable field, and loud-fail the advertised flags that must NOT be mutable on
+      the update path. (3) Remove risk from the --file-rec required list and model it like
+      automatable -- accepted optionally for override-detection only, never authoritative. (4) Correct
+      the module docstring, which currently asserts the CLI surface is byte-identical to the
+      pre-decomposition monolith; this change alters exit codes and error strings, so leaving that
+      claim in place would be a knowingly-false invariant.
+  - file: tests/ops_data_portal/test_cli.py
+    action: Modify
+    purpose: >-
+      Add red-then-green regression tests for all three defects in the established CLI test home
+      (Decision 130/131: map_source_to_test returns None for scripts/ops_portal/cli.py, so there is
+      no mirror obligation and no new tests/ops_portal/ directory may be created). Every rejection
+      test must assert the warehouse write boundary was never reached, not merely that the exit code
+      was 1 -- an exit code alone does not prove no write occurred, which is the actual harm.
+bundled_recommendations:
+  - rec-2945
+  - rec-2866
+  - rec-2826
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Passing --dry-run with any action other than --purge-postmortems-for exits 1, prints an
+    explanatory error to stderr, and reaches no warehouse write boundary.
+  - >-
+    Passing --dry-run with --purge-postmortems-for continues to preview exactly as before
+    (no regression on the one action that implements the flag).
+  - >-
+    --update-rec threads status, resolution, execution_result, execution_date, execution_branch,
+    execution_pr_url, context, title, acceptance, priority, tags, dependencies, verification and
+    verification_tier into the update payload actually handed to update_rec.
+  - >-
+    --update-rec exits 1 without writing when passed --file, --effort, --risk, --source or
+    --context-v2-json, and the error names the specific flag and the reason it is not updatable.
+  - >-
+    A successful --update-rec prints the exact list of fields applied, so a caller can confirm what
+    was written rather than inferring it from a bare success string.
+  - >-
+    --file-rec succeeds without --risk, and still accepts --risk when supplied (backward compatible),
+    with the persisted risk value identical in both cases because it is always formula-derived.
+  - >-
+    The scripts/ops_portal/cli.py module docstring no longer asserts byte-identical parity with the
+    pre-decomposition monolith.
+  - >-
+    rec-2945, rec-2866 and rec-2826 are closed by the merge, and rec-3034, rec-2808 and rec-2972 are
+    closed as duplicates of rec-2866.
+test_obligations:
+  - source: scripts/ops_portal/cli.py
+    behavior: >-
+      --dry-run must never be silently ignored: it is honoured only for --purge-postmortems-for and
+      loud-fails without writing for every other action.
+    test_selector: tests/ops_data_portal/test_cli.py
+    verification_step: 1
+    red_green_expectation: >-
+      The dry-run tests fail against current main, where --dry-run --file-rec exits 0 and calls the
+      writer, and pass once the guard rejects it before any write path is reached.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove --dry-run can no longer convert an intended preview into a real write, and that the one
+      action which implements it still previews.
+    command: bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -k dry_run -q
+    expected: >-
+      Exits 0. Tests confirm --dry-run --file-rec and --dry-run --update-rec each return 1 with the
+      patched _ducklake_write asserted not called, and --dry-run --purge-postmortems-for still returns 0.
+    fix_if: >-
+      If a rejection test passes on exit code but the not-called assertion fails, the guard was placed
+      after a write path -- move it to immediately after parse_args, before any action dispatch.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: portal-cli-dry-run-rejected-outside-purge
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove --update-rec threads every advertised mutable field into the payload actually handed to
+      update_rec, and loud-fails the non-mutable ones without writing.
+    command: bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -k update_rec -q
+    expected: >-
+      Exits 0. Threading tests assert the merged record passed to the patched _ducklake_write carries
+      the new title/acceptance/priority/verification values; rejection tests assert exit 1, the flag
+      named in stderr, and _ducklake_write not called.
+    fix_if: >-
+      If a threaded field is absent from the write payload, the dest-to-field map is missing its
+      argparse dest -- note --file maps to dest target_file and --context maps to dest rec_context.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: portal-cli-update-rec-field-fidelity
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove --file-rec no longer demands a value it discards, and that supplying it remains
+      backward compatible (rec-2826).
+    command: bin/venv-python -m pytest tests/ops_data_portal -k risk_optional -q
+    expected: >-
+      Exits 0. --file-rec without --risk returns 0 and the persisted record carries the formula-derived
+      risk; --file-rec with an explicit --risk returns 0 and persists the same derived value.
+    fix_if: >-
+      If the record persists the caller-supplied risk instead of the derived one, risk was left in the
+      literal fields dict unconditionally -- make it conditional so _derive_computed_fields owns it.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: portal-cli-file-rec-risk-optional
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Ratchet coverage on the changed file. Whole-file 100% is explicitly NOT the gate here: roughly
+      45% of cli.py is action branches (decisions, backfill, sync, selftests, back-validate) untouched
+      by this plan and unreachable from this test module. The gate is that the lines this plan adds
+      are covered, expressed as a floor above the measured 52% baseline.
+    command: bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -q --cov=scripts.ops_portal.cli --cov-report=term-missing --cov-fail-under=62
+    expected: >-
+      Exits 0 at 62% or above, and no line of the new --dry-run guard, the dest-to-field map loop, the
+      rejection loop or the risk-optional branch appears in the Missing column.
+    fix_if: >-
+      If the floor is met but a new line appears in Missing, add the missing case as a test. Do NOT
+      lower the floor to pass -- the floor is a ratchet, not a target.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The 62% floor is calibrated to this file's current unrelated-branch composition, so graduating it
+      into the standing registry would pin a number that any future test added to an unrelated cli.py
+      action branch would move, producing registry churn unrelated to this plan's behavior. Steps 1-3
+      graduate the actual behavioral guarantees, which is where the durable regression value sits.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove end-to-end against the live warehouse that --acceptance now reaches the writer, using the
+      exact repair that rec-3034 documented as silently failing. rec-2866's own acceptance names the
+      nonexistent path tests/ops_portal, so this repair is both the fix's live proof and a real data
+      correction.
+    command: bin/venv-python -m scripts.ops_data_portal --update-rec rec-2866 --acceptance "bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -k update_rec -q" && bin/venv-python -m scripts.ops_data_portal --sync && grep -c 'tests/ops_data_portal/test_cli.py' <(bin/venv-python -c "import json,pathlib;rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];print(next(r for r in reversed(rows) if r.get('id')=='rec-2866')['acceptance'])")
+    expected: >-
+      The update prints a success line naming acceptance among the applied fields, and the read-back
+      after sync shows the repaired acceptance command, proving the field survived the round trip.
+    fix_if: >-
+      If the read-back still shows the old tests/ops_portal path, acceptance never entered the updates
+      dict -- re-check the dest-to-field map. If the command errors on credentials, the static-key
+      chain needs refreshing; this step is credential-dependent by design and cannot be faked.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run the full validation tier before commit, as a real executed step rather than a handoff_policy
+      assertion (Decision 163).
+    command: bin/venv-python -m scripts.validate
+    expected: Exits 0 with no failures, including validate_sloc_limits on the grown cli.py.
+    fix_if: >-
+      If validate_sloc_limits fails, cli.py crossed 500 SLOC -- decompose per Decision 128, do not
+      register a budget raise. The measured pre-change baseline is 311 SLOC against a 500 limit, so a
+      failure here means the implementation grew the file far beyond the planned delta.
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Verify the closure obligation: the three bundled recs closed via the merge trailer, and the three
+      human-confirmed duplicates closed against rec-2866.
+    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib;rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];latest={};[latest.__setitem__(r.get('id'),r) for r in rows];[print(i, latest.get(i,{}).get('status')) for i in ['rec-2945','rec-2866','rec-2826','rec-3034','rec-2808','rec-2972']]"
+    expected: All six ids print status closed.
+    fix_if: >-
+      If a bundled rec is still open after roughly five minutes, rec-autoclose did not fire -- close it
+      with the AGENTS.md fallback command. If a duplicate is still open, its human-confirmed close
+      command was not run in execution step 7.
+constraints:
+  - >-
+    Only scripts/ops_portal/cli.py and tests/ops_data_portal/test_cli.py may be modified. The
+    re-derivation widening that would make file/effort updatable belongs in update_rec in
+    scripts/ops_data_portal.py and is explicitly OUT of scope -- it is filed as a separate follow-on
+    recommendation in execution step 8 per the human's decision at the planning gate.
+  - >-
+    Do not make risk, automatable, source or context_v2_json updatable. risk and automatable are
+    documented in config/agent/data_quality/ops.yaml as "Derived, never agent-set" (Decision 65), and
+    _derive_computed_fields is called only from file_rec, never from update_rec.
+  - >-
+    Do not create tests/ops_portal/ -- tests/ops_data_portal/test_cli.py is the established home and
+    map_source_to_test returns None for this source, so no mirror obligation applies (Decision 130/131).
+  - >-
+    Every rejection test must assert the patched write boundary was not called. Asserting exit code 1
+    alone does not prove the absence of a write, which is the defect being fixed.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    All recommendation writes transit the ops portal (Decision 84 Single Portal Invariant). Never edit
+    logs/.recommendations-log.jsonl directly -- it is a read cache and never a write source.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND on the first dispatch
+    (119 of 119 triaged), re-dispatched against the revised approach after the human added rec-2826.
+    CITE list: dec-84, dec-55, dec-66, dec-88, dec-48, dec-163, dec-65, dec-103, dec-124, dec-63,
+    dec-130, dec-131.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
+  - >-
+    Scout flag 1 (Decision 65, WARN, resolved and verified in-session) -- the planning agent had
+    excluded --risk from the mutable set because update_rec never re-derives it, but --file and
+    --effort are the two inputs to compute_risk(file, effort) and compute_automatable(file, effort).
+    Admitting them reaches the identical stale-derived-field harm by another route, and automatable
+    gates executor eligibility (Decision 117). Verified directly: _derive_computed_fields is called
+    only at scripts/ops_data_portal.py:347 inside file_rec. Human chose at the planning gate to
+    loud-fail file/effort and file the re-derivation widening as a separate follow-on.
+  - >-
+    Scout flag 2 (Decision 103, WARN, resolved) -- duplicate is a semantic verdict, so the three dedup
+    closures are close_proposed commands confirmed by the human at the planning gate, never
+    agent-initiated closes. The scout also corrected the planning agent's citation of Decision 70 for
+    closure semantics: Decision 103 is the authority; Decision 70 governs bootstrap-record deletion.
+  - >-
+    Scout flag 3 (Decision 124, NOTE, resolved) -- cli.py's module docstring asserts the CLI surface is
+    byte-identical to the pre-decomposition monolith. This change alters exit codes and error strings,
+    so the docstring is corrected in the same PR rather than left as a false invariant.
+  - >-
+    rec-2808's acceptance names a test called test_cli_update_rec_title_and_acceptance_and_file. That
+    exact name was deliberately NOT adopted, because --file is rejected rather than threaded under the
+    Decision 65 resolution, and a test name implying otherwise would be misleading. rec-2808 is closed
+    as a duplicate so its acceptance command is never run.
+  - >-
+    Grep confirmed that no existing caller anywhere in the repo passes --risk, --source,
+    --context-v2-json or --dry-run alongside --update-rec; every in-repo --update-rec call site uses
+    only --status, --resolution or --context. The new rejections therefore break no caller.
+  - >-
+    Making --risk optional on --file-rec is backward compatible: both file and effort remain required,
+    so _derive_computed_fields always fires and the persisted risk value is unchanged whether or not
+    the caller supplies --risk.
+  - >-
+    Branch was 1 commit behind origin/main at planning time. The Main Divergence Assessment found zero
+    overlap with the scope files, so planning proceeded against the current view; the rebase happens at
+    commit-flow time per the AGENTS.md rebase phase distinction.
+  - >-
+    cli.py measured 311 SLOC against the default 500 limit and is unregistered in
+    config/sloc_budgets.yaml, so Decision 128 is not engaged by the planned delta of roughly 40 lines.
+  - >-
+    Baseline before any change: tests/ops_data_portal/test_cli.py has 6 passing tests and covers 52% of
+    scripts/ops_portal/cli.py.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/ops_portal/cli.py -- add a --dry-run guard immediately after parse_args, before any action
+    dispatch: if args.dry_run and not args.purge_postmortems_for, print an error to stderr stating that
+    --dry-run is supported only with --purge-postmortems-for and that every other action writes for
+    real, then return 1.
+  - >-
+    scripts/ops_portal/cli.py -- add a module-level dest-to-rec-field map for the mutable --update-rec
+    fields (status, resolution, execution_result, execution_date, execution_branch, execution_pr_url,
+    rec_context->context, title, acceptance, priority, tags, dependencies, verification,
+    verification_tier) and a module-level rejection table for target_file->--file, effort->--effort,
+    risk->--risk, source->--source and context_v2_json->--context-v2-json, each carrying the reason it
+    is not updatable. Module level, not function local, so both are greppable and directly testable.
+  - >-
+    scripts/ops_portal/cli.py -- rewrite the --update-rec branch to first reject any supplied flag in
+    the rejection table (printing one stderr line per offending flag, returning 1 before any write),
+    then build updates from the dest-to-field map, preserving the existing empty-updates error, and
+    finally print the applied field list alongside the rec id on success.
+  - >-
+    scripts/ops_portal/cli.py -- remove "risk" from the --file-rec required list and move risk out of
+    the literal fields dict into a conditional assignment alongside tags and dependencies, so
+    _derive_computed_fields remains the sole authority for the persisted value (rec-2826).
+  - >-
+    scripts/ops_portal/cli.py -- rewrite the module docstring so it describes the current contract
+    instead of asserting byte-identical parity with the pre-decomposition monolith, and note that
+    unhonoured flags loud-fail per action.
+  - >-
+    tests/ops_data_portal/test_cli.py -- add regression tests covering: --dry-run rejected for
+    --file-rec and for --update-rec with the write boundary asserted not called; --dry-run still
+    honoured for --purge-postmortems-for; --update-rec threading title/acceptance/priority/verification
+    into the write payload; --update-rec rejecting each of the five non-mutable flags without writing;
+    the success message naming applied fields; and --file-rec succeeding both without and with --risk
+    (name these two so they match the selector "risk_optional"). Confirm each new test fails against
+    the pre-change code before implementing the fix.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55).
+  - >-
+    After the merge, run the three human-confirmed duplicate closures, which were approved at the
+    planning gate and are close_proposed rather than agent-initiated (Decision 103):
+    --update-rec rec-3034 --status closed --resolution "Duplicate of rec-2866 (same defect, same file);
+    fixed by ops-portal-write-fidelity"; --update-rec rec-2808 --status closed --resolution "Duplicate
+    of rec-2866; --title/--acceptance exposed by ops-portal-write-fidelity"; --update-rec rec-2972
+    --status closed --resolution "Duplicate of rec-2866; --title now updatable via
+    ops-portal-write-fidelity".
+  - >-
+    File the follow-on recommendation the human requested be kept separate, via get_rec_write_guidance
+    then file_rec: propose that update_rec in scripts/ops_data_portal.py call _derive_computed_fields on
+    the merged record whenever file or effort changes, so that --file and --effort can graduate from
+    loud-fail to mutable without stranding risk and automatable. Target file
+    scripts/ops_data_portal.py, source planning, and reference this plan and Decision 65.
+  - >-
+    Include the trailer "Resolves: rec-2945, rec-2866, rec-2826" in the squash-merge commit body so
+    rec-autoclose closes the bundled recs.
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Single-file revert of scripts/ops_portal/cli.py restores the prior behaviour; no schema, no
+  infrastructure and no warehouse migration is involved. The one irreversible side effect is the
+  execution-step-5 acceptance repair on rec-2866 and the duplicate closures, which are ordinary
+  portal writes on an append-only store and are corrected forward by further portal updates rather
+  than by reverting code.
