@@ -1030,6 +1030,8 @@ This Decision is the structural mechanism Decision 145's own reversal conditions
 
 **Related:** Decision 84 (sole ops_decisions ETL source), Decision 86 (rationale -> numbered Decision), Decision 105 (ratification guard resolves headers across both files), Decision 134 (size governance + authoring grammar), Decision 145 (byte-ceiling stopgap + archival as the named relief valve), audit DPI-04 (audits/decision-log-premise-integrity-8fb581e.yaml).
 
+[Amendment 2026-08-07: Decision 160 lists this entry among its amends targets (retiring the live-byte ceiling this entry's Rationale cites); see Decision 160 for the citation. This entry's own Decision text is unchanged by that title-level relation.]
+
 ---
 
 ## Decision 145: Arbitrary stopgap raise of the DECISIONS.md live byte ceiling (400,000 -> 500,000) pending the structural growth-direction mechanism (amends Decision 134 clause 2) (Decided)

@@ -7,20 +7,32 @@ graduation_completeness precedents) rather than real git plumbing for the determ
 one test uses a real throwaway directory with no git repo at all to prove the default reader's
 own SKIP-on-unreachable path end-to-end (mirrors
 tests/checks/verification/test_validate_graduation_completeness.py's
-test_origin_main_unreachable_advisory_skips).
+test_origin_main_unreachable_advisory_skips). A handful of helper-level tests use a real
+throwaway git repo with a `refs/remotes/origin/main` ref (same pattern as
+tests/checks/verification/test_validate_graduation_completeness.py's `_git`/`_commit_all`
+helpers) to exercise the DEFAULT baseline_reader's reachable-origin branch, which every
+injected-seam test above deliberately bypasses.
 """
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import yaml
 
 from scripts.checks.decisions.validate_decision_entry_conformance import (
+    _current_decision_entries,
+    _default_baseline_decision_numbers,
+    _load_block_separator_form,
+    _load_required_markers,
     validate_decision_entry_conformance,
 )
 
 _CONTRACT_YAML = "required_markers:\n  - Status\n  - Date\n  - Decision\n"
+_CONTRACT_YAML_WITH_BLOCK_SEPARATOR = (
+    'required_markers:\n  - Status\n  - Date\n  - Decision\nblock_separator:\n  form: "---"\n'
+)
 
 
 def _write_contract(root: Path, contract_text: str = _CONTRACT_YAML) -> None:
@@ -34,6 +46,25 @@ def _write_decisions_md(root: Path, content: str, archive_content: str = "") -> 
     docs_dir.mkdir(parents=True, exist_ok=True)
     (docs_dir / "DECISIONS.md").write_text(content, encoding="utf-8")
     (docs_dir / "DECISIONS_ARCHIVE.md").write_text(archive_content, encoding="utf-8")
+
+
+def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
+    result = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, f"git {args} failed: {result.stderr}"
+    return result
+
+
+def _init_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, ["init", "-q"])
+    _git(repo, ["config", "user.email", "test@example.com"])
+    _git(repo, ["config", "user.name", "Test"])
+
+
+def _commit_all(repo: Path, message: str) -> str:
+    _git(repo, ["add", "-A"])
+    _git(repo, ["commit", "-q", "-m", message])
+    return _git(repo, ["rev-parse", "HEAD"]).stdout.strip()
 
 
 class TestSkipOnUnreachableBaseline:
@@ -130,6 +161,57 @@ class TestHistoricalEntryGrandfathered:
         assert failed == []
 
 
+class TestBlockSeparatorSubCheck:
+    """CFG-06 forward enforcement of decision-entry.yaml's block_separator rule (rec-2991) --
+    new-in-diff entries only, historical band grandfathered (same posture as required_markers)."""
+
+    def test_new_entry_missing_separator_fails(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, contract_text=_CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: A new entry with no trailing separator (Decided)\n\n"
+            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == ["Decision-entry conformance"]
+
+    def test_new_entry_with_separator_passes(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, contract_text=_CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: A new entry carrying the trailing separator (Decided)\n\n"
+            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n\n---\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == []
+
+    def test_historical_entry_without_separator_is_grandfathered(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, contract_text=_CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 1: Historical, no trailing separator (Decided)\n\n"
+            "**Status:** Decided -- April 2026\n\n**Decision:** Historical body.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: {1})
+        assert failed == []
+
+    def test_missing_block_separator_key_is_a_tolerated_absence(self, tmp_path: Path) -> None:
+        """The default (pre-CFG-06) contract fixture carries no block_separator key -- the
+        sub-check must no-op rather than failing every pre-existing conformance test fixture."""
+        _write_contract(tmp_path)  # default _CONTRACT_YAML, no block_separator key
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: A new entry with no trailing separator (Decided)\n\n"
+            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == []
+
+
 class TestMissingContract:
     def test_missing_contract_file_fails(self, tmp_path: Path) -> None:
         _write_decisions_md(tmp_path, "## Decision 1: X (Decided)\n\n**Status:** Decided\n")
@@ -156,3 +238,84 @@ class TestRealContractIntegration:
         contract_path = repo_root / "docs" / "contracts" / "decision-entry.yaml"
         data = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
         assert data["required_markers"] == ["Status", "Date", "Decision"]
+
+
+class TestDefaultBaselineDecisionNumbersRealRepo:
+    """Covers the reachable-origin/main branch of _default_baseline_decision_numbers, exercised
+    only by the DEFAULT baseline_reader -- every test above bypasses it via the injected
+    baseline_reader= seam. Real throwaway git repo with a refs/remotes/origin/main ref, mirroring
+    tests/checks/verification/test_validate_graduation_completeness.py's _git/_commit_all
+    pattern."""
+
+    def test_reads_decision_numbers_from_both_files_at_origin_main_ref(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _write_contract(repo)
+        _write_decisions_md(
+            repo,
+            "## Decision 1: Base entry (Decided)\n\n**Status:** Decided\n",
+            archive_content="## Decision 2: Archive entry (Decided)\n\n**Status:** Decided\n",
+        )
+        sha = _commit_all(repo, "base")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", sha])
+        assert _default_baseline_decision_numbers(repo) == {1, 2}
+
+    def test_missing_decisions_files_at_origin_main_are_skipped(self, tmp_path: Path) -> None:
+        """Neither DECISIONS.md nor DECISIONS_ARCHIVE.md exists at the origin/main ref -- the
+        'git show' non-zero-exit continue branch fires for both, yielding an empty set (not the
+        None advisory-skip sentinel, since origin/main itself IS reachable)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        sha = _commit_all(repo, "base")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", sha])
+        assert _default_baseline_decision_numbers(repo) == set()
+
+
+class TestCurrentDecisionEntriesHelper:
+    """Direct unit coverage of _current_decision_entries' two continue branches: a missing file
+    (only DECISIONS.md exists) and a duplicate number across files (first-wins dedup)."""
+
+    def test_missing_archive_file_is_skipped(self, tmp_path: Path) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True)
+        (docs_dir / "DECISIONS.md").write_text("## Decision 1: Only live (Decided)\n\n**Status:** Decided\n", encoding="utf-8")
+        # DECISIONS_ARCHIVE.md deliberately not created (unlike _write_decisions_md, which
+        # always writes both files even with an empty archive_content).
+        entries = _current_decision_entries(tmp_path)
+        assert set(entries) == {1}
+
+    def test_duplicate_number_across_files_keeps_first(self, tmp_path: Path) -> None:
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 1: Live version (Decided)\n\n**Status:** Decided\n",
+            archive_content="## Decision 1: Archive version (Decided)\n\n**Status:** Decided\n",
+        )
+        entries = _current_decision_entries(tmp_path)
+        assert "Live version" in entries[1]
+        assert "Archive version" not in entries[1]
+
+
+class TestLoadRequiredMarkersMalformedYaml:
+    def test_malformed_yaml_fails_with_parse_error_message(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, contract_text="required_markers: [unclosed\n")
+        failed: list[str] = []
+        result = _load_required_markers(tmp_path, failed)
+        assert result is None
+        assert len(failed) == 1
+        assert "could not parse" in failed[0]
+
+
+class TestLoadBlockSeparatorFormHelper:
+    """Direct unit coverage of _load_block_separator_form's tolerated-absence branches."""
+
+    def test_missing_contract_file_returns_none(self, tmp_path: Path) -> None:
+        assert _load_block_separator_form(tmp_path) is None
+
+    def test_malformed_yaml_returns_none(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, contract_text="block_separator: [unclosed\n")
+        assert _load_block_separator_form(tmp_path) is None
+
+    def test_non_dict_contract_returns_none(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, contract_text="- just\n- a\n- list\n")
+        assert _load_block_separator_form(tmp_path) is None

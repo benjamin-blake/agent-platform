@@ -127,6 +127,30 @@ def _missing_markers(block: str, required_markers: list[str]) -> list[str]:
     return missing
 
 
+def _load_block_separator_form(root: Path) -> Optional[str]:
+    """Return the declared block_separator form (e.g. '---'), or None when the contract is
+    unreadable or declares no block_separator section.
+
+    A missing block_separator key is a TOLERATED absence, not a failure -- unlike
+    required_markers (mandatory), this sub-check is additive (CFG-06 / rec-2991) and must not
+    fail every conformance test fixture pre-dating the section's existence.
+    """
+    contract_path = root / _CONTRACT_REL_PATH
+    if not contract_path.exists():
+        return None
+    try:
+        data = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    block_separator = data.get("block_separator")
+    if not isinstance(block_separator, dict):
+        return None
+    form = block_separator.get("form")
+    return str(form) if form else None
+
+
 @registry.register("validate_decision_entry_conformance", owner="platform")
 def validate_decision_entry_conformance(
     failed: list[str],
@@ -152,6 +176,8 @@ def validate_decision_entry_conformance(
     if required_markers is None:
         return
 
+    block_separator_form = _load_block_separator_form(root)
+
     current_entries = _current_decision_entries(root)
     new_numbers = sorted(set(current_entries) - baseline_numbers)
 
@@ -161,10 +187,17 @@ def validate_decision_entry_conformance(
 
     issues: list[str] = []
     for n in new_numbers:
-        missing = _missing_markers(current_entries[n], required_markers)
+        block = current_entries[n]
+        missing = _missing_markers(block, required_markers)
         if missing:
             issues.append(
                 f"  FAIL: Decision {n} is new (absent from the origin/main baseline) but missing marker(s): {missing}"
+            )
+        if block_separator_form and not block.rstrip().endswith(block_separator_form):
+            issues.append(
+                f"  FAIL: Decision {n} is new (absent from the origin/main baseline) but its block does not "
+                f"end with the required separator {block_separator_form!r} (docs/contracts/decision-entry.yaml "
+                "block_separator)."
             )
 
     if issues:
