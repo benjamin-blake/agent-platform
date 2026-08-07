@@ -6,8 +6,13 @@ slug: "ops-portal-write-fidelity"
 intent: >-
   Close three write-fidelity defects on the ops data portal CLI, the single sanctioned agent write
   path to the operational warehouse, so that the CLI never reports success for a write it did not
-  perform and never performs a write the caller asked it to preview. Every advertised-but-unhonoured
-  flag becomes a loud failure instead of a silent no-op.
+  perform and never performs a write the caller asked it to preview. Governing rule, stated with its
+  one exception so the exception is derivable rather than a carve-out: an advertised-but-unhonoured
+  flag must loud-fail, EXCEPT the formula-derived fields risk and automatable, which are accepted
+  advisorily and emit an override warning because Decision 66 Tier B places their value under the
+  portal's control rather than the caller's. That exception is precisely why --risk is rejected on
+  --update-rec (where nothing re-derives it) yet merely optional-and-advisory on --file-rec (where
+  _derive_computed_fields always overwrites it).
 plan_type: IMPLEMENTATION
 verification_tier: V2
 plan_path: docs/plans/PLAN-ops-portal-write-fidelity.yaml
@@ -154,7 +159,7 @@ verification_plan:
       exact repair that rec-3034 documented as silently failing. rec-2866's own acceptance names the
       nonexistent path tests/ops_portal, so this repair is both the fix's live proof and a real data
       correction.
-    command: bin/venv-python -m scripts.ops_data_portal --update-rec rec-2866 --acceptance "bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -k update_rec -q" && bin/venv-python -m scripts.ops_data_portal --sync && grep -c 'tests/ops_data_portal/test_cli.py' <(bin/venv-python -c "import json,pathlib;rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];print(next(r for r in reversed(rows) if r.get('id')=='rec-2866')['acceptance'])")
+    command: bin/venv-python -m scripts.ops_data_portal --update-rec rec-2866 --acceptance "bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -k update_rec -q" && bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib,sys;rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];acc=next(r for r in reversed(rows) if r.get('id')=='rec-2866')['acceptance'];print(acc);sys.exit(0 if 'tests/ops_data_portal/test_cli.py' in acc else 1)"
     expected: >-
       The update prints a success line naming acceptance among the applied fields, and the read-back
       after sync shows the repaired acceptance command, proving the field survived the round trip.
@@ -187,13 +192,13 @@ verification_plan:
     fix_if: >-
       If a bundled rec is still open after roughly five minutes, rec-autoclose did not fire -- close it
       with the AGENTS.md fallback command. If a duplicate is still open, its human-confirmed close
-      command was not run in execution step 7.
+      command was not run in the duplicate-closure execution step.
 constraints:
   - >-
     Only scripts/ops_portal/cli.py and tests/ops_data_portal/test_cli.py may be modified. The
     re-derivation widening that would make file/effort updatable belongs in update_rec in
     scripts/ops_data_portal.py and is explicitly OUT of scope -- it is filed as a separate follow-on
-    recommendation in execution step 8 per the human's decision at the planning gate.
+    recommendation in the follow-on-filing execution step, per the human's decision at the planning gate.
   - >-
     Do not make risk, automatable, source or context_v2_json updatable. risk and automatable are
     documented in config/agent/data_quality/ops.yaml as "Derived, never agent-set" (Decision 65), and
@@ -213,7 +218,31 @@ context:
     "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND on the first dispatch
     (119 of 119 triaged), re-dispatched against the revised approach after the human added rec-2826.
     CITE list: dec-84, dec-55, dec-66, dec-88, dec-48, dec-163, dec-65, dec-103, dec-124, dec-63,
-    dec-130, dec-131.
+    dec-130, dec-131, dec-132, dec-70, dec-159.
+  - >-
+    Re-dispatch flag (Decision 48, NOTE, resolved) -- the automated per-file coverage gate cannot fire
+    on this scope: map_source_to_test returns None for scripts/ops_portal/**, a carve-out established
+    by Decision 124, preserved verbatim by Decision 131 cl.1 and re-confirmed by Decision 159 cl.4.
+    Verification step 4 is therefore the explicit manual discharge of the V2 coverage obligation. Its
+    floor is deliberately 62% rather than 100% because roughly 45% of cli.py is action branches
+    (decisions, backfill, sync, selftests, back-validate) that this plan does not touch and that this
+    test module cannot reach; a 100% whole-file gate would be unmeetable and would pressure the
+    implementer to fudge it. Do NOT extend map_source_to_test -- that widening was deliberately deferred.
+  - >-
+    Re-dispatch flag (Decision 55, NOTE, accepted as a scoped residual) -- the --file and --effort
+    rejection guards the CLI surface only. A caller using the Python surface directly, as
+    scripts.ops_data_portal.update_rec(rec_id, {"file": ...}), still strands risk and automatable
+    silently, because update_rec content-validates file but never re-derives the computed fields. This
+    plan does not close that hole; the follow-on recommendation filed in the follow-on-filing execution step is therefore
+    scoped at the portal function (update_rec re-derives on merge), not merely at widening the CLI's
+    mutable set. Anyone reading this plan as a complete fix for the derived-field defect should read
+    that residual first.
+  - >-
+    Re-dispatch flag (Decision 163, WARN, resolved) -- the first draft asserted a universal
+    "advertised-but-unhonoured flags loud-fail" rule and then immediately carved rec-2826's
+    warn-and-discard treatment of --risk out of it without saying so, which is the declared-versus-
+    enforced shape Decision 163 exists to prevent. The intent field now states the exception inside the
+    rule, so item 6's treatment is derivable from the stated principle. No code change implied.
   - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
   - >-
     Scout flag 1 (Decision 65, WARN, resolved and verified in-session) -- the planning agent had
