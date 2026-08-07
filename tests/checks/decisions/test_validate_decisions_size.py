@@ -4,7 +4,7 @@ scripts/checks/decisions/validate_decisions_size.py (Decision 134 / Decision 114
 The live-byte-only ceiling (_DECISIONS_LIVE_MAX_BYTES, Decision 145's stopgap raise to 500_000)
 was RETIRED by PLAN-decision-scout-bounded-retrieval -- the decision-scout gate no longer reads
 the live file wholesale, so the ceiling that guard existed to size no longer has a referent. Only
-_DECISIONS_LIVE_MAX_H2 (120) and _DECISIONS_COMBINED_MAX_BYTES (700_000) survive; this file
+_DECISIONS_LIVE_MAX_H2 (132) and _DECISIONS_COMBINED_MAX_BYTES (780_000) survive; this file
 covers their boundaries plus a case proving a live file ABOVE the old 500_000 value now passes on
 its own while a combined breach still FAILs."""
 
@@ -47,7 +47,7 @@ class TestDecisionsSizeIssuesCombined:
     """_decisions_size_issues() combined live+archive-byte-ceiling boundary cases
     (_DECISIONS_COMBINED_MAX_BYTES), with the live-H2 ceiling not breached."""
 
-    _LIVE_SIZE = 350_000  # comfortably under _DECISIONS_COMBINED_MAX_BYTES (700_000) on its own
+    _LIVE_SIZE = 350_000  # comfortably under _DECISIONS_COMBINED_MAX_BYTES (780_000) on its own
 
     def test_below_ceiling_returns_empty(self) -> None:
         live = "x" * self._LIVE_SIZE
@@ -190,3 +190,48 @@ class TestLiveByteCeilingRetired:
         import scripts.checks.decisions.validate_decisions_size as m
 
         assert not hasattr(m, "_DECISIONS_LIVE_MAX_BYTES")
+
+
+class TestBridgeCeilingValues:
+    """Deliberate bridge values (docs/plans/PLAN-decision-ceiling-bridge.yaml) pending the
+    contract-first governance rebuild on claude/contract-first-audit-p5f0tu: the live '## Decision'
+    header ceiling moves 120 -> 132 and the combined byte ceiling moves 700_000 -> 780_000. Every
+    pre-existing boundary test in this module expresses its assertions RELATIVE to the constants
+    (_DECISIONS_LIVE_MAX_H2 - 1, + 1, and so on) and so passes identically before and after the
+    raise -- these absolute-literal assertions are what actually distinguishes the two."""
+
+    def test_132_headers_returns_no_issues(self) -> None:
+        live = _live_header_block(132)
+        assert _decisions_size_issues(live, "") == []
+
+    def test_133_headers_returns_exactly_one_header_issue(self) -> None:
+        live = _live_header_block(133)
+        issues = _decisions_size_issues(live, "")
+        assert len(issues) == 1
+        assert "live '## Decision' headers" in issues[0]
+
+    def test_combined_780000_bytes_returns_no_issues(self) -> None:
+        live = "x" * 780_000
+        assert _decisions_size_issues(live, "") == []
+
+    def test_combined_780001_bytes_returns_exactly_one_byte_issue(self) -> None:
+        live = "x" * 780_001
+        issues = _decisions_size_issues(live, "")
+        assert len(issues) == 1
+        assert "combined" in issues[0]
+
+    def test_live_max_h2_pinned_to_132(self) -> None:
+        assert _DECISIONS_LIVE_MAX_H2 == 132
+
+    def test_combined_max_bytes_pinned_to_780000(self) -> None:
+        assert _DECISIONS_COMBINED_MAX_BYTES == 780_000
+
+    def test_header_breach_message_omits_134(self) -> None:
+        live = _live_header_block(133)
+        issues = _decisions_size_issues(live, "")
+        assert all("134" not in issue for issue in issues)
+
+    def test_combined_breach_message_omits_134(self) -> None:
+        live = "x" * 780_001
+        issues = _decisions_size_issues(live, "")
+        assert all("134" not in issue for issue in issues)
