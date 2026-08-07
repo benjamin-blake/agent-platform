@@ -2,7 +2,9 @@
 
 Audited commit: `33c8667` (origin/main, 2026-08-07). YAML system-of-record:
 `audits/contract-first-governance-33c8667.yaml`. Findings: 11 (0 critical, 3 high) against 15
-rejected candidates. Maturity: S1 strong, S2 frontier, S3 strong, S4 strong, S5 frontier.
+rejected candidates. Maturity: strong across S1-S5 (S2/S5 were initially rated frontier;
+downgraded by the post-run adversarial review's EX7 correction -- see the amendment section at
+the end).
 
 ## Arc A -- why the interventions eroded (Q1: primary-mechanism-identified)
 
@@ -43,7 +45,7 @@ The self-consumption half (DD-A, pinned arithmetic):
 | **Byte share** | **15.15%** |
 | **Header share** (9 / 120-header ceiling) | **7.5%** |
 | Reclaimed by built levers in the same window | ~5-8 KB (2 compactions; 1 archival wave -- header relief only) |
-| Measured inflow, D160 -> base (518,839/113 -> 573,726/119) | ~9,150 B/day, ~1.5 headers/day |
+| Measured inflow, D160 -> base (518,839/113 -> 573,726/119) | ~9,150 B/day, ~1.5 headers/day (cadence-inflated window; treat as upper bounds) |
 | Band medians (bytes) | D<=60: 2,327 (n=16) / D61-100: 3,898 (n=37) / D101-139: 3,241 (n=39) / D>=140: **7,257** (n=27) |
 
 If each intervention's implementing code and contracts were counted the cost rises further
@@ -126,8 +128,8 @@ entry**. That is why Arc C puts authoring-side gates before any outflow work.
 | Warehouse projection | ops_decisions SCD2 | n/a (they are the schema source) | none |
 | Review lane | PR + scout + critique + operator gate | PR + drift gate | PR only |
 
-Q4 answer: ready for field semantics (ritual side is the strongest surface in scope -- hence S2's
-frontier rating); **not ready for mechanism content** without CFG-04/CFG-09's minimal upgrade
+Q4 answer: ready for field semantics (the ritual side is the strongest surface in scope);
+**not ready for mechanism content** without CFG-04/CFG-09's minimal upgrade
 (declared subject + evaluator + log-on-change), because today the routing rule sends content from
 the best-governed prose surface to the least-governed structured one. Q5's free-form detection
 answer follows directly: parallel and contradictory assertion are not merely undetected but not
@@ -153,9 +155,11 @@ Rule in `meta.partition_rule`; unit = approximate byte share per entry, whole-bl
 | D166 | 40% | 25% | 30% | 5% |
 | **Mean** | **~43%** | **~33%** | **~19%** | ~6% |
 
-Roughly **62% of the newest band's bytes are specification or change narrative** -- content whose
-home under the routing rule is a contract or the PR record. D164 is the existence proof that the
-corpus's own conventions already support the clean ADR shape.
+Shares are single-rater estimates at 5-point granularity; treat them as +/-10 points -- the
+conclusion survives any plausible rater error. Roughly **62% of the newest band's bytes are
+specification or change narrative** -- content whose home under the routing rule is a contract or
+the PR record. D164 is the existence proof that the corpus's own conventions already support the
+clean ADR shape.
 
 ## Arc B -- end-state (Q7)
 
@@ -164,11 +168,16 @@ rationale, ruling, reversal conditions, pointers -- retrieved by id (T2.56 c2's 
 specification in contracts and change narrative in the PR record. Corpus shape:
 `extract_machine_semantics_only`, forward-only; no ratified body is rewritten. The decidable
 rule (three ordered property tests -- checkable-without-why -> contract; this-landing/acute-state
--> PR body; why-this-choice/reversal -> entry) and three forcing functions (per-new-entry byte
-cap; required Significance routing-row marker riding the existing conformance check; declared
-subject+evaluator obligation narrowing the drift gate's skip branch) are in the YAML with
-failure-mode and cost columns; each fails on an empty repository, so each is a real forcing
-function. On the corpus-shape sub-question this audit largely restates T2.56 c2 -- an ownership
+-> PR body; why-this-choice/reversal -> entry) and three flow-side mechanisms (per-new-entry byte
+cap; required Significance routing-row marker; declared subject+evaluator obligation narrowing
+the drift gate's skip branch) are in the YAML with failure-mode and cost columns; each fails on
+an empty repository. Per the post-run adversarial review: f2 is a recording obligation rather
+than a forcing function (the author still elects the routing -- its forcing partner is f1 plus
+the operator lane, with a WARN-tier consistency lint), f1 lands WARN-tier until destination
+readiness completes with a split-evasion guard, and NEW entries adopt a typed YAML front-matter
+envelope (number/status/date/amends/supersedes/routing row; body stays prose rationale) -- the
+`extract_multiple_typed_fields` adjudication the original run skipped, which deletes CFG-06's
+extractor-grammar defect class at the root (MADR ADR-0013; Structured MADR). On the corpus-shape sub-question this audit largely restates T2.56 c2 -- an ownership
 finding, stated plainly. Both roadmap verdicts are `sufficient_with_specific_amendments`: T1.5
 solves read cost, not authoring routing, and must not fossilize ungoverned raw_blocks as the
 retrieval unit; T2.56 covers ambient-load cost but not authoring-time enforcement -- the exact
@@ -200,3 +209,21 @@ fully processed -- scarcity, not disuse), and the bridge plan's scout override (
 adjudicated override is the control working). The five prior audits' mechanisms survive; the
 sixth audit's conclusion is that the next intervention must be the first one that governs flow
 rather than stock -- and that it should cost the corpus almost nothing to record.
+
+## Post-run amendment (2026-08-07, operator-directed adversarial review)
+
+An independent adversarial review (industry AI-first-ADR lens) re-derived every load-bearing
+number exactly and returned STAND WITH AMENDMENTS: all 11 findings, 15 rejections, and Q1-Q8
+verdicts unchanged; the corrections are to this audit's own judgment calls, applied in place.
+(1) EX7 partial -> **missed** (the corpus is measured monotonic and the only nameable
+compensating control is the one CFG-01 rules property-mismatched) and EX4 met -> partial
+(internal consistency with CFG-03); the single missed forecloses frontier repo-wide, so **S2 and
+S5 drop to strong** -- tally now 3 met / 9 partial / 1 missed. (2) f2 reclassified: a recorded
+routing claim is an audit trail, not a forcing function; a WARN-tier consistency lint closes the
+residue. (3) f1 sequenced WARN-tier until destination readiness lands, with a same-PR
+multi-entry split-evasion guard (two capped entries burn headers, the first-binding ceiling).
+(4) Q7 now adjudicates the typed-entry option it had skipped: NEW entries adopt a YAML
+front-matter metadata envelope, priced against the T1.5 sunset. (5) Step 8 gains a
+retrieval-quality acceptance gate (re-run the Decision 160 point-14 probe protocol against the
+portal) -- content parity tests recoverability, not findability. (6) Inflow rates are qualified
+as cadence-window upper bounds; E2 shares carry an explicit +/-10-point tolerance.
