@@ -113,17 +113,46 @@ scope:
   - file: docs/decisions-index.json
     action: Modify
     purpose: Regenerate via `scripts.decisions_index --write` so the freshness check passes with the Decision 167 row.
-  - file: tests/test_decisions_md_envelope.py
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Add "scripts/decisions_md.py" to _CONCERN_SPLIT_TEST_PACKAGES (13 existing members), remapping
+      it from the single file tests/test_decisions_md.py to the test PACKAGE tests/decisions_md/.
+      Without this, validate_test_coverage measures decisions_md.py by running ONLY
+      tests/test_decisions_md.py (no config/coverage_baseline.yaml entry, so the threshold is 100%),
+      and the new envelope code -- whose tests live elsewhere -- would drop it below 100% and fail
+      the full tier, breaking this plan's own handoff_policy.
+  - file: tests/test_decisions_md.py
+    action: Delete
+    purpose: >-
+      Moved into the tests/decisions_md/ concern-split package. Deleting rather than editing also
+      dissolves the 488/500 SLOC pressure that forced the separate-module design in the first place
+      -- the split across package members IS the Decision 128 decomposition.
+  - file: tests/decisions_md/test_parse.py
     action: Create
     purpose: >-
-      Envelope precedence, fallback on the grandfathered band, byte-reconstruction preservation, and
-      the bare-`yaml` info-string boundary against Decision 133's ```yaml reversal-conditions form.
-      A NEW cohesive module rather than an extension of tests/test_decisions_md.py, which sits at
-      488/500 SLOC with 12 lines of headroom -- decompose by default, never raise (Decision 128).
-      tests/test_decisions_md.py is deliberately NOT in scope and must not be edited.
+      The existing tests/test_decisions_md.py content moved verbatim (including the
+      byte-reconstruction invariant), split so each package member stays under budget. No assertion
+      is weakened or dropped in the move.
+  - file: tests/decisions_md/test_envelope.py
+    action: Create
+    purpose: >-
+      Envelope precedence, fallback on the grandfathered band, byte-reconstruction preservation
+      under an envelope, and the bare-`yaml` info-string boundary against Decision 133's
+      ```yaml reversal-conditions form. Together with test_parse.py this package must give
+      scripts/decisions_md.py 100% per-file coverage, since it has no coverage_baseline entry.
   - file: tests/test_decisions_index.py
     action: Modify
-    purpose: Envelope-sourced edges reach the index; `significance` is absent from the projection.
+    purpose: >-
+      Envelope-sourced edges reach the index; `significance` is absent from the projection. Also
+      re-point its line-85 docstring reference to the retired tests/test_decisions_md.py at the new
+      package path (step 14's live-reference sweep).
+  - file: tests/checks/test__marker_guard.py
+    action: Modify
+    purpose: >-
+      Docstring-only edit: re-point the line-134 reference to the retired tests/test_decisions_md.py
+      at the new tests/decisions_md/ package path. In scope solely to satisfy step 14's
+      live-reference sweep; no assertion changes. 369 SLOC, ample headroom.
   - file: tests/checks/decisions/test_validate_decision_entry_conformance.py
     action: Modify
     purpose: >-
@@ -223,11 +252,11 @@ verification_plan:
       Envelope precedence and fallback -- an entry whose envelope status/date/amends disagree with
       its bold markers and title parenthetical parses to the ENVELOPE values; an entry with no
       envelope parses to the bold-marker/title values unchanged.
-    command: bin/venv-python -m pytest tests/test_decisions_md_envelope.py tests/test_decisions_md.py -q
+    command: bin/venv-python -m pytest tests/decisions_md/ -q
     expected: >-
-      Every envelope precedence and fallback test in the new module passes, and the pre-existing
-      tests/test_decisions_md.py suite (including its byte-reconstruction invariant) still passes
-      unmodified.
+      Every envelope precedence and fallback test in tests/decisions_md/test_envelope.py passes, and
+      every assertion moved from the old tests/test_decisions_md.py into
+      tests/decisions_md/test_parse.py (including the byte-reconstruction invariant) still passes.
     fix_if: >-
       A failure showing bold-marker values winning means the envelope read is layered after the
       fallback instead of before it; a failure on a no-envelope fixture means the fallback path was
@@ -491,6 +520,40 @@ verification_plan:
       token-parity guard.
   - step: 14
     phase: pre-deploy
+    action: >-
+      Stale-reference sweep for the retired test module (closure obligation, triggered by the
+      tests/test_decisions_md.py Delete row) -- no path, import, or config entry still names it, and
+      the concern-split remap resolves to the package.
+    command: >-
+      bin/venv-python -c "import sys,subprocess; from pathlib import Path;
+      from scripts.test_coverage_checker import map_source_to_test;
+      out=subprocess.run(['git','grep','-n','test_decisions_md','--',':!docs/plans/'],capture_output=True,text=True).stdout.strip();
+      r=[l for l in out.splitlines() if l.strip()];
+      m=str(map_source_to_test(Path('scripts/decisions_md.py')));
+      ok=(not r) and m.endswith('tests/decisions_md') and not Path('tests/test_decisions_md.py').exists();
+      print('live refs:', r or '(none)'); print('maps_to:',m);
+      sys.exit(0 if ok else 1)"
+    expected: >-
+      "live refs: (none)", maps_to ends with tests/decisions_md (the package directory, no test_
+      prefix and no .py suffix), and the old file is gone. Exit 0. docs/plans/ is excluded by
+      pathspec: merged plan documents are immutable historical artefacts, and
+      PLAN-daf-authoring-grammar.yaml legitimately records the pre-move path. Verified at planning
+      time that the only LIVE reference outside docs/plans/ is
+      docs/contracts/decision-entry.yaml:93, which is in scope and must be re-pointed at the package.
+    fix_if: >-
+      A surviving live reference names a file that no longer exists -- update it, unless it is under
+      docs/plans/ (historical, never edited). A maps_to still ending in test_decisions_md.py means
+      scripts/decisions_md.py was not added to _CONCERN_SPLIT_TEST_PACKAGES, which is the whole
+      point of the scripts/test_coverage_checker.py edit.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-shot migration sweep asserting that a specific retired path is gone, not a standing
+      repository invariant -- graduating it would pin a permanent registry row to a filename that
+      ceased to exist in this very commit. The durable property (decisions_md.py has a resolvable
+      test home at 100% coverage) is enforced natively by validate_test_coverage in the full tier.
+  - step: 15
+    phase: pre-deploy
     action: Full-tier validation on the complete tree before commit (handoff_policy obligation, Decision 163).
     command: bin/venv-python -m scripts.validate
     expected: Exit 0 across every registered check in the full sequence.
@@ -505,10 +568,11 @@ test_obligations:
       The envelope is read before the bold-marker/title grammar for status, decided_date, amends and
       title_supersedes, and the fallback path stays intact for entries with no envelope.
     verification_step: 1
-    test_selector: tests/test_decisions_md_envelope.py
+    test_selector: tests/decisions_md/
     red_green_expectation: >-
-      Red before -- the module does not exist and no envelope parsing exists, so an envelope-bearing
-      fixture returns the bold-marker values. Green after.
+      Red before -- the package does not exist and no envelope parsing exists, so an envelope-bearing
+      fixture returns the bold-marker values. Green after, with 100% per-file coverage of
+      scripts/decisions_md.py measured across the package.
   - source: scripts/decisions_index.py
     behavior: >-
       Envelope-sourced amends/supersedes edges reach the index through the shared parser, and
@@ -543,6 +607,49 @@ test_obligations:
     verification_step: 7
     test_selector: tests/checks/decisions/test__baseline.py
     red_green_expectation: Red before -- the module does not exist. Green after.
+  - source: docs/contracts/decision-entry.yaml
+    behavior: >-
+      Carries the metadata_envelope section, the routing_rule and standing_commitment keys, the
+      lever-by-ceiling matrix, and the per_entry_size_norm cap; its size_governance ceilings equal
+      validate_decisions_size's constants; required_markers stays [Status, Date, Decision].
+    verification_step: 13
+    command: grep -q 'per_entry_size_norm' docs/contracts/decision-entry.yaml
+    red_green_expectation: >-
+      Red before -- verified by execution against the current tree, step 13 exits 1 listing all six
+      missing deliverables (ceilings 120/700000, per_entry_size_norm, matrix, routing_rule,
+      standing_commitment). Green after.
+  - source: docs/decisions-index.json
+    behavior: >-
+      Regenerates to include the Decision 167 row with envelope-sourced edges, stays within the
+      131,000-byte pin, and never carries a `significance` key.
+    verification_step: 10
+    command: bin/venv-python -m scripts.decisions_index --check
+    red_green_expectation: >-
+      Red before -- once Decision 167 lands in DECISIONS.md the committed index is stale and
+      --check exits 1. Green after regeneration.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: Carries one admissible row per graduated verification step, keyed by graduation_check_id.
+    verification_step: 12
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This file has a stronger native verifier than any test this plan could add:
+      validate_verification_registry runs a real differential on every newly-added row, checking out
+      an origin/main worktree and requiring the row's check_spec to FAIL there and PASS on HEAD, and
+      it rejects tautological rows outright. It runs in both tiers, so step 12 exercises it. A
+      hand-written test asserting the rows exist would be strictly weaker than the admission gate
+      already guarding them.
+  - source: scripts/test_coverage_checker.py
+    behavior: >-
+      scripts/decisions_md.py resolves to the tests/decisions_md/ package directory rather than the
+      retired tests/test_decisions_md.py file.
+    verification_step: 15
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      The change is a single frozenset membership addition to an existing, already-tested mechanism
+      (_CONCERN_SPLIT_TEST_PACKAGES has 13 members whose resolution branch is covered). Its real
+      proof is downstream and strictly stronger than any assertion this plan could add:
+      validate_test_coverage in the full tier fails outright if the remap is wrong, or if the
+      package does not give scripts/decisions_md.py 100% per-file coverage.
   - source: scripts/checks/registry.py
     behavior: validate_decision_entry_conformance is present in the --pre sequence, glob-gated on the two DECISIONS files.
     verification_step: 11
@@ -566,9 +673,11 @@ constraints:
     whole block including the heading.
   - >-
     ZERO-HEADROOM FILES -- do NOT edit tests/test_checks_registry.py (643/643 SLOC, dec-159
-    raise-approved pin) or tests/test_decisions_md.py (488/500). Neither is in scope. New tests go in
-    the two new modules. Do not raise either budget: Decision 128 is decompose-by-default, and a
-    raise would need its own `# raise-approved: dec-NNN` marker naming an authorizing Decision.
+    raise-approved pin). It is not in scope; its assertion lives in the new
+    tests/checks/decisions/test_conformance_registration.py. tests/test_decisions_md.py (488/500) is
+    NOT edited either -- it is DELETED and its content moved into the tests/decisions_md/ package,
+    which is the decomposition. Do not raise either budget: Decision 128 is decompose-by-default,
+    and a raise would need its own `# raise-approved: dec-NNN` marker naming an authorizing Decision.
   - >-
     The per-entry cap lands WARN-TIER. It prints and MUST NOT append to `failed`. The hard-fail flip
     is owned by migration step 3 (destination readiness) -- landing it hard here is the
@@ -623,7 +732,32 @@ context:
     CITE: Decision 160, Decision 150, Decision 151, Decision 134, Decision 165, Decision 166,
     Decision 104, Decision 84, Decision 86, Decision 127, Decision 128. RELATED: Decision 145,
     Decision 146, Decision 118, Decision 132, Decision 105."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s), operator-accepted"
+  - >-
+    PLAN-CRITIQUE ROUND 3 = REVISE, hitting the skill's 3-round convergence cap. Escalated to the
+    operator, who reviewed both remaining blockers and directed merge without a 4th round on the
+    grounds that the fixes are mechanical. Round 3 verified all eight round-2 findings landed, ran
+    step 13 and confirmed it genuinely red for the right six reasons, re-measured every corpus
+    figure exact, and found no dangling references, orphaned criteria, unwired obligations or
+    contradictory constraints. Its two blockers, both reproduced here by execution before fixing:
+    (B1) validate_plan_documents deterministically failed --pre on this document because
+    _behavior_scope_files exempts only tests/, docs/plans/ and .md/.rst/.txt -- the .yaml/.json
+    scope rows each needed a test_obligation or per-source waiver; four were added (decision-entry
+    .yaml, decisions-index.json, verification_registry/registry.yaml, test_coverage_checker.py).
+    (B2) validate_test_coverage measures scripts/decisions_md.py by running ONLY its mapped test
+    file, which has no coverage_baseline entry (threshold 100%) -- so routing envelope tests to a
+    separate module while forbidding edits to tests/test_decisions_md.py would have dropped it below
+    100% and failed the full tier, breaking this plan's own handoff_policy. NOTE the fix adopted is
+    NOT the critique's preferred one: it recommended extracting a new scripts/decisions_envelope.py,
+    but scripts/CLAUDE.md forbids a third scripts/decisions_* root sibling, so that route would
+    trigger a scripts/decisions/ subpackage migration plus a file-router allowlist edit and a
+    repo-wide reference rewrite. Adopted instead: the repo's existing concern-split mechanism --
+    add scripts/decisions_md.py to _CONCERN_SPLIT_TEST_PACKAGES (13 existing members), remapping it
+    to the tests/decisions_md/ package. This also dissolves the 488/500 SLOC pressure that forced
+    the separate-module design, so the Decision 128 decomposition and the coverage rule now agree
+    instead of colliding. The Delete row this introduces triggers the closure obligation's
+    surface-retiring branch, discharged by the new step 14 live-reference sweep (docs/plans/ is
+    excluded by pathspec -- merged plan documents are immutable historical artefacts).
   - >-
     PLAN-CRITIQUE ROUND 1 = REVISE; all 10 findings verified independently and applied. The
     load-bearing ones: (1) the first draft CONFLATED rec-2934 with rec-3023 -- rec-2934's real
@@ -650,7 +784,7 @@ context:
   - >-
     Decision-scout flag resolutions, all accepted and folded into this plan -- Decision 163 [WARN]:
     a plan declaring full_validation_required_before_commit must carry a VP step invoking
-    `-m scripts.validate` without --pre (verified against validate_handoff_full_tier); step 14 is
+    `-m scripts.validate` without --pre (verified against validate_handoff_full_tier); step 15 is
     that step. Decision 160 [SPIRIT WARN]: point 11 names the per-entry norm as the only lever that
     bends the accrual RATE, and a WARN-tier cap does not bend it -- Decision 167 clause 3 states the
     WARN tier as a dated pre-commitment with a named flip trigger and explicitly disclaims that the
@@ -821,7 +955,7 @@ execution_steps:
     Write the tests named in the Scope table and in test_obligations -- each must fail against the
     pre-change tree and pass after (red/green per row).
   - >-
-    Execute the Verification Plan -- run each step in order; loop until pass. Step 14 (full tier)
+    Execute the Verification Plan -- run each step in order; loop until pass. Step 15 (full tier)
     must complete exit 0 before commit per handoff_policy. On unrecoverable failure stop and RCA
     (Decision 55); never narrow a check to make it pass.
   - >-
