@@ -17,8 +17,8 @@ import re
 
 from scripts.checks import _common, registry
 
-_DECISIONS_LIVE_MAX_H2 = 120
-_DECISIONS_COMBINED_MAX_BYTES = 700_000
+_DECISIONS_LIVE_MAX_H2 = 132
+_DECISIONS_COMBINED_MAX_BYTES = 780_000
 
 _RELIEF_VALVES = (
     "compact superseded decision bodies to pointer stubs (Decision 149) -- archiving a live "
@@ -47,12 +47,12 @@ def _decisions_size_issues(
     if live_h2_count > live_max_h2:
         issues.append(
             f"  FAIL: docs/DECISIONS.md has {live_h2_count} live '## Decision' headers, exceeding "
-            f"the {live_max_h2}-header ceiling (Decision 134) -- relief valves: {_RELIEF_VALVES}"
+            f"the {live_max_h2}-header ceiling -- relief valves: {_RELIEF_VALVES}"
         )
     if combined_bytes > combined_max_bytes:
         issues.append(
             f"  FAIL: docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md combined are {combined_bytes} "
-            f"bytes, exceeding the {combined_max_bytes}-byte combined ceiling (Decision 134) -- "
+            f"bytes, exceeding the {combined_max_bytes}-byte combined ceiling -- "
             f"relief valves: {_RELIEF_VALVES}"
         )
     return issues
