@@ -68,7 +68,9 @@ scope:
       forward pointer the widened amends grammar exposes (option 3b).
   - file: docs/decisions-index.json
     action: Modify
-    purpose: Regenerate; Decision 160's amends row becomes [145, 134, 146].
+    purpose: >-
+      Regenerate; Decision 160's amends row becomes [134, 145, 146] (sorted by
+      scripts/decisions_index.py:173, not the parser's first-occurrence order).
 bundled_recommendations:
   - rec-2971
   - rec-2990
@@ -80,13 +82,19 @@ acceptance_criteria:
     "and Decision N"), so Decision 160's real title yields [145, 134, 146]; and all four rejection
     forms still reject (the "mirrors" clause boundary, the "2nd amendment" ordinal, the inverse
     "as amended by", and the CD.NN namespace).
-  - Decision 160's row in docs/decisions-index.json records amends [145, 134, 146].
   - >-
-    _extract_related_decisions terminates at ALL THREE dated-trailer forms the corpus carries
-    ("[Amendment ", "> **Update (", and "> **Amended by Decision "), so the seven affected entries
-    drop their trailer-borne ids exactly -- 74 loses 112; 87 loses 103; 89 loses 83; 103 loses 103;
-    105 loses 150; 116 loses 164 and 122; 122 loses 164 -- and no entry outside those seven has its
-    related_decisions changed.
+    Decision 160's row in docs/decisions-index.json records amends [134, 145, 146]. The index
+    SORTS (scripts/decisions_index.py:173), so the row order differs from the parser's
+    first-occurrence order [145, 134, 146] -- both are correct at their own layer. CFG-06's own
+    acceptance text states the parser order for the index row; it is wrong and is not inherited.
+  - >-
+    _extract_related_decisions terminates at the GENERAL blockquote-annotation rule ("\n> **",
+    covering every observed and future annotation spelling) plus the non-blockquote "[Amendment "
+    form, so all ELEVEN affected entries drop their trailer-borne ids exactly: 60 loses 73; 62
+    loses 73, 81 and 74; 68 loses 73; 71 loses 73; 74 loses 112; 87 loses 103; 89 loses 83; 103
+    loses 103; 105 loses 150; 116 loses 164 and 122; 122 loses 164. Cross-checked against an
+    INDEPENDENT paragraph-break rule ("\n\n"), which agrees on all 146 rows -- so the general rule
+    is not over-greedy.
   - >-
     Decision 146's related_decisions is unchanged by its new trailer and does NOT absorb 160 --
     the plan's own corpus edit is a live regression case for rec-2990.
@@ -96,8 +104,9 @@ acceptance_criteria:
     deliberately excludes the amendment openers).
   - >-
     docs/contracts/decision-entry.yaml carries a field_grammar section naming both terminator sets
-    with their per-set justification, a block_separator section, an amendment_forms list with all
-    three dated-trailer shapes, and a shared_parser_note that names the field extractors rather
+    with their per-set justification, a block_separator section, an amendment_forms entry stating
+    the GENERAL blockquote-annotation rule with non-exhaustive examples, and a shared_parser_note
+    that names the field extractors rather
     than only the header grammar -- all asserted against the REAL contract by VP step 12, not only
     against step 6's synthetic fixture.
   - >-
@@ -147,8 +156,8 @@ verification_plan:
     command: >-
       bin/venv-python -c 'import json;
       rows={d["number"]:d for d in json.load(open("docs/decisions-index.json"))["decisions"]};
-      a=rows[160]["amends"]; assert a==[145,134,146], a; print("PASS",a)'
-    expected: "Prints PASS [145, 134, 146]; exit 0."
+      a=rows[160]["amends"]; assert a==[134,145,146], a; print("PASS",a)'
+    expected: "Prints PASS [134, 145, 146]; exit 0 -- SORTED, unlike step 1's parser-level order."
     fix_if: >-
       Still [145] means the index was not regenerated after the parser fix -- rerun the
       regeneration step rather than hand-editing the JSON.
@@ -161,22 +170,23 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: >-
-      Confirm the typed-id-list terminator drops exactly the trailer-borne ids on the seven
+      Confirm the typed-id-list terminator drops exactly the trailer-borne ids on all eleven
       affected entries, and that Decision 146 does not absorb 160 from the trailer this plan adds.
     command: >-
       bin/venv-python -c 'from scripts.decisions_md import parse_decisions_md;
       r={x["decision_id"]:x for x in parse_decisions_md()};
-      exp={74:[68,72,73],87:[84,85,76,81,86,69,78,70,75,57],89:[60,68],103:[70,84,88,55],
+      exp={60:[48,51,78,55,57],62:[57,60],68:[36,37,60],71:[68],74:[68,72,73],
+      87:[84,85,76,81,86,69,78,70,75,57],89:[60,68],103:[70,84,88,55],
       105:[90,84,92,103,104,76,86],116:[49,52,117],122:[116,49,121,47,84,105,40]};
       bad={n:(r[n]["related_decisions"],v) for n,v in exp.items() if r[n]["related_decisions"]!=v};
       assert not bad, bad; assert 160 not in r[146]["related_decisions"], r[146]["related_decisions"];
       print("PASS", len(exp))'
-    expected: "Prints PASS 7; exit 0. All seven trailer-affected rows match, including 89 and 105."
+    expected: "Prints PASS 11; exit 0. All eleven trailer-affected rows match, including 60/62/68/71."
     fix_if: >-
-      A retained trailer id means an amendment opener is missing from _TYPED_ID_LIST_TERMINATOR --
-      check all three, especially "> **Amended by Decision ", the most common form and the one
-      rows 89 and 105 depend on. A missing legitimate id means the terminator fires inside the
-      Related line itself (check the "\\n" anchor on each opener).
+      A retained trailer id means the terminator is enumerating spellings again instead of using
+      the general "\\n> \\*\\*" rule -- rows 60/62/68/71 depend on the general form and are exactly
+      what a closed opener list misses. A missing legitimate id means the terminator fires inside
+      the Related line itself (check the "\\n" anchor).
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -206,13 +216,16 @@ verification_plan:
     command: bin/venv-python -m pytest tests/test_decision_field_grammar.py -q
     expected: >-
       All tests pass. Cases are DERIVED from the contract (parametrised over field_grammar), so
-      coverage of declared forms is structural rather than asserted. Guard against a truncated or
-      emptied contract section with a liveness floor: the derived case count is at least 8 accepted
-      plus 4 rejected forms, and at least 3 declared amendment_forms openers.
+      coverage of declared forms is structural rather than asserted. Crucially the suite includes a
+      CROSS-RULE AGREEMENT property: the production _TYPED_ID_LIST_TERMINATOR must agree, on all
+      146 corpus entries, with an independently-implemented paragraph-break rule ("\\n\\n"). That
+      property fails on ANY future unlisted annotation spelling, which a hard-coded opener count
+      cannot -- it is what would have caught rows 89/105 and 60/62/68/71 at planning time.
     fix_if: >-
       A pin failure means scripts/decisions_md.py and decision-entry.yaml disagree -- fix whichever
-      is wrong, never loosen the assertion to make them agree. A liveness-floor failure means the
-      contract section lost forms; restore them rather than lowering the floor. SEPARATELY, if the
+      is wrong, never loosen the assertion to make them agree. A cross-rule disagreement means the
+      corpus grew an annotation shape the terminator does not cover: widen the GENERAL rule, never
+      append another special-case opener. SEPARATELY, if the
       full tier's validate_test_coverage later fails on scripts/decisions_md.py, the cause is that
       it measures coverage by running ONLY tests/test_decisions_md.py (100 percent today, no
       baseline entry) -- add the minimal covering case to that file, which is in scope for exactly
@@ -330,7 +343,9 @@ verification_plan:
     fix_if: >-
       A moved-row set wider than {160} means the continuation grammar is over-greedy and minted an
       amends edge somewhere unintended -- diff the offending rows before touching anything else. An
-      empty set means the index was never regenerated.
+      empty set means the index was never regenerated. A moved set containing OTHER decision numbers
+      with no parser explanation usually means main advanced under the branch (a PR minting a
+      Decision merged); rebase onto origin/main and re-run before investigating the grammar.
     hermetic: false
     graduation: graduate
     graduation_check_id: decision-index-blast-radius-bounded
@@ -344,14 +359,14 @@ verification_plan:
       c=yaml.safe_load(open("docs/contracts/decision-entry.yaml"));
       assert "block_separator" in c, "block_separator absent";
       assert "field_grammar" in c, "field_grammar absent";
-      assert len(c["amendment_forms"])>=3, c["amendment_forms"];
+      af=str(c["amendment_forms"]); assert "> **" in af and "[Amendment" in af, af;
       n=c["shared_parser_note"];
       assert "_extract_related_decisions" in n and "terminator" in n, n; print("PASS")'
     expected: "Prints PASS; exit 0."
     fix_if: >-
       A failure means an execution step was skipped -- add the missing surface rather than relaxing
-      the assertion. An amendment_forms count below 3 means the third dated-trailer shape was not
-      recorded, which silently re-opens the rows 89 and 105 defect.
+      the assertion. amendment_forms must describe the general blockquote-annotation rule plus the
+      "[Amendment " form; a closed list of spellings is what left rows 60/62/68/71 corrupted.
     hermetic: true
     graduation: graduate
     graduation_check_id: decision-entry-contract-surfaces-present
@@ -409,7 +424,7 @@ test_obligations:
     red_green_expectation: >-
       Red before: no field_grammar or block_separator section exists, so the contract-derived suite
       has nothing to parametrise over and the constant-to-contract pin cannot be expressed. Green
-      after, with step 11 additionally asserting the surfaces exist in the real contract rather
+      after, with step 12 additionally asserting the surfaces exist in the real contract rather
       than only in step 6's synthetic fixture.
   - source: docs/decisions-index.json
     behavior: >-
@@ -521,20 +536,24 @@ context:
   - >-
     Measured baseline over the full 146-entry corpus (live + archive) before any edit: the widened
     continuation grammar moves exactly 1 row (Decision 160 amends [145] -> [145, 134, 146]) with
-    zero false positives and title_supersedes unchanged; the THREE-opener typed-id-list terminator
-    moves exactly 7 rows, all trailer-borne removals (74, 87, 89, 103, 105, 116, 122); unifying the
+    zero false positives and title_supersedes unchanged; the GENERAL blockquote typed-id-list
+    terminator moves exactly 11 rows, all trailer-borne removals (60, 62, 68, 71, 74, 87, 89, 103,
+    105, 116, 122); unifying the
     prose end-anchors and adding the \w guard to _extract_section is a measured ZERO-delta change;
     docs/decisions-index.json moves exactly 1 of 146 rows, because index rows carry amends but not
-    related_decisions.
+    related_decisions -- and that row reads [134, 145, 146], since the index sorts.
   - >-
-    Round-2 plan-critique found that decision-entry.yaml's amendment_forms is INCOMPLETE: it
-    declares two dated-trailer shapes, but the corpus carries a third, "> **Amended by Decision N
-    (YYYY-MM-DD):**", at 11 occurrences in docs/DECISIONS.md -- more than the two declared shapes
-    combined (6 and 5). Independently re-measured and confirmed. The two-opener design would have
-    left Decision 89 retaining a spurious 83 and Decision 105 a spurious 150, i.e. under-fixed the
-    very defect class the plan exists to close, while publishing the incomplete set as the
-    contract's authoritative statement. Resolved in-scope (option a): the third opener joins both
-    amendment_forms and _TYPED_ID_LIST_TERMINATOR, and the affected-row count went 5 -> 7.
+    Enumerating trailer openers failed TWICE during planning and is now rejected as a design.
+    Round 2 found a third shape ("> **Amended by Decision N (DATE):**", 11 occurrences) that the
+    two-opener set missed, corrupting rows 89 and 105. Round 3 then found a FOURTH, date-first
+    shape ("> **2026-06-16 amendment (...):**", 6 occurrences) that the three-opener set still
+    missed, corrupting rows 60, 62, 68 and 71 -- row 62 kept 3 spurious ids of 5, worse than
+    several rows the enumeration did fix. Both were independently re-measured and confirmed. The
+    plan now uses the GENERAL rule "a blockquote-bold annotation line terminates a typed id-list
+    field", which closes all eleven rows and agrees with an independent paragraph-break rule on all
+    146 entries. This is CFG-06's own mandate ("one class fix, not per-extractor patches"; "neither
+    states the general rule, so the next extractor re-diverges by default") applied to the plan
+    itself -- the affected-row count moved 5 -> 7 -> 11 across the three critique rounds.
   - >-
     Decision 146's trailer is itself a live regression case for rec-2990: it places "Decision 160"
     in a trailer immediately after the Related paragraph, so without the typed-id-list terminator
@@ -594,12 +613,15 @@ execution_steps:
     grammar, and a projection-residue note recording the five related_decisions rows that will not
     re-project into ops_decisions.
   - >-
-    docs/contracts/decision-entry.yaml -- correct amendment_forms, which today declares only two
-    dated-trailer shapes while the corpus carries three. Add "> **Amended by Decision N
-    (YYYY-MM-DD):**" (11 occurrences in docs/DECISIONS.md, more than the two declared shapes
-    combined). This is a prerequisite for the terminator work, not a nicety: field_grammar cites
-    amendment_forms as the opener set, so an incomplete amendment_forms publishes an incomplete
-    grammar as authoritative -- the exact failure mode this plan exists to end.
+    docs/contracts/decision-entry.yaml -- restate amendment_forms as a GENERAL form plus
+    non-exhaustive examples, not a closed list. The general rule is "a blockquote-bold annotation
+    line (> **...:**) terminates a typed id-list field"; the observed spellings ("> **Update
+    (DATE):**", "> **Amended by Decision N (DATE):**", "> **DATE <label>:**", "> **Supersession
+    note:**") are EXAMPLES, and "[Amendment DATE: ...]" is the one non-blockquote form needing its
+    own opener. State explicitly that the list is illustrative, so a new annotation spelling does
+    not silently re-open the defect. Also note (a) the Decision 151 clause 3(ii) ripple: widening
+    amendment_forms widens the sanctioned in-Intent accretion vocabulary, and (b) that
+    _extract_section has no production caller and is exercised only by tests/test_decisions_md.py.
   - >-
     docs/contracts/decision-entry.yaml -- add the block_separator section: form "---", required on
     new-in-diff entries, historical band grandfathered with the 21-entry census recorded, and the
@@ -611,10 +633,12 @@ execution_steps:
     scripts/decisions_md.py -- introduce _MARKER_SECTION_TERMINATOR = r"(?=\n\*\*\w|\n---|\Z)" and
     use it in both _extract_by_marker_pattern and _extract_section (this unifies the end-anchors
     and gives _extract_section the \w guard; measured zero delta). Introduce
-    _TYPED_ID_LIST_TERMINATOR = the prose set plus ALL THREE dated-trailer openers --
-    "\n\[Amendment ", "\n> \*\*Update \(" and "\n> \*\*Amended by Decision " -- and use it in
-    _extract_related_decisions only. Do not omit the third: it is the MOST common form in the
-    corpus (11 occurrences vs 6 and 5), and rows 89 and 105 are corrupted by it.
+    _TYPED_ID_LIST_TERMINATOR = r"(?=\n\*\*\w|\n---|\n\[Amendment |\n> \*\*|\Z)" and use it in
+    _extract_related_decisions only. Use the GENERAL blockquote rule "\n> \*\*", NOT a closed list
+    of observed openers: enumerating spellings is the anti-pattern CFG-06 names, and each
+    enumeration attempt in planning missed a further shape (two openers missed rows 89/105; three
+    missed rows 60/62/68/71). The general rule closes all eleven and was cross-validated against an
+    independent paragraph-break rule with identical results on all 146 rows.
   - >-
     scripts/decisions_md.py -- widen the title-relation continuation grammar so a comma may be
     followed by an optional repeated "Decision"/"Decisions" token and "and" may be followed by a
