@@ -66,8 +66,10 @@ acceptance_criteria:
     verification_tier into the update payload actually handed to update_rec.
   - >-
     --update-rec exits 1 without writing when passed --file, --effort, --risk, --source or
-    --context-v2-json ALONGSIDE an otherwise-valid update, and the error names the specific flag and
-    states it is not updatable via the CLI pending re-derivation, pointing at the follow-on rec.
+    --context-v2-json ALONGSIDE an otherwise-valid update, and the error names the specific flag. The
+    derived-field group (--file, --effort, --risk) says it is not updatable via the CLI pending
+    re-derivation and points at the follow-on rec; --source and --context-v2-json give their own
+    reason and do NOT reference that rec, since no re-derivation is pending for either.
   - >-
     A successful --update-rec prints the exact list of fields applied, so a caller can confirm what
     was written rather than inferring it from a bare success string.
@@ -229,8 +231,10 @@ verification_plan:
       Run the full validation tier before commit, as a real executed step rather than a handoff_policy
       assertion (Decision 163). Sequenced BEFORE the live warehouse write of step 6 so that no
       production row is written from a tree that has not passed the full tier.
-    command: bin/venv-python -m scripts.validate
-    expected: Exits 0 with no failures, including validate_sloc_limits on the grown cli.py.
+    command: bin/venv-python -m scripts.validate && ! grep -q "byte-identical" scripts/ops_portal/cli.py
+    expected: >-
+      Exits 0 with no failures, including validate_sloc_limits on the grown cli.py, and the module
+      docstring no longer contains the now-false "byte-identical" parity claim.
     fix_if: >-
       If validate_sloc_limits fails, cli.py crossed 500 SLOC -- decompose per Decision 128, do not
       register a budget raise. The measured pre-change baseline is 311 SLOC against a 500 limit, so a
@@ -299,9 +303,14 @@ constraints:
     reason strings should CITE config/agent/data_quality/ops.yaml as the authority rather than restate
     the semantics, so this does not become a third surface asserting derivedness.
   - >-
-    Reject-reason wording must say "not updatable via the CLI pending re-derivation" and point at the
-    follow-on rec -- NOT a bare "not updatable", which would contradict update_rec's own docstring and
-    _UPDATE_CONTENT_VALIDATED_FIELDS, both of which do support updating file.
+    Reject-reason wording uses TWO distinct strings, because the five rejected flags are rejected for
+    two different reasons. For --file, --effort and --risk (the derived-field group) the reason must
+    say "not updatable via the CLI pending re-derivation" and point at the follow-on rec -- NOT a bare
+    "not updatable", which would contradict update_rec's own docstring and
+    _UPDATE_CONTENT_VALIDATED_FIELDS, both of which do support updating file. For --source and
+    --context-v2-json the reason must NOT reference the follow-on rec, since neither is a derived field
+    and no re-derivation is pending for them: --source is filing provenance and is immutable after the
+    rec is filed, and --context-v2-json has no update_rec parameter at all.
   - >-
     Do not create tests/ops_portal/ -- tests/ops_data_portal/test_cli.py is the established home and
     map_source_to_test returns None for this source, so no mirror obligation applies (Decision 130/131).
@@ -328,7 +337,7 @@ context:
     of 119 triaged each), the second re-dispatched against the revised approach after the human added
     rec-2826. CITE list: dec-84, dec-55, dec-66, dec-88, dec-48, dec-163, dec-65, dec-103, dec-124,
     dec-63, dec-130, dec-131, dec-132, dec-70, dec-159.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)"
   - >-
     Scout flag 1 (Decision 65, WARN, resolved and verified in-session) -- the planning agent had
     excluded --risk from the mutable set because update_rec never re-derives it, but --file and
@@ -501,6 +510,9 @@ execution_steps:
     Execute Verification Plan -- run each step in order; loop until pass; on unrecoverable V3 failure
     stop and RCA (Decision 55).
   - >-
+    Include the trailer "Resolves: rec-2945, rec-2866, rec-2826" in the squash-merge commit body so
+    rec-autoclose closes the bundled recs.
+  - >-
     After the merge, run the three human-confirmed duplicate closures, which were approved at the
     planning gate and are close_proposed rather than agent-initiated (Decision 103):
     --update-rec rec-3034 --status closed --resolution "Duplicate of rec-2866 (same defect, same file);
@@ -508,9 +520,6 @@ execution_steps:
     of rec-2866; --title/--acceptance exposed by ops-portal-write-fidelity"; --update-rec rec-2972
     --status closed --resolution "Duplicate of rec-2866; --title now updatable via
     ops-portal-write-fidelity".
-  - >-
-    Include the trailer "Resolves: rec-2945, rec-2866, rec-2826" in the squash-merge commit body so
-    rec-autoclose closes the bundled recs.
   - >-
     After rec-autoclose has fired, overwrite rec-2866's resolution to record partial delivery:
     --update-rec rec-2866 --resolution "Partially delivered by ops-portal-write-fidelity: --title and
