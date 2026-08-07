@@ -4517,3 +4517,88 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/checks/ci_guards/test__workflow_shell_bodies.py::TestWorkflowRatchetLiveSurface
+  - check_id: decision-amends-continuation-grammar
+    primitive_slot: command_exit_zero
+    guard_target: scripts/decisions_md.py
+    guard_symbol: extract_amends_edges
+    plan_slug: decision-extractor-grammar-fixes
+    graduated_at: '2026-08-07'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - |-
+          from scripts.decisions_md import extract_amends_edges as e;
+          cases=[("amends Decision 145, Decision 134 clause 2, and Decision 146",[145,134,146]),
+          ("amends Decision 122, 116",[122,116]),("amends Decision 122 and Decision 116",[122,116]),
+          ("amends Decision 122 and 116",[122,116]),("amends Decision 104, mirrors Decision 132",[104]),
+          ("amends Decision 73, 2nd amendment; builds on 80/104/124/131",[73]),
+          ("as amended by Decision 116",[]),("amends CD.28 clause 3",[])];
+          bad=[(t,e(t),x) for t,x in cases if e(t)!=x]; assert not bad, bad; print("PASS",len(cases))
+  - check_id: decision-intent-accretion-preserved
+    primitive_slot: test_selector
+    guard_target: scripts/decisions_md.py
+    guard_symbol: _MARKER_SECTION_TERMINATOR
+    plan_slug: decision-extractor-grammar-fixes
+    graduated_at: '2026-08-07'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_decision_field_grammar.py::test_intent_retains_dated_in_section_accretion
+  - check_id: decision-field-grammar-contract-pin
+    primitive_slot: test_selector
+    guard_target: docs/contracts/decision-entry.yaml
+    guard_symbol: field_grammar
+    plan_slug: decision-extractor-grammar-fixes
+    graduated_at: '2026-08-07'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_decision_field_grammar.py
+  - check_id: decision-block-separator-forward-enforced
+    primitive_slot: test_selector
+    guard_target: scripts/checks/decisions/validate_decision_entry_conformance.py
+    guard_symbol: _load_block_separator_form
+    plan_slug: decision-extractor-grammar-fixes
+    graduated_at: '2026-08-07'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/decisions/test_validate_decision_entry_conformance.py::TestBlockSeparatorSubCheck
+  - check_id: decision-index-blast-radius-bounded
+    primitive_slot: command_exit_zero
+    guard_target: docs/decisions-index.json
+    guard_symbol: null
+    plan_slug: decision-extractor-grammar-fixes
+    graduated_at: '2026-08-07'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - |-
+          import json, subprocess;
+          old={d["number"]:d for d in json.loads(subprocess.run(["git","show",
+          "origin/main:docs/decisions-index.json"],capture_output=True,text=True,check=True).stdout)["decisions"]};
+          new={d["number"]:d for d in json.load(open("docs/decisions-index.json"))["decisions"]};
+          moved={n for n in set(old)|set(new) if old.get(n)!=new.get(n)}; assert moved=={160}, moved;
+          print("PASS")
+  - check_id: decision-entry-contract-surfaces-present
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/decision-entry.yaml
+    guard_symbol: field_grammar
+    plan_slug: decision-extractor-grammar-fixes
+    graduated_at: '2026-08-07'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - |-
+          import yaml;
+          c=yaml.safe_load(open("docs/contracts/decision-entry.yaml"));
+          assert "block_separator" in c, "block_separator absent";
+          assert "field_grammar" in c, "field_grammar absent";
+          af=str(c["amendment_forms"]); assert "> **" in af and "[Amendment" in af, af;
+          pr=c["field_grammar"]["projection_residue"]; assert pr["row_count"]==11, pr;
+          assert sorted(pr["rows"])==[60,62,68,71,74,87,89,103,105,116,122], pr;
+          n=c["shared_parser_note"];
+          assert "_extract_related_decisions" in n and "terminator" in n, n; print("PASS")
