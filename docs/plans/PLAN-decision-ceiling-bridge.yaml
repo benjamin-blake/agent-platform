@@ -1,0 +1,428 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "decision-ceiling-bridge"
+intent: >-
+  Raise both surviving docs/DECISIONS.md size ceilings to bridge values so decision-corpus writes
+  stay unblocked until the contract-first governance rebuild lands, keeping the platform's agents
+  able to ratify decisions during the window in which the decision architecture itself is being
+  replaced.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-decision-ceiling-bridge.yaml
+phase: >-
+  Platform T2.56 (Normative / contract / ADR layering) -- bridge only; this plan closes NO T2.56
+  exit criterion and performs none of its structural work. It buys runway for the rebuild
+  commissioned on branch claude/contract-first-audit-p5f0tu
+  (docs/audit-prompts/AUDIT-contract-first-governance.md).
+scope:
+  - file: scripts/checks/decisions/validate_decisions_size.py
+    action: Modify
+    purpose: >-
+      Raise _DECISIONS_LIVE_MAX_H2 from 120 to 132 and _DECISIONS_COMBINED_MAX_BYTES from 700_000
+      to 780_000, and drop the now-false "(Decision 134)" attribution from the two FAIL messages
+      (after this change neither value traces to Decision 134 or to any Decision).
+  - file: tests/checks/decisions/test_validate_decisions_size.py
+    action: Modify
+    purpose: >-
+      Add absolute-value regression pins on both raised constants (the assertions that fail
+      without the change -- every existing boundary test is written RELATIVE to the constants and
+      passes either way), and correct the stale 120 / 700_000 figures in the module docstring and
+      the _LIVE_SIZE comment.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/checks/decisions/validate_decisions_size.py defines _DECISIONS_LIVE_MAX_H2 = 132 and
+    _DECISIONS_COMBINED_MAX_BYTES = 780_000.
+  - >-
+    validate_decisions_size() passes on the committed corpus with at least 12 live-header slots
+    and at least 90,000 combined bytes of headroom remaining.
+  - >-
+    tests/checks/decisions/test_validate_decisions_size.py carries absolute-value pins on both
+    constants that fail against the pre-change values, and every pre-existing relative boundary
+    test in that module still passes unmodified.
+  - >-
+    Neither FAIL message in validate_decisions_size.py attributes a raised VALUE to Decision 134.
+    Scoped deliberately to the two f-string messages: the module docstring (line 8) and the
+    validate_decisions_size docstring (line 63) keep their Decision 134 references, because those
+    describe the ceilings as an INSTRUMENT (which Decision 134 did create) rather than asserting
+    the numbers, which after this change trace to no Decision at all. Do not edit either docstring.
+  - >-
+    docs/decisions-index.json stays under the existing 131,000-byte pin and
+    tests/test_decisions_index.py is not modified by this plan.
+  - >-
+    No new '## Decision NNN:' header is added to docs/DECISIONS.md or docs/DECISIONS_ARCHIVE.md,
+    and docs/contracts/decision-entry.yaml is left byte-identical to origin/main.
+  - "bin/venv-python -m scripts.validate --pre exits 0."
+  - >-
+    The full presubmit tier, bin/venv-python -m scripts.validate, exits 0 -- required because this
+    plan declares handoff_policy.full_validation_required_before_commit.
+  - >-
+    Every test class and test function present in tests/checks/decisions/test_validate_decisions_size.py
+    on origin/main is still present by name after the change (the pre-existing boundary coverage is
+    added to, never rewritten).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm both bridge ceiling values are live in the guard module.
+    command: >-
+      bin/venv-python -c "from scripts.checks.decisions.validate_decisions_size import
+      _DECISIONS_COMBINED_MAX_BYTES as B, _DECISIONS_LIVE_MAX_H2 as H; assert (H, B) == (132,
+      780_000), (H, B); print('ceilings', H, B)"
+    expected: "Exit 0, prints: ceilings 132 780000"
+    fix_if: >-
+      AssertionError reporting (120, 700000) means the constants were not edited; reporting any
+      other pair means the wrong bridge values were used.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      These are deliberately temporary bridge values that the contract-first governance rebuild
+      retires; a standing verification-registry row pinning them would outlive its referent and
+      have to be removed again by that rebuild. The mirror test module (step 2) already pins them
+      for the life of the bridge.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the guard's mirror test module -- the new absolute pins plus every pre-existing relative
+      boundary case.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decisions_size.py -q
+    expected: >-
+      All tests pass, including the new TestBridgeCeilingValues absolute pins and the unmodified
+      relative live-H2 and combined-byte boundary classes.
+    fix_if: >-
+      A relative boundary test failing means the raise broke the guard's comparison logic rather
+      than only its thresholds; a TestBridgeCeilingValues failure means the pins and the constants
+      disagree.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The only differentially-admissible node id here is ::TestBridgeCeilingValues (the module is
+      byte-identical on origin/main and HEAD, so a module-level selector is tautologically green
+      and run_differential would refuse it). That class asserts the deliberately temporary bridge
+      thresholds -- the exact transience cited to waive steps 1 and 4 -- so graduating it would
+      contradict those waivers and leave the rebuild a registry row to remove alongside the class.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the red half of the obligation -- confirm the pre-change tree carries 120 / 700_000,
+      so the step-2 absolute pins genuinely fail without this change.
+    command: >-
+      git show origin/main:scripts/checks/decisions/validate_decisions_size.py | grep -E
+      "^_DECISIONS_(LIVE_MAX_H2|COMBINED_MAX_BYTES) = "
+    expected: >-
+      Prints _DECISIONS_LIVE_MAX_H2 = 120 and _DECISIONS_COMBINED_MAX_BYTES = 700_000, confirming
+      the step-2 pins assert values absent from the baseline.
+    fix_if: >-
+      Values other than 120 / 700_000 mean main moved under this branch and the bridge arithmetic
+      in the Context section must be re-derived before merging.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Measure the runway the raise actually buys on the committed corpus, on both ceilings at once.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from
+      scripts.checks.decisions.validate_decisions_size import _DECISIONS_COMBINED_MAX_BYTES as B,
+      _DECISIONS_LIVE_MAX_H2 as H, _LIVE_H2_RE; l=Path('docs/DECISIONS.md').read_text(encoding='utf-8');
+      a=Path('docs/DECISIONS_ARCHIVE.md').read_text(encoding='utf-8'); n=len(_LIVE_H2_RE.findall(l));
+      c=len(l.encode())+len(a.encode()); assert H-n >= 12 and B-c >= 90_000, (n, c); print('headers',
+      n, 'of', H, '| combined', c, 'of', B)"
+    expected: >-
+      Exit 0, printing 119 of 132 headers and 684796 of 780000 combined bytes -- at least 12 header
+      slots and at least 90,000 bytes free.
+    fix_if: >-
+      An AssertionError means the raise did not deliver the intended runway on one of the two
+      ceilings; re-derive both values together rather than raising only the binding one.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This asserts a transient property of the corpus, not an invariant -- the runway it measures
+      is consumed by design as decisions are authored, so a standing registry row would go red
+      during normal operation and would have to be waived or deleted within the bridge window.
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the guard now returns clean on the real committed corpus.
+    command: >-
+      bin/venv-python -c "from scripts.checks.decisions.validate_decisions_size import
+      validate_decisions_size as v; failed=[]; v(failed); assert failed == [], failed;
+      print('guard PASS')"
+    expected: "Prints the guard's PASS line and then 'guard PASS'; exit 0."
+    fix_if: >-
+      A populated failed list names which ceiling is still breached; read the FAIL text to see
+      whether it is the header count or the combined byte count.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the already-registered validate_decisions_size check, which both presubmit tiers
+      run unscoped on every PR; a registry row would re-run the identical guard under a second
+      identity and add a maintenance surface with no additional coverage.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the third ceiling is untouched -- docs/decisions-index.json still fits the existing
+      131,000-byte pin, so no pin bump is required by this raise.
+    command: bin/venv-python -m pytest tests/test_decisions_index.py -q
+    expected: >-
+      All tests pass, including TestCommittedIndexSizePin -- the committed index (110,582 bytes)
+      remains under the 131,000-byte pin.
+    fix_if: >-
+      A pin failure means the index has grown past the committed pin. Do NOT bump the pin here:
+      Decision 166 reversal condition (g) requires landing rec-3012 (archive-row skeletonization)
+      before a third bump. Stop and hand back.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      tests/test_decisions_index.py is already a standing pytest module executed by the full
+      validate tier; graduating a second identity for the same selector would duplicate existing
+      coverage rather than add a new regression guard.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm the plan's governance footprint -- the decision corpus, the decision-entry contract,
+      and the index pin test are all left byte-identical to origin/main.
+    command: >-
+      git diff --quiet origin/main -- docs/DECISIONS.md docs/DECISIONS_ARCHIVE.md
+      docs/contracts/decision-entry.yaml tests/test_decisions_index.py && echo "footprint clean"
+    expected: "Exit 0, prints: footprint clean"
+    fix_if: >-
+      A non-zero exit names a file this plan must not touch. Revert it. In particular, no new
+      '## Decision NNN:' header may be minted by this plan, and decision-entry.yaml must not be
+      edited (see the Context note on its self-contradiction).
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: Run the authoritative fast presubmit tier.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0, with the 'DECISIONS size governance' section reporting PASS and no regression in the
+      decision-entry conformance, decisions-index freshness, or plan-document checks.
+    fix_if: >-
+      A DECISIONS size governance FAIL means the constants were not raised as intended; any other
+      failing section is unrelated to the raise and must be diagnosed on its own terms.
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm the pre-existing boundary coverage was added to, not rewritten -- every test symbol
+      present on origin/main still exists by name.
+    command: >-
+      bin/venv-python -c "import re, subprocess; from pathlib import Path;
+      old=subprocess.run(['git','show','origin/main:tests/checks/decisions/test_validate_decisions_size.py'],
+      capture_output=True, text=True).stdout;
+      new=Path('tests/checks/decisions/test_validate_decisions_size.py').read_text(encoding='utf-8');
+      pat=r'^\s*(?:class|def) (\w+)'; names=set(re.findall(pat, old, re.M));
+      new_names=set(re.findall(pat, new, re.M)); missing=sorted(names - new_names); assert not
+      missing, missing; print('preserved', len(names), 'pre-existing test symbols')"
+    expected: "Exit 0, printing the count of preserved symbols (22 on the current baseline)."
+    fix_if: >-
+      A non-empty missing list names a pre-existing test class or function that was renamed or
+      deleted. Restore it -- this plan adds coverage and may edit only the module docstring and the
+      _LIVE_SIZE comment.
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Run the FULL presubmit tier, as required by this plan's
+      handoff_policy.full_validation_required_before_commit declaration.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0. Required by validate_handoff_full_tier, which fails any plan declaring
+      full_validation_required_before_commit whose verification_plan invokes only the --pre tier.
+    fix_if: >-
+      A full-tier-only failure (for example validate_supersession_annotations or a decisions-index
+      freshness check) is unrelated to the raise and must be diagnosed on its own terms; do not
+      relax the ceilings further to make it pass.
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: scripts/checks/decisions/validate_decisions_size.py
+    behavior: >-
+      Two behavior changes in one module. (1) Both surviving ceilings move to their bridge values
+      (live '## Decision' header ceiling 120 -> 132; live+archive combined byte ceiling 700,000 ->
+      780,000), so _decisions_size_issues() admits a corpus it previously rejected while its
+      comparison logic is otherwise unchanged. (2) Both FAIL message strings stop attributing a
+      raised value to Decision 134, since after the raise neither value traces to that Decision.
+    verification_step: 2
+    test_selector: "tests/checks/decisions/test_validate_decisions_size.py::TestBridgeCeilingValues"
+    red_green_expectation: >-
+      RED before the change, GREEN after, on three independent assertions in the class. (a)
+      Absolute-literal BEHAVIOR boundaries, not constant restatements: a synthetic 132-header live
+      file returns no issues and a 133-header one returns exactly one header issue; a combined
+      corpus of exactly 780,000 bytes returns no issues and 780,001 returns exactly one byte issue.
+      On the pre-change tree the 132-header and 780,000-byte cases both FAIL (132 > 120 and 780,000
+      > 700,000 there), which is what makes this a real red-green pair rather than a change
+      detector. (b) Absolute pins on the two constants, retained as a cheap locator so a future
+      reader sees which values are deliberate. (c) The string '134' appears in neither FAIL message,
+      covering behavior change (2) -- red before, since both messages carry '(Decision 134)' today.
+      These absolute assertions are necessary because all 22 pre-existing symbols in the module
+      express their boundaries RELATIVE to the constants (_DECISIONS_LIVE_MAX_H2 - 1, + 1, and so
+      on) and so pass identically before and after the raise; they cannot detect this change at all.
+constraints:
+  - >-
+    Do NOT mint a numbered '## Decision NNN:' entry for this raise. This is a deliberate,
+    human-directed override recorded at plan approval: the decision architecture is the subject of
+    the active rebuild, so an entry authorizing a stopgap inside it is noise, and the operator's
+    position is that a guard whose bypass route is prose is not a functioning guard. The rationale
+    lives in the commit message, this plan document, and git history.
+  - >-
+    Do NOT edit docs/contracts/decision-entry.yaml. Its size_governance block sits two lines below
+    the sentence "Approaching either surviving ceiling is a signal to compact superseded bodies to
+    pointer stubs ... or tighten per-entry authoring size, never to raise the ceiling" -- syncing
+    the mirrored values would make that file forbid what it documents, and deleting the sentence
+    is the governance-prose edit this plan is explicitly declining. The file's own clause "The
+    validator constants are the SoT if these values ever drift from it again" makes leaving the
+    mirror stale the sanctioned outcome.
+  - >-
+    Do NOT bump the docs/decisions-index.json byte pin in tests/test_decisions_index.py. Decision
+    166 reversal condition (g) forbids a third bump on faith before rec-3012 lands, and no bump is
+    needed: the committed index is 110,582 bytes against a 131,000-byte pin.
+  - >-
+    Do NOT perform archival or compaction work, add headroom reporting, or introduce a per-entry
+    authoring size norm. All structural relief is deliberately deferred to the rebuild on
+    claude/contract-first-audit-p5f0tu; this plan is a bridge and nothing more.
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "Do not raise a SLOC or structural size budget as part of this change (Decision 128)."
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): BLOCK. CITE: Decision 134,
+    Decision 146, Decision 114. CONTRADICT: Decision 160 [BLOCK], Decision 166 [BLOCK], Decision
+    145 [BLOCK], Decision 150 [WARN], Decision 149 [WARN], Decision 86 [WARN], Decision 147
+    [NOTE]. SPIRIT: Decision 128 [WARN], Decision 55 [WARN], Decision 165 [NOTE]. RELATED:
+    Decision 127, Decision 102, Decision 130, Decision 152, Decision 151, Decision 105."
+  - >-
+    "gates: decision-scout=BLOCK (overridden by explicit human direction at Step 6b, after the
+    verdict and all three quoted reversal conditions were surfaced in full); plan-critique=PROCEED
+    after 2 round(s) -- round 1 REVISE on four blocking findings (missing full-tier VP step, an
+    over-claimed graduation, an unverified acceptance criterion, and a change-detector test
+    obligation), all fixed and independently re-verified in round 2"
+  - >-
+    HUMAN OVERRIDE OF A BLOCK VERDICT, recorded deliberately. Three ratified reversal conditions
+    are knowingly overridden: (1) Decision 160 -- "the response is to re-derive the runway and
+    escalate the norm's priority, never a silent re-raise"; (2) Decision 166 point 9 -- "only an
+    operator-disposed archival wave under Decision 146 relieves it"; (3) Decision 145 -- "a SECOND
+    stopgap raise on top of this one is itself a signal that the structural fix is overdue, not a
+    routine act to repeat". The operator's stated grounds: the premise those clauses protect is
+    itself the thing under reconstruction, so honouring them would spend the last header on noise
+    inside a system being replaced.
+  - >-
+    Bridge arithmetic, measured 2026-08-06 on origin/main d4e01ad. Corpus at authoring: 119 live
+    '## Decision' headers of 120; 684,796 combined live+archive bytes of 700,000. Observed inflow
+    1.43 entries/day over 30 days (1.29/day over 14), mean entry 7,305 bytes measured over the
+    30-day window (7,445 bytes measured over the newest 30 entries; both figures are recorded
+    because the two windows disagree slightly and neither is privileged). The two bridge values are
+    chosen so NEITHER ceiling binds meaningfully before the other: 132 headers yields 13 entries and
+    780,000 bytes yields 95,204 free, which is 13.0 entries at 7,305 bytes and 12.8 at 7,445 --
+    about 9 days either way, balanced to within a fraction of one entry. Raising only the header
+    ceiling would have left the byte ceiling binding within about 1.5 days, which is the trap in a
+    header-only raise.
+  - >-
+    KNOWN AND ACCEPTED: this raise silently consumes the archive-row buffer that the
+    docs/decisions-index.json pin was derived from. Decision 166 point 9 derived the 131,000-byte
+    pin as a live term (120 rows x 764 bytes) plus an archive term (54 rows x 726 bytes, twice the
+    then-current 27-row archive as a multi-quarter buffer) = 130,884. At 132 live rows that
+    derivation yields 140,052, over the pin. Actual projected usage stays under it (132 x 764 + 27
+    x 726 = about 120,450 against 131,000), so CI passes and no bump is needed -- but the
+    multi-quarter archive headroom is spent. Any header ceiling above 120 breaks that derivation,
+    so no alternative bridge value avoids this. A future archival wave taking the archive past
+    roughly 40 rows will need the pin re-derived alongside rec-3012.
+  - >-
+    HANDOFF TO THE REBUILD (claude/contract-first-audit-p5f0tu,
+    docs/audit-prompts/AUDIT-contract-first-governance.md). Artefacts left deliberately stale by
+    this plan, for that audit to reconcile: tests/test_decisions_index.py:420-428 (the pin
+    derivation's live term of 120 x 764 and its 130,884 total become arithmetically false) and
+    :443-447 ("binding within ONE more live entry ... only an archival wave under Decision 146
+    does"); docs/ROADMAP-PLATFORM.yaml:8097 (T2.56's own runway figures, already stale on the pin
+    before this change); docs/contracts/decision-entry.yaml:228-229 and :236-239 (the Decision 134
+    attribution and the never-raise sentence); docs/audit-prompts/AUDIT-agent-context-governance.md:357-358
+    and docs/audit-prompts/AUDIT-size-governance-expansion.md:659-662 (both quote the constants;
+    the former already cites the retired _DECISIONS_LIVE_MAX_BYTES = 400_000);
+    docs/plans/PLAN-esb-routing-rationale.yaml:410 (hard-codes assert idx <= 110000, stale since
+    Decision 166); docs/audit-prompts/AUDIT-decision-consolidation-growth.md:404-405 and :526
+    (quotes both constants AND the already-retired _DECISIONS_LIVE_MAX_BYTES = 400_000, the same
+    class as the two audit prompts above). Fixing these was considered and declined -- the list is
+    worth more to the rebuild than the edits are worth now.
+  - >-
+    Why neither ratified relief valve could have been used instead, recorded because it is this
+    plan's strongest structural defense: the two valves are individually insufficient against the
+    binding constraint. Decision 149 compaction is number-preserving by construction (its
+    never-remove-headers rule), so it cannot reduce the live header count at all -- and the header
+    ceiling is the binding one at 119/120. Decision 146 archival does reduce the header count, but
+    Decision 160 point 5 measured it as INERT against the combined byte ceiling, since a move only
+    shuffles bytes between the two counted files. Only archival relieves headers; only compaction
+    relieves bytes; both are declined here per Constraint 4, so the raise is not a substitute for a
+    single valve that would have worked.
+  - >-
+    Relevant factual correction surfaced by the scout, supporting the no-Decision choice:
+    validate_decisions_size carries NO raise-marker guard of its own (stated explicitly in
+    Decision 145 point 4), unlike the six marker-gated budget guards consolidated onto
+    scripts/checks/_marker_guard.py by Decision 165. There is therefore no prose-authorization
+    mechanism being bypassed here -- the raise is already a frictionless constants edit that
+    passes CI silently, with or without a Decision entry.
+  - >-
+    Decision 55 spirit flag, accepted and recorded rather than resolved: raising a threshold so a
+    firing guard stops firing, with all structural relief deferred, is the workaround-over-root-cause
+    shape Decision 55 names. The root-cause fix is the commissioned rebuild; this plan's entire
+    justification is that it is a time-boxed bridge to it, not a substitute for it.
+  - >-
+    Tier Item Freshness Gate on T2.56 (Normative / contract / ADR layering): verified live,
+    status not_started, both named scope paths (docs/DECISIONS.md, docs/decisions-index.json)
+    exist, no stale surface references, not superseded by a sibling item. This plan closes none of
+    its exit criteria and declares no closes_criteria.
+  - >-
+    Main divergence: the branch was fast-forwarded to origin/main d4e01ad before authoring. That
+    commit landed the plan-document test-obligation gate, which is why this plan is authored at
+    schema_version 4 with a test_obligations entry for its one behavior-changing scope file
+    (tests/ paths are exempt via _NON_BEHAVIOR_PREFIXES).
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Confirm the corpus is still at 119 headers / 684,796 combined bytes before editing; if main
+    moved, re-derive both bridge values so they still yield equal runway
+execution_steps:
+  - >-
+    scripts/checks/decisions/validate_decisions_size.py -- set _DECISIONS_LIVE_MAX_H2 = 132 and
+    _DECISIONS_COMBINED_MAX_BYTES = 780_000. Leave _RELIEF_VALVES unchanged (compaction and a
+    leaner per-entry authoring norm remain the correct advice at the new ceiling). Remove the
+    "(Decision 134)" parenthetical from both FAIL message f-strings, since neither raised value
+    traces to that Decision; do not substitute another attribution.
+  - >-
+    tests/checks/decisions/test_validate_decisions_size.py -- add a TestBridgeCeilingValues class
+    carrying three groups of assertions, with a docstring naming these as deliberate bridge values
+    pending the contract-first rebuild. (a) Absolute-literal behavior boundaries built with the
+    module's existing _live_header_block helper: 132 headers returns no issues, 133 returns exactly
+    one header issue, a combined corpus of exactly 780,000 bytes returns no issues, and 780,001
+    returns exactly one byte issue. (b) Absolute pins on both constants. (c) An assertion that the
+    literal '134' appears in neither FAIL message produced by a breaching corpus. Update the module
+    docstring's stale "(120)" and "(700_000)" figures and the _LIVE_SIZE comment's reference to
+    700_000. Do not rename, delete, weaken, or re-express any of the 22 pre-existing test symbols
+    (verification step 9 enforces this by name). AUTHORING TRAP for assertion group (c): build the
+    breaching corpus from 133 headers and 780,001 bytes, never from 134 headers -- the header FAIL
+    message interpolates the live count, so a 134-header corpus puts the literal '134' into the
+    message and fails the no-134 assertion spuriously.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop
+    and RCA (Decision 55)
+  - >-
+    Commit with a message that carries the full rationale, since it is the only durable record by
+    design -- name both old and new values, the measured runway (13 entries / about 9 days at 1.43
+    entries per day), the deliberate absence of a Decision entry and why, the three overridden
+    reversal conditions, the consumed index-pin archive buffer, and the bridge target branch
+    claude/contract-first-audit-p5f0tu.
+  - "Report: what was implemented, verification results"
+work_areas: []
+rollback: >-
+  Revert the two constants to 120 / 700_000 and drop the TestBridgeCeilingValues class. This is
+  safe to do at any time while the live corpus remains at or below 120 headers and 700,000
+  combined bytes; once a decision entry has been authored into the bridge headroom, reverting
+  would wedge the presubmit gate for every subsequent PR until an archival wave under Decision 146
+  brings the corpus back under the original ceilings.
