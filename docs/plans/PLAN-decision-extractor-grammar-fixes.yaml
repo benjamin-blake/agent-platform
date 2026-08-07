@@ -30,8 +30,9 @@ scope:
     purpose: >-
       Add the field_grammar section (per-extractor continuation forms, terminator sets, qualifier
       forms, known_divergent_grammars, projection-residue note) and the block_separator section;
-      extend shared_parser_note to cover field extractors, not just header grammar; and CORRECT
-      amendment_forms, which declares two dated-trailer shapes while the corpus carries three.
+      extend shared_parser_note to cover field extractors, not just header grammar; and RESTATE
+      amendment_forms as a general blockquote-annotation rule with non-exhaustive examples, rather
+      than the closed two-shape list it declares today.
   - file: tests/test_decision_field_grammar.py
     action: Create
     purpose: >-
@@ -57,7 +58,7 @@ scope:
       exactly 100 percent with no config/coverage_baseline.yaml entry. If the decisions_md.py edits
       introduce any statement this file does not reach, add the minimal covering case HERE. It has
       exactly 12 SLOC of headroom before the 500 unregistered cap (488 measured). If more than 12
-      is required, STOP and re-plan: decomposing this 610-line, 13-class module is out of scope
+      is required, STOP and re-plan: decomposing this 610-line, 16-class module is out of scope
       here and has no execution or verification step, and a budget raise is forbidden (Decision
       128 / 165, no authorizing Decision). Do NOT relocate the contract-derived property tests into
       this file; they belong in tests/test_decision_field_grammar.py.
@@ -360,13 +361,17 @@ verification_plan:
       assert "block_separator" in c, "block_separator absent";
       assert "field_grammar" in c, "field_grammar absent";
       af=str(c["amendment_forms"]); assert "> **" in af and "[Amendment" in af, af;
+      pr=c["field_grammar"]["projection_residue"]; assert pr["row_count"]==11, pr;
+      assert sorted(pr["rows"])==[60,62,68,71,74,87,89,103,105,116,122], pr;
       n=c["shared_parser_note"];
       assert "_extract_related_decisions" in n and "terminator" in n, n; print("PASS")'
     expected: "Prints PASS; exit 0."
     fix_if: >-
       A failure means an execution step was skipped -- add the missing surface rather than relaxing
       the assertion. amendment_forms must describe the general blockquote-annotation rule plus the
-      "[Amendment " form; a closed list of spellings is what left rows 60/62/68/71 corrupted.
+      "[Amendment " form; a closed list of spellings is what left rows 60/62/68/71 corrupted. A
+      projection_residue mismatch means the contract records a stale row count -- the count was
+      wrong (5) in four earlier drafts, which is exactly why this assertion exists.
     hermetic: true
     graduation: graduate
     graduation_check_id: decision-entry-contract-surfaces-present
@@ -392,7 +397,7 @@ verification_plan:
       After the squash-merge Resolves trailer fires rec-autoclose, confirm all three bundled recs
       are closed in the warehouse projection.
     command: >-
-      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c 'import json, pathlib;
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c 'import json, pathlib;
       rows=[json.loads(l) for l in pathlib.Path("logs/.recommendations-log.jsonl").read_text().splitlines() if l.strip()];
       s={r["id"]:r.get("status") for r in rows};
       bad={k:s.get(k) for k in ("rec-2971","rec-2990","rec-2991") if s.get(k)!="closed"};
@@ -504,7 +509,7 @@ context:
     were wrong -- validate_decision_entry_conformance and validate_supersession_annotations are
     FULL-tier only (confirmed absent from pre_sequence), so VP step 10's expected and VP step 8's
     waiver reason were corrected; (3) the rollback note over-claimed -- Decision 146's own
-    content_hash DOES change, so dec-146 re-projects even though the five related_decisions rows do
+    content_hash DOES change, so dec-146 re-projects even though the eleven related_decisions rows do
     not. Round-1's four measured-baseline claims were independently re-derived by the critic and
     matched exactly, id-for-id.
   - >-
@@ -525,7 +530,7 @@ context:
     Decision-131 non-application (Decision 154 precedent): the new module's subject is the
     CONTRACT's declared grammar rather than the source module's unit behavior.
   - >-
-    Scout SPIRIT flag on Decision 55 was ACCEPTED. The five corrected related_decisions rows will
+    Scout SPIRIT flag on Decision 55 was ACCEPTED. The eleven corrected related_decisions rows will
     NOT re-project into ops_decisions: the backfill is content-hash gated on sha256(raw_block), and
     a parser fix does not change the markdown. This is a fidelity lag, not a source-of-truth
     inversion -- Decision 84's ratified premise is that ops_decisions is recreatable from
@@ -580,7 +585,7 @@ context:
     validate_supersession_annotations._EDGE_RE with the contract's stated continuation grammar --
     it is a third, whole-block grammar that still reads only the first citation; (ii) remove the
     block_separator grandfathering and retro-standardise the 21 non-conforming entries; (iii)
-    record the five-row ops_decisions related_decisions projection residue for the Decision 134
+    record the eleven-row ops_decisions related_decisions projection residue for the Decision 134
     clause 5(b) content-parity gate; (iv) correct the stale size_governance values in
     decision-entry.yaml -- it declares live_max_h2_headers 120 / combined_max_bytes 700000 while
     validate_decisions_size.py reads 132 / 780000 (raised by PR #863). The contract self-declares
@@ -610,8 +615,11 @@ execution_steps:
     difference between the prose and typed-id-list sets (citing Decision 151 clause 3(ii) for why
     the prose set omits the amendment openers). Include a known_divergent_grammars entry naming
     validate_supersession_annotations._EDGE_RE as a third, deliberately-unaligned whole-block
-    grammar, and a projection-residue note recording the five related_decisions rows that will not
-    re-project into ops_decisions.
+    grammar, and a projection-residue note recording the ELEVEN related_decisions rows that will
+    not re-project into ops_decisions. Record it machine-readably as
+    field_grammar.projection_residue with row_count: 11 and rows: [60, 62, 68, 71, 74, 87, 89, 103,
+    105, 116, 122], so Decision 134 clause 5(b)'s future content-parity gate inherits the exact set
+    rather than prose -- VP step 12 asserts both.
   - >-
     docs/contracts/decision-entry.yaml -- restate amendment_forms as a GENERAL form plus
     non-exhaustive examples, not a closed list. The general rule is "a blockquote-bold annotation
@@ -679,7 +687,7 @@ rollback: >-
   Every change is additive or a pure regex/contract edit on a read path; no warehouse write, no
   infrastructure, no deploy. Reverting the commit restores the prior extractor behavior and index
   content exactly. The one corpus edit (Decision 146's trailer) is an append-only annotation that
-  reverts cleanly with it. Projection nuance: the FIVE corrected related_decisions rows never reach
+  reverts cleanly with it. Projection nuance: the ELEVEN corrected related_decisions rows never reach
   ops_decisions in either direction (content-hash gating leaves them unchanged), and Decision 160's
   amends value lives only in the regenerated index file -- but Decision 146 is the exception, since
   its trailer changes its own raw_block and therefore its content_hash, so dec-146 WILL re-project
