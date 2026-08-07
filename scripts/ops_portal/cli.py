@@ -1,11 +1,21 @@
 # complexity-waiver: decision-43
 """Argparse CLI for the ops data portal.
 
-Owner-concern: the argparse surface only. Every flag, argument group, error string, and
-exit code is byte-identical to the pre-decomposition monolith (the Single Portal CLI
-contract). Cross-module verb calls use FUNCTION-LOCAL imports from scripts.ops_data_portal
-(the facade) INSIDE main() -- a module-level import here would bind at load time and
-defeat facade patches for CLI-driven tests.
+Owner-concern: the argparse surface only. Cross-module verb calls use FUNCTION-LOCAL
+imports from scripts.ops_data_portal (the facade) INSIDE main() -- a module-level import
+here would bind at load time and defeat facade patches for CLI-driven tests.
+
+Write-fidelity contract (Decision 66/163, ops-portal-write-fidelity): an advertised flag
+either reaches the write it names or the CLI loud-fails before any write boundary is
+called -- it is never silently accepted and dropped. The sole exception is the
+formula-derived field group (risk on --file-rec), which is accepted advisorily because
+_derive_computed_fields always overwrites it (Decision 66 Tier B places its value under
+the portal's control, not the caller's). --dry-run is honoured only for
+--purge-postmortems-for, the only action that implements it, and loud-fails for every
+other action. --update-rec threads every genuinely mutable field via a module-level
+dest-to-field map and loud-fails the flags that are not updatable via that path
+(_UPDATE_REC_REJECTIONS below), so every dest registered on the two rec argument groups
+is classified by exactly one of the two tables.
 """
 
 from __future__ import annotations
@@ -19,26 +29,47 @@ from typing import Optional
 import yaml
 from pydantic import ValidationError
 
+# --update-rec fields that thread straight into the update_rec() payload. Keys are
+# argparse dests; values are the corresponding update_rec() field names.
+_UPDATE_REC_FIELD_MAP: dict[str, str] = {
+    "status": "status",
+    "resolution": "resolution",
+    "execution_result": "execution_result",
+    "execution_date": "execution_date",
+    "execution_branch": "execution_branch",
+    "execution_pr_url": "execution_pr_url",
+    "rec_context": "context",
+    "title": "title",
+    "acceptance": "acceptance",
+    "priority": "priority",
+    "tags": "tags",
+    "dependencies": "dependencies",
+    "verification": "verification",
+    "verification_tier": "verification_tier",
+}
 
-def main(argv: Optional[list[str]] = None) -> int:
-    """CLI entrypoint for the ops data portal."""
-    from scripts.ops_data_portal import (
-        _CI_RCA_BACK_VALIDATE_DEFAULT_SINCE,
-        _print_ci_rca_back_validation_report,
-        back_validate_ci_rca,
-        backfill_decisions_from_md,
-        bump_ci_rca_occurrence,
-        enqueue_findings,
-        file_decision,
-        file_rec,
-        find_open_ci_rca_rec_by_fingerprint,
-        purge_postmortems_for,
-        selftest_read,
-        selftest_roundtrip,
-        sync,
-        update_decision,
-        update_rec,
-    )
+_DERIVED_FIELD_REASON = (
+    "not updatable via the CLI pending re-derivation (config/agent/data_quality/ops.yaml: "
+    "derived, never agent-set -- see follow-on rec-3047)"
+)
+
+# --update-rec flags that must loud-fail rather than silently thread or drop. Keys are
+# argparse dests; values are (flag name for the error message, rejection reason).
+_UPDATE_REC_REJECTIONS: dict[str, tuple[str, str]] = {
+    "target_file": ("--file", _DERIVED_FIELD_REASON),
+    "effort": ("--effort", _DERIVED_FIELD_REASON),
+    "risk": ("--risk", _DERIVED_FIELD_REASON),
+    "source": ("--source", "not updatable via the CLI -- filing provenance, immutable once the rec is filed"),
+    "context_v2_json": (
+        "--context-v2-json",
+        "not updatable via the CLI -- update_rec has no context_v2_json parameter",
+    ),
+}
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the argparse parser. Behaviour-preserving extraction from main()."""
+    from scripts.ops_data_portal import _CI_RCA_BACK_VALIDATE_DEFAULT_SINCE  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(
         description="Unified gateway for filing and updating recommendations and decisions.",
@@ -172,10 +203,40 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="DECISIONS.md-assigned integer number (numbering authority is DECISIONS.md, Decision 84)",
     )
 
+    return parser
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """CLI entrypoint for the ops data portal."""
+    from scripts.ops_data_portal import (
+        _print_ci_rca_back_validation_report,
+        back_validate_ci_rca,
+        backfill_decisions_from_md,
+        bump_ci_rca_occurrence,
+        enqueue_findings,
+        file_decision,
+        file_rec,
+        find_open_ci_rca_rec_by_fingerprint,
+        purge_postmortems_for,
+        selftest_read,
+        selftest_roundtrip,
+        sync,
+        update_decision,
+        update_rec,
+    )
+
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
+    if args.dry_run and not args.purge_postmortems_for:
+        print(
+            "ERROR: --dry-run is supported only with --purge-postmortems-for; every other action writes for real",
+            file=sys.stderr,
+        )
+        return 1
+
     if args.file_rec:
-        required = ["title", "target_file", "rec_context", "acceptance", "effort", "priority", "source", "risk"]
+        required = ["title", "target_file", "rec_context", "acceptance", "effort", "priority", "source"]
         missing = [r for r in required if not getattr(args, r, None)]
         if missing:
             print(f"ERROR: --file-rec requires: {', '.join(missing)}", file=sys.stderr)
@@ -188,9 +249,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             "effort": args.effort,
             "priority": args.priority,
             "source": args.source,
-            "risk": args.risk,
             "status": "open",
         }
+        if args.risk is not None:
+            fields["risk"] = args.risk
         if args.tags is not None:
             fields["tags"] = args.tags
         if args.dependencies is not None:
@@ -233,19 +295,24 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 1
 
     if args.update_rec:
-        updates: dict = {}
-        for field in ["status", "execution_result", "execution_date", "execution_branch", "execution_pr_url", "resolution"]:
-            val = getattr(args, field, None)
-            if val is not None:
-                updates[field] = val
-        if args.rec_context is not None:
-            updates["context"] = args.rec_context
+        rejected_flags = [
+            (flag, reason) for dest, (flag, reason) in _UPDATE_REC_REJECTIONS.items() if getattr(args, dest, None) is not None
+        ]
+        if rejected_flags:
+            for flag, reason in rejected_flags:
+                print(f"ERROR: {flag} is {reason}", file=sys.stderr)
+            return 1
+        updates: dict = {
+            field: getattr(args, dest)
+            for dest, field in _UPDATE_REC_FIELD_MAP.items()
+            if getattr(args, dest, None) is not None
+        }
         if not updates:
             print("ERROR: --update-rec requires at least one update field (e.g. --status)", file=sys.stderr)
             return 1
         try:
             update_rec(args.update_rec, updates, profile=args.profile)
-            print(f"Updated {args.update_rec}")
+            print(f"Updated {args.update_rec}: {', '.join(sorted(updates))}")
             return 0
         except (ValidationError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
