@@ -76,8 +76,10 @@ acceptance_criteria:
     with the persisted risk value identical in both cases because it is always formula-derived.
   - >-
     Every argparse dest registered in the --file-rec fields and --update-rec fields groups is
-    classified by exactly one of the threaded map, the rejection table, or the declared
-    file-rec-only set -- so a future flag cannot silently become the next ignored flag.
+    classified by exactly one of the threaded map or the rejection table -- so a future flag cannot
+    silently become the next ignored flag. Measured this session: those two groups carry 19 dests
+    total, and the planned threaded map (14) plus rejection table (5) covers all 19 with no overlap
+    and none unclassified, so the test should assert exact partition, not mere containment.
   - >-
     The scripts/ops_portal/cli.py module docstring no longer asserts byte-identical parity with the
     pre-decomposition monolith.
@@ -90,7 +92,7 @@ test_obligations:
     behavior: >-
       --dry-run must never be silently ignored: it is honoured only for --purge-postmortems-for and
       loud-fails without writing for every other action.
-    test_selector: tests/ops_data_portal/test_cli.py
+    test_selector: tests/ops_data_portal/test_cli.py::TestCLI::test_cli_dry_run_rejected_for_file_rec
     verification_step: 1
     red_green_expectation: >-
       Red before: with an otherwise-complete argument set, --dry-run --file-rec exits 0 and calls the
@@ -99,7 +101,7 @@ test_obligations:
     behavior: >-
       --update-rec threads every advertised mutable field into the write payload, and loud-fails the
       five non-mutable flags instead of silently discarding them.
-    test_selector: tests/ops_data_portal/test_cli.py
+    test_selector: tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_threads_title_acceptance_priority_verification
     verification_step: 2
     red_green_expectation: >-
       Red before: --update-rec rec-042 --status closed --title NEW exits 0 with a write payload whose
@@ -109,25 +111,36 @@ test_obligations:
   - source: scripts/ops_portal/cli.py
     behavior: >-
       --file-rec accepts a filing without --risk, and never treats a supplied --risk as authoritative.
-    test_selector: tests/ops_data_portal/test_cli.py
+    test_selector: tests/ops_data_portal/test_cli.py::TestCLI::test_cli_file_rec_risk_optional_omitted
     verification_step: 3
     red_green_expectation: >-
       Red before: --file-rec without --risk exits 1 on the required-field check. Green after: exits 0
       with the formula-derived risk persisted. Note the with---risk case is a backward-compatibility
       guard, NOT a discriminating test -- it passes identically before and after.
+  - source: scripts/ops_portal/cli.py
+    behavior: >-
+      Every flag registered in the two rec argument groups is classified as either threaded or
+      rejected, so a newly added flag cannot silently become the next ignored one.
+    test_selector: tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_flag_dest_classification_is_exhaustive
+    verification_step: 2
+    red_green_expectation: >-
+      Red before: neither classification table exists, so the test cannot import them and errors on
+      collection. Green after: the 19 registered dests partition exactly into the 14-entry threaded map
+      and the 5-entry rejection table.
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
       Prove --dry-run can no longer convert an intended preview into a real write, and that the one
       action which implements it still previews.
-    command: bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -k dry_run -q
+    command: bin/venv-python -m pytest "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_dry_run_rejected_for_file_rec" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_dry_run_rejected_for_update_rec" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_dry_run_still_previews_for_purge_postmortems" -q
     expected: >-
-      Exits 0. Each rejection test supplies an OTHERWISE-COMPLETE, OTHERWISE-SUCCEEDING argument set
-      (a full valid --file-rec; --update-rec with --status closed and _fetch_rec_from_reader patched),
-      asserts exit 1, asserts the patched _ducklake_write was NOT called, and asserts stderr contains
-      the literal string "--dry-run". The purge test asserts --dry-run --purge-postmortems-for still
-      exits 0.
+      Exits 0 with exactly 3 tests passed. Explicit node ids, never a -k selector, so a missing test is
+      a collection error rather than a vacuous pass. Each rejection test supplies an
+      OTHERWISE-COMPLETE, OTHERWISE-SUCCEEDING argument set (a full valid --file-rec; --update-rec with
+      --status closed and _fetch_rec_from_reader patched), asserts exit 1, asserts the patched
+      _ducklake_write was NOT called, and asserts stderr contains the literal string "--dry-run". The
+      purge test asserts --dry-run --purge-postmortems-for still exits 0.
     fix_if: >-
       If a rejection test passes against unfixed code, the argument set is incomplete and the test is
       measuring pre-existing argument validation instead of the guard -- see the discriminating-test
@@ -142,19 +155,23 @@ verification_plan:
       Prove --update-rec threads every advertised mutable field into the payload actually handed to
       update_rec, loud-fails the non-mutable ones without writing, and that no registered flag is
       left unclassified.
-    command: bin/venv-python -m pytest tests/ops_data_portal/test_cli.py -k update_rec -q
+    command: bin/venv-python -m pytest "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_threads_title_acceptance_priority_verification" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_rejects_file_flag" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_rejects_effort_flag" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_rejects_risk_flag" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_rejects_source_flag" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_rejects_context_v2_json_flag" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_success_message_names_applied_fields" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_flag_dest_classification_is_exhaustive" -q
     expected: >-
-      Exits 0. Threading tests assert the merged record passed to the patched _ducklake_write carries
-      the new title/acceptance/priority/verification values. Each of the five rejection tests pairs the
-      rejected flag WITH a valid mutable flag (--status closed), asserts exit 1, asserts _ducklake_write
-      NOT called, and asserts stderr names the rejected flag. The exhaustive-classification test
-      introspects _build_parser() and asserts every dest in the two rec argument groups is in exactly
-      one classification set.
+      Exits 0 with exactly 8 tests passed. Explicit node ids are MANDATORY here: the selector
+      "-k update_rec" already matches the two pre-existing tests test_cli_update_rec_success and
+      test_cli_update_rec_context, so it exits 0 today with zero new tests written -- measured this
+      session as "2 passed, 4 deselected". Threading tests assert the merged record passed to the
+      patched _ducklake_write carries the new title/acceptance/priority/verification values, and the
+      success-message test asserts the printed line names exactly the applied fields. Each of the five
+      rejection tests pairs the rejected flag WITH a valid mutable flag (--status closed), asserts exit
+      1, asserts _ducklake_write NOT called, and asserts stderr names the rejected flag. The
+      exhaustive-classification test introspects _build_parser() and asserts every dest in the two rec
+      argument groups is in exactly one classification set.
     fix_if: >-
       If a threaded field is absent from the write payload, the dest-to-field map is missing its
       argparse dest -- note --file maps to dest target_file and --context maps to dest rec_context. If
       a rejection test passes against unfixed code, it was written without the paired --status closed
-      and is vacuous.
+      and is vacuous. If this step is ever reduced back to a -k selector, it stops verifying anything.
     hermetic: true
     graduation: graduate
     graduation_check_id: portal-cli-update-rec-field-fidelity
@@ -163,13 +180,21 @@ verification_plan:
     action: >-
       Prove --file-rec no longer demands a value it discards, and that supplying it remains
       backward compatible (rec-2826).
-    command: bin/venv-python -m pytest tests/ops_data_portal -k risk_optional -q
+    command: bin/venv-python -m pytest "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_file_rec_risk_optional_omitted" "tests/ops_data_portal/test_cli.py::TestCLI::test_cli_file_rec_risk_optional_supplied_is_backward_compatible" -q
     expected: >-
-      Exits 0. --file-rec without --risk returns 0 and the persisted record carries the formula-derived
-      risk; --file-rec with an explicit --risk returns 0 and persists the same derived value.
+      Exits 0 with exactly 2 tests passed. The omitted-risk test is the discriminating one: it exits 1
+      on the required-field check today and 0 after the fix. The supplied-risk test is a
+      backward-compatibility guard that passes identically before and after, and the two tests assert
+      the SAME persisted risk value as each other.
     fix_if: >-
-      If the record persists the caller-supplied risk instead of the derived one, risk was left in the
-      literal fields dict unconditionally -- make it conditional so _derive_computed_fields owns it.
+      Do NOT assert a hardcoded literal risk value. compute_risk shells out to radon and reads
+      coverage.xml, so the derived value is environment-dependent and a literal assertion will be
+      flaky. Compare the two runs' persisted risk against each other, or against a direct
+      compute_risk(file, effort) call. Note also that the persisted value cannot differ from the
+      derived one either before or after this change, because _derive_computed_fields overwrites risk
+      unconditionally whenever file and effort are present and both are required on --file-rec; the
+      conditional-assignment edit removes a misleading required argument, it does not change persisted
+      output.
     hermetic: true
     graduation: graduate
     graduation_check_id: portal-cli-file-rec-risk-optional
@@ -237,12 +262,17 @@ verification_plan:
     action: >-
       Verify the closure obligation: the three bundled recs closed via the merge trailer, and the three
       human-confirmed duplicates closed against rec-2866.
-    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib;rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];latest={};[latest.__setitem__(r.get('id'),r) for r in rows];[print(i, latest.get(i,{}).get('status')) for i in ['rec-2945','rec-2866','rec-2826','rec-3034','rec-2808','rec-2972']]"
-    expected: All six ids print status closed.
+    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib,sys;rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];latest={};[latest.__setitem__(r.get('id'),r) for r in rows];[print(i, latest.get(i,{}).get('status')) for i in ['rec-2945','rec-2866','rec-2826','rec-3034','rec-2808','rec-2972']];bad=[i for i in ['rec-2945','rec-2866','rec-2826','rec-3034','rec-2808','rec-2972'] if latest.get(i,{}).get('status')!='closed'];res=latest.get('rec-2866',{}).get('resolution') or '';print('rec-2866 resolution:',res);sys.exit(1 if bad or 'follow-on' not in res.lower() else 0)"
+    expected: >-
+      All six ids print status closed, and rec-2866's resolution contains the partial-delivery note
+      naming the follow-on rec id. Exits non-zero if any id is not closed or the resolution was never
+      overwritten.
     fix_if: >-
       If a bundled rec is still open after roughly five minutes, rec-autoclose did not fire -- close it
       with the AGENTS.md fallback command. If a duplicate is still open, its human-confirmed close
-      command was not run in the duplicate-closure execution step.
+      command was not run. If rec-2866 is closed but its resolution is the generic autoclose string,
+      the partial-delivery overwrite step did not run -- rec-autoclose.yml line 103 hardcodes its own
+      resolution text for every id in the trailer, so the overwrite is a separate, mandatory step.
 constraints:
   - >-
     DISCRIMINATING-TEST CONSTRAINT (the single most important correctness requirement here). Asserting
@@ -279,6 +309,15 @@ constraints:
     The _build_parser() extraction must be behaviour-preserving: keep the cross-module verb imports
     function-local inside main() as the existing module docstring requires, and note that
     _build_parser needs its own function-local import for the --since default.
+  - >-
+    The exhaustive-classification test must reach argparse's private _action_groups / _group_actions
+    to enumerate the two rec argument groups. This works and is intentional -- argparse exposes no
+    public accessor for per-group actions, so do not spend time hunting for one.
+  - >-
+    tests/ops_data_portal/test_cli.py is 148 lines today and is unregistered in
+    config/sloc_budgets.yaml. Decision 130 brought tests/ under SLOC governance, and roughly a dozen
+    new tests plausibly land it near 400 lines. That is under the 500 default, but if it crosses,
+    decompose into a sibling module (Decision 128) rather than registering a budget raise.
   - No rescue agents or workaround loops (Decision 55).
   - >-
     All recommendation writes transit the ops portal (Decision 84 Single Portal Invariant). Never edit
@@ -340,6 +379,30 @@ context:
     cannot meet without breaching scope invites exactly the workaround behaviour Decision 55 forbids,
     so the floor is now 56% and the Missing-column clause carries the real weight.
   - >-
+    Critique round 2 B1 (blocking, resolved) -- the round-1 fix hardened the test BODIES but left the
+    SELECTORS vacuous, which is the same defect class one level up. Measured: "pytest
+    tests/ops_data_portal/test_cli.py -k update_rec" exits 0 today with "2 passed, 4 deselected",
+    because the selector already matches the pre-existing test_cli_update_rec_success and
+    test_cli_update_rec_context. All three pytest VP steps now use explicit ::TestCLI::test_name node
+    ids, which also fixes the plan-implement-registry linkage the graduate steps need, since
+    TestSelectorCheck is node-id based rather than -k based.
+  - >-
+    Critique round 2 B2 (blocking, resolved) -- .github/workflows/rec-autoclose.yml line 103 hardcodes
+    its own resolution string and applies it to every id in the Resolves trailer, so the trailer
+    structurally cannot carry rec-2866's partial-delivery note. The overwrite is now its own post-merge
+    execution step and VP step 7 asserts the resolution text, not merely the closed status.
+  - >-
+    Critique round 2 B3 (blocking, resolved) -- the follow-on rec was filed at the second-to-last
+    execution step, yet its allocated id was needed by rejection-reason strings written near the start,
+    which would have required editing already-merged code. The filing moved to execution step 1.
+  - >-
+    Critique round 2 S1 (adopted) -- compute_risk shells out to radon and reads coverage.xml, so the
+    derived risk value is environment-dependent and a test asserting a hardcoded literal would be
+    flaky. VP step 3 now requires comparing the two runs against each other. The same finding notes
+    that the conditional-assignment edit cannot change persisted output, since
+    _derive_computed_fields overwrites risk unconditionally; its value is removing a misleading
+    required argument, not changing what is stored.
+  - >-
     Critique R6 (should-fix, adopted) -- the first draft fixed three enumerated flags but left the
     mechanism that produced them intact, so a fourth flag added tomorrow would silently become the next
     ignored one. The _build_parser() extraction plus the exhaustive-classification test closes the
@@ -379,6 +442,16 @@ pre_implementation_checklist:
     The discriminating-test constraint has been read and understood BEFORE any test is written --
     a rejection test that omits the paired valid flag is vacuous and will pass against the bug.
 execution_steps:
+  - >-
+    FIRST, before any cli.py edit, file the follow-on recommendation the human requested be kept
+    separate, via get_rec_write_guidance then file_rec: propose that update_rec in
+    scripts/ops_data_portal.py call _derive_computed_fields on the merged record whenever file or
+    effort changes, so that --file and --effort can graduate from loud-fail to mutable without
+    stranding risk and automatable. Note in its context that the defect is reachable today through the
+    Python surface even after this plan lands. Target file scripts/ops_data_portal.py, source planning,
+    and reference this plan and Decision 65. This step is FIRST because the allocated rec id is needed
+    by the rejection-reason strings written in a later step -- filing it afterwards would require
+    editing already-merged code.
   - >-
     scripts/ops_portal/cli.py -- extract the argparse construction from main() into a module-level
     _build_parser() that returns the configured parser, keeping the cross-module verb imports
@@ -436,18 +509,16 @@ execution_steps:
     --status closed --resolution "Duplicate of rec-2866; --title now updatable via
     ops-portal-write-fidelity".
   - >-
-    File the follow-on recommendation the human requested be kept separate, via get_rec_write_guidance
-    then file_rec: propose that update_rec in scripts/ops_data_portal.py call _derive_computed_fields on
-    the merged record whenever file or effort changes, so that --file and --effort can graduate from
-    loud-fail to mutable without stranding risk and automatable. Note in its context that the defect is
-    reachable today through the Python surface even after this plan lands. Target file
-    scripts/ops_data_portal.py, source planning, and reference this plan and Decision 65. Capture the
-    allocated rec id and use it in the rejection-reason strings.
-  - >-
     Include the trailer "Resolves: rec-2945, rec-2866, rec-2826" in the squash-merge commit body so
-    rec-autoclose closes the bundled recs. rec-2866's closure must record partial delivery: its ask
-    included threading --file, which this plan rejects instead, so name the follow-on rec id in its
-    resolution (Decision 103 closure-proof).
+    rec-autoclose closes the bundled recs.
+  - >-
+    After rec-autoclose has fired, overwrite rec-2866's resolution to record partial delivery:
+    --update-rec rec-2866 --resolution "Partially delivered by ops-portal-write-fidelity: --title and
+    --acceptance now thread on --update-rec, but the requested --file threading is deliberately
+    rejected pending derived-field re-derivation -- see follow-on rec-NNNN". This is a SEPARATE
+    mandatory step because .github/workflows/rec-autoclose.yml line 103 hardcodes its own resolution
+    string for every id in the trailer, so the trailer cannot carry this text (Decision 103
+    closure-proof).
   - 'Report: what was implemented, verification results'
 work_areas: []
 rollback: >-
