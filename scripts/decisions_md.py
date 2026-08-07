@@ -214,16 +214,37 @@ _extract_superseded_by = extract_superseded_by
 # keyword). CFG-06 widened the comma and "and" continuations to accept BOTH the bare-number and
 # repeated-Decision-token spellings (dec-160's real title, "amends Decision 145, Decision 134
 # clause 2, and Decision 146", mixes both in one title) -- the repeated "Decision(s)" token is
-# always optional, never required, on either continuation. Any other following text -- a
-# semicolon, a different relation word ("mirrors", "extends", "builds on"), an ordinal like "2nd
-# amendment" -- is not a valid continuation and silently ends the scan for that anchor
-# occurrence.
+# always optional, never required, on either continuation.
+#
+# A repeated "Decision(s)" token is unambiguous evidence on its own. A BARE number is weaker
+# evidence, so CFG-06's post-merge follow-up (code-review finding, confirmed false-positive:
+# "amends Decision 116 and 2027 planning cycle" wrongly added 2027) requires the bare-number
+# branch of the comma/and continuations to be followed by a citation-list-safe boundary
+# (_BARE_NUMBER_BOUNDARY_RE: closing punctuation, another "and", or a recognized qualifier) --
+# NOT by open-ended prose. The repeated-token branch carries no such requirement. Any other
+# following text -- a semicolon with no recognized qualifier, a different relation word
+# ("mirrors", "extends", "builds on"), an ordinal like "2nd amendment", or (for a bare number)
+# unrecognized trailing prose -- is not a valid continuation and silently ends the scan for that
+# anchor occurrence.
 _TITLE_RELATION_SEED_RE = re.compile(r"\s+Decisions?\s+(\d+)\b", re.IGNORECASE)
 _TITLE_RELATION_QUALIFIER_RE = re.compile(r"\s*(?:point\s+\d+|cl\.\s*\d+|clause\s+\d+|(?!and\b)[A-Za-z]+)", re.IGNORECASE)
-_TITLE_RELATION_AND_RE = re.compile(r"\s*,?\s*and\s+(?:Decisions?\s+)?(\d+)\b", re.IGNORECASE)
+_BARE_NUMBER_BOUNDARY_RE = r"(?=[),;]|\s+(?:and\b|point\s+\d+|cl\.\s*\d+|clause\s+\d+)|\Z)"
+_TITLE_RELATION_AND_RE = re.compile(
+    r"\s*,?\s*and\s+(Decisions?\s+)?(\d+)\b(?(1)|" + _BARE_NUMBER_BOUNDARY_RE + r")", re.IGNORECASE
+)
 _TITLE_RELATION_PLUS_RE = re.compile(r"\s*\+\s*Decisions?\s+(\d+)\b", re.IGNORECASE)
-_TITLE_RELATION_COMMA_RE = re.compile(r"\s*,\s*(?:Decisions?\s+)?(\d+)\b", re.IGNORECASE)
+_TITLE_RELATION_COMMA_RE = re.compile(r"\s*,\s*(Decisions?\s+)?(\d+)\b(?(1)|" + _BARE_NUMBER_BOUNDARY_RE + r")", re.IGNORECASE)
 _TITLE_RELATION_SLASH_RE = re.compile(r"\s*/\s*(\d+)\b")
+
+# (pattern, capture-group-index-for-the-number) in match-priority order -- AND_RE/COMMA_RE carry
+# two groups (optional "Decisions?" prefix, then the digits) so their digits are group 2;
+# PLUS_RE/SLASH_RE carry a single digits-only group.
+_TITLE_RELATION_CONTINUATIONS: tuple[tuple[re.Pattern[str], int], ...] = (
+    (_TITLE_RELATION_AND_RE, 2),
+    (_TITLE_RELATION_PLUS_RE, 1),
+    (_TITLE_RELATION_COMMA_RE, 2),
+    (_TITLE_RELATION_SLASH_RE, 1),
+)
 
 
 def _extract_title_relation_targets(raw_title: str, relation_word: str) -> list[int]:
@@ -254,15 +275,16 @@ def _extract_title_relation_targets(raw_title: str, relation_word: str) -> list[
         while True:
             qual_m = _TITLE_RELATION_QUALIFIER_RE.match(raw_title, pos)
             qual_end = qual_m.end() if qual_m else pos
-            cont_m = (
-                _TITLE_RELATION_AND_RE.match(raw_title, qual_end)
-                or _TITLE_RELATION_PLUS_RE.match(raw_title, qual_end)
-                or _TITLE_RELATION_COMMA_RE.match(raw_title, qual_end)
-                or _TITLE_RELATION_SLASH_RE.match(raw_title, qual_end)
-            )
+            cont_m = None
+            group_idx = 1
+            for pattern, idx in _TITLE_RELATION_CONTINUATIONS:
+                cont_m = pattern.match(raw_title, qual_end)
+                if cont_m:
+                    group_idx = idx
+                    break
             if not cont_m:
                 break
-            _add(int(cont_m.group(1)))
+            _add(int(cont_m.group(group_idx)))
             pos = cont_m.end()
 
     return targets

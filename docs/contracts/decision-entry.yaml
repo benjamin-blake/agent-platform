@@ -81,6 +81,7 @@ amendment_forms:
   # prefix); the remaining entries are additional OBSERVED spellings recorded for illustration
   # only, never individually enforced.
   - form: general_rule
+    example: "> **...:** ... (any blockquote-bold-prefixed line; see illustrative entries below)"
     description: >-
       A blockquote-bold annotation line ("> **...:**") terminates a typed id-list field (e.g.
       Related). The one NON-blockquote form, a trailing bracketed "[Amendment DATE: ...]"
@@ -195,6 +196,12 @@ field_grammar:
       - example: "amends Decision 122 and 116"
         expected: [122, 116]
         reason: "'and' continuation also accepts a bare number (CFG-06 widening)."
+      - example: "amends Decision 116 and 117 clause 2"
+        expected: [116, 117]
+        reason: >-
+          a bare-number continuation followed by a recognized qualifier (clause N / point N /
+          cl.N) stays admitted -- the CFG-06 follow-up boundary only excludes open-ended prose,
+          not the existing qualifier grammar.
     rejected_forms:
       - example: "amends Decision 104, mirrors Decision 132"
         expected: [104]
@@ -210,6 +217,24 @@ field_grammar:
       - example: "amends CD.28 clause 3"
         expected: []
         reason: "CD.28 is not 'Decision N' -- the seed regex requires an immediately-adjacent Decision(s) N token."
+      - example: "amends Decision 116 and 2027 planning cycle"
+        expected: [116]
+        reason: >-
+          CFG-06 FOLLOW-UP (post-merge code-review finding): a bare-number 'and' continuation
+          followed by open-ended prose ('planning cycle', not a recognized qualifier or
+          terminator) is REJECTED -- 2027 is incidental prose, not a citation. A repeated
+          'Decision' token needs no such boundary (it is unambiguous on its own); only the
+          bare-number branch of the comma/and continuations requires
+          _BARE_NUMBER_BOUNDARY_RE (closing punctuation, another 'and', or a point/cl./clause
+          qualifier) immediately afterward. Before this fix, extract_amends_edges wrongly
+          returned [116, 2027] here -- exactly the silent warehouse-column corruption this
+          contract exists to prevent.
+      - example: "amends Decision 116, 2027 planning cycle"
+        expected: [116]
+        reason: >-
+          the identical false-positive shape for the comma continuation (pre-existing before
+          CFG-06, closed by the same _BARE_NUMBER_BOUNDARY_RE fix for consistency -- both
+          continuations share one grammar and one risk class).
   prose_terminator:
     used_by:
       - _extract_by_marker_pattern
@@ -245,6 +270,20 @@ field_grammar:
         reason: >-
           a following bold marker (not an amendment_forms opener) already terminates via the
           shared prose_terminator set -- not a case the widened terminator changes.
+      - example: "**Related:** Decision 60 (see the blockquote '> style' convention).\n\n---"
+        expected: [60]
+        reason: >-
+          a bare '>' character inline in prose is NOT the blockquote opener -- the terminator
+          requires the exact '\n> **' prefix (a '>' at the start of a line immediately followed
+          by a bold marker), so this near-miss text does not truncate the Related capture. This
+          exercises the boundary of the "[Amendment " / "\n> **" openers this PR actually added
+          (code-review follow-up).
+      - example: "**Related:** Decision 60 (informal note: [not an amendment here]).\n\n---"
+        expected: [60]
+        reason: >-
+          '[not an amendment' does not match the exact '\n[Amendment ' opener (different text,
+          and not at the start of a line) -- the near-miss bracket text does not truncate the
+          Related capture.
   projection_residue:
     # Decision 134 clause 5(b) forward-note (Decision 55 spirit-flag, accepted during CFG-06
     # planning): recorded machine-readably here, not only in plan prose, so a future
