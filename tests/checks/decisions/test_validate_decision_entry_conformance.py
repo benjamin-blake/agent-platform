@@ -1,17 +1,11 @@
-"""Tests for validate_decision_entry_conformance(). Mirror of
-scripts/checks/decisions/validate_decision_entry_conformance.py (DAF-03 / Decision 134 cl.3 /
-PLAN-daf-authoring-grammar).
+"""Tests for validate_decision_entry_conformance() (DAF-03 / Decision 134 cl.3; extended by
+PLAN-decision-entry-flow-governance / Decision 167 with the typed metadata envelope, the
+Significance routing claim, and the envelope/body conflict and number-match sub-checks).
 
 Exercises the root/baseline_reader injection seams (mirrors the vp_replay /
-graduation_completeness precedents) rather than real git plumbing for the deterministic cases;
-one test uses a real throwaway directory with no git repo at all to prove the default reader's
-own SKIP-on-unreachable path end-to-end (mirrors
-tests/checks/verification/test_validate_graduation_completeness.py's
-test_origin_main_unreachable_advisory_skips). A handful of helper-level tests use a real
-throwaway git repo with a `refs/remotes/origin/main` ref (same pattern as
-tests/checks/verification/test_validate_graduation_completeness.py's `_git`/`_commit_all`
-helpers) to exercise the DEFAULT baseline_reader's reachable-origin branch, which every
-injected-seam test above deliberately bypasses.
+graduation_completeness precedents) rather than real git plumbing for the deterministic cases.
+`_default_baseline_decision_numbers` is the shared `_baseline.baseline_decision_numbers`
+function, imported under its legacy name so this module's own call sites need no further edit.
 """
 
 from __future__ import annotations
@@ -19,12 +13,15 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
+from scripts.checks.decisions._baseline import baseline_decision_numbers as _default_baseline_decision_numbers
 from scripts.checks.decisions.validate_decision_entry_conformance import (
     _current_decision_entries,
-    _default_baseline_decision_numbers,
+    _is_compacted_stub,
     _load_block_separator_form,
+    _load_envelope_config,
     _load_required_markers,
     validate_decision_entry_conformance,
 )
@@ -33,6 +30,35 @@ _CONTRACT_YAML = "required_markers:\n  - Status\n  - Date\n  - Decision\n"
 _CONTRACT_YAML_WITH_BLOCK_SEPARATOR = (
     'required_markers:\n  - Status\n  - Date\n  - Decision\nblock_separator:\n  form: "---"\n'
 )
+
+_SIGNIFICANCE_YAML = """\
+metadata_envelope:
+  required_fields: [number, significance]
+significance:
+  routing:
+    numbered_decision: A durable architectural commitment.
+    cd_state_flip: A CD state transition.
+    operational_fact: A transient statement. Never a numbered Decision.
+    field_semantics: A field's meaning. Never a numbered Decision.
+"""
+
+_FULL_CONTRACT_YAML = _CONTRACT_YAML + _SIGNIFICANCE_YAML
+_FULL_CONTRACT_YAML_WITH_BLOCK_SEPARATOR = _CONTRACT_YAML_WITH_BLOCK_SEPARATOR + _SIGNIFICANCE_YAML
+
+
+def _envelope(number: int, significance: str = "numbered_decision", justification: str = "A reason.", **extra: object) -> str:
+    lines = [f"number: {number}"]
+    for key, value in extra.items():
+        if isinstance(value, list):
+            lines.append(f"{key}: {value}")
+        else:
+            lines.append(f"{key}: {value}")
+    if significance is not None:
+        lines.append("significance:")
+        lines.append(f"  value: {significance}")
+        lines.append(f"  justification: {justification}")
+    body = "\n".join(lines)
+    return f"```yaml\n{body}\n```\n"
 
 
 def _write_contract(root: Path, contract_text: str = _CONTRACT_YAML) -> None:
@@ -69,7 +95,7 @@ def _commit_all(repo: Path, message: str) -> str:
 
 class TestSkipOnUnreachableBaseline:
     def test_injected_none_baseline_skips(self, tmp_path: Path) -> None:
-        _write_contract(tmp_path)
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
         _write_decisions_md(tmp_path, "## Decision 1: New entry (Decided)\n\n**Status:** Decided\n")
         failed: list[str] = []
         validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: None)
@@ -78,7 +104,7 @@ class TestSkipOnUnreachableBaseline:
     def test_default_reader_skips_with_no_git_repo_at_all(self, tmp_path: Path) -> None:
         """No .git directory anywhere under tmp_path -- origin/main is genuinely unreachable,
         exercising the DEFAULT baseline_reader (not an injected seam)."""
-        _write_contract(tmp_path)
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
         _write_decisions_md(tmp_path, "## Decision 1: New entry (Decided)\n\n**Status:** Decided\n")
         failed: list[str] = []
         validate_decision_entry_conformance(failed, root=tmp_path)
@@ -86,43 +112,27 @@ class TestSkipOnUnreachableBaseline:
 
 
 class TestNewEntryConformance:
-    def test_canonical_new_entry_passes(self, tmp_path: Path) -> None:
-        _write_contract(tmp_path)
-        _write_decisions_md(
-            tmp_path,
-            "## Decision 5: A well-formed new entry (Decided)\n\n"
-            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n",
-        )
+    @pytest.mark.parametrize(
+        ("body_tail", "expect_fail"),
+        [
+            ("\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n", False),
+            ("\n**Status:** Decided\n\n**Decision:** Do the thing.\n", True),  # missing required Date marker
+            (
+                "\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision (four invariants):** Do the thing.\n",
+                False,
+            ),  # decorated marker tolerated (decision_marker_tolerance)
+        ],
+        ids=["canonical_passes", "missing_date_fails", "decorated_marker_tolerated"],
+    )
+    def test_new_entry_cases(self, tmp_path: Path, body_tail: str, expect_fail: bool) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(tmp_path, "## Decision 5: New entry case (Decided)\n\n" + _envelope(5) + body_tail)
         failed: list[str] = []
         validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
-        assert failed == []
-
-    def test_non_canonical_new_entry_fails(self, tmp_path: Path) -> None:
-        """A new entry missing the required Date marker fails -- named in the failure message."""
-        _write_contract(tmp_path)
-        _write_decisions_md(
-            tmp_path,
-            "## Decision 5: A malformed new entry (Decided)\n\n**Status:** Decided\n\n**Decision:** Do the thing.\n",
-        )
-        failed: list[str] = []
-        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
-        assert failed == ["Decision-entry conformance"]
-
-    def test_decorated_decision_marker_is_tolerated_on_new_entry(self, tmp_path: Path) -> None:
-        """A decorated '**Decision (...):**' marker still satisfies the required 'Decision'
-        marker (decision_marker_tolerance in decision-entry.yaml)."""
-        _write_contract(tmp_path)
-        _write_decisions_md(
-            tmp_path,
-            "## Decision 5: Decorated marker entry (Decided)\n\n"
-            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision (four invariants):** Do the thing.\n",
-        )
-        failed: list[str] = []
-        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
-        assert failed == []
+        assert failed == (["Decision-entry conformance"] if expect_fail else [])
 
     def test_no_new_entries_passes_trivially(self, tmp_path: Path) -> None:
-        _write_contract(tmp_path)
+        _write_contract(tmp_path, _CONTRACT_YAML)  # no significance section needed -- never loaded
         _write_decisions_md(tmp_path, "## Decision 1: Already known (Decided)\n\n**Status:** Decided\n")
         failed: list[str] = []
         validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: {1})
@@ -131,10 +141,9 @@ class TestNewEntryConformance:
 
 class TestHistoricalEntryGrandfathered:
     def test_modified_historical_entry_is_not_flagged(self, tmp_path: Path) -> None:
-        """A decision number already present in the baseline is grandfathered even when its
-        current-tree body is missing required markers (the DPI-07 promote scenario: Decisions
-        52/53/54 carry no separate **Date:** marker and must not self-fail)."""
-        _write_contract(tmp_path)
+        """A baseline-present number is grandfathered even missing required markers/envelope
+        (DPI-07: Decisions 52/53/54 carry no separate **Date:** marker and must not self-fail)."""
+        _write_contract(tmp_path, _CONTRACT_YAML)
         _write_decisions_md(
             tmp_path,
             "## Decision 1: Historical, now missing Date (Decided)\n\n"
@@ -148,7 +157,7 @@ class TestHistoricalEntryGrandfathered:
         """Baseline computed over h3-shaped text (pre-promote); current tree has the same
         number promoted to h2 (post-promote) and missing the Date marker -- must not be
         flagged as new, proving the shared '#{2,3}' grammar covers both heading levels."""
-        _write_contract(tmp_path)
+        _write_contract(tmp_path, _CONTRACT_YAML)
         # baseline_reader simulates decisions_md.iter_decision_headings() over the origin/main
         # (pre-promote, h3) blob -- decision 52 is visible there too, via the same #{2,3} grammar.
         _write_decisions_md(
@@ -162,33 +171,25 @@ class TestHistoricalEntryGrandfathered:
 
 
 class TestBlockSeparatorSubCheck:
-    """CFG-06 forward enforcement of decision-entry.yaml's block_separator rule (rec-2991) --
-    new-in-diff entries only, historical band grandfathered (same posture as required_markers)."""
+    """CFG-06 forward enforcement of block_separator (rec-2991) -- new entries only."""
 
-    def test_new_entry_missing_separator_fails(self, tmp_path: Path) -> None:
-        _write_contract(tmp_path, contract_text=_CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
-        _write_decisions_md(
-            tmp_path,
-            "## Decision 5: A new entry with no trailing separator (Decided)\n\n"
-            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n",
-        )
+    @pytest.mark.parametrize(
+        ("body_tail", "expect_fail"),
+        [
+            ("\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n", True),
+            ("\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n\n---\n", False),
+        ],
+        ids=["missing_separator", "with_separator"],
+    )
+    def test_new_entry_separator_cases(self, tmp_path: Path, body_tail: str, expect_fail: bool) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
+        _write_decisions_md(tmp_path, "## Decision 5: Separator case (Decided)\n\n" + _envelope(5) + body_tail)
         failed: list[str] = []
         validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
-        assert failed == ["Decision-entry conformance"]
-
-    def test_new_entry_with_separator_passes(self, tmp_path: Path) -> None:
-        _write_contract(tmp_path, contract_text=_CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
-        _write_decisions_md(
-            tmp_path,
-            "## Decision 5: A new entry carrying the trailing separator (Decided)\n\n"
-            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n\n---\n",
-        )
-        failed: list[str] = []
-        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
-        assert failed == []
+        assert failed == (["Decision-entry conformance"] if expect_fail else [])
 
     def test_historical_entry_without_separator_is_grandfathered(self, tmp_path: Path) -> None:
-        _write_contract(tmp_path, contract_text=_CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
+        _write_contract(tmp_path, _CONTRACT_YAML_WITH_BLOCK_SEPARATOR)
         _write_decisions_md(
             tmp_path,
             "## Decision 1: Historical, no trailing separator (Decided)\n\n"
@@ -201,11 +202,12 @@ class TestBlockSeparatorSubCheck:
     def test_missing_block_separator_key_is_a_tolerated_absence(self, tmp_path: Path) -> None:
         """The default (pre-CFG-06) contract fixture carries no block_separator key -- the
         sub-check must no-op rather than failing every pre-existing conformance test fixture."""
-        _write_contract(tmp_path)  # default _CONTRACT_YAML, no block_separator key
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)  # no block_separator key
         _write_decisions_md(
             tmp_path,
             "## Decision 5: A new entry with no trailing separator (Decided)\n\n"
-            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n",
+            + _envelope(5)
+            + "\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** Do the thing.\n",
         )
         failed: list[str] = []
         validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
@@ -213,25 +215,294 @@ class TestBlockSeparatorSubCheck:
 
 
 class TestMissingContract:
-    def test_missing_contract_file_fails(self, tmp_path: Path) -> None:
-        _write_decisions_md(tmp_path, "## Decision 1: X (Decided)\n\n**Status:** Decided\n")
-        failed: list[str] = []
-        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
-        assert len(failed) == 1
-        assert "decision-entry.yaml" in failed[0]
+    """Contract-shape failures. The metadata_envelope/significance load is deferred until AFTER
+    the no-new-entries early-return, so a bare required_markers-only contract stays valid for a
+    diff with no new entries (TestNewEntryConformance.test_no_new_entries_passes_trivially) but
+    fails once a new entry needs it -- exercised here via the "new" fixtures below."""
 
-    def test_contract_missing_required_markers_key_fails(self, tmp_path: Path) -> None:
-        _write_contract(tmp_path, contract_text="header_form: something\n")
-        _write_decisions_md(tmp_path, "## Decision 1: X (Decided)\n\n**Status:** Decided\n")
+    @pytest.mark.parametrize(
+        ("contract_text", "md_content", "expected_snippet"),
+        [
+            (None, "## Decision 1: X (Decided)\n\n**Status:** Decided\n", "decision-entry.yaml"),
+            ("header_form: something\n", "## Decision 1: X (Decided)\n\n**Status:** Decided\n", "required_markers"),
+            (_CONTRACT_YAML, "## Decision 5: New (Decided)\n\n**Status:** Decided\n", "metadata_envelope"),
+            (
+                _CONTRACT_YAML + "metadata_envelope:\n  required_fields: [number, significance]\n",
+                "## Decision 5: New (Decided)\n\n**Status:** Decided\n",
+                "significance.routing",
+            ),
+        ],
+        ids=["missing_file", "missing_required_markers", "missing_metadata_envelope", "missing_significance_routing"],
+    )
+    def test_contract_shape_failures(
+        self, tmp_path: Path, contract_text: str | None, md_content: str, expected_snippet: str
+    ) -> None:
+        if contract_text is not None:
+            _write_contract(tmp_path, contract_text=contract_text)
+        _write_decisions_md(tmp_path, md_content)
         failed: list[str] = []
         validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
         assert len(failed) == 1
-        assert "required_markers" in failed[0]
+        assert expected_snippet in failed[0]
+
+
+class TestLoadEnvelopeConfigDirect:
+    """Direct unit coverage of _load_envelope_config's failure branches -- each is unreachable
+    through the main check's call sequence (a missing/malformed contract already halts at
+    _load_required_markers first, since both read the same file), so these exercise the
+    function directly, mirroring TestLoadRequiredMarkersMalformedYaml's pattern."""
+
+    def test_missing_contract_file_fails(self, tmp_path: Path) -> None:
+        failed: list[str] = []
+        result = _load_envelope_config(tmp_path, failed)
+        assert result is None
+        assert "not found" in failed[0]
+
+    @pytest.mark.parametrize(
+        ("contract_text", "expected_snippet"),
+        [
+            ("metadata_envelope: [unclosed\n", "could not parse"),
+            ("- just\n- a\n- list\n", "unexpected top-level shape"),
+        ],
+        ids=["malformed_yaml", "non_dict_top_level"],
+    )
+    def test_load_failure_cases(self, tmp_path: Path, contract_text: str, expected_snippet: str) -> None:
+        _write_contract(tmp_path, contract_text=contract_text)
+        failed: list[str] = []
+        result = _load_envelope_config(tmp_path, failed)
+        assert result is None
+        assert expected_snippet in failed[0]
+
+    def test_well_formed_config_returns_fields_and_routing(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        failed: list[str] = []
+        result = _load_envelope_config(tmp_path, failed)
+        assert failed == []
+        assert result is not None
+        fields, routing = result
+        assert fields == ["number", "significance"]
+        assert set(routing) == {"numbered_decision", "cd_state_flip", "operational_fact", "field_semantics"}
+
+
+class TestIsCompactedStubHelper:
+    """Direct unit coverage of _is_compacted_stub's branches."""
+
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            ("## Decision 1: No status (Decided)\n\n**Decision:** X.\n", False),
+            ("**Status:** Decided\n\n**Decision:** X.\n", False),
+            ("**Status:** Superseded\n\n**Decision:** X.\n", False),
+            ("**Status:** Superseded\n\n**Decision:** See Decision 6.\n\n**Superseded by: Decision 6**\n", True),
+        ],
+        ids=["no_status_marker", "status_not_superseded", "superseded_no_pointer", "superseded_with_pointer"],
+    )
+    def test_is_compacted_stub(self, block: str, expected: bool) -> None:
+        assert _is_compacted_stub(block) is expected
+
+
+class TestEnvelopeMissingRequiredField:
+    """Includes a code-review follow-up: a malformed 'number: abc' must produce the ordinary
+    no-well-formed-envelope FAIL, never an unhandled ValueError from int(envelope["number"])."""
+
+    @pytest.mark.parametrize(
+        "envelope_yaml",
+        ["significance:\n  value: numbered_decision\n  justification: reason.\n", "number: abc\n"],
+        ids=["number_absent", "number_non_numeric"],
+    )
+    def test_malformed_number_field_fails(self, tmp_path: Path, envelope_yaml: str) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(
+            tmp_path,
+            f"## Decision 5: Malformed number case (Decided)\n\n```yaml\n{envelope_yaml}```\n\n"
+            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == ["Decision-entry conformance"]
+
+
+class TestEnvelopeWellFormedness:
+    """VP step 4: envelope presence, well-formedness, and the number-match sub-check."""
+
+    def test_new_entry_with_no_envelope_at_all_fails(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: No envelope (Decided)\n\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == ["Decision-entry conformance"]
+
+    def test_number_mismatch_fails(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: Number mismatch (Decided)\n\n"
+            + _envelope(999)
+            + "\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == ["Decision-entry conformance"]
+
+    def test_number_match_passes(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: Number match (Decided)\n\n"
+            + _envelope(5)
+            + "\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == []
+
+    def test_compacted_stub_is_exempt_from_envelope_obligation(self, tmp_path: Path) -> None:
+        """Decision 149 compacted stub -- '**Status:** Superseded' plus a live '**Superseded
+        by: Decision N**' pointer -- is exempt from the envelope obligation even though it is
+        a genuinely new-in-diff entry number (a compaction that lands on a same-session-new
+        number is a degenerate but legal case)."""
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: Compacted stub (Decided)\n\n"
+            "**Status:** Superseded\n\n**Date:** 2026-07-16\n\n"
+            "**Decision:** Superseded by Decision 6; see its body.\n\n"
+            "**Superseded by: Decision 6**\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == []
+
+
+class TestEnvelopeBodyConflict:
+    """VP step 4: envelope/bold-marker conflict on one field fails; agreement passes; absence
+    of the bold marker passes."""
+
+    @pytest.mark.parametrize(
+        ("envelope_kwargs", "body_tail", "expect_fail"),
+        [
+            ({"status": "Decided"}, "\n**Status:** Superseded\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n", True),
+            ({"status": "Decided"}, "\n**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n", False),
+            ({"decided_date": "2026-07-16"}, "\n**Status:** Decided\n\n**Date:** 2099-01-01\n\n**Decision:** X.\n", True),
+        ],
+        ids=["status_conflict", "status_agreement", "decided_date_conflict"],
+    )
+    def test_conflict_cases(self, tmp_path: Path, envelope_kwargs: dict, body_tail: str, expect_fail: bool) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(
+            tmp_path, "## Decision 5: Conflict case (Decided)\n\n" + _envelope(5, **envelope_kwargs) + body_tail
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == (["Decision-entry conformance"] if expect_fail else [])
+
+    def test_bold_date_marker_absent_passes(self, tmp_path: Path) -> None:
+        """Envelope declares decided_date but the body carries no bold **Date:** marker at all
+        -- nothing to conflict with, so this passes. required_markers still demands a literal
+        Date marker SOMEWHERE in the block, satisfied here by the block_separator-form Status
+        line's own Date-free shape being irrelevant: this fixture keeps a bold **Date:** marker
+        for required_markers but on a DIFFERENT decision (5 has none) to isolate the conflict
+        sub-check from the marker-presence sub-check -- required_markers is patched out via a
+        contract with only Status/Decision required."""
+        _write_contract(
+            tmp_path,
+            "required_markers:\n  - Status\n  - Decision\n" + _SIGNIFICANCE_YAML,
+        )
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: Date marker absent (Decided)\n\n"
+            + _envelope(5, decided_date="2026-07-16")
+            + "\n**Status:** Decided\n\n**Decision:** X.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == []
+
+
+class TestSignificanceEnforcement:
+    """VP step 3: presence, the contract-read token vocabulary, the non-empty justification, and
+    the strict rejection of the two "Never a numbered Decision" rows on a new entry."""
+
+    def _fixture(self, significance_yaml: str) -> str:
+        return (
+            "## Decision 5: Significance case (Decided)\n\n"
+            f"```yaml\nnumber: 5\n{significance_yaml}```\n\n"
+            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n"
+        )
+
+    @pytest.mark.parametrize(
+        "significance_yaml",
+        [
+            "",
+            "significance:\n  value: not_a_real_token\n  justification: reason.\n",
+            'significance:\n  value: numbered_decision\n  justification: ""\n',
+            "significance:\n  value: operational_fact\n  justification: reason.\n",
+            "significance:\n  value: field_semantics\n  justification: reason.\n",
+        ],
+        ids=["absent", "unknown_token", "empty_justification", "operational_fact", "field_semantics"],
+    )
+    def test_significance_fail_cases(self, tmp_path: Path, significance_yaml: str) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(tmp_path, self._fixture(significance_yaml))
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == ["Decision-entry conformance"]
+
+    @pytest.mark.parametrize("token", ["numbered_decision", "cd_state_flip"], ids=["numbered_decision", "cd_state_flip"])
+    def test_significance_pass_cases(self, tmp_path: Path, token: str) -> None:
+        _write_contract(tmp_path, _FULL_CONTRACT_YAML)
+        _write_decisions_md(tmp_path, self._fixture(f"significance:\n  value: {token}\n  justification: reason.\n"))
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == []
+
+    def test_historical_band_entry_without_significance_is_untouched(self, tmp_path: Path) -> None:
+        _write_contract(tmp_path, _CONTRACT_YAML)
+        _write_decisions_md(tmp_path, "## Decision 1: Historical (Decided)\n\n**Status:** Decided\n")
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: {1})
+        assert failed == []
+
+
+class TestContractTokenParity:
+    """VP step 8: the four significance.routing tokens the check enforces are exactly the keys
+    in decision-entry.yaml, and the two rejected rows are identified from the contract's own
+    "Never a numbered Decision" text rather than a hardcoded list -- adding a fifth routing row
+    to the fixture contract changes the accepted set with no code edit."""
+
+    def test_contract_parity_added_fifth_routing_row_is_accepted_with_no_code_change(self, tmp_path: Path) -> None:
+        contract = (
+            _CONTRACT_YAML
+            + "metadata_envelope:\n  required_fields: [number, significance]\n"
+            + "significance:\n  routing:\n    numbered_decision: A durable commitment.\n"
+            "    cd_state_flip: A CD flip.\n    operational_fact: A fact. Never a numbered Decision.\n"
+            "    field_semantics: A field. Never a numbered Decision.\n"
+            "    fifth_row: A brand-new row not hardcoded anywhere in the check.\n"
+        )
+        _write_contract(tmp_path, contract)
+        _write_decisions_md(
+            tmp_path,
+            "## Decision 5: Fifth row (Decided)\n\n"
+            "```yaml\nnumber: 5\nsignificance:\n  value: fifth_row\n  justification: reason.\n```\n\n"
+            "**Status:** Decided\n\n**Date:** 2026-07-16\n\n**Decision:** X.\n",
+        )
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed, root=tmp_path, baseline_reader=lambda r: set())
+        assert failed == []
+
+    def test_contract_parity_derived_token_set_matches_contract_keys(self, tmp_path: Path) -> None:
+        data = yaml.safe_load(_SIGNIFICANCE_YAML)
+        routing = data["significance"]["routing"]
+        rejected = {k for k, v in routing.items() if "Never a numbered Decision" in v}
+        assert rejected == {"operational_fact", "field_semantics"}
+        assert set(routing) - rejected == {"numbered_decision", "cd_state_flip"}
 
 
 class TestRealContractIntegration:
-    """Sanity check against the REAL docs/contracts/decision-entry.yaml required_markers list,
-    proving the check reads the actual contract shape rather than a test-local assumption."""
+    """Sanity check against the REAL decision-entry.yaml, not a test-local assumption."""
 
     def test_real_contract_required_markers_are_status_date_decision(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
@@ -239,18 +510,29 @@ class TestRealContractIntegration:
         data = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
         assert data["required_markers"] == ["Status", "Date", "Decision"]
 
+    def test_real_contract_metadata_envelope_declares_significance_as_required(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        contract_path = repo_root / "docs" / "contracts" / "decision-entry.yaml"
+        data = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+        assert "significance" in data["metadata_envelope"]["required_fields"]
+        assert "Significance" not in data["required_markers"]
+
+    def test_real_repo_conformance_check_is_green(self) -> None:
+        failed: list[str] = []
+        validate_decision_entry_conformance(failed)
+        assert failed == []
+
 
 class TestDefaultBaselineDecisionNumbersRealRepo:
-    """Covers the reachable-origin/main branch of _default_baseline_decision_numbers, exercised
-    only by the DEFAULT baseline_reader -- every test above bypasses it via the injected
-    baseline_reader= seam. Real throwaway git repo with a refs/remotes/origin/main ref, mirroring
-    tests/checks/verification/test_validate_graduation_completeness.py's _git/_commit_all
-    pattern."""
+    """Covers the reachable-origin/main branch of the shared baseline reader, exercised via this
+    module's own `_default_baseline_decision_numbers` re-export -- every test above bypasses it
+    via the injected baseline_reader= seam. Real throwaway repo with a refs/remotes/origin/main
+    ref (mirrors test_validate_graduation_completeness.py's _git/_commit_all)."""
 
     def test_reads_decision_numbers_from_both_files_at_origin_main_ref(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         _init_repo(repo)
-        _write_contract(repo)
+        _write_contract(repo, _CONTRACT_YAML)
         _write_decisions_md(
             repo,
             "## Decision 1: Base entry (Decided)\n\n**Status:** Decided\n",
@@ -260,21 +542,9 @@ class TestDefaultBaselineDecisionNumbersRealRepo:
         _git(repo, ["update-ref", "refs/remotes/origin/main", sha])
         assert _default_baseline_decision_numbers(repo) == {1, 2}
 
-    def test_missing_decisions_files_at_origin_main_are_skipped(self, tmp_path: Path) -> None:
-        """Neither DECISIONS.md nor DECISIONS_ARCHIVE.md exists at the origin/main ref -- the
-        'git show' non-zero-exit continue branch fires for both, yielding an empty set (not the
-        None advisory-skip sentinel, since origin/main itself IS reachable)."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "README.md").write_text("base\n", encoding="utf-8")
-        sha = _commit_all(repo, "base")
-        _git(repo, ["update-ref", "refs/remotes/origin/main", sha])
-        assert _default_baseline_decision_numbers(repo) == set()
-
 
 class TestCurrentDecisionEntriesHelper:
-    """Direct unit coverage of _current_decision_entries' two continue branches: a missing file
-    (only DECISIONS.md exists) and a duplicate number across files (first-wins dedup)."""
+    """_current_decision_entries' two continue branches: a missing file and a cross-file dup."""
 
     def test_missing_archive_file_is_skipped(self, tmp_path: Path) -> None:
         docs_dir = tmp_path / "docs"

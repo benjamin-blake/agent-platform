@@ -6,6 +6,10 @@ raw_block/content_hash presence, plural-cite parsing + dedupe, per-file byte-rec
 coverage (with a synthetic sectioner-narrowing mutation proving the assertion is live, not
 vacuous), archive coverage, and dual schema-model field sync (DecisionPayload / jsonl_store.
 Decision both carry the four new fields as plain, non-Dq-Annotated optional strings).
+
+Moved verbatim from tests/test_decisions_md.py (PLAN-decision-entry-flow-governance, split into
+this package's test_parse.py / test_envelope.py per the scripts/test_coverage_checker.py
+concern-split remap -- no assertion here is weakened or dropped in the move).
 """
 
 from __future__ import annotations
@@ -562,7 +566,8 @@ class TestParseDecisionsMdMissingFile:
 class TestParseDecisionsMdDuplicateDedup:
     """The first-wins dedup at the `if decision_id in seen: continue` site (DPI-06) now emits a
     stderr WARNING naming the dropped decision number -- behavior-preserving: the returned parse
-    result and the byte-reconstruction invariant are unchanged."""
+    result and the byte-reconstruction invariant are unchanged.
+    """
 
     def test_duplicate_number_emits_stderr_warning_and_keeps_first_entry(self, tmp_path: Path, capsys) -> None:
         path = tmp_path / "DECISIONS.md"

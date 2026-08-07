@@ -30,6 +30,16 @@ structurally rather than enumerated. Surfaces two INDEX-ONLY parse_decisions_md 
 "amends" and "title_supersedes", consumed solely by scripts/decisions_index.py -- neither key
 is added to _DECISION_BACKFILL_COLS, DecisionPayload, or config/agent/data_quality (Decision
 84 warehouse-safety boundary, mirrors the intent key's index-vs-warehouse separation).
+
+Decision-entry flow governance (PLAN-decision-entry-flow-governance, Decision 167): adds
+extract_entry_envelope(), a public reader for the optional typed metadata envelope -- a fenced
+```yaml block immediately after a '## Decision N:' heading (docs/contracts/decision-entry.yaml
+metadata_envelope). parse_decisions_md() prefers envelope values for status / decided_date /
+amends / title_supersedes over the legacy bold-marker/title grammar, which remains the fallback
+for every entry with no envelope (forward-only; the historical band is untouched, since none of
+it carries one). Surfaces a new `significance` row key (the envelope's routing claim dict, or {}
+when absent) -- INDEX-ONLY like amends/title_supersedes: never added to _DECISION_BACKFILL_COLS,
+DecisionPayload, or the warehouse projection (Decision 166 point 9).
 """
 
 from __future__ import annotations
@@ -41,6 +51,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -357,7 +369,7 @@ def iter_decision_sections(content: str) -> list[tuple[re.Match[str], str]]:
     not including) the start of the next heading, or through end-of-file for the last one.
     Concatenating a file's preamble (the text before its first heading) with every raw_block
     here, in order, byte-reconstructs the source file exactly -- the invariant the
-    byte-reconstruction coverage test in tests/test_decisions_md.py asserts.
+    byte-reconstruction coverage test in tests/decisions_md/test_parse.py asserts.
 
     Public per DAF-03 consolidation (PLAN-size-gov-marker-guard): the single shared
     section-block parser scripts/checks/_marker_guard.py's load_decision_bodies() consumes,
@@ -374,6 +386,58 @@ def iter_decision_sections(content: str) -> list[tuple[re.Match[str], str]]:
 # Private alias retained so existing internal callers (this module's own parse_decisions_md)
 # keep working unchanged.
 _iter_decision_sections = iter_decision_sections
+
+
+# Bare ```yaml fence, immediately (modulo the conventional blank line) after the heading line --
+# never `---` (overloaded as block_separator/field-terminator already) and never a decorated
+# info string like ```yaml reversal-conditions (Decision 133's monitored stanza, matched by
+# scripts/preflight/decision_conditions.py on that exact info string).
+_ENVELOPE_FENCE_RE = re.compile(r"\A#{2,3}\s+Decision\s+\d+:[^\n]*\n+```yaml\n(.*?)\n```", re.DOTALL)
+
+
+def _envelope_has_well_formed_shape(data: dict) -> bool:
+    """Type-check the handful of envelope fields every downstream consumer assumes a shape for
+    (parse_decisions_md's list()/str() coercions, the conformance check's int(number)) -- a
+    scalar where a list is expected (e.g. 'amends: 150' instead of 'amends: [150]') or a
+    non-numeric 'number' must not crash a shared-parser caller with a raw traceback; it is
+    exactly as malformed as unparseable YAML, so it is rejected at the same layer.
+    """
+    number = data.get("number")
+    if number is not None and not (isinstance(number, int) and not isinstance(number, bool)):
+        return False
+    for list_field in ("amends", "supersedes"):
+        value = data.get(list_field)
+        if value is not None and not (
+            isinstance(value, list) and all(isinstance(n, int) and not isinstance(n, bool) for n in value)
+        ):
+            return False
+    significance = data.get("significance")
+    if significance is not None and not isinstance(significance, dict):
+        return False
+    return True
+
+
+def extract_entry_envelope(block: str) -> Optional[dict]:
+    """Parse the typed metadata envelope from a heading-inclusive raw block, or None.
+
+    Returns None when no fenced ```yaml block immediately follows the heading, the fence's
+    content is not valid YAML, it does not parse to a mapping, or a known field carries the
+    wrong shape (_envelope_has_well_formed_shape) -- a malformed or absent envelope is treated
+    identically here (silently absent), so a broken envelope never crashes a corpus-wide parse
+    or a downstream consumer's own type-shaped access; scripts.checks.decisions.
+    validate_decision_entry_conformance is the layer that turns "no well-formed envelope on a
+    new entry" into a FAIL.
+    """
+    m = _ENVELOPE_FENCE_RE.match(block)
+    if not m:
+        return None
+    try:
+        data = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict) or not _envelope_has_well_formed_shape(data):
+        return None
+    return data
 
 
 def parse_decisions_md(paths: Optional[list[Path]] = None) -> list[dict]:
@@ -400,12 +464,16 @@ def parse_decisions_md(paths: Optional[list[Path]] = None) -> list[dict]:
             raw_title = m.group(2).strip()
             title = re.sub(r"\s*\(.*?\)\s*$", "", raw_title).strip()
             body = full_block[m.end() - m.start() :]
-            status_m = re.search(r"\*\*Status:\*\*\s*(.+)", body)
-            if status_m:
-                status = status_m.group(1).strip().split("--")[0].strip()
+            envelope = extract_entry_envelope(full_block)
+            if envelope and envelope.get("status"):
+                status = str(envelope["status"]).strip()
             else:
-                paren_m = re.search(r"\(([^)]+)\)\s*$", raw_title)
-                status = paren_m.group(1).strip() if paren_m else ""
+                status_m = re.search(r"\*\*Status:\*\*\s*(.+)", body)
+                if status_m:
+                    status = status_m.group(1).strip().split("--")[0].strip()
+                else:
+                    paren_m = re.search(r"\(([^)]+)\)\s*$", raw_title)
+                    status = paren_m.group(1).strip() if paren_m else ""
             raw_block = full_block.strip()
             content_hash = hashlib.sha256(raw_block.encode("utf-8")).hexdigest()
             seen[decision_id] = {
@@ -416,12 +484,17 @@ def parse_decisions_md(paths: Optional[list[Path]] = None) -> list[dict]:
                 "intent": _extract_multiline_section(body, "Intent"),
                 "decision_text": _extract_decision_text(body),
                 "context": _extract_multiline_section(body, "Rationale", "Key details", "Context"),
-                "decided_date": _extract_decided_date(body),
+                "decided_date": str(envelope["decided_date"]).strip()
+                if envelope and envelope.get("decided_date")
+                else _extract_decided_date(body),
                 "related_decisions": _extract_related_decisions(body),
-                "reversal_conditions": _extract_multiline_section(body, "Reversal conditions", "Reversal condition"),
                 "superseded_by": _extract_superseded_by(body),
-                "amends": extract_amends_edges(raw_title),
-                "title_supersedes": _extract_title_borne_supersedes(raw_title),
+                "reversal_conditions": _extract_multiline_section(body, "Reversal conditions", "Reversal condition"),
+                "amends": list(envelope["amends"]) if envelope and envelope.get("amends") else extract_amends_edges(raw_title),
+                "title_supersedes": list(envelope["supersedes"])
+                if envelope and envelope.get("supersedes")
+                else _extract_title_borne_supersedes(raw_title),
+                "significance": envelope.get("significance", {}) if envelope else {},
                 "raw_block": raw_block,
                 "content_hash": content_hash,
                 "created_timestamp": now_iso,
