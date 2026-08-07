@@ -1,0 +1,970 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "decision-entry-flow-governance"
+intent: >-
+  Install the flow-side governance pair on NEW docs/DECISIONS.md entries -- a typed metadata
+  envelope, a required Significance routing-row claim, and a per-new-entry byte cap -- so the
+  decision corpus's size ceilings pace growth instead of scheduling their own raises, and so the
+  sole front-door control on corpus shape stops being self-certified with no record.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-decision-entry-flow-governance.yaml
+phase: >-
+  Migration step 2 of audits/contract-first-governance-33c8667.yaml (findings CFG-01, CFG-03,
+  CFG-07 plus the 2026-08-07 post-run adversarial-review amendments). Platform tier_item T2.56
+  (normative/contract/ADR layering) is the eventual owner of this corpus's shape; this plan closes
+  none of its exit criteria and declares no closes_criteria. Step 1 (PLAN-decision-ceiling-bridge,
+  PR #863) has landed; step 3 (destination readiness) owns this plan's WARN-to-hard-fail flip.
+scope:
+  - file: scripts/checks/decisions/_baseline.py
+    action: Create
+    purpose: >-
+      Single shared origin/main baseline reader (decision numbers present at origin/main, None as
+      the advisory-skip sentinel), memoized per root so the two --pre consumers share ONE git
+      invocation (Decision 153 fast-tier budget). Reachability MUST delegate to the existing
+      scripts.checks._common.origin_main_reachable (_common.py:229, already consumed by
+      validate_graduation_completeness / validate_vp_replay / validate_reconcile_pending_gate /
+      validate_fallback_reevaluation) -- validate_decision_entry_conformance's private
+      _origin_main_reachable duplicate (line 42) is DELETED, not relocated. Moving a duplicate
+      would perpetuate the second-implementation pattern Decision 134 clause 3 rejects.
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      Add envelope extraction (a fenced ```yaml block immediately following a '## Decision N:'
+      heading) and make parse_decisions_md read it FIRST for status / decided_date / amends /
+      title_supersedes, falling back to today's bold-marker and title-relation grammar when absent.
+      Surface a new `significance` row key. Public helper for the checks to reuse -- never a second
+      envelope parser (Decision 134 clause 3 shared-parser mandate).
+  - file: scripts/decisions_index.py
+    action: Modify
+    purpose: >-
+      Inherit envelope-sourced amends/supersedes/status/decided_date edges through the shared
+      parser rather than re-deriving them; record in the module docstring that `significance` is
+      deliberately NOT projected into docs/decisions-index.json (the 131,000-byte pin, Decision 166
+      point 9, and the index-only precedent set by intent/amends/title_supersedes).
+  - file: scripts/checks/decisions/validate_decision_entry_conformance.py
+    action: Modify
+    purpose: >-
+      Enforce on new-in-diff entries only: (i) a well-formed envelope is present; (ii) its
+      `significance` value names one of decision-entry.yaml's four significance.routing tokens plus
+      a non-empty one-line justification, and the two rows whose own contract text reads "Never a
+      numbered Decision" FAIL; (iii) an envelope field and its bold-marker twin must not carry
+      conflicting values; (iv) the envelope's `number` matches the heading number. Reads the token
+      vocabulary from the contract at check time, never a hardcoded copy.
+  - file: scripts/checks/decisions/validate_decisions_size.py
+    action: Modify
+    purpose: >-
+      Add a forward-only per-NEW-entry byte cap of 6,144 bytes (heading-to-next-heading UTF-8 span)
+      landing WARN-TIER -- it prints a named warning and MUST NOT append to `failed`. Historical
+      entries are never measured. Uses the shared baseline reader; on an unreachable origin/main the
+      per-entry cap advisory-skips while the two existing stock ceilings still run. NOTE this check
+      is registered UNGATED in pre_sequence() (registry.py:115), unlike the glob-gated conformance
+      check -- so gate the new per-entry path on the two DECISIONS files changing, or the baseline
+      git read fires on every --pre run in the repo rather than only DECISIONS-touching ones.
+  - file: scripts/checks/decisions/validate_supersession_annotations.py
+    action: Modify
+    purpose: >-
+      Union envelope-borne amends/supersedes edges into extract_supersession_edges so an
+      envelope-bearing entry cannot silently escape the annotation guard -- _EDGE_RE matches only
+      the textual "amends Decision N" prose form, which a typed envelope no longer emits.
+      Non-regression obligation, not a feature.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_decision_entry_conformance in the --pre tier, glob-gated on
+      docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md. Today it is full-tier only, so it fires
+      post-merge on main and never gates the PR -- CFG-03's stated acceptance ("fails --pre") is
+      not achievable without this.
+  - file: docs/contracts/decision-entry.yaml
+    action: Modify
+    purpose: >-
+      Add the metadata_envelope section (field list; info string pinned to BARE `yaml`, never
+      `yaml reversal-conditions`; placement immediately after the heading and before the
+      Problem/Intent/Decision marker order registry.yaml:3576 pins; forward-only scope;
+      compacted-stub exemption); add the audit's three-question routing rule with its
+      standing-commitment clause to the significance section, the routing rule under a
+      `routing_rule` key and the standing-commitment clause under a sibling `standing_commitment`
+      key (both machine-checkable at step 13 -- a prose-substring assertion would false-pass on the
+      existing "forward-standing" wording); declare the Significance obligation as
+      a `metadata_envelope.required_fields` entry -- NEVER by appending "Significance" to the
+      top-level `required_markers:` list, which must stay exactly [Status, Date, Decision]. The audit
+      f2 is explicit that the claim is carried in the envelope "not as a fifth bold marker", and
+      `_missing_markers` would otherwise demand a literal `**Significance:**` bold marker on every
+      new entry, breaking the existing required_markers pin in
+      tests/checks/decisions/test_validate_decision_entry_conformance.py:236. In size_governance:
+      FIRST correct the two stale values --
+      live_max_h2_headers 120 -> 132 and combined_max_bytes 700000 -> 780000, both stale against the
+      validator since PR #863 -- THEN add the lever-by-ceiling matrix and the per-entry cap under
+      the key `per_entry_size_norm` (rec-2934's acceptance grep). Building the matrix on top of two
+      stale cells would ship a wrong matrix. Field semantics only (Decision 86/127) -- no rationale
+      prose here.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add exactly ONE new entry, Decision 167, ratifying the whole ruling (envelope + required
+      Significance claim + cap value + routing-rule home). Authored under the 6,144-byte cap,
+      carrying its own envelope as the first exemplar, and carrying ruling / rationale / reversal
+      conditions / pointers only. ALSO append a dated `> **Amended by Decision 167 (2026-08-07):**`
+      annotation trailer to Decisions 150 and 160 -- required by validate_supersession_annotations,
+      whose _is_annotated needs the literal string "Decision 167" in each victim's block. This is
+      the contract's sanctioned amendment_forms dated append, NOT a body rewrite.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: Regenerate via `scripts.decisions_index --write` so the freshness check passes with the Decision 167 row.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Add "scripts/decisions_md.py" to _CONCERN_SPLIT_TEST_PACKAGES (13 existing members), remapping
+      it from the single file tests/test_decisions_md.py to the test PACKAGE tests/decisions_md/.
+      Without this, validate_test_coverage measures decisions_md.py by running ONLY
+      tests/test_decisions_md.py (no config/coverage_baseline.yaml entry, so the threshold is 100%),
+      and the new envelope code -- whose tests live elsewhere -- would drop it below 100% and fail
+      the full tier, breaking this plan's own handoff_policy.
+  - file: tests/test_decisions_md.py
+    action: Delete
+    purpose: >-
+      Moved into the tests/decisions_md/ concern-split package. Deleting rather than editing also
+      dissolves the 488/500 SLOC pressure that forced the separate-module design in the first place
+      -- the split across package members IS the Decision 128 decomposition.
+  - file: tests/decisions_md/test_parse.py
+    action: Create
+    purpose: >-
+      The existing tests/test_decisions_md.py content moved verbatim (including the
+      byte-reconstruction invariant), split so each package member stays under budget. No assertion
+      is weakened or dropped in the move.
+  - file: tests/decisions_md/test_envelope.py
+    action: Create
+    purpose: >-
+      Envelope precedence, fallback on the grandfathered band, byte-reconstruction preservation
+      under an envelope, and the bare-`yaml` info-string boundary against Decision 133's
+      ```yaml reversal-conditions form. Together with test_parse.py this package must give
+      scripts/decisions_md.py 100% per-file coverage, since it has no coverage_baseline entry.
+  - file: tests/test_decisions_index.py
+    action: Modify
+    purpose: >-
+      Envelope-sourced edges reach the index; `significance` is absent from the projection. Also
+      re-point its line-85 docstring reference to the retired tests/test_decisions_md.py at the new
+      package path (step 14's live-reference sweep).
+  - file: tests/checks/test__marker_guard.py
+    action: Modify
+    purpose: >-
+      Docstring-only edit: re-point the line-134 reference to the retired tests/test_decisions_md.py
+      at the new tests/decisions_md/ package path. In scope solely to satisfy step 14's
+      live-reference sweep; no assertion changes. 369 SLOC, ample headroom.
+  - file: tests/checks/decisions/test_validate_decision_entry_conformance.py
+    action: Modify
+    purpose: >-
+      Significance presence, the strict token rejection, envelope/body conflict, number mismatch,
+      historical-band grandfathering. ALSO update the relocation's call sites: this module imports
+      _default_baseline_decision_numbers from validate_decision_entry_conformance at line 26 and
+      exercises it at lines 261/272 plus the no-git-repo skip case. Moving the symbol without
+      re-pointing that import breaks module COLLECTION, so VP steps 3, 4 and 8 would all fail before
+      asserting anything.
+  - file: tests/checks/decisions/test_validate_decisions_size.py
+    action: Modify
+    purpose: Per-entry cap WARN-tier semantics -- over-cap new entry warns without failing; historical over-cap entries are silent.
+  - file: tests/checks/decisions/test_validate_supersession_annotations.py
+    action: Modify
+    purpose: Envelope-borne amends/supersedes edges are discovered by the annotation guard.
+  - file: tests/checks/decisions/test__baseline.py
+    action: Create
+    purpose: >-
+      Shared baseline reader -- reachable branch, unreachable-sentinel branch, and single-read
+      memoization per root. The DOUBLE underscore is mandatory, not a typo: map_source_to_test
+      prefixes `test_` onto the stem `_baseline`, so validate_test_coverage demands exactly
+      tests/checks/decisions/test__baseline.py (precedent: tests/checks/test__marker_guard.py,
+      tests/checks/structural/test__classify.py). _baseline.py has no config/coverage_baseline.yaml
+      entry, so this file alone must reach 100% per-file coverage of the module.
+  - file: tests/checks/decisions/test_conformance_registration.py
+    action: Create
+    purpose: >-
+      validate_decision_entry_conformance is present in pre_sequence() carrying
+      pre_globs=("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"), and resolves as a module-level
+      global in scripts/validate.py. A NEW module because tests/test_checks_registry.py is at
+      643/643 SLOC with ZERO headroom under a dec-159 raise-approved pin -- any added line fails
+      both validate_sloc_limits and validate_sloc_budget_raises in --pre. That file is deliberately
+      NOT in scope and must not be edited; do not raise its budget.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Add one row per `graduation: graduate` verification step (NINE rows -- steps 1, 3, 4, 5, 6, 7,
+      8, 10, 11; step 2 is waived as differentially inadmissible), keyed by the step's
+      graduation_check_id, per Decision 132 / T3.21's implement-PR obligation. Headroom is ample
+      (~4,426 of the 6,000 effective-line ceiling). Each row must name a SINGLE canonical primitive
+      that genuinely FAILS in an origin/main worktree -- for the multi-file pytest steps (1, 10, 11)
+      pin the test_selector node to a net-new module's node id, never the whole compound command
+      (CommandExitZeroCheck.command is a list[str] run without shell=True, so a `&&` chain cannot be
+      materialized at all).
+bundled_recommendations:
+  - rec-2934
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A genuinely-new decision entry lacking a well-formed metadata envelope fails
+    `validate --pre`; all 146 grandfathered entries still pass (119 live + 27 archive -- the
+    conformance check and the parser both read BOTH files).
+  - >-
+    docs/contracts/decision-entry.yaml's size_governance ceilings equal validate_decisions_size's
+    constants (132 / 780000), its significance section carries the three-question routing rule and
+    the standing-commitment clause, size_governance carries the lever-by-ceiling matrix and the
+    `per_entry_size_norm` key, and the top-level required_markers list is still exactly
+    [Status, Date, Decision].
+  - >-
+    rec-2934 is satisfied: `grep -q 'per_entry_size_norm' docs/contracts/decision-entry.yaml`
+    exits 0, and the squash-merge commit body carries `Resolves: rec-2934`.
+  - >-
+    A new entry whose envelope `significance` value is absent, is not one of decision-entry.yaml's
+    four significance.routing tokens, carries no one-line justification, or names `operational_fact`
+    or `field_semantics` fails `validate --pre` with a message quoting the row's own "Never a
+    numbered Decision" text and naming the correct destination.
+  - >-
+    A new entry whose envelope field conflicts with its bold-marker twin (e.g. envelope
+    `status: Decided` against `**Status:** Superseded`) fails; agreement or absence of either side
+    passes.
+  - >-
+    A new entry exceeding 6,144 bytes emits a named WARNING from validate_decisions_size and does
+    NOT append to `failed`; an existing entry over 6,144 bytes produces no output at all.
+  - >-
+    parse_decisions_md reads the envelope first and the bold-marker/title grammar as fallback:
+    for every decision number present at both origin/main and HEAD, every parsed field is
+    byte-identical to its origin/main value.
+  - >-
+    An envelope-bearing entry declaring `amends` or `supersedes` is visible to
+    validate_supersession_annotations' edge extraction (no silent escape of the annotation guard).
+  - >-
+    validate_decision_entry_conformance appears in the --pre sequence, glob-gated on the two
+    DECISIONS files, and is reachable via scripts/validate.py's facade re-export.
+  - >-
+    docs/contracts/decision-entry.yaml carries the metadata_envelope section, the three-question
+    routing rule with its standing-commitment clause, the lever-by-ceiling matrix, and the cap
+    value; the four routing tokens the conformance check enforces are read from it, not hardcoded.
+  - >-
+    Decision 167 exists, is under 6,144 bytes, carries its own envelope, and passes the new
+    conformance and cap checks it installs.
+  - >-
+    `bin/venv-python -m scripts.validate` (full tier) exits 0 on the complete tree.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Envelope precedence and fallback -- an entry whose envelope status/date/amends disagree with
+      its bold markers and title parenthetical parses to the ENVELOPE values; an entry with no
+      envelope parses to the bold-marker/title values unchanged.
+    command: bin/venv-python -m pytest tests/decisions_md/ -q
+    expected: >-
+      Every envelope precedence and fallback test in tests/decisions_md/test_envelope.py passes, and
+      every assertion moved from the old tests/test_decisions_md.py into
+      tests/decisions_md/test_parse.py (including the byte-reconstruction invariant) still passes.
+    fix_if: >-
+      A failure showing bold-marker values winning means the envelope read is layered after the
+      fallback instead of before it; a failure on a no-envelope fixture means the fallback path was
+      replaced rather than retained.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decisions-md-envelope-precedence
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Live-corpus non-regression -- parse every decision present at BOTH origin/main and HEAD under
+      the new parser and assert each parsed field is byte-identical to the same entry parsed from
+      the origin/main blob. This is the guard that the dual-grammar window changed nothing for the
+      119 grandfathered entries.
+    command: >-
+      bin/venv-python -c "import subprocess,sys,tempfile,pathlib; from scripts.decisions_md import
+      parse_decisions_md; d=pathlib.Path(tempfile.mkdtemp());
+      [(d/n).write_bytes(subprocess.run(['git','show',f'origin/main:docs/{n}'],capture_output=True).stdout)
+      for n in ('DECISIONS.md','DECISIONS_ARCHIVE.md')];
+      base={r['decision_id']:r for r in parse_decisions_md([d/'DECISIONS.md',d/'DECISIONS_ARCHIVE.md'])};
+      cur={r['decision_id']:r for r in parse_decisions_md()};
+      keys=[k for k in ('title','status','problem','intent','decision_text','context','decided_date','related_decisions','reversal_conditions','superseded_by','amends','title_supersedes')];
+      bad=[(n,k) for n in sorted(set(base)&set(cur)) for k in keys if base[n][k]!=cur[n][k]];
+      print('DRIFT:',bad) or sys.exit(1) if bad else print(f'OK: {len(set(base)&set(cur))} shared entries identical')"
+    expected: >-
+      Prints "OK: 146 shared entries identical" and exits 0, with no DRIFT line. 146 is the count
+      across BOTH files -- 119 live plus 27 archive, verified at planning time. Do NOT "fix" a 146
+      result down to 119 by dropping DECISIONS_ARCHIVE.md from the command; that would halve this
+      plan's strongest non-regression guard.
+    fix_if: >-
+      Any DRIFT tuple names an entry/field the envelope logic changed for the grandfathered band --
+      the envelope read must be strictly additive and must never fire on an entry with no envelope.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Structurally inadmissible as a graduated row, not merely inconvenient. Newly-added
+      verification_registry rows go through _run_added_entry_differentials, which materializes the
+      check_spec inside a REAL origin/main worktree (make_worktree_revert_runner) and requires it to
+      FAIL there. This step compares parse_decisions_md over an origin/main blob against
+      parse_decisions_md over the tree -- inside an origin/main worktree both sides are the same
+      corpus, so it PASSES and the gate rejects the row as "not admitted -- revert did not produce
+      FAIL (tautological)", failing --pre and full. The durable half of this property (envelope
+      reads never fire on an entry without an envelope) IS graduated, at step 1 as
+      decisions-md-envelope-precedence, against committed fixtures rather than against origin/main.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Significance enforcement -- required presence, the four-token vocabulary read from the
+      contract, the non-empty one-line justification, and the strict rejection of the two
+      "Never a numbered Decision" rows on a new entry.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_entry_conformance.py -k "significance" -q
+    expected: >-
+      Presence, unknown-token, empty-justification, `operational_fact` and `field_semantics` cases
+      all FAIL the check; `numbered_decision` and `cd_state_flip` pass; historical-band entries
+      without the element are untouched.
+    fix_if: >-
+      An `operational_fact` fixture passing means the strict branch is not wired; a historical-band
+      fixture failing means the new-in-diff gate was bypassed and the check is retro-enforcing.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decision-entry-significance-strict-token
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Envelope integrity -- envelope/bold-marker conflict on one field fails; agreement passes;
+      absence of the bold marker passes; an envelope `number` disagreeing with its heading fails.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_entry_conformance.py -k "envelope" -q
+    expected: Conflict and number-mismatch cases fail the check; agreement and marker-absent cases pass.
+    fix_if: >-
+      An agreeing fixture failing means the conflict rule is comparing presence rather than value;
+      a conflicting fixture passing means the bold-marker twin is never read for comparison.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decision-entry-envelope-integrity
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Per-entry cap WARN-tier semantics -- an over-cap NEW entry produces a named warning and leaves
+      `failed` EMPTY; an over-cap HISTORICAL entry produces nothing; a new entry at exactly 6,144
+      bytes is silent (boundary).
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decisions_size.py -k "per_entry" -q
+    expected: >-
+      The over-cap new-entry case asserts `failed == []` and a warning string naming the cap and the
+      entry; the historical over-cap case asserts no output; the boundary case is silent.
+    fix_if: >-
+      A non-empty `failed` means the cap was wired hard-fail instead of WARN-tier -- the flip is
+      owned by migration step 3, not this plan. Silence on the over-cap new entry means the baseline
+      reader is not classifying it as new.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decisions-size-per-entry-cap-warn-tier
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Supersession-guard non-regression -- an envelope-bearing entry declaring `amends: [150]` and
+      `supersedes: [X]` yields the same edges the textual "amends Decision 150" prose form would.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_supersession_annotations.py -k "envelope" -q
+    expected: extract_supersession_edges returns the envelope-declared edges; the guard's annotation obligation applies to them.
+    fix_if: >-
+      Zero edges returned means only _EDGE_RE's prose form is consulted -- the envelope union was
+      not wired, and envelope entries silently escape the guard.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: supersession-envelope-borne-edges
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Shared baseline reader -- one git read per validate run across both consumers (Decision 153
+      fast-tier budget), plus the unreachable-origin advisory-skip sentinel.
+    command: bin/venv-python -m pytest tests/checks/decisions/test__baseline.py -q
+    expected: >-
+      The memoization test asserts exactly ONE subprocess git invocation when both checks run
+      against one root; the unreachable case returns the None sentinel rather than raising.
+    fix_if: >-
+      More than one invocation means each check still calls its own reader -- collapse them onto the
+      shared module. A raise on the unreachable case breaks the advisory-skip contract.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decisions-baseline-reader-single-read
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Contract/check token parity -- the four significance.routing tokens the check enforces are
+      exactly the keys in decision-entry.yaml, and the two rejected rows are identified from the
+      contract's own "Never a numbered Decision" text rather than a hardcoded list.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_entry_conformance.py -k "contract_parity" -q
+    expected: >-
+      The test derives the token set and the rejected subset from the contract file and asserts the
+      check agrees; adding a fifth routing row to the fixture contract changes the accepted set with
+      no code edit.
+    fix_if: >-
+      A divergence means the token list was copied into the module -- the same hardcoded-copy defect
+      decision-entry.yaml's shared_parser_note and test_decision_field_grammar.py exist to prevent.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decision-entry-contract-token-parity
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Decision 167 self-conformance -- the entry this plan authors is under the cap it installs, and
+      its envelope PARSES through the new public helper (not a substring test: Decision 133's
+      ```yaml reversal-conditions stanza would satisfy a bare substring check) and sits immediately
+      after the heading. Also confirms validate_reversal_stanzas stays green corpus-wide, so the
+      envelope's bare-`yaml` info string provably does not collide with the monitored fenced form.
+    command: >-
+      bin/venv-python -c "import sys; from pathlib import Path;
+      from scripts.decisions_md import iter_decision_sections, extract_entry_envelope;
+      b=dict((int(m.group(1)),blk) for m,blk in iter_decision_sections(Path('docs/DECISIONS.md').read_text(encoding='utf-8')))[167];
+      n=len(b.encode('utf-8')); env=extract_entry_envelope(b);
+      after_heading=b.split(chr(10),1)[1].lstrip().startswith(chr(96)*3+'yaml'+chr(10));
+      print(f'D167 {n} B / 6144 cap; envelope={env is not None}; position_ok={after_heading}; sig={(env or {}).get(chr(115)+chr(105)+chr(103)+chr(110)+chr(105)+chr(102)+chr(105)+chr(99)+chr(97)+chr(110)+chr(99)+chr(101))!r}');
+      sys.exit(0 if n<=6144 and env and after_heading else 1)" &&
+      bin/venv-python -c "from scripts.checks.ops_governance.validate_reversal_stanzas import validate_reversal_stanzas as v;
+      f=[]; v(f); import sys; print('reversal stanzas failed:',f); sys.exit(1 if f else 0)"
+    expected: >-
+      Prints "D167 <n> B / 6144 cap; envelope=True; position_ok=True" with n at or under 6144 and a
+      significance value naming a routing row, then reports zero reversal-stanza failures. Exit 0.
+    fix_if: >-
+      Over the cap -- move specification out to docs/contracts/decision-entry.yaml (the intended
+      pressure) or compress the Related pointer block; never split into a sibling entry, which burns
+      a second header against the first-binding ceiling.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a property of one specific entry authored by this plan, not a standing repository
+      invariant -- graduating it would pin a permanent guard to decision number 167. The general
+      property (every new entry under the cap) is graduated at step 5 as
+      decisions-size-per-entry-cap-warn-tier.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Index edges, freshness and projection boundary -- envelope-declared amends/supersedes reach
+      the index through the shared parser, the regenerated index matches the committed file, and
+      `significance` never appears in it.
+    command: >-
+      bin/venv-python -m pytest tests/test_decisions_index.py -q &&
+      bin/venv-python -m scripts.decisions_index --check && bin/venv-python -c "import json,sys;
+      d=json.load(open('docs/decisions-index.json'));
+      rows=d['decisions'] if isinstance(d,dict) and 'decisions' in d else d;
+      bad=[r for r in (rows.values() if isinstance(rows,dict) else rows) if 'significance' in r];
+      print('LEAKED:',len(bad)) or sys.exit(1) if bad else print('OK: significance absent from projection')"
+    expected: >-
+      The index tests pass (envelope-declared edges present), the freshness check exits 0, and the
+      projection carries no `significance` key on any row.
+    fix_if: >-
+      A freshness failure means `--write` was not re-run after the Decision 167 edit. A leaked key
+      means significance was added to the index projection, which grows every future row against the
+      131,000-byte pin (Decision 166 point 9).
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: decisions-index-envelope-borne-edges
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Registry reachability -- validate_decision_entry_conformance is present in the --pre sequence
+      with its DECISIONS glob gate and resolves through scripts/validate.py's facade re-export
+      (without the re-export line, --pre KeyErrors on the check name).
+    command: bin/venv-python -m pytest tests/checks/decisions/test_conformance_registration.py tests/test_checks_registry.py -q
+    expected: >-
+      The new module asserts validate_decision_entry_conformance is in pre_sequence() carrying
+      pre_globs=("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md") and resolves as a
+      scripts/validate.py module-level global; the pre-existing tests/test_checks_registry.py suite
+      still passes UNMODIFIED (it must not be edited -- zero SLOC headroom).
+    fix_if: >-
+      A KeyError or reachability failure means the facade re-export line is missing from
+      scripts/validate.py -- dispatch is globals()[name](failed), with no auto-discovery.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decision-entry-conformance-pre-tier-registered
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Fast tier on the complete tree -- the authoritative pre-merge gate, now including the
+      conformance check in its --pre registration.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0. The DECISIONS size section prints the per-entry cap line with no warning (Decision 167
+      is under cap); the decision-entry conformance section reports 1 new entry conforming.
+    fix_if: >-
+      A conformance failure names the missing element on Decision 167. A size failure means a stock
+      ceiling breached -- check header count and combined bytes, never raise the cap to fit.
+    hermetic: false
+    graduation: not-applicable
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Contract deliverables and the bundled rec's closure -- rec-2934's own acceptance grep passes,
+      the two stale size_governance values are corrected, and CFG-07's routing rule, its
+      standing-commitment clause and the lever-by-ceiling matrix are actually present. Nothing else
+      in the repository pins the contract's ceiling values against the validator constants (the
+      contract itself concedes "the validator constants are the SoT"), so without this the round-1
+      stale-value fix and all of CFG-07 could silently not land.
+    command: >-
+      bin/venv-python -c "import sys,yaml; d=yaml.safe_load(open('docs/contracts/decision-entry.yaml'));
+      from scripts.checks.decisions.validate_decisions_size import _DECISIONS_LIVE_MAX_H2 as H, _DECISIONS_COMBINED_MAX_BYTES as B;
+      sg=d.get('size_governance') or {}; sig=d.get('significance') or {}; rm=d.get('required_markers');
+      bad=[]; bad += [] if sg.get('live_max_h2_headers')==H else [f'live_max_h2_headers {sg.get(\"live_max_h2_headers\")}!={H}'];
+      bad += [] if sg.get('combined_max_bytes')==B else [f'combined_max_bytes {sg.get(\"combined_max_bytes\")}!={B}'];
+      bad += [] if 'per_entry_size_norm' in sg else ['per_entry_size_norm missing from size_governance'];
+      bad += [] if any('lever' in str(k) for k in sg) else ['lever-by-ceiling matrix missing'];
+      bad += [] if any('routing_rule' in str(k) for k in sig) else ['routing_rule missing from significance'];
+      bad += [] if 'standing_commitment' in sig else ['standing_commitment key missing from significance'];
+      bad += [] if rm==['Status','Date','Decision'] else [f'required_markers mutated to {rm}'];
+      print('FAIL:',bad) or sys.exit(1) if bad else print('OK: contract deliverables present, ceilings match validator')"
+      && grep -q 'per_entry_size_norm' docs/contracts/decision-entry.yaml && echo "rec-2934 acceptance satisfied"
+    expected: >-
+      Prints "OK: contract deliverables present, ceilings match validator" then "rec-2934 acceptance
+      satisfied", exit 0.
+    fix_if: >-
+      A ceiling mismatch means the stale 120 / 700000 values were not corrected before the matrix was
+      layered on them. A missing `per_entry_size_norm` means the cap was recorded under a different
+      key -- use that exact key, or drop rec-2934 from bundled_recommendations and the Resolves
+      trailer rather than claim a rec whose acceptance does not pass. A mutated required_markers
+      means Significance was wrongly added there instead of to metadata_envelope.required_fields.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-shot closure assertion for a specific recommendation resolved by this plan, not a
+      standing repository invariant -- graduating it would pin a permanent registry row to rec-2934.
+      The durable property (the contract carries the cap) is covered by step 8's contract/check
+      token-parity guard.
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep for the retired test module (closure obligation, triggered by the
+      tests/test_decisions_md.py Delete row) -- no path, import, or config entry still names it, and
+      the concern-split remap resolves to the package.
+    command: >-
+      bin/venv-python -c "import sys,subprocess; from pathlib import Path;
+      from scripts.test_coverage_checker import map_source_to_test;
+      out=subprocess.run(['git','grep','-n','test_decisions_md','--',':!docs/plans/'],capture_output=True,text=True).stdout.strip();
+      r=[l for l in out.splitlines() if l.strip()];
+      m=str(map_source_to_test(Path('scripts/decisions_md.py')));
+      ok=(not r) and m.endswith('tests/decisions_md') and not Path('tests/test_decisions_md.py').exists();
+      print('live refs:', r or '(none)'); print('maps_to:',m);
+      sys.exit(0 if ok else 1)"
+    expected: >-
+      "live refs: (none)", maps_to ends with tests/decisions_md (the package directory, no test_
+      prefix and no .py suffix), and the old file is gone. Exit 0. docs/plans/ is excluded by
+      pathspec: merged plan documents are immutable historical artefacts, and
+      PLAN-daf-authoring-grammar.yaml legitimately records the pre-move path. Verified at planning
+      time that the only LIVE reference outside docs/plans/ is
+      docs/contracts/decision-entry.yaml:93, which is in scope and must be re-pointed at the package.
+    fix_if: >-
+      A surviving live reference names a file that no longer exists -- update it, unless it is under
+      docs/plans/ (historical, never edited). A maps_to still ending in test_decisions_md.py means
+      scripts/decisions_md.py was not added to _CONCERN_SPLIT_TEST_PACKAGES, which is the whole
+      point of the scripts/test_coverage_checker.py edit.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-shot migration sweep asserting that a specific retired path is gone, not a standing
+      repository invariant -- graduating it would pin a permanent registry row to a filename that
+      ceased to exist in this very commit. The durable property (decisions_md.py has a resolvable
+      test home at 100% coverage) is enforced natively by validate_test_coverage in the full tier.
+  - step: 15
+    phase: pre-deploy
+    action: Full-tier validation on the complete tree before commit (handoff_policy obligation, Decision 163).
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 across every registered check in the full sequence.
+    fix_if: >-
+      Triage the named failing check. Do not narrow a check to pass; forward-fix per Decision 55, and
+      if the failure is in CI file a source=ci_rca rec rather than patching inline.
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: scripts/decisions_md.py
+    behavior: >-
+      The envelope is read before the bold-marker/title grammar for status, decided_date, amends and
+      title_supersedes, and the fallback path stays intact for entries with no envelope.
+    verification_step: 1
+    test_selector: tests/decisions_md/
+    red_green_expectation: >-
+      Red before -- the package does not exist and no envelope parsing exists, so an envelope-bearing
+      fixture returns the bold-marker values. Green after, with 100% per-file coverage of
+      scripts/decisions_md.py measured across the package.
+  - source: scripts/decisions_index.py
+    behavior: >-
+      Envelope-sourced amends/supersedes edges reach the index through the shared parser, and
+      `significance` is never projected into the committed JSON.
+    verification_step: 10
+    test_selector: tests/test_decisions_index.py
+    red_green_expectation: Red before -- envelope-declared edges are invisible to the index. Green after.
+  - source: scripts/checks/decisions/validate_decision_entry_conformance.py
+    behavior: >-
+      A new entry must carry a well-formed envelope whose significance names an accepted routing
+      token with a justification; the two "Never a numbered Decision" rows are rejected; envelope/
+      body conflicts and number mismatches fail; the historical band is never retro-enforced.
+    verification_step: 3
+    test_selector: tests/checks/decisions/test_validate_decision_entry_conformance.py
+    red_green_expectation: Red before -- the check enforces only Status/Date/Decision markers. Green after.
+  - source: scripts/checks/decisions/validate_decisions_size.py
+    behavior: >-
+      A new entry over 6,144 bytes warns without failing; historical entries are never measured; the
+      two existing stock ceilings keep their current fail behaviour.
+    verification_step: 5
+    test_selector: tests/checks/decisions/test_validate_decisions_size.py
+    red_green_expectation: Red before -- no per-entry cap exists, so an over-cap new entry is silent. Green after.
+  - source: scripts/checks/decisions/validate_supersession_annotations.py
+    behavior: Envelope-borne amends/supersedes edges are extracted alongside the textual prose form.
+    verification_step: 6
+    test_selector: tests/checks/decisions/test_validate_supersession_annotations.py
+    red_green_expectation: Red before -- an envelope-only entry yields zero edges. Green after.
+  - source: scripts/checks/decisions/_baseline.py
+    behavior: >-
+      Returns the origin/main decision-number set, None on unreachable origin, and performs exactly
+      one git read per root across both consumers.
+    verification_step: 7
+    test_selector: tests/checks/decisions/test__baseline.py
+    red_green_expectation: Red before -- the module does not exist. Green after.
+  - source: docs/contracts/decision-entry.yaml
+    behavior: >-
+      Carries the metadata_envelope section, the routing_rule and standing_commitment keys, the
+      lever-by-ceiling matrix, and the per_entry_size_norm cap; its size_governance ceilings equal
+      validate_decisions_size's constants; required_markers stays [Status, Date, Decision].
+    verification_step: 13
+    command: grep -q 'per_entry_size_norm' docs/contracts/decision-entry.yaml
+    red_green_expectation: >-
+      Red before -- verified by execution against the current tree, step 13 exits 1 listing all six
+      missing deliverables (ceilings 120/700000, per_entry_size_norm, matrix, routing_rule,
+      standing_commitment). Green after.
+  - source: docs/decisions-index.json
+    behavior: >-
+      Regenerates to include the Decision 167 row with envelope-sourced edges, stays within the
+      131,000-byte pin, and never carries a `significance` key.
+    verification_step: 10
+    command: bin/venv-python -m scripts.decisions_index --check
+    red_green_expectation: >-
+      Red before -- once Decision 167 lands in DECISIONS.md the committed index is stale and
+      --check exits 1. Green after regeneration.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: Carries one admissible row per graduated verification step, keyed by graduation_check_id.
+    verification_step: 12
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This file has a stronger native verifier than any test this plan could add:
+      validate_verification_registry runs a real differential on every newly-added row, checking out
+      an origin/main worktree and requiring the row's check_spec to FAIL there and PASS on HEAD, and
+      it rejects tautological rows outright. It runs in both tiers, so step 12 exercises it. A
+      hand-written test asserting the rows exist would be strictly weaker than the admission gate
+      already guarding them.
+  - source: scripts/test_coverage_checker.py
+    behavior: >-
+      scripts/decisions_md.py resolves to the tests/decisions_md/ package directory rather than the
+      retired tests/test_decisions_md.py file.
+    verification_step: 15
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      The change is a single frozenset membership addition to an existing, already-tested mechanism
+      (_CONCERN_SPLIT_TEST_PACKAGES has 13 members whose resolution branch is covered). Its real
+      proof is downstream and strictly stronger than any assertion this plan could add:
+      validate_test_coverage in the full tier fails outright if the remap is wrong, or if the
+      package does not give scripts/decisions_md.py 100% per-file coverage.
+  - source: scripts/checks/registry.py
+    behavior: validate_decision_entry_conformance is present in the --pre sequence, glob-gated on the two DECISIONS files.
+    verification_step: 11
+    test_selector: tests/checks/decisions/test_conformance_registration.py
+    red_green_expectation: >-
+      Red before -- the module does not exist, and its assertion is genuinely red against the
+      pre-change tree because validate_decision_entry_conformance is absent from pre_sequence().
+      Note the pre-existing tests/test_checks_registry.py could NOT supply this red:
+      test_pre_sequence_meets_required_floor asserts REQUIRED_PRE_CHECKS <= actual, a subset floor
+      that adding a check never reddens. Green after.
+constraints:
+  - >-
+    FORWARD-ONLY. The 146-entry historical band (119 live + 27 archive) is never retro-enforced and
+    no ratified body is REWRITTEN (Decision 151 precedent; the audit's corpus_shape is
+    extract_machine_semantics_only, forward-only). "New" means a decision number absent from the
+    origin/main baseline, the same test the conformance check already applies. The dated
+    `> **Amended by Decision 167 (2026-08-07):**` trailers appended to Decisions 150 and 160 are NOT
+    rewrites -- they are the append-only accretion decision-entry.yaml's amendment_forms sanctions,
+    and they are required by validate_supersession_annotations regardless of the envelope, since
+    Decision 167's own title says "amends Decision 150 and Decision 160" and _EDGE_RE scans the
+    whole block including the heading.
+  - >-
+    ZERO-HEADROOM FILES -- do NOT edit tests/test_checks_registry.py (643/643 SLOC, dec-159
+    raise-approved pin). It is not in scope; its assertion lives in the new
+    tests/checks/decisions/test_conformance_registration.py. tests/test_decisions_md.py (488/500) is
+    NOT edited either -- it is DELETED and its content moved into the tests/decisions_md/ package,
+    which is the decomposition. Do not raise either budget: Decision 128 is decompose-by-default,
+    and a raise would need its own `# raise-approved: dec-NNN` marker naming an authorizing Decision.
+  - >-
+    The per-entry cap lands WARN-TIER. It prints and MUST NOT append to `failed`. The hard-fail flip
+    is owned by migration step 3 (destination readiness) -- landing it hard here is the
+    pressure-before-destination mistake the audit's own sequence warns against, since routing is
+    one-way-at-entry and no lifecycle mechanism undoes a misroute later.
+  - >-
+    Cap value is 6,144 bytes (heading-to-next-heading UTF-8 span), ruled by the operator at Step 6b.
+    Do not change it during implementation. If Decision 167 will not fit, move specification into
+    docs/contracts/decision-entry.yaml -- never raise the cap, and never split into a sibling entry
+    (two capped entries burn two headers against the first-binding ceiling).
+  - >-
+    Exactly ONE new numbered Decision entry. Decision 167 covers the entire ruling (envelope +
+    Significance element + cap value + routing-rule home) as a single entry.
+  - >-
+    Envelope delimiter is a fenced ```yaml block with a BARE `yaml` info string, NOT a `---` fence
+    and never `yaml reversal-conditions`. `---` is triply overloaded here: the pinned
+    block_separator, the trailing separator the conformance check requires on every new block, and a
+    field terminator in both parser terminator constants. The bare-`yaml` info string is what keeps
+    the envelope distinct from Decision 133's monitored ```yaml reversal-conditions stanza, which
+    scripts/preflight/decision_conditions.py matches on the exact info string and closes with
+    `^```$` -- pin this in the contract and cover it at step 9.
+  - >-
+    Mechanics route to docs/contracts/decision-entry.yaml, rationale to Decision 167 (Decision
+    86/127). No new standing prose-architecture doc under docs/ (Decision 86 intent-doc freeze).
+  - >-
+    `significance` is NOT added to _DECISION_BACKFILL_COLS, DecisionPayload,
+    config/agent/data_quality, or docs/decisions-index.json -- it is parser-surfaced and check-read
+    only, mirroring the index-only treatment of intent/amends/title_supersedes (Decision 84
+    warehouse-safety boundary; Decision 166 point 9 index pin).
+  - >-
+    Compacted stubs (Decision 149) are EXEMPT from the envelope obligation -- a compaction replaces a
+    body it never authored, and its stub_grammar fixes `**Status:** Superseded`, which would
+    otherwise trip the envelope/body conflict rule. State the exemption in decision-entry.yaml.
+  - >-
+    One shared origin/main baseline read across both --pre consumers (Decision 153 fast-tier budget).
+    Do not add a second git invocation to the fast tier, and do not add a THIRD reachability
+    implementation -- _baseline.py delegates to scripts.checks._common.origin_main_reachable and the
+    private duplicate in validate_decision_entry_conformance is deleted.
+  - >-
+    validate_decisions_size currently takes only `failed` and has no injection seam; its tests patch
+    scripts.checks._common.ROOT. Add an explicit `baseline_reader` (and `root`) seam mirroring
+    validate_decision_entry_conformance's, or the WARN-tier per-entry path is untestable -- in a
+    tmp_path with no git repo the shared reader returns the None sentinel and advisory-skips.
+  - >-
+    Do not hardcode the routing-token vocabulary. The check reads it from decision-entry.yaml at
+    check time, as it already does for required_markers (contract is the single source of truth).
+  - No rescue agents or workaround loops (Decision 55). A cap or conformance failure fails loud and is forward-fixed.
+  - Only files in the Scope table may be modified.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (119 of 119 triaged).
+    CITE: Decision 160, Decision 150, Decision 151, Decision 134, Decision 165, Decision 166,
+    Decision 104, Decision 84, Decision 86, Decision 127, Decision 128. RELATED: Decision 145,
+    Decision 146, Decision 118, Decision 132, Decision 105."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s), operator-accepted"
+  - >-
+    PLAN-CRITIQUE ROUND 3 = REVISE, hitting the skill's 3-round convergence cap. Escalated to the
+    operator, who reviewed both remaining blockers and directed merge without a 4th round on the
+    grounds that the fixes are mechanical. Round 3 verified all eight round-2 findings landed, ran
+    step 13 and confirmed it genuinely red for the right six reasons, re-measured every corpus
+    figure exact, and found no dangling references, orphaned criteria, unwired obligations or
+    contradictory constraints. Its two blockers, both reproduced here by execution before fixing:
+    (B1) validate_plan_documents deterministically failed --pre on this document because
+    _behavior_scope_files exempts only tests/, docs/plans/ and .md/.rst/.txt -- the .yaml/.json
+    scope rows each needed a test_obligation or per-source waiver; four were added (decision-entry
+    .yaml, decisions-index.json, verification_registry/registry.yaml, test_coverage_checker.py).
+    (B2) validate_test_coverage measures scripts/decisions_md.py by running ONLY its mapped test
+    file, which has no coverage_baseline entry (threshold 100%) -- so routing envelope tests to a
+    separate module while forbidding edits to tests/test_decisions_md.py would have dropped it below
+    100% and failed the full tier, breaking this plan's own handoff_policy. NOTE the fix adopted is
+    NOT the critique's preferred one: it recommended extracting a new scripts/decisions_envelope.py,
+    but scripts/CLAUDE.md forbids a third scripts/decisions_* root sibling, so that route would
+    trigger a scripts/decisions/ subpackage migration plus a file-router allowlist edit and a
+    repo-wide reference rewrite. Adopted instead: the repo's existing concern-split mechanism --
+    add scripts/decisions_md.py to _CONCERN_SPLIT_TEST_PACKAGES (13 existing members), remapping it
+    to the tests/decisions_md/ package. This also dissolves the 488/500 SLOC pressure that forced
+    the separate-module design, so the Decision 128 decomposition and the coverage rule now agree
+    instead of colliding. The Delete row this introduces triggers the closure obligation's
+    surface-retiring branch, discharged by the new step 14 live-reference sweep (docs/plans/ is
+    excluded by pathspec -- merged plan documents are immutable historical artefacts).
+  - >-
+    PLAN-CRITIQUE ROUND 1 = REVISE; all 10 findings verified independently and applied. The
+    load-bearing ones: (1) the first draft CONFLATED rec-2934 with rec-3023 -- rec-2934's real
+    acceptance is `grep -q 'per_entry_size_norm'` and is squarely this plan's work, so it is now
+    bundled and Resolved rather than wrongly left open; (2) tests/test_checks_registry.py is at
+    643/643 SLOC with a dec-159 raise-approved pin (zero headroom) and tests/test_decisions_md.py at
+    488/500, so both were removed from scope in favour of two new cohesive test modules (Decision
+    128 decompose-by-default); (3) the original red/green claim for test_checks_registry.py was
+    false -- test_pre_sequence_meets_required_floor asserts a SUBSET floor that adding a check never
+    reddens; (4) VP step 2's expected count was 119, but the command parses both files and returns
+    146 -- an implementer reconciling the mismatch could have "fixed" it by dropping the archive and
+    halving the guard; (5) decision-entry.yaml's size_governance still carried the pre-PR-#863
+    values 120 / 700000, which the lever-by-ceiling matrix would have been built on top of; (6)
+    scripts.checks._common.origin_main_reachable already exists, so _baseline.py must delegate to it
+    rather than relocate the private duplicate; (7) Decisions 150 and 160 need dated amendment
+    trailers for validate_supersession_annotations, an obligation that fires from Decision 167's
+    title regardless of the envelope. Two findings were assessed and NOT adopted as stated: the
+    ```yaml reversal-conditions collision is latent rather than live (validate_reversal_stanzas
+    gates well-formedness only on entries that CARRY a monitored stanza, and Decision 167 uses prose
+    reversal conditions), but the bare-`yaml` info string is pinned in the contract and asserted at
+    step 9 anyway; and step 10 stays `graduate` with its check_id re-pointed at the meaningful
+    assertions (envelope edges + index freshness) rather than the near-tautological
+    significance-absence sub-check.
+  - >-
+    Decision-scout flag resolutions, all accepted and folded into this plan -- Decision 163 [WARN]:
+    a plan declaring full_validation_required_before_commit must carry a VP step invoking
+    `-m scripts.validate` without --pre (verified against validate_handoff_full_tier); step 15 is
+    that step. Decision 160 [SPIRIT WARN]: point 11 names the per-entry norm as the only lever that
+    bends the accrual RATE, and a WARN-tier cap does not bend it -- Decision 167 clause 3 states the
+    WARN tier as a dated pre-commitment with a named flip trigger and explicitly disclaims that the
+    lever is installed. Decision 149 [NOTE]: compacted stubs are exempted from the envelope
+    obligation. Decision 153 [NOTE]: one shared baseline read, asserted at step 7.
+  - >-
+    TWO CORRECTIONS TO THE AUDIT'S OWN PARAMETERS, both measured this session. (1) CFG-01's
+    acceptance reads "the D164-shaped ruling (3.9 KB) authors cleanly" -- Decision 164 actually
+    measures 7,257 bytes; 3,898 is the D61-100 BAND MEDIAN from the adjacent cell of the same table.
+    No 4-5 KB cap admits the audit's own clean-ADR exemplar, so the cap value was re-derived from
+    measurement rather than inherited. (2) CFG-03's acceptance reads "fails --pre", but
+    validate_decision_entry_conformance is registered in the FULL tier only (registry.py:218) while
+    PR CI runs --pre (ci.yml:67) and full runs post-merge on main -- the marker would gate nothing at
+    PR time without the --pre registration this plan adds.
+  - >-
+    CAP RULING EVIDENCE (operator ruling at Step 6b: 6,144 bytes). Measured over the live corpus:
+    median 4,060 B across 119 entries; last-10 median 6,625 B. Entries over each candidate cap
+    (last-10 / last-16 / all-119): 5,120 -> 7/12/41; 6,144 -> 5/10/31; 7,168 -> 5/10/25;
+    8,192 -> 3/7/17. 6,144 sits below the last-10 median so it bites the current authoring norm.
+    Decision 164's ruling+rationale+reversal+Problem+Intent total 5,290 B; its overrun is a 1,967 B
+    Related citation block, so 6,144 admits a D164-shaped ruling while pricing pointer bloat. The
+    Decision 167 draft measured 5,974 B, but only after trimming its own Related block -- the cap
+    forced the intended compression with 170 B of margin, and 5,120 would have made this
+    four-clause ruling unauthorable in one entry, tripping the audit's abort criterion on the first
+    entry.
+  - >-
+    SIGNIFICANCE TOKEN STRICTNESS -- resolved by a Fable advice-consult (fresh context, read-only)
+    requested by the operator, who was not convinced this should depart from the audit. Verdict:
+    the strict form is audit-COMPATIBLE, not a departure. CFG-03's "names one of the four routing
+    rows" and f2's "constrained to the four routing-row tokens" are both VOCABULARY BOUNDS (an upper
+    bound on what may appear), never acceptance mandates; nothing in CFG-03, f2, or migration step 2
+    states the two confessing tokens must pass. The signal-destruction objection was weighed and
+    judged weak here: a deliberate misrouter writes `numbered_decision` under either option, so the
+    future WARN-tier consistency lint (claimed row vs measured proxies) loses nothing -- the only
+    case that changes is an agent honestly classifying content as field_semantics while instructed
+    to mint an entry, which under the permissive form lands permanently in an append-only file and
+    under the strict form is corrected at the last mutable moment. All six existing voluntary
+    Significance stanzas already claim the numbered_decision row and explicitly negate the other
+    three, so false-positive exposure on real entry shapes is zero.
+  - >-
+    Sequencing prerequisite satisfied: the extractor-grammar plan merged as PR #867
+    (feat(decision-extractor-grammar-fixes), CFG-06) with its follow-up in PR #868, so
+    decisions_md.py, decision-entry.yaml and decisions_index.py are clean at this branch point.
+    Migration step 1 (PLAN-decision-ceiling-bridge, PR #863) also landed.
+  - >-
+    Corpus headroom at planning time: 119/132 live headers, 685,048/780,000 combined bytes,
+    docs/decisions-index.json 110,608/131,000 bytes, docs/contracts/decision-entry.yaml 342/500
+    effective lines (Decision 166 contracts class). One new entry plus the contract additions fit
+    with room. Decision 166 point 9's "binding within ONE more live entry" note is stale after the
+    PR #863 bridge raise.
+  - >-
+    BUNDLED RECS -- rec-2934 ONLY. Corrected at the plan-critique gate: the first draft attributed
+    rec-3023's acceptance criteria to rec-2934 (a planning-session grep matched rec-3023's context
+    field, which cites rec-2934 by id). Verified by id lookup: rec-2934 is "Author a per-entry
+    authoring size norm for new DECISIONS.md entries to bend the accrual rate (Decision 160)",
+    file docs/contracts/decision-entry.yaml, acceptance
+    `grep -q 'per_entry_size_norm' docs/contracts/decision-entry.yaml` -- exactly this plan's work in
+    exactly this plan's file. It is BUNDLED and Resolved, with the contract key named
+    `per_entry_size_norm` and step 13 asserting the acceptance before the trailer is claimed.
+  - >-
+    RECS DELIBERATELY LEFT OPEN. rec-3023 ("bound and enforce body content") greps for `body_content`
+    in decision-entry.yaml AND `validate_decision_entry_shape` in scripts/checks/registry.py -- no
+    check by that name exists, and the audit deliberately routes this work into two EXISTING
+    correctly-homed checks; minting a third check to satisfy a grep string would be
+    tail-wagging-dog, and the WARN tier means "enforce" is genuinely half-delivered. rec-3015
+    (`why not a contract`) and rec-3016 (`amendment_forms`) both grep
+    .claude/skills/planning/SKILL.md, which is migration step 4's authoring surface, not step 2's --
+    both return 0 matches today. All three stay open for the authoring-surface plan.
+  - >-
+    NOT a surface retirement, so no stale-reference sweep is owed under the closure obligation: the
+    envelope is an additive forward-only grammar whose bold-marker fallback is retained permanently
+    for the grandfathered band, not an X -> Y cutover. The dual-grammar window closes only at the
+    T1.5 portal cutover (migration step 8), which is CD.17-frozen and out of scope here.
+  - >-
+    docs/contracts/decision-entry.yaml is NOT a Class A/B/C ritual contract (no top-level
+    contract:/class: block), so validate_contract_drift skips it as a free-form registry doc per
+    Decision 118. Editing it does not trigger the amendment-log-on-change obligation; the audit's
+    CFG-11 tracks that gap and it is out of scope here.
+  - >-
+    Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main, so
+    the Main Divergence Assessment is clean and no rebase deferral is recorded.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read -- Decisions 84, 86, 104, 127, 128, 134, 145, 146,
+    149, 150, 151, 153, 160, 163, 165, 166 (targeted per-entry reads, never the whole file)
+  - >-
+    audits/contract-first-governance-33c8667.yaml findings CFG-01, CFG-03, CFG-07, the end_state
+    routing_rule and forcing_functions blocks, and migration_sequence step 2 read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Re-check the current maximum '## Decision NNN:' header in docs/DECISIONS.md before authoring --
+    decision numbers are not reserved at draft time and a concurrent PR may have claimed 167
+execution_steps:
+  - >-
+    Create scripts/checks/decisions/_baseline.py -- move _default_baseline_decision_numbers out of
+    validate_decision_entry_conformance, DELETE its private _origin_main_reachable duplicate and
+    delegate reachability to scripts.checks._common.origin_main_reachable, memoize per root so both
+    --pre consumers share one git read, and keep the None-on-unreachable advisory-skip sentinel.
+    Re-point the conformance check at it with no behaviour change, and sweep the relocation's call
+    sites in the SAME commit -- tests/checks/decisions/test_validate_decision_entry_conformance.py
+    imports _default_baseline_decision_numbers from the conformance module (line 26, used at 261/272
+    and in the no-git-repo skip test). Confirm the deleted duplicate is gone:
+    `! grep -q '_origin_main_reachable' scripts/checks/decisions/validate_decision_entry_conformance.py`.
+  - >-
+    Modify scripts/decisions_md.py -- add envelope extraction for a fenced ```yaml block immediately
+    following a '## Decision N:' heading, expose it as a public helper, and make parse_decisions_md
+    prefer envelope values for status / decided_date / amends / title_supersedes with the existing
+    bold-marker and title-relation grammar as fallback. Add the `significance` row key. Preserve the
+    byte-reconstruction invariant asserted in tests/test_decisions_md.py.
+  - >-
+    Modify scripts/decisions_index.py -- confirm envelope-sourced edges flow through the shared
+    parser without a second derivation, and record in the docstring that `significance` is
+    deliberately not projected (index pin, Decision 166 point 9).
+  - >-
+    Modify scripts/checks/decisions/validate_decision_entry_conformance.py -- add the envelope
+    well-formedness, number-match, envelope/body conflict, and Significance element checks, reading
+    the four routing tokens and the two "Never a numbered Decision" rows FROM the contract at check
+    time. New-in-diff entries only; exempt compacted stubs.
+  - >-
+    Modify scripts/checks/decisions/validate_decisions_size.py -- add `root` and `baseline_reader`
+    injection seams (mirroring validate_decision_entry_conformance's, without which the WARN path is
+    untestable), then add the forward-only 6,144-byte per-NEW-entry cap at WARN tier via the shared
+    baseline reader. It prints; it must not append to `failed`. Leave both stock ceilings' fail
+    behaviour untouched.
+  - >-
+    Modify scripts/checks/decisions/validate_supersession_annotations.py -- union envelope-borne
+    amends/supersedes edges into extract_supersession_edges so envelope entries cannot escape the
+    annotation guard.
+  - >-
+    Modify scripts/checks/registry.py -- add validate_decision_entry_conformance to pre_sequence()
+    with pre_globs=("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"). Confirm the
+    scripts/validate.py facade re-export line already exists (it does) so dispatch resolves. Do NOT
+    edit tests/test_checks_registry.py -- it has zero SLOC headroom; the assertion lives in the new
+    tests/checks/decisions/test_conformance_registration.py.
+  - >-
+    Modify docs/contracts/decision-entry.yaml -- add metadata_envelope (fields, BARE ```yaml fence
+    delimiter, placement immediately after the heading, forward-only scope, compacted-stub
+    exemption), declaring the Significance obligation under metadata_envelope.required_fields and
+    leaving the top-level required_markers list as exactly [Status, Date, Decision]; add the
+    three-question routing rule with the standing-commitment clause to significance:; in
+    size_governance: correct live_max_h2_headers 120 -> 132 and combined_max_bytes 700000 -> 780000
+    FIRST, then add the lever-by-ceiling matrix and the cap under the key `per_entry_size_norm`
+    (spelled EXACTLY so -- it is rec-2934's literal acceptance grep and step 13 asserts it). Keep
+    additions terse -- 158 effective lines of headroom against the 500-line contracts class, and
+    Decision 128 says compact, never raise.
+  - >-
+    Author Decision 167 in docs/DECISIONS.md -- one entry, under 6,144 bytes, carrying its own
+    ```yaml envelope as the first exemplar, with ruling / rationale / reversal conditions / pointers
+    only. Clause 3 must state the WARN tier as a dated pre-commitment naming migration step 3 as the
+    flip trigger and disclaim that the Decision 160 point 11 accrual-rate lever is installed.
+    Reversal conditions carry the retune/abort trigger (>2 of the first 10 new entries unauthorable
+    without losing DECISION content), the same-PR split-evasion review trigger, T1.5 retirement, and
+    the never-raise-to-fit pre-commitment in Decision 166 point 6 / Decision 145 form.
+  - >-
+    Append a dated `> **Amended by Decision 167 (2026-08-07):**` annotation trailer to Decisions 150
+    and 160, placed AFTER each entry's Related line so the CFG-06 typed-id-list terminator excludes
+    it from related_decisions. Required by validate_supersession_annotations (_is_annotated needs
+    the literal "Decision 167" in each victim's block). Both entries' content_hash changes, so both
+    re-project to ops_decisions on the next backfill -- expected, not a defect.
+  - >-
+    Add one config/agent/verification_registry/registry.yaml row per `graduation: graduate` step,
+    keyed by its graduation_check_id (Decision 132 / T3.21 implement-PR obligation).
+  - "Regenerate the index: bin/venv-python -m scripts.decisions_index --write"
+  - >-
+    Write the tests named in the Scope table and in test_obligations -- each must fail against the
+    pre-change tree and pass after (red/green per row).
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until pass. Step 15 (full tier)
+    must complete exit 0 before commit per handoff_policy. On unrecoverable failure stop and RCA
+    (Decision 55); never narrow a check to make it pass.
+  - >-
+    Report: what was implemented, the measured Decision 167 byte size against the cap, the per-entry
+    cap warning behaviour observed, and full verification results.
+rollback: >-
+  Every change is additive and forward-only. Reverting the commit restores the prior grammar with no
+  data migration: the envelope is read-preferred but never required by the parser (the bold-marker
+  fallback is retained), no ratified body is rewritten, and the only corpus change is the single
+  Decision 167 entry plus the regenerated index. If the cap proves mis-set in production, it is a
+  one-constant change in validate_decisions_size.py at WARN tier, which fails nothing while it is
+  retuned -- the reason the audit staged it WARN-first.
