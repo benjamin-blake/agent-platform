@@ -30,7 +30,8 @@ scope:
     purpose: >-
       Add the field_grammar section (per-extractor continuation forms, terminator sets, qualifier
       forms, known_divergent_grammars, projection-residue note) and the block_separator section;
-      extend shared_parser_note to cover field extractors, not just header grammar.
+      extend shared_parser_note to cover field extractors, not just header grammar; and CORRECT
+      amendment_forms, which declares two dated-trailer shapes while the corpus carries three.
   - file: tests/test_decision_field_grammar.py
     action: Create
     purpose: >-
@@ -55,9 +56,11 @@ scope:
       scripts/decisions_md.py by running ONLY this mapped test file, which currently sits at
       exactly 100 percent with no config/coverage_baseline.yaml entry. If the decisions_md.py edits
       introduce any statement this file does not reach, add the minimal covering case HERE. It has
-      roughly 12 SLOC of headroom before the 500 unregistered cap -- if more is needed, decompose
-      (Decision 128), never raise. Do NOT relocate the contract-derived property tests into this
-      file; they belong in tests/test_decision_field_grammar.py.
+      exactly 12 SLOC of headroom before the 500 unregistered cap (488 measured). If more than 12
+      is required, STOP and re-plan: decomposing this 610-line, 13-class module is out of scope
+      here and has no execution or verification step, and a budget raise is forbidden (Decision
+      128 / 165, no authorizing Decision). Do NOT relocate the contract-derived property tests into
+      this file; they belong in tests/test_decision_field_grammar.py.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
@@ -79,9 +82,11 @@ acceptance_criteria:
     "as amended by", and the CD.NN namespace).
   - Decision 160's row in docs/decisions-index.json records amends [145, 134, 146].
   - >-
-    _extract_related_decisions terminates at an [Amendment ...] or "> **Update (" trailer, so the
-    five affected entries drop their trailer-borne ids exactly (74 loses 112; 87 loses 103; 103
-    loses 103; 116 loses 164 and 122; 122 loses 164) and no other entry's related_decisions moves.
+    _extract_related_decisions terminates at ALL THREE dated-trailer forms the corpus carries
+    ("[Amendment ", "> **Update (", and "> **Amended by Decision "), so the seven affected entries
+    drop their trailer-borne ids exactly -- 74 loses 112; 87 loses 103; 89 loses 83; 103 loses 103;
+    105 loses 150; 116 loses 164 and 122; 122 loses 164 -- and no entry outside those seven has its
+    related_decisions changed.
   - >-
     Decision 146's related_decisions is unchanged by its new trailer and does NOT absorb 160 --
     the plan's own corpus edit is a live regression case for rec-2990.
@@ -91,8 +96,10 @@ acceptance_criteria:
     deliberately excludes the amendment openers).
   - >-
     docs/contracts/decision-entry.yaml carries a field_grammar section naming both terminator sets
-    with their per-set justification, and a block_separator section; shared_parser_note names the
-    field extractors, not only the header grammar.
+    with their per-set justification, a block_separator section, an amendment_forms list with all
+    three dated-trailer shapes, and a shared_parser_note that names the field extractors rather
+    than only the header grammar -- all asserted against the REAL contract by VP step 12, not only
+    against step 6's synthetic fixture.
   - >-
     tests/test_decision_field_grammar.py fails if either terminator constant in
     scripts/decisions_md.py diverges from the regex the contract states.
@@ -108,7 +115,10 @@ acceptance_criteria:
   - >-
     docs/contracts/decision-entry.yaml stays under the Decision 166 contracts-class budget: fewer
     than 500 effective lines and longest line under 2000 chars, with no budget raise.
-  - "bin/venv-python -m scripts.validate --pre exits 0."
+  - >-
+    Both presubmit tiers exit 0: `bin/venv-python -m scripts.validate --pre` (step 10) and the FULL
+    `bin/venv-python -m scripts.validate` (step 13), the latter being the only tier that exercises
+    validate_decision_entry_conformance, validate_supersession_annotations and validate_test_coverage.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -151,20 +161,21 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: >-
-      Confirm the typed-id-list terminator drops exactly the trailer-borne ids on the five affected
-      entries, and that Decision 146 does not absorb 160 from the trailer this plan adds.
+      Confirm the typed-id-list terminator drops exactly the trailer-borne ids on the seven
+      affected entries, and that Decision 146 does not absorb 160 from the trailer this plan adds.
     command: >-
       bin/venv-python -c 'from scripts.decisions_md import parse_decisions_md;
       r={x["decision_id"]:x for x in parse_decisions_md()};
-      exp={74:[68,72,73],87:[84,85,76,81,86,69,78,70,75,57],103:[70,84,88,55],116:[49,52,117],
-      122:[116,49,121,47,84,105,40]};
+      exp={74:[68,72,73],87:[84,85,76,81,86,69,78,70,75,57],89:[60,68],103:[70,84,88,55],
+      105:[90,84,92,103,104,76,86],116:[49,52,117],122:[116,49,121,47,84,105,40]};
       bad={n:(r[n]["related_decisions"],v) for n,v in exp.items() if r[n]["related_decisions"]!=v};
       assert not bad, bad; assert 160 not in r[146]["related_decisions"], r[146]["related_decisions"];
-      print("PASS")'
-    expected: "Prints PASS; exit 0."
+      print("PASS", len(exp))'
+    expected: "Prints PASS 7; exit 0. All seven trailer-affected rows match, including 89 and 105."
     fix_if: >-
-      A retained trailer id means the amendment openers are missing from
-      _TYPED_ID_LIST_TERMINATOR; a missing legitimate id means the terminator fires inside the
+      A retained trailer id means an amendment opener is missing from _TYPED_ID_LIST_TERMINATOR --
+      check all three, especially "> **Amended by Decision ", the most common form and the one
+      rows 89 and 105 depend on. A missing legitimate id means the terminator fires inside the
       Related line itself (check the "\\n" anchor on each opener).
     hermetic: true
     graduation: waive
@@ -194,17 +205,18 @@ verification_plan:
       declares, plus the constant-to-contract pin.
     command: bin/venv-python -m pytest tests/test_decision_field_grammar.py -q
     expected: >-
-      All tests pass, and the suite exercises EVERY accepted and rejected form the contract's
-      field_grammar section declares -- assert the parametrised case count equals the number of
-      declared forms, so adding a form to the contract without a test fails here.
+      All tests pass. Cases are DERIVED from the contract (parametrised over field_grammar), so
+      coverage of declared forms is structural rather than asserted. Guard against a truncated or
+      emptied contract section with a liveness floor: the derived case count is at least 8 accepted
+      plus 4 rejected forms, and at least 3 declared amendment_forms openers.
     fix_if: >-
       A pin failure means scripts/decisions_md.py and decision-entry.yaml disagree -- fix whichever
-      is wrong, never loosen the assertion to make them agree. A case-count mismatch means the
-      suite hardcodes cases instead of deriving them from the contract. SEPARATELY, if the full
-      tier's validate_test_coverage later fails on scripts/decisions_md.py, the cause is that it
-      measures coverage by running ONLY tests/test_decisions_md.py (100 percent today, no baseline
-      entry) -- add the minimal covering case to that file, which is in scope for exactly this
-      purpose.
+      is wrong, never loosen the assertion to make them agree. A liveness-floor failure means the
+      contract section lost forms; restore them rather than lowering the floor. SEPARATELY, if the
+      full tier's validate_test_coverage later fails on scripts/decisions_md.py, the cause is that
+      it measures coverage by running ONLY tests/test_decisions_md.py (100 percent today, no
+      baseline entry) -- add the minimal covering case to that file, which is in scope for exactly
+      this purpose.
     hermetic: false
     graduation: graduate
     graduation_check_id: decision-field-grammar-contract-pin
@@ -290,17 +302,76 @@ verification_plan:
     action: Run the authoritative fast presubmit tier over the whole change.
     command: bin/venv-python -m scripts.validate --pre
     expected: >-
-      Exit 0. Note the tier boundary: of this plan's relevant guards, only
-      validate_decisions_index_freshness and validate_structural_size_limits run in --pre.
-      validate_decision_entry_conformance, validate_supersession_annotations and
-      validate_test_coverage are FULL-tier only, so a green --pre does NOT exercise them --
-      handoff_policy.full_validation_required_before_commit is what forces them before commit.
+      Exit 0. Tier boundary: --pre DOES exercise validate_decisions_index_freshness,
+      validate_structural_size_limits, validate_decisions_size (this diff edits DECISIONS.md),
+      validate_sloc_limits and validate_sloc_budget_raises (load-bearing for the 488/500 relief
+      valve), validate_test_count_coupling and validate_no_cross_test_imports (two test files in
+      scope), plus validate_plan_documents and validate_handoff_full_tier (gated on docs/plans/**).
+      It does NOT exercise validate_decision_entry_conformance, validate_supersession_annotations
+      or validate_test_coverage -- those are FULL-tier only, which is why step 13 exists.
     fix_if: >-
       Fix forward; do not add a check to ci.yml without adding it to validate.py first. Do not
-      treat a green --pre as sufficient evidence for this plan: run the full tier before commit.
+      treat a green --pre as sufficient evidence for this plan -- step 13 is the gate that matters.
     hermetic: false
     graduation: not-applicable
   - step: 11
+    phase: pre-deploy
+    action: >-
+      Close the bounded-blast-radius claim: assert the regenerated index differs from the
+      origin/main baseline in exactly one row (Decision 160).
+    command: >-
+      bin/venv-python -c 'import json, subprocess;
+      old={d["number"]:d for d in json.loads(subprocess.run(["git","show",
+      "origin/main:docs/decisions-index.json"],capture_output=True,text=True,check=True).stdout)["decisions"]};
+      new={d["number"]:d for d in json.load(open("docs/decisions-index.json"))["decisions"]};
+      moved={n for n in set(old)|set(new) if old.get(n)!=new.get(n)}; assert moved=={160}, moved;
+      print("PASS")'
+    expected: "Prints PASS; exit 0. The moved-row set is exactly {160}."
+    fix_if: >-
+      A moved-row set wider than {160} means the continuation grammar is over-greedy and minted an
+      amends edge somewhere unintended -- diff the offending rows before touching anything else. An
+      empty set means the index was never regenerated.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: decision-index-blast-radius-bounded
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Assert the REAL contract carries every surface this plan promises, not only step 6's
+      synthetic _CONTRACT_YAML fixture.
+    command: >-
+      bin/venv-python -c 'import yaml;
+      c=yaml.safe_load(open("docs/contracts/decision-entry.yaml"));
+      assert "block_separator" in c, "block_separator absent";
+      assert "field_grammar" in c, "field_grammar absent";
+      assert len(c["amendment_forms"])>=3, c["amendment_forms"];
+      n=c["shared_parser_note"];
+      assert "_extract_related_decisions" in n and "terminator" in n, n; print("PASS")'
+    expected: "Prints PASS; exit 0."
+    fix_if: >-
+      A failure means an execution step was skipped -- add the missing surface rather than relaxing
+      the assertion. An amendment_forms count below 3 means the third dated-trailer shape was not
+      recorded, which silently re-opens the rows 89 and 105 defect.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decision-entry-contract-surfaces-present
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Run the FULL presubmit tier, the only tier that exercises validate_decision_entry_conformance,
+      validate_supersession_annotations and validate_test_coverage. Required by
+      handoff_policy.full_validation_required_before_commit.
+    command: bin/venv-python -m scripts.validate
+    expected: "Exit 0, with the decision-entry conformance, supersession-annotation and per-file coverage checks all green."
+    fix_if: >-
+      A validate_test_coverage failure on scripts/decisions_md.py means an added statement is not
+      reached by tests/test_decisions_md.py -- add the minimal covering case there (in scope, 12
+      SLOC headroom). If more than 12 SLOC is required, STOP: that is an out-of-scope re-plan
+      trigger, not an in-flight decomposition. Do not commit on a timeout -- handoff_policy sets
+      timeout_disposition blocked, so resume later and rerun the full tier from the start.
+    hermetic: false
+    graduation: not-applicable
+  - step: 14
     phase: post-deploy
     action: >-
       After the squash-merge Resolves trailer fires rec-autoclose, confirm all three bundled recs
@@ -327,6 +398,34 @@ test_obligations:
     red_green_expectation: >-
       Red before: the continuation cases return [145] instead of [145, 134, 146], the trailer cases
       return trailer-borne ids, and the constant-to-contract pin has no contract to read. Green after.
+  - source: docs/contracts/decision-entry.yaml
+    behavior: >-
+      The contract is the authoritative statement of the field grammar, not documentation of it:
+      field_grammar declares both terminator sets and all three amendment_forms openers,
+      block_separator declares the separator rule, and shared_parser_note names the field
+      extractors. Code that diverges from any of these must fail CI.
+    verification_step: 5
+    test_selector: tests/test_decision_field_grammar.py
+    red_green_expectation: >-
+      Red before: no field_grammar or block_separator section exists, so the contract-derived suite
+      has nothing to parametrise over and the constant-to-contract pin cannot be expressed. Green
+      after, with step 11 additionally asserting the surfaces exist in the real contract rather
+      than only in step 6's synthetic fixture.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The index is a pure derived projection of the corpus: it stays byte-identical to a fresh
+      build_index(), and this change moves exactly one row (Decision 160's amends edge set).
+    verification_step: 11
+    command: >-
+      bin/venv-python -c 'import json, subprocess;
+      old={d["number"]:d for d in json.loads(subprocess.run(["git","show",
+      "origin/main:docs/decisions-index.json"],capture_output=True,text=True,check=True).stdout)["decisions"]};
+      new={d["number"]:d for d in json.load(open("docs/decisions-index.json"))["decisions"]};
+      moved={n for n in set(old)|set(new) if old.get(n)!=new.get(n)}; assert moved=={160}, moved;
+      print("PASS")'
+    red_green_expectation: >-
+      Red before: the moved-row set is empty, because the index still records Decision 160's amends
+      as [145]. Green after: the moved-row set is exactly {160}.
   - source: scripts/checks/decisions/validate_decision_entry_conformance.py
     behavior: >-
       The block_separator rule is read from decision-entry.yaml and enforced on new-in-diff
@@ -380,7 +479,7 @@ context:
     Decision 48, Decision 146, Decision 151, Decision 166, Decision 101, Decision 118, Decision 131,
     Decision 165, Decision 55."
   - >-
-    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)"
   - >-
     Round-1 plan-critique returned REVISE with three mechanical corrections, all applied and each
     independently re-verified against the repo before acceptance: (1) the coverage-gate trap --
@@ -422,10 +521,20 @@ context:
   - >-
     Measured baseline over the full 146-entry corpus (live + archive) before any edit: the widened
     continuation grammar moves exactly 1 row (Decision 160 amends [145] -> [145, 134, 146]) with
-    zero false positives and title_supersedes unchanged; the typed-id-list terminator moves exactly
-    5 rows, all trailer-borne removals; unifying the prose end-anchors and adding the \w guard to
-    _extract_section is a measured ZERO-delta change; docs/decisions-index.json moves exactly 1 of
-    146 rows, because index rows carry amends but not related_decisions.
+    zero false positives and title_supersedes unchanged; the THREE-opener typed-id-list terminator
+    moves exactly 7 rows, all trailer-borne removals (74, 87, 89, 103, 105, 116, 122); unifying the
+    prose end-anchors and adding the \w guard to _extract_section is a measured ZERO-delta change;
+    docs/decisions-index.json moves exactly 1 of 146 rows, because index rows carry amends but not
+    related_decisions.
+  - >-
+    Round-2 plan-critique found that decision-entry.yaml's amendment_forms is INCOMPLETE: it
+    declares two dated-trailer shapes, but the corpus carries a third, "> **Amended by Decision N
+    (YYYY-MM-DD):**", at 11 occurrences in docs/DECISIONS.md -- more than the two declared shapes
+    combined (6 and 5). Independently re-measured and confirmed. The two-opener design would have
+    left Decision 89 retaining a spurious 83 and Decision 105 a spurious 150, i.e. under-fixed the
+    very defect class the plan exists to close, while publishing the incomplete set as the
+    contract's authoritative statement. Resolved in-scope (option a): the third opener joins both
+    amendment_forms and _TYPED_ID_LIST_TERMINATOR, and the affected-row count went 5 -> 7.
   - >-
     Decision 146's trailer is itself a live regression case for rec-2990: it places "Decision 160"
     in a trailer immediately after the Related paragraph, so without the typed-id-list terminator
@@ -443,7 +552,7 @@ context:
     trailer cannot mint a spurious amends edge. The whole-block grammar is a separate regex
     (validate_supersession_annotations._EDGE_RE), which this plan deliberately leaves alone.
   - >-
-    Complexity heuristic: 7 scope files exceeds the >5 threshold that would suggest STRATEGIC, but
+    Complexity heuristic: 8 scope files exceeds the >5 threshold that would suggest STRATEGIC, but
     STRATEGIC classification is suspended under the executor freeze (Decision 67 / AGENTS.md
     Temporary Operational Constraints), so this is authored as a single IMPLEMENTATION plan. The
     work is one cohesive class fix and does not split cleanly into atomic plans.
@@ -467,8 +576,8 @@ pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
   - >-
-    Only the plan-cited decision sections read (134, 150, 151, 166, 165, 128, 131, 84, 86, 127,
-    146, 160, 101, 118, 55) -- do not load DECISIONS.md in full
+    Only the plan-cited decision sections read (134, 150, 151, 166, 165, 149, 128, 131, 104, 84,
+    86, 127, 146, 160, 101, 118, 55, 48) -- do not load DECISIONS.md in full
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
   - >-
@@ -485,6 +594,13 @@ execution_steps:
     grammar, and a projection-residue note recording the five related_decisions rows that will not
     re-project into ops_decisions.
   - >-
+    docs/contracts/decision-entry.yaml -- correct amendment_forms, which today declares only two
+    dated-trailer shapes while the corpus carries three. Add "> **Amended by Decision N
+    (YYYY-MM-DD):**" (11 occurrences in docs/DECISIONS.md, more than the two declared shapes
+    combined). This is a prerequisite for the terminator work, not a nicety: field_grammar cites
+    amendment_forms as the opener set, so an incomplete amendment_forms publishes an incomplete
+    grammar as authoritative -- the exact failure mode this plan exists to end.
+  - >-
     docs/contracts/decision-entry.yaml -- add the block_separator section: form "---", required on
     new-in-diff entries, historical band grandfathered with the 21-entry census recorded, and the
     reason (majority convention plus current practice at 164-166).
@@ -495,8 +611,10 @@ execution_steps:
     scripts/decisions_md.py -- introduce _MARKER_SECTION_TERMINATOR = r"(?=\n\*\*\w|\n---|\Z)" and
     use it in both _extract_by_marker_pattern and _extract_section (this unifies the end-anchors
     and gives _extract_section the \w guard; measured zero delta). Introduce
-    _TYPED_ID_LIST_TERMINATOR = the prose set plus "\n\[Amendment " and "\n> \*\*Update \(", and
-    use it in _extract_related_decisions only.
+    _TYPED_ID_LIST_TERMINATOR = the prose set plus ALL THREE dated-trailer openers --
+    "\n\[Amendment ", "\n> \*\*Update \(" and "\n> \*\*Amended by Decision " -- and use it in
+    _extract_related_decisions only. Do not omit the third: it is the MOST common form in the
+    corpus (11 occurrences vs 6 and 5), and rows 89 and 105 are corrupted by it.
   - >-
     scripts/decisions_md.py -- widen the title-relation continuation grammar so a comma may be
     followed by an optional repeated "Decision"/"Decisions" token and "and" may be followed by a
