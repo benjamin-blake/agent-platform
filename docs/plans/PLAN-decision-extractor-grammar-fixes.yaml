@@ -48,6 +48,16 @@ scope:
       Cover the block_separator sub-check via the existing root / baseline_reader injection seams:
       a new-in-diff entry missing the separator FAILS, one carrying it PASSES, and the historical
       band stays grandfathered.
+  - file: tests/test_decisions_md.py
+    action: Modify
+    purpose: >-
+      Coverage-gate relief valve only. validate_test_coverage (full tier) measures
+      scripts/decisions_md.py by running ONLY this mapped test file, which currently sits at
+      exactly 100 percent with no config/coverage_baseline.yaml entry. If the decisions_md.py edits
+      introduce any statement this file does not reach, add the minimal covering case HERE. It has
+      roughly 12 SLOC of headroom before the 500 unregistered cap -- if more is needed, decompose
+      (Decision 128), never raise. Do NOT relocate the contract-derived property tests into this
+      file; they belong in tests/test_decision_field_grammar.py.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
@@ -183,10 +193,18 @@ verification_plan:
       Run the full contract-derived property suite: every accepted/rejected form the contract
       declares, plus the constant-to-contract pin.
     command: bin/venv-python -m pytest tests/test_decision_field_grammar.py -q
-    expected: "All tests pass; the suite reports a non-zero collected count."
+    expected: >-
+      All tests pass, and the suite exercises EVERY accepted and rejected form the contract's
+      field_grammar section declares -- assert the parametrised case count equals the number of
+      declared forms, so adding a form to the contract without a test fails here.
     fix_if: >-
       A pin failure means scripts/decisions_md.py and decision-entry.yaml disagree -- fix whichever
-      is wrong, never loosen the assertion to make them agree.
+      is wrong, never loosen the assertion to make them agree. A case-count mismatch means the
+      suite hardcodes cases instead of deriving them from the contract. SEPARATELY, if the full
+      tier's validate_test_coverage later fails on scripts/decisions_md.py, the cause is that it
+      measures coverage by running ONLY tests/test_decisions_md.py (100 percent today, no baseline
+      entry) -- add the minimal covering case to that file, which is in scope for exactly this
+      purpose.
     hermetic: false
     graduation: graduate
     graduation_check_id: decision-field-grammar-contract-pin
@@ -200,7 +218,12 @@ verification_plan:
     expected: "All tests pass, including the new missing-separator FAIL and carries-separator PASS cases."
     fix_if: >-
       If the missing-separator case passes, the sub-check is not reached (confirm it runs per
-      new-in-diff number, alongside _missing_markers, not only when markers are absent).
+      new-in-diff number, alongside _missing_markers, not only when markers are absent). If an
+      EXISTING test breaks instead, the likely cause is the fixture: _CONTRACT_YAML carries no
+      block_separator key, and test_contract_missing_required_markers_key_fails asserts
+      len(failed) == 1. Decide deliberately whether a missing block_separator key is its own
+      failure or a tolerated absence, then update the fixture or the assertion to match -- do not
+      silently relax the count.
     hermetic: false
     graduation: graduate
     graduation_check_id: decision-block-separator-forward-enforced
@@ -245,7 +268,8 @@ verification_plan:
     graduation: waive
     graduation_waiver_reason: >-
       A one-time assertion about this plan's own corpus edit. The standing supersession-annotation
-      guard already runs in both presubmit tiers and covers the invariant going forward.
+      guard covers the invariant going forward; it runs in the FULL tier only (verified absent from
+      pre_sequence), which handoff_policy requires to pass before commit.
   - step: 9
     phase: pre-deploy
     action: Confirm the committed index is byte-identical to a fresh build.
@@ -265,9 +289,15 @@ verification_plan:
     phase: pre-deploy
     action: Run the authoritative fast presubmit tier over the whole change.
     command: bin/venv-python -m scripts.validate --pre
-    expected: "Exit 0, including the decision-entry conformance, supersession-annotation, and index-freshness checks."
+    expected: >-
+      Exit 0. Note the tier boundary: of this plan's relevant guards, only
+      validate_decisions_index_freshness and validate_structural_size_limits run in --pre.
+      validate_decision_entry_conformance, validate_supersession_annotations and
+      validate_test_coverage are FULL-tier only, so a green --pre does NOT exercise them --
+      handoff_policy.full_validation_required_before_commit is what forces them before commit.
     fix_if: >-
-      Fix forward; do not add a check to ci.yml without adding it to validate.py first.
+      Fix forward; do not add a check to ci.yml without adding it to validate.py first. Do not
+      treat a green --pre as sufficient evidence for this plan: run the full tier before commit.
     hermetic: false
     graduation: not-applicable
   - step: 11
@@ -327,6 +357,16 @@ constraints:
   - >-
     scripts/validate.py is the single source of truth for CI gates -- no ci.yml check without a
     validate.py check first (AGENTS.md merge protocol).
+  - >-
+    A green `validate --pre` is NOT sufficient evidence for this plan. Three of its load-bearing
+    guards -- validate_decision_entry_conformance, validate_supersession_annotations and
+    validate_test_coverage -- are FULL-tier only. handoff_policy.full_validation_required_before_commit
+    is true precisely so they run before commit; do not shortcut it.
+  - >-
+    Prefer statement-neutral edits in scripts/decisions_md.py (module-level constants and widened
+    regex literals, which are covered on import) over new helper functions or branches. Any new
+    statement must be reached by tests/test_decisions_md.py, since that is the only file
+    validate_test_coverage runs when measuring this source file.
   - No rescue agents or workaround loops (Decision 55).
   - >-
     Only files in the Scope table may be modified. In particular, do NOT widen
@@ -340,7 +380,19 @@ context:
     Decision 48, Decision 146, Decision 151, Decision 166, Decision 101, Decision 118, Decision 131,
     Decision 165, Decision 55."
   - >-
-    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+  - >-
+    Round-1 plan-critique returned REVISE with three mechanical corrections, all applied and each
+    independently re-verified against the repo before acceptance: (1) the coverage-gate trap --
+    validate_test_coverage measures scripts/decisions_md.py by running ONLY tests/test_decisions_md.py
+    (100 percent today, no coverage_baseline.yaml entry), so that file joins the Scope table as a
+    relief valve and two constraints now steer toward statement-neutral edits; (2) two tier claims
+    were wrong -- validate_decision_entry_conformance and validate_supersession_annotations are
+    FULL-tier only (confirmed absent from pre_sequence), so VP step 10's expected and VP step 8's
+    waiver reason were corrected; (3) the rollback note over-claimed -- Decision 146's own
+    content_hash DOES change, so dec-146 re-projects even though the five related_decisions rows do
+    not. Round-1's four measured-baseline claims were independently re-derived by the critic and
+    matched exactly, id-for-id.
   - >-
     Scout WARN on Decision 151 was ACCEPTED and the approach pivoted before presentation. The
     original design applied the amendment-trailer terminators uniformly across all marker sections;
@@ -401,7 +453,13 @@ context:
     it is a third, whole-block grammar that still reads only the first citation; (ii) remove the
     block_separator grandfathering and retro-standardise the 21 non-conforming entries; (iii)
     record the five-row ops_decisions related_decisions projection residue for the Decision 134
-    clause 5(b) content-parity gate.
+    clause 5(b) content-parity gate; (iv) correct the stale size_governance values in
+    decision-entry.yaml -- it declares live_max_h2_headers 120 / combined_max_bytes 700000 while
+    validate_decisions_size.py reads 132 / 780000 (raised by PR #863). The contract self-declares
+    the validator as SoT on drift, so this is tolerated rather than failing, but it is the same
+    contract-vs-code divergence class this plan exists to close, in the very file it edits. Left
+    out of this diff deliberately to keep the blast radius reviewable (AGENTS.md: out-of-scope bugs
+    become recommendations, not inline fixes).
   - >-
     docs/contracts/decision-entry.yaml is explicitly a NON-ritual doc, so validate_contract_drift
     (Decision 118 / CD.25 pre-codegen ritual) does not gate these edits.
@@ -469,16 +527,19 @@ execution_steps:
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
     and RCA (Decision 55).
   - >-
-    File the three follow-on recs listed in Context via get_rec_write_guidance() then file_rec()
+    File the four follow-on recs listed in Context via get_rec_write_guidance() then file_rec()
     (portal only -- never a direct write to logs/).
   - >-
     Commit with the Resolves trailer "Resolves: rec-2971, rec-2990, rec-2991" in the squash-merge
     commit body so rec-autoclose.yml fires.
-  - "Report: what was implemented, verification results, and the three follow-on rec ids."
+  - "Report: what was implemented, verification results, and the four follow-on rec ids."
 rollback: >-
   Every change is additive or a pure regex/contract edit on a read path; no warehouse write, no
   infrastructure, no deploy. Reverting the commit restores the prior extractor behavior and index
   content exactly. The one corpus edit (Decision 146's trailer) is an append-only annotation that
-  reverts cleanly with it. Note that a revert would NOT un-project anything: the five corrected
-  related_decisions rows never reach ops_decisions in the first place (content-hash gating), and
-  Decision 160's amends value lives only in the regenerated index file.
+  reverts cleanly with it. Projection nuance: the FIVE corrected related_decisions rows never reach
+  ops_decisions in either direction (content-hash gating leaves them unchanged), and Decision 160's
+  amends value lives only in the regenerated index file -- but Decision 146 is the exception, since
+  its trailer changes its own raw_block and therefore its content_hash, so dec-146 WILL re-project
+  at the next backfill carrying the corrected parse. That is benign and arguably desirable; a
+  revert would simply re-project it again with the trailer removed.
