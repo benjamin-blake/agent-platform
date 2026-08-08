@@ -82,7 +82,7 @@ class TestBothFilesCoverage:
         assert numbers == sorted(numbers)
 
     def test_archive_only_entry_present(self) -> None:
-        """dec-36 exists only in DECISIONS_ARCHIVE.md (tests/test_decisions_md.py's own
+        """dec-36 exists only in DECISIONS_ARCHIVE.md (tests/decisions_md/test_parse.py's own
         archive-coverage anchor) -- proves the index covers the archive file too."""
         idx = build_index()
         numbers = {entry["number"] for entry in idx["decisions"]}
@@ -137,6 +137,22 @@ class TestTypedEdgeSpotChecks:
         d = {x["number"]: x for x in idx["decisions"]}
         assert d[52]["supersedes"] == [37, 40, 49]
         assert 52 not in d[37]["supersedes"]
+
+
+class TestEnvelopeSourcedEdges:
+    """PLAN-decision-entry-flow-governance / Decision 167: envelope-declared amends/supersedes
+    edges reach the index through the shared parser, with no second derivation here, and
+    `significance` never leaks into the projection even though the parser row carries it."""
+
+    def test_dec167_envelope_amends_reach_the_index(self) -> None:
+        idx = build_index()
+        d = {x["number"]: x for x in idx["decisions"]}
+        assert d[167]["amends"] == [150, 160]
+
+    def test_dec167_significance_absent_from_its_projected_entry(self) -> None:
+        idx = build_index()
+        d = {x["number"]: x for x in idx["decisions"]}
+        assert "significance" not in d[167]
 
 
 class TestSupersededByCoercion:

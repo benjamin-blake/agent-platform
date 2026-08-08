@@ -9,6 +9,16 @@ scripts/checks/roadmap/validate_platform_roadmap.py's _roadmap_size_issues() pre
 decision-scout gate's `M`, Decision 134) and a live+archive combined byte ceiling, which now
 backstops docs/DECISIONS.md's size on its own (Decision 151 consequence). Both are cheap,
 structural, and independent of how the decision-scout gate reads the corpus.
+
+PLAN-decision-entry-flow-governance / Decision 167 adds a third, WARN-tier ceiling: a forward-only
+per-NEW-entry authoring size norm (docs/contracts/decision-entry.yaml size_governance
+.per_entry_size_norm, rec-2934). It prints and never appends to `failed` -- the hard-fail flip is
+owned by a later migration step (destination readiness), not this one. Historical entries are
+never measured (forward-only, mirrors validate_decision_entry_conformance's own new-vs-baseline
+scope). Since this check is registered UNGATED in the --pre tier (unlike the glob-gated
+conformance check), the per-entry sub-check's own (git-cost) baseline read is skipped whenever a
+non-default `root` is injected for testing -- production calls (the default root) always pay it,
+since the two stock ceilings below already read both files on every --pre run regardless.
 """
 
 from __future__ import annotations
@@ -16,9 +26,12 @@ from __future__ import annotations
 import re
 
 from scripts.checks import _common, registry
+from scripts.checks.decisions._baseline import BaselineReaderFn, baseline_decision_numbers
+from scripts.decisions_md import iter_decision_sections
 
 _DECISIONS_LIVE_MAX_H2 = 132
 _DECISIONS_COMBINED_MAX_BYTES = 780_000
+_PER_ENTRY_CAP_BYTES = 6_144
 
 _RELIEF_VALVES = (
     "compact superseded decision bodies to pointer stubs (Decision 149) -- archiving a live "
@@ -58,8 +71,36 @@ def _decisions_size_issues(
     return issues
 
 
+def _per_entry_cap_warnings(root, baseline_numbers: set[int]) -> list[str]:
+    """WARN (never FAIL) for each NEW entry (absent from baseline_numbers) over the per-entry
+    authoring cap. Historical entries are never measured -- forward-only, mirrors
+    validate_decision_entry_conformance's own new-vs-baseline scope."""
+    warnings: list[str] = []
+    for rel in ("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"):
+        path = root / rel
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8", errors="replace")
+        for m, block in iter_decision_sections(content):
+            n = int(m.group(1))
+            if n in baseline_numbers:
+                continue
+            size = len(block.encode("utf-8"))
+            if size > _PER_ENTRY_CAP_BYTES:
+                warnings.append(
+                    f"  WARN: Decision {n} ({rel}) is {size} bytes, exceeding the {_PER_ENTRY_CAP_BYTES}-byte "
+                    "per-entry authoring cap (docs/contracts/decision-entry.yaml "
+                    "size_governance.per_entry_size_norm) -- WARN-tier, does not fail --pre."
+                )
+    return warnings
+
+
 @registry.register("validate_decisions_size", owner="platform")
-def validate_decisions_size(failed: list[str]) -> None:
+def validate_decisions_size(
+    failed: list[str],
+    root=None,
+    baseline_reader: BaselineReaderFn | None = None,
+) -> None:
     """Enforce the two surviving Decision 134 size ceilings on docs/DECISIONS.md and
     docs/DECISIONS_ARCHIVE.md: the live '## Decision' header count and the live+archive combined
     byte count. The live-byte-only ceiling (Decision 145's stopgap raise to 500_000) is RETIRED
@@ -72,18 +113,28 @@ def validate_decisions_size(failed: list[str]) -> None:
     breach, the failure message names the relief valves that actually reduce combined bytes
     (compaction to pointer stubs per Decision 149; a per-entry authoring size norm) so the guard
     is actionable, not just a stop sign.
+
+    root / baseline_reader are test injection seams (mirrors validate_decision_entry_conformance)
+    for the WARN-tier per-entry cap sub-check below. A non-default root always exercises that
+    sub-check (deterministic for tests); the default (production) root skips it whenever this
+    check's own root equals _common.ROOT AND neither DECISIONS file changed in this diff, since
+    this check runs UNGATED on every --pre invocation and the git baseline read is not free.
     """
     print("\n=== DECISIONS size governance ===")
 
-    live_path = _common.ROOT / "docs" / "DECISIONS.md"
-    archive_path = _common.ROOT / "docs" / "DECISIONS_ARCHIVE.md"
+    using_default_root = root is None
+    root = root if root is not None else _common.ROOT
+    baseline_reader = baseline_reader or baseline_decision_numbers
+
+    live_path = root / "docs" / "DECISIONS.md"
+    archive_path = root / "docs" / "DECISIONS_ARCHIVE.md"
 
     if not live_path.exists():
-        print(f"  FAIL: {live_path.relative_to(_common.ROOT)} not found")
+        print("  FAIL: docs/DECISIONS.md not found")
         failed.append("DECISIONS size governance")
         return
     if not archive_path.exists():
-        print(f"  FAIL: {archive_path.relative_to(_common.ROOT)} not found")
+        print("  FAIL: docs/DECISIONS_ARCHIVE.md not found")
         failed.append("DECISIONS size governance")
         return
 
@@ -98,3 +149,13 @@ def validate_decisions_size(failed: list[str]) -> None:
         failed.append("DECISIONS size governance")
     else:
         print("  PASS: DECISIONS.md / DECISIONS_ARCHIVE.md size within ceiling.")
+
+    if using_default_root and not (set(_common.get_changed_files()) & {"docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"}):
+        return
+
+    baseline_numbers = baseline_reader(root)
+    if baseline_numbers is None:
+        print("  (per-entry cap: SKIP, origin/main unreachable.)")
+        return
+    for warning in _per_entry_cap_warnings(root, baseline_numbers):
+        print(warning)

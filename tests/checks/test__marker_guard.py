@@ -131,8 +131,8 @@ class TestAuthorizationAncestorRule:
 
     def test_archive_only_decision_is_present_in_loaded_bodies(self) -> None:
         """Decisions in DECISIONS_ARCHIVE.md count as authorizing (matches the shared parser's
-        own _DECISIONS_MD_PATHS convention) -- dec-36 is archive-only (tests/test_decisions_md.py
-        TestArchiveCoverage)."""
+        own _DECISIONS_MD_PATHS convention) -- dec-36 is archive-only (tests/decisions_md/
+        test_parse.py TestArchiveCoverage)."""
         bodies = load_decision_bodies()
         assert 36 in bodies
 

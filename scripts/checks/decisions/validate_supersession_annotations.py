@@ -40,7 +40,7 @@ from typing import Optional
 import yaml
 
 from scripts.checks import _common, registry
-from scripts.decisions_md import _iter_decision_sections
+from scripts.decisions_md import _iter_decision_sections, extract_entry_envelope
 
 _LIVE_REL_PATH = "docs/DECISIONS.md"
 _ARCHIVE_REL_PATH = "docs/DECISIONS_ARCHIVE.md"
@@ -55,7 +55,11 @@ _GUARD_NAME = "Decision supersession-annotation guard"
 
 def extract_supersession_edges(root: Path) -> list[tuple[int, int, str]]:
     """Pure extractor: (superseder, victim, file) for every textual Supersedes/amends/partially
-    supersedes cross-reference in docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md.
+    supersedes cross-reference in docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md, UNIONED with
+    every envelope-borne amends/supersedes edge (PLAN-decision-entry-flow-governance, Decision
+    167) -- an envelope-bearing entry that declares `amends: [N]` or `supersedes: [N]` must not
+    silently escape this guard just because it carries no textual "amends Decision N" prose;
+    _EDGE_RE matches only that textual form, which a typed envelope no longer emits.
 
     The containing block's own header number is the superseder; the referenced number is the
     victim. A self-reference (victim == superseder) is impossible by construction and skipped
@@ -79,6 +83,11 @@ def extract_supersession_edges(root: Path) -> list[tuple[int, int, str]]:
                 if victim == superseder:
                     continue
                 edges.add((superseder, victim, rel_path))
+            envelope = extract_entry_envelope(block)
+            if envelope:
+                for victim in list(envelope.get("amends") or []) + list(envelope.get("supersedes") or []):
+                    if int(victim) != superseder:
+                        edges.add((superseder, int(victim), rel_path))
     return sorted(edges)
 
 

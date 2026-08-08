@@ -2,6 +2,40 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 167: Decision-entry flow governance -- typed metadata envelope, required Significance routing claim, and a WARN-tier per-entry authoring size norm (amends Decision 150 and Decision 160) (Decided)
+
+```yaml
+number: 167
+status: Decided
+decided_date: "2026-08-07"
+amends: [150, 160]
+significance:
+  value: numbered_decision
+  justification: A durable architectural commitment installing three enforced governance mechanisms with reversal-relevant consequences.
+```
+
+**Status:** Decided
+**Date:** 2026-08-07
+**Warehouse ID:** dec-167 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** The decision corpus's sole front-door control on new-entry SHAPE (the Decision 150 Significance bar) was self-certified prose with no machine check, and neither Decision-134/166 size ceiling paced how fast an INDIVIDUAL new entry grows the corpus -- only its total stock. audits/contract-first-governance-33c8667.yaml findings CFG-01/CFG-03/CFG-07 (migration step 2): a new entry could mint a numbered Decision without ever declaring which of the four significance.routing rows applies, and no per-entry byte norm bent the corpus's accrual RATE the way Decision 160 point 11 named as the missing lever.
+
+**Decision:**
+1. **Typed metadata envelope.** A new decision entry (absent from the origin/main baseline) carries a fenced ```yaml metadata envelope immediately after its heading (docs/contracts/decision-entry.yaml `metadata_envelope`), read by `scripts/decisions_md.py`'s `parse_decisions_md` in PREFERENCE to the legacy bold-marker/title grammar, which remains the permanent fallback for every entry without one -- additive, never a cutover. `scripts/checks/decisions/validate_decision_entry_conformance.py` enforces well-formedness, the envelope's `number` against its heading, and envelope/bold-marker conflicts on new entries only; a Decision 149 compacted stub is exempt.
+2. **Required Significance routing claim.** The envelope's `significance` field is required on every new entry: a value naming one of `decision-entry.yaml`'s four `significance.routing` tokens, plus a non-empty one-line justification, read from the contract at check time. `operational_fact` and `field_semantics` are REJECTED outright -- both routing rows' own text says the content is "Never a numbered Decision," so claiming either on an entry that is by construction minting one is a contradiction the check catches rather than trusts.
+3. **Per-entry authoring size norm, WARN tier.** A new entry over 6,144 bytes (heading-to-next-heading UTF-8 span) triggers a named WARN from `validate_decisions_size`, never a `--pre` failure -- a DATED pre-commitment, not the accrual-rate lever itself: Decision 160 point 11 named a per-entry norm as the only lever that bends the corpus's growth RATE, and this clause explicitly disclaims that the lever is installed until migration step 3 (destination readiness) flips it to hard-fail.
+4. **Routing rule and standing commitment homed in the contract.** The three-question routing rule (durable commitment? reversal-relevant? unclaimed by another row?) and its standing-commitment clause live in `decision-entry.yaml`'s `significance.routing_rule` / `significance.standing_commitment` keys, machine-checkable rather than asserted only in this prose.
+
+**Reversal conditions:** (a) more than 2 of the first 10 new entries authored under the 6,144-byte cap cannot fit their ruling/rationale/reversal content without losing DECISION substance -- retune the cap value or abort the norm, never raise it silently to fit a single entry; (b) two or more entries land in the SAME PR specifically to evade the per-entry cap (split-then-recombine) -- close the loophole at the check, not by raising the cap; (c) T1.5's portal cutover retires the flow this envelope feeds -- these obligations retire with it; (d) migration step 3 never lands and the cap stays WARN-tier indefinitely -- re-audit whether the lever does any work at WARN tier alone. Per Decision 166 point 6 / Decision 145's own precedent: the response to cap pressure is compaction or trimming Related pointer blocks, never a raise to fit.
+
+**Rationale:** The envelope and the Significance claim are the same shape decision-scout already reads machine-readably for triage (category_tags, triage_excerpt) -- extending that machine-readability to the routing claim itself closes the "self-certified with no record" gap CFG-03 named. The WARN-tier cap is staged behind a destination-readiness gate (migration step 3) so the pressure is felt before the lever is armed to fail builds -- the audit's own sequencing warning against pressure before a landing spot exists for it.
+
+**Significance:** clears the Decision 150 significance bar -- a durable architectural commitment (a typed envelope grammar, an enforced Significance routing claim, and a dated WARN-tier size norm, each backed by a `--pre`-registered check) with reversal-relevant consequences; not a CD state-flip, operational fact, or field-semantics change (field shapes and the exact byte value live in `docs/contracts/decision-entry.yaml`, not restated here).
+
+**Related:** Decision 150 (the Significance bar enforced machine-readably), Decision 160 (point 11's accrual-rate lever, installed here at WARN tier only), Decision 134 (the two stock size ceilings this norm sits alongside), Decision 145 (the never-raise-to-fit precedent), Decision 149 (the compacted-stub exemption), Decision 84 (warehouse-safety boundary keeping `significance` index-only), Decision 153 (the shared, memoized baseline read). Roadmap refs: audits/contract-first-governance-33c8667.yaml findings CFG-01/CFG-03/CFG-07 (closed), rec-2934 (resolved by `per_entry_size_norm`), tier_item T2.56 (eventual owner of this corpus's shape; closes none of its criteria here).
+
+---
+
 ## Decision 166: Structural-size governance extends beyond Python -- one parameterized class engine over a classified non-Python file taxonomy (completes Decision 43's declared scope; builds on Decisions 102/128/130) (Decided)
 
 **Status:** Decided
@@ -452,6 +486,10 @@ CONTRADICT WARN on Decision 145 (retire-vs-raise, resolved by point 1/2), Decisi
 resolved by point 7), and Decision 88 (egress re-fetch, resolved by point 2); plan-critique converged
 after 3 rounds with all blocking items applied. Roadmap/queue refs (not DECISIONS.md entries): T0.8
 (closed out alongside this entry, Tier Item Freshness Gate), T1.5 c1, rec-2783, rec-2774, rec-2479.
+
+> **Amended by Decision 167 (2026-08-07):** Decision 167 installs the per-entry authoring size norm
+> this point 11 named as the only lever bending the corpus's accrual RATE, at WARN tier pending
+> migration step 3 (destination readiness).
 
 ## Decision 158: Reconcile's recovery path may substitute a freshly-planned artifact for the saved plan.bin, and its complete terminal route set narrows the tf-gated-apply Environment's reach (Decided)
 
@@ -931,6 +969,10 @@ Decision 134 (the size-governance ceilings and authoring grammar this extends), 
 Invariant / numbering authority for the ETL landing this entry), Decision 90 (tier_item status
 flips stay a separate bookkeeping step from ratification, preserved unchanged), Decision 79 (the
 CD.16/CD.24 -> dec-079 precedent the batch-wave form codifies forward).
+
+> **Amended by Decision 167 (2026-08-07):** Decision 167 extends this significance bar with a
+> machine-enforced routing claim (the required envelope `significance` field) and a routing
+> rule / standing-commitment pair in `docs/contracts/decision-entry.yaml`.
 
 ---
 

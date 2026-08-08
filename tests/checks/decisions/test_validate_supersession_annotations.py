@@ -101,6 +101,91 @@ class TestExtractSupersessionEdges:
         assert failed == []
 
 
+class TestEnvelopeBorneEdges:
+    """PLAN-decision-entry-flow-governance / Decision 167: envelope-declared amends/supersedes
+    edges are unioned into extract_supersession_edges so an envelope-bearing entry cannot
+    silently escape this guard just because it carries no textual "amends Decision N" prose."""
+
+    def test_envelope_amends_edge_is_extracted(self, tmp_path: Path) -> None:
+        _write_decisions(
+            tmp_path,
+            live="## Decision 5: Envelope-only amends (Decided)\n\n"
+            "```yaml\nnumber: 5\namends: [1]\n```\n\n**Decision:** No textual amends prose here.\n\n---\n\n"
+            "## Decision 1: Old (Decided)\n\n**Status:** Superseded\n",
+        )
+        edges = extract_supersession_edges(tmp_path)
+        assert (5, 1, "docs/DECISIONS.md") in edges
+
+    def test_envelope_supersedes_edge_is_extracted(self, tmp_path: Path) -> None:
+        _write_decisions(
+            tmp_path,
+            live="## Decision 5: Envelope-only supersedes (Decided)\n\n"
+            "```yaml\nnumber: 5\nsupersedes: [1]\n```\n\n**Decision:** No textual prose here.\n\n---\n\n"
+            "## Decision 1: Old (Decided)\n\n**Status:** Superseded\n",
+        )
+        edges = extract_supersession_edges(tmp_path)
+        assert (5, 1, "docs/DECISIONS.md") in edges
+
+    def test_envelope_only_entry_without_annotation_fails_the_guard(self, tmp_path: Path) -> None:
+        """The whole point: an envelope-declared edge with no forward pointer on the victim
+        must not silently escape -- it fails exactly like the textual-prose form does."""
+        _write_decisions(
+            tmp_path,
+            live="## Decision 5: Envelope amends, no annotation (Decided)\n\n"
+            "```yaml\nnumber: 5\namends: [1]\n```\n\n**Decision:** No back-pointer named here at all.\n\n---\n\n"
+            "## Decision 1: Old (Decided)\n\n**Status:** Superseded\n\n**Decision:** No back-pointer here.\n",
+        )
+        _write_waivers(tmp_path)
+        failed: list[str] = []
+        validate_supersession_annotations(failed, root=tmp_path)
+        assert failed == ["Decision supersession-annotation guard"]
+
+    def test_envelope_edge_with_annotation_passes(self, tmp_path: Path) -> None:
+        _write_decisions(
+            tmp_path,
+            live="## Decision 5: Envelope amends, annotated (Decided)\n\n"
+            "```yaml\nnumber: 5\namends: [1]\n```\n\n**Decision:** No textual prose here.\n\n---\n\n"
+            "## Decision 1: Old (Decided)\n\n**Status:** Superseded by Decision 5.\n",
+        )
+        _write_waivers(tmp_path)
+        failed: list[str] = []
+        validate_supersession_annotations(failed, root=tmp_path)
+        assert failed == []
+
+    def test_envelope_self_reference_is_skipped(self, tmp_path: Path) -> None:
+        _write_decisions(
+            tmp_path,
+            live="## Decision 5: Self-citing envelope (Decided)\n\n```yaml\nnumber: 5\namends: [5]\n```\n",
+        )
+        edges = extract_supersession_edges(tmp_path)
+        assert edges == []
+
+    def test_envelope_and_textual_edge_for_the_same_pair_is_not_duplicated(self, tmp_path: Path) -> None:
+        _write_decisions(
+            tmp_path,
+            live="## Decision 5: Both forms (Decided)\n\n"
+            "```yaml\nnumber: 5\namends: [1]\n```\n\n**Decision:** This also says amends Decision 1 in prose.\n\n---\n\n"
+            "## Decision 1: Old (Decided)\n\n**Status:** Superseded\n",
+        )
+        edges = extract_supersession_edges(tmp_path)
+        assert edges.count((5, 1, "docs/DECISIONS.md")) == 1
+
+    def test_no_envelope_entry_is_unaffected(self, tmp_path: Path) -> None:
+        """An entry with no envelope at all must not spuriously contribute edges."""
+        _write_decisions(tmp_path, live="## Decision 5: No envelope (Decided)\n\n**Status:** Decided\n")
+        assert extract_supersession_edges(tmp_path) == []
+
+    def test_scalar_amends_does_not_crash_and_contributes_no_edge(self, tmp_path: Path) -> None:
+        """Code-review follow-up: a malformed 'amends: 150' (scalar, not a list) is rejected as
+        a malformed envelope at the shared extract_entry_envelope layer -- this extractor must
+        not crash on list(envelope.get("amends") or []), and must contribute zero edges for it."""
+        _write_decisions(
+            tmp_path,
+            live="## Decision 5: Malformed amends (Decided)\n\n```yaml\nnumber: 5\namends: 150\n```\n",
+        )
+        assert extract_supersession_edges(tmp_path) == []
+
+
 class TestSupersessionAnnotationSubCheck:
     def test_unannotated_full_supersession_fails(self, tmp_path: Path) -> None:
         _write_decisions(

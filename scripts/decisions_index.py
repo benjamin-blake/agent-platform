@@ -14,13 +14,24 @@ consecutive calls are byte-identical (json.dumps(..., sort_keys=True) equal) and
 docs/decisions-index.json can be compared for drift without a timestamp always tripping it.
 
 Edge derivation:
-  - amends: the row's own "amends" key (scripts.decisions_md.extract_amends_edges, forward
-    title-relation extraction on the raw heading title).
+  - amends: the row's own "amends" key -- envelope-sourced (scripts.decisions_md
+    extract_entry_envelope's `amends` field) when the entry carries a well-formed metadata
+    envelope, else the legacy title-relation extraction (extract_amends_edges). No second
+    derivation lives here: this generator consumes whichever value parse_decisions_md() already
+    resolved, unchanged (PLAN-decision-entry-flow-governance, Decision 167).
   - superseded_by: the row's typed "superseded_by" string ('dec-NNN' or ''), coerced to
     int | None.
   - supersedes: the corpus-wide UNION of (a) the inverse of every OTHER row's superseded_by
-    pointing at this number, and (b) this row's own "title_supersedes" key
-    (scripts.decisions_md._extract_title_borne_supersedes, title-borne "Supersedes Decision N").
+    pointing at this number, and (b) this row's own "title_supersedes" key -- likewise
+    envelope-sourced (the envelope's `supersedes` field) when present, else the legacy
+    title-borne extraction (scripts.decisions_md._extract_title_borne_supersedes).
+
+`significance` is a parse_decisions_md() row key (the envelope's routing claim dict, or {} when
+absent) that is DELIBERATELY NOT projected into docs/decisions-index.json -- it is parser-surfaced
+and check-read only (scripts.checks.decisions.validate_decision_entry_conformance), mirroring the
+index-only treatment of `intent`/`amends`/`title_supersedes` before them: the 131,000-byte index
+pin (Decision 166 point 9) grows with every projected field on every row, and significance is a
+per-entry authoring-time claim the index's consumers (decision-scout triage) have no use for.
 
 `live` derivation (PLAN-decision-scout-bounded-retrieval): whether the decision number is headed
 in docs/DECISIONS.md, via scripts.decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md])

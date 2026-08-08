@@ -114,6 +114,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_candidate_decision_supersession"),
         _c("validate_decisions_size"),
         _c("validate_decisions_index_freshness"),
+        _c("validate_decision_entry_conformance", pre_globs=("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md")),
         _c("validate_cc_limits", pre_globs=("**/*.py",)),
         _c("validate_sloc_limits"),
         _c("validate_structural_size_limits"),
