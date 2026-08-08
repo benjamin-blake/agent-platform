@@ -7,9 +7,10 @@ coverage (with a synthetic sectioner-narrowing mutation proving the assertion is
 vacuous), archive coverage, and dual schema-model field sync (DecisionPayload / jsonl_store.
 Decision both carry the four new fields as plain, non-Dq-Annotated optional strings).
 
-Moved verbatim from tests/test_decisions_md.py (PLAN-decision-entry-flow-governance, split into
-this package's test_parse.py / test_envelope.py per the scripts/test_coverage_checker.py
-concern-split remap -- no assertion here is weakened or dropped in the move).
+Moved verbatim from the retired top-level decisions_md test module (PLAN-decision-entry-flow-
+governance, split into this package's test_parse.py / test_envelope.py per the
+scripts/test_coverage_checker.py concern-split remap -- no assertion here is weakened or dropped
+in the move).
 """
 
 from __future__ import annotations
