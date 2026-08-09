@@ -1,0 +1,574 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "opswriter-never-drain-guard"
+intent: >-
+  Close rec-2929 by giving OpsWriter.drain() the never-drain guard Decision 84 I-4 requires, so the
+  last unguarded path that could re-stage a DuckLake-migrated ops row from a local file into Iceberg
+  is shut -- protecting the warehouse-as-source-of-truth invariant the autonomous loop depends on.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-opswriter-never-drain-guard.yaml
+phase: >-
+  Platform T2 (durable operational state hardening). Guards the Decision 84 I-4 retired-outbox
+  invariant ahead of the T2.26 legacy-staging retirement. Not a tier_item slice: this is an
+  ad_hoc_rec (rec-2929), so the Tier Item Freshness Gate is skipped per the soft-warn exception
+  categories.
+scope:
+  - file: src/common/outbox_retirement.py
+    action: Create
+    purpose: >-
+      Sole home for the retired-outbox classification -- DUCKLAKE_MIGRATED_TABLES and
+      is_retired_dir(). Must live under src/ because both Lambda manifests bundle `src/` wholesale
+      but neither includes scripts/sync/, so scripts/ops_writer.py cannot import the constant from
+      scripts.sync.ops without an in-Lambda ImportError. Pure stdlib leaf (no boto3, no awswrangler).
+  - file: tests/test_outbox_retirement.py
+    action: Create
+    purpose: >-
+      Unit tests for the sole home. Path is mapper-verified: map_source_to_test() resolves
+      src/common/outbox_retirement.py to tests/test_outbox_retirement.py, NOT tests/common/ (the
+      src/-generic branch fires because the module is in neither _ALL_MIRROR_TARGET_HOMES nor
+      _RETIRING_GRANDFATHER_HOMES).
+  - file: scripts/ops_writer.py
+    action: Modify
+    purpose: >-
+      Add the never-drain guard to drain(): import is_retired_dir from the sole home and filter the
+      table loop through it. Budgeted at +1 SLOC (569 -> 570 against a 571 budget) by making the
+      filter a generator expression on the existing `for table in TABLE_NAMES:` line rather than an
+      if/continue block.
+  - file: tests/ops_writer/test_drain.py
+    action: Modify
+    purpose: >-
+      Add the retired-skip tests: drain() must not put_object() and must not unlink() a
+      migrated-table outbox file, and must still drain ops_session_log and telemetry_* normally.
+  - file: scripts/sync/ops.py
+    action: Modify
+    purpose: >-
+      Import DUCKLAKE_MIGRATED_TABLES and is_retired_dir from the sole home; re-export
+      DUCKLAKE_MIGRATED_TABLES to preserve every existing `from scripts.sync.ops import ...` site;
+      replace the inline predicate at line 298 with is_retired_dir(table).
+  - file: tests/sync/ops/test_sync_cli.py
+    action: Modify
+    purpose: >-
+      Update the DUCKLAKE_MIGRATED_TABLES set-equality assertion if the re-export changes how it
+      resolves; the assertion must keep proving the re-export is live, not merely that a name exists.
+  - file: scripts/checks/ops_governance/validate_outbox_staleness.py
+    action: Modify
+    purpose: >-
+      Delete the private _is_retired_dir copy and consume is_retired_dir from the sole home.
+  - file: tests/checks/ops_governance/test_validate_outbox_staleness.py
+    action: Modify
+    purpose: >-
+      Keep the check at or above its 95.8 coverage baseline entry after the private copy is removed.
+  - file: tests/fixtures/outbox_guard.py
+    action: Modify
+    purpose: >-
+      Re-point at the sole home (import is_retired_dir rather than redefining it) and update the
+      module docstring, which currently names scripts.sync.ops as the verbatim source.
+  - file: scripts/convergence_health/code_drift.py
+    action: Modify
+    purpose: >-
+      Add src/common/outbox_retirement.py to PROD_SOURCE_PATHSPECS so a future edit to the sole home
+      triggers the governed prod deploy and is visible to the drift sensor.
+  - file: tests/convergence_health/test_code_drift.py
+    action: Modify
+    purpose: >-
+      Cover the new pathspec entry. code_drift.py has no coverage_baseline.yaml entry, so the
+      diff-gated per-file check requires 100%.
+  - file: .github/workflows/deploy-prod-lambdas.yml
+    action: Modify
+    purpose: >-
+      Add the matching 'src/common/outbox_retirement.py' entry to on.push.paths. rec-2686 requires
+      this filter and PROD_SOURCE_PATHSPECS stay in sync; there is NO automated check enforcing it
+      (verified), so the two edits must land together in this PR.
+bundled_recommendations:
+  - rec-2929
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    OpsWriter.drain() never calls put_object() for, and never unlinks, a file under a retired outbox
+    dir (a DUCKLAKE_MIGRATED_TABLES member or any *_pending sibling), while still draining
+    ops_session_log and telemetry_* tables exactly as before.
+  - >-
+    src/common/outbox_retirement.py is the SOLE definition of the retired-dir classification: no
+    other file in scripts/, src/ or tests/ redefines the `in DUCKLAKE_MIGRATED_TABLES or
+    endswith("_pending")` predicate, and scripts.sync.ops.DUCKLAKE_MIGRATED_TABLES still resolves
+    for every existing importer.
+  - >-
+    scripts/ops_writer.py stays at or under its 571 SLOC budget with no new
+    `# raise-approved:` marker added to config/sloc_budgets.yaml.
+  - >-
+    rec-2929's stored acceptance command passes verbatim against the working tree.
+  - >-
+    src/common/outbox_retirement.py appears in BOTH PROD_SOURCE_PATHSPECS and the
+    deploy-prod-lambdas.yml on.push.paths filter.
+  - >-
+    Both affected active Lambda artifacts (data-pipeline, ops-compaction) are rebuilt and deployed
+    through the governed .github/workflows/deploy-prod-lambdas.yml channel with their per-function
+    smoke gate green, and the deployed code carries the guard.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Sole home exists, exports both public names, and carries the migrated-table set unchanged from
+      its previous home in scripts/sync/ops.py.
+    command: >-
+      bin/venv-python -c "from src.common.outbox_retirement import DUCKLAKE_MIGRATED_TABLES,
+      is_retired_dir; assert DUCKLAKE_MIGRATED_TABLES == frozenset({'ops_recommendations',
+      'ops_decisions', 'ops_priority_queue', 'ops_execution_plans'}), DUCKLAKE_MIGRATED_TABLES;
+      assert is_retired_dir('ops_decisions') and is_retired_dir('ops_priority_queue') and
+      is_retired_dir('anything_pending'); assert not is_retired_dir('ops_session_log') and not
+      is_retired_dir('telemetry_sessions'); print('OK')"
+    expected: "Prints OK and exits 0."
+    fix_if: >-
+      A KeyError/ImportError means the module or a name is missing. An AssertionError on the frozenset
+      means the set was transcribed rather than moved -- copy it verbatim from scripts/sync/ops.py:56.
+      An AssertionError on ops_session_log means the predicate over-matches and would stop a
+      legitimate legacy-staging drain.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: outbox-retirement-sole-home-exports
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      The retired-dir predicate has exactly ONE definition repo-wide (Decision 104 sole-home) -- the
+      three pre-existing private copies are gone.
+    command: >-
+      test "$(grep -rn 'in DUCKLAKE_MIGRATED_TABLES or' --include='*.py' scripts/ src/ tests/ | wc -l)"
+      -eq 1
+    expected: >-
+      Exit 0. Exactly one match, in src/common/outbox_retirement.py. Before this plan the count is 3
+      (tests/fixtures/outbox_guard.py:20, scripts/checks/ops_governance/validate_outbox_staleness.py:10,
+      scripts/sync/ops.py:298).
+    fix_if: >-
+      Count 2 or 3 means a private copy survived -- re-point that consumer at the sole home. Count 0
+      means the sole home phrased the predicate differently; either restate it in this form or update
+      this step's pattern to match the real single definition.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: outbox-retirement-single-definition
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Behavioural proof of the guard: drain() refuses retired dirs and still drains legitimate ones.
+      This is the step that would catch a guard that silently no-ops or that over-matches.
+    command: >-
+      bin/venv-python -m pytest tests/ops_writer/test_drain.py tests/test_outbox_retirement.py
+      tests/sync/ops/test_drain.py tests/test_outbox_hermeticity_guard.py -q
+    expected: >-
+      All pass. The new drain tests must assert BOTH negatives (no put_object call for the migrated
+      table, and the outbox file still exists afterwards) and the positives (ops_session_log and a
+      telemetry_* table still drain and still unlink).
+    fix_if: >-
+      A test asserting the file survives but not that put_object was never called is too weak -- a
+      guard that stages then fails to unlink would pass it. Assert on the mock's call args, not just
+      on filesystem state.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The evidence is a multi-file pytest invocation over four suites, not one of the six canonical
+      primitive slots; a test_selector slot would pin only a single node id and would stop guarding
+      the other three suites this step deliberately runs together.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      rec-2929's stored acceptance command passes verbatim -- the guard name is load-bearing code in
+      scripts/ops_writer.py, not a comment.
+    command: >-
+      grep -q 'is_retired_dir\|DUCKLAKE_MIGRATED_TABLES\|_RETIRED' scripts/ops_writer.py &&
+      grep -q 'is_retired_dir' scripts/ops_writer.py &&
+      test "$(grep -c 'is_retired_dir' scripts/ops_writer.py)" -ge 2
+    expected: >-
+      Exit 0. At least two occurrences: the import and the call site in drain(). A single occurrence
+      would mean the name is imported but unused, or present only in a comment.
+    fix_if: >-
+      Zero matches means the guard was written with a differently-named helper -- do NOT add a comment
+      naming is_retired_dir to satisfy this grep (that is acceptance-theatre). Either call
+      is_retired_dir directly, or update rec-2929's acceptance string via
+      `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2929` and record the change in the
+      resolution.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ops-writer-drain-guard-load-bearing
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      scripts/ops_writer.py stays within its SLOC budget without a new raise marker, and no budget
+      entry was raised anywhere.
+    command: >-
+      bin/venv-python -c "import pathlib; n=len([l for l in
+      pathlib.Path('scripts/ops_writer.py').read_text().splitlines() if l.strip() and not
+      l.strip().startswith('#')]); print(n); assert n <= 571, f'{n} SLOC exceeds budget 571'" &&
+      git diff origin/main -- config/sloc_budgets.yaml | grep -q 'raise-approved' && exit 1 || exit 0
+    expected: >-
+      Prints a number <= 571 and exits 0, with no 'raise-approved' marker added to the budget diff.
+      Expected landing value is 570.
+    fix_if: >-
+      Over 571 means the guard was written as an if/continue block. Use a generator filter on the
+      existing loop line instead. Do NOT raise the budget: Decision 128's decompose-by-default applies
+      and no existing Decision authorizes a raise here (Decision 165), so a marker would be
+      unauthorized and validate_sloc_budget_raises would fail the PR.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ops-writer-sloc-within-budget
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      The sole home is registered in BOTH halves of the rec-2686 convention-synced pair, so a future
+      edit to it triggers the governed deploy and is visible to the drift sensor.
+    command: >-
+      bin/venv-python -c "from scripts.convergence_health import PROD_SOURCE_PATHSPECS; import
+      pathlib; wf = pathlib.Path('.github/workflows/deploy-prod-lambdas.yml').read_text(); p =
+      'src/common/outbox_retirement.py'; assert p in PROD_SOURCE_PATHSPECS, PROD_SOURCE_PATHSPECS;
+      assert p in wf, 'workflow on.push.paths missing the entry'; print('OK')"
+    expected: "Prints OK and exits 0."
+    fix_if: >-
+      Failing on PROD_SOURCE_PATHSPECS means only the workflow was edited; failing on the workflow
+      means only the tuple was. There is no automated check keeping these in sync, so a one-sided edit
+      is silently wrong -- both must land in this PR.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: outbox-retirement-prod-pathspec-synced
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Every touched source file still meets its coverage obligation, and the test-path mapper agrees
+      with where the new test was written.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.test_coverage_checker import
+      map_source_to_test; r = map_source_to_test(Path('src/common/outbox_retirement.py')); assert
+      r is not None and r.name == 'test_outbox_retirement.py' and r.parent.name == 'tests', r;
+      print('OK')" && bin/venv-python -m pytest tests/ops_writer tests/sync/ops
+      tests/test_outbox_retirement.py tests/checks/ops_governance/test_validate_outbox_staleness.py
+      tests/convergence_health/test_code_drift.py -q --cov=scripts.ops_writer --cov=scripts.sync.ops
+      --cov=src.common.outbox_retirement --cov=scripts.convergence_health.code_drift
+      --cov=scripts.checks.ops_governance.validate_outbox_staleness --cov-report=term-missing
+    expected: >-
+      Mapper prints OK. ops_writer.py, sync/ops.py, outbox_retirement.py and code_drift.py all report
+      100% (none has a coverage_baseline.yaml entry); validate_outbox_staleness.py reports >= 95.8
+      (its baseline entry).
+    fix_if: >-
+      A mapper mismatch means the test file is in the wrong place and check_test_file_exists will fail
+      -- move it rather than registering a new roster entry. A coverage drop on ops_writer.py or
+      sync/ops.py is a regression: both measure 100% before this plan.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Composite of a mapper assertion and a five-target coverage run with per-file thresholds that
+      differ (100% vs the 95.8 baseline); it is not expressible as a single canonical primitive slot,
+      and the coverage gate itself is already enforced independently by validate.py.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Full-tier presubmit passes end to end before any commit or PR (Decision 163 -- the fast tier
+      alone does not satisfy this plan's handoff_policy).
+    command: bin/venv-python -m scripts.validate
+    expected: "Exit 0."
+    fix_if: >-
+      Forward-fix on the branch; never auto-revert. If the run times out, treat the handoff as blocked
+      per handoff_policy.timeout_disposition and rerun the full tier from the start.
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: post-deploy
+    action: >-
+      The governed code-deploy channel actually ran for the merge commit and deployed BOTH affected
+      active artifacts (Decision 125/126: this channel is the default; build_lambda --deploy is
+      break-glass and must NOT be run here).
+    command: >-
+      bin/venv-python -c "import subprocess, json; print(subprocess.run(['gh','run','list',
+      '--workflow','deploy-prod-lambdas.yml','--limit','3','--json',
+      'conclusion,headSha,displayTitle'], capture_output=True, text=True).stdout)" ||
+      echo "NOTE: gh CLI is unavailable in CC-web -- read the run via
+      mcp__github__actions_list(workflow='deploy-prod-lambdas.yml') instead"
+    expected: >-
+      The most recent deploy-prod-lambdas run whose headSha is this PR's merge commit has
+      conclusion=success, with its per-function smoke gate green for
+      agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor and
+      agent-platform-ops-compaction.
+    fix_if: >-
+      No run triggered means the push touched no path in the on.push.paths filter -- re-check step 6.
+      A red smoke gate is a real deploy failure: diagnose and forward-fix; do NOT fall back to local
+      `build_lambda --deploy`, which is break-glass-only and needs explicit human direction.
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: post-deploy
+    action: >-
+      The deployed package actually contains the guard -- proving the manifest bundled the new
+      src/common leaf rather than silently excluding it.
+    command: >-
+      bin/venv-python -m scripts.build_lambda --list-contents ops-compaction 2>/dev/null | grep -c
+      'outbox_retirement' || bin/venv-python -c "from scripts.lambda_manifest import load_manifest,
+      staged_paths; print([p for p in staged_paths(load_manifest('ops-compaction')) if
+      'outbox_retirement' in str(p)])"
+    expected: >-
+      src/common/outbox_retirement.py appears in the staged contents of BOTH data-pipeline.zip and
+      ops-compaction.zip (it is picked up by the `includes: - src/` wildcard; it must NOT be caught by
+      either manifest's ducklake-only excludes list).
+    fix_if: >-
+      Absent means an excludes entry is over-matching, or the module was placed outside src/. If the
+      helper name differs from the real build_lambda/lambda_manifest API, substitute the equivalent
+      staging-inspection call rather than skipping the step -- an unbundled sole home would make
+      drain() ImportError inside the Lambda, which is worse than the bug being fixed.
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: post-deploy
+    action: >-
+      rec-2929 is closed in the warehouse and the read cache reflects it.
+    command: >-
+      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json, pathlib; rows =
+      [json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; r =
+      next(x for x in rows if x.get('id') == 'rec-2929'); assert r['status'] == 'closed', r['status'];
+      print(r['resolution'][:200])"
+    expected: >-
+      Status is closed and the resolution explicitly records the TABLE_NAMES decision the rec asked
+      for ("removal deferred to T2.26 with the producer repoint").
+    fix_if: >-
+      If the Resolves: trailer did not fire rec-autoclose, close it manually via
+      `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2929 --status closed --resolution
+      "..."`. Never edit logs/.recommendations-log.jsonl directly -- it is a read cache.
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: src/common/outbox_retirement.py
+    behavior: >-
+      is_retired_dir() returns True for every DUCKLAKE_MIGRATED_TABLES member and for any *_pending
+      dir, and False for legitimately-drainable dirs (ops_session_log, telemetry_*).
+    verification_step: 3
+    test_selector: tests/test_outbox_retirement.py
+    red_green_expectation: >-
+      Red before (module does not exist), green after.
+  - source: scripts/ops_writer.py
+    behavior: >-
+      OpsWriter.drain() never put_object()s and never unlinks a file under a retired outbox dir, while
+      still draining ops_session_log and telemetry_* tables.
+    verification_step: 3
+    test_selector: tests/ops_writer/test_drain.py
+    red_green_expectation: >-
+      Red before (drain() has no guard, so a migrated-table outbox file is staged and unlinked), green
+      after.
+  - source: scripts/sync/ops.py
+    behavior: >-
+      sync_ops.drain() keeps skipping retired dirs with a loud warning after the predicate moves to
+      the sole home, and scripts.sync.ops.DUCKLAKE_MIGRATED_TABLES still resolves for existing
+      importers.
+    verification_step: 3
+    test_selector: tests/sync/ops/test_drain.py
+    red_green_expectation: >-
+      Green before and after -- this is a refactor-safety obligation; it turns red if the re-export or
+      the predicate swap breaks the existing guard.
+  - source: tests/fixtures/outbox_guard.py
+    behavior: >-
+      The conftest hermeticity guard still detects files landing in retired outbox dirs after the
+      fixture stops defining its own predicate.
+    verification_step: 3
+    test_selector: tests/test_outbox_hermeticity_guard.py
+    red_green_expectation: >-
+      Green before and after -- turns red if re-pointing the fixture at the sole home changes its
+      detection semantics.
+  - source: scripts/checks/ops_governance/validate_outbox_staleness.py
+    behavior: >-
+      The check still hard-fails on any file in a retired outbox dir and still only warns on >24h
+      legacy staging files, after its private predicate copy is removed.
+    verification_step: 7
+    test_selector: tests/checks/ops_governance/test_validate_outbox_staleness.py
+    red_green_expectation: >-
+      Green before and after -- turns red if consuming the sole home changes the check's verdicts.
+  - source: scripts/convergence_health/code_drift.py
+    behavior: >-
+      PROD_SOURCE_PATHSPECS contains src/common/outbox_retirement.py, so the drift sensor treats an
+      edit to the sole home as a prod source change.
+    verification_step: 7
+    test_selector: tests/convergence_health/test_code_drift.py
+    red_green_expectation: >-
+      Red before (entry absent), green after.
+  - source: .github/workflows/deploy-prod-lambdas.yml
+    behavior: >-
+      on.push.paths includes src/common/outbox_retirement.py so an edit to the sole home triggers the
+      governed deploy.
+    verification_step: 6
+    command: >-
+      bin/venv-python -c "from scripts.convergence_health import PROD_SOURCE_PATHSPECS; import
+      pathlib; wf = pathlib.Path('.github/workflows/deploy-prod-lambdas.yml').read_text(); p =
+      'src/common/outbox_retirement.py'; assert p in PROD_SOURCE_PATHSPECS, PROD_SOURCE_PATHSPECS;
+      assert p in wf, 'workflow on.push.paths missing the entry'; print('OK')"
+    waiver_reason: >-
+      A GitHub Actions workflow trigger filter is not reachable from pytest -- it is YAML consumed by
+      GitHub, not importable code. The paired assertion in verification step 6 is the strongest
+      available in-repo evidence, and rec-2686's sync convention has no automated enforcer to lean on.
+constraints:
+  - >-
+    Only files in the Scope table may be modified. Out-of-scope bugs become recommendations via
+    scripts/ops_data_portal.py, never inline fixes.
+  - >-
+    Do NOT remove ops_decisions / ops_priority_queue from _OPS_TABLE_NAMES or TABLE_NAMES. That
+    changes write(), compact(), compact_all() and _refresh_view() inside the LIVE ops-compaction
+    Lambda, and turns write() into warn-and-drop for the dormant s3_log_store queue producer -- the
+    tracked exemption at validate_warehouse_write_sources.py:61, explicitly parked pending the T2.26
+    repoint. That removal belongs to T2.26, which owns the producer repoint.
+  - >-
+    scripts/ops_writer.py must stay at or under 571 SLOC. Do NOT raise the budget and do NOT
+    decompose the file into a facade package in this plan -- see the Context entries on Decision 128
+    and T-1.24.
+  - >-
+    The sole home must be a pure stdlib leaf. No boto3, awswrangler, pandas or scripts.* imports: it
+    is bundled into two Lambda zips via the `includes: - src/` wildcard and imported at
+    scripts/ops_writer.py module scope.
+  - >-
+    Do NOT run `bin/venv-python -m scripts.build_lambda --deploy` locally. Per Decision 125/126 and
+    docs/contracts/build-lambda.yaml deploy_channels, the governed
+    .github/workflows/deploy-prod-lambdas.yml channel is the default for both affected artifacts;
+    the local invocation is break-glass-only and needs explicit human direction.
+  - >-
+    Do NOT satisfy rec-2929's acceptance grep with a comment naming is_retired_dir. The name must be
+    load-bearing code. If the implementation genuinely cannot use that name, update the rec's
+    acceptance string via the ops portal and say so in the resolution.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    All recommendation writes go through scripts.ops_data_portal. Never edit
+    logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl directly.
+context:
+  - >-
+    "Decision-scout verdict + CITE list: FLAGS_FOUND (120 of 120 decisions triaged). CITE:
+    dec-84 (I-1, I-4), dec-79, dec-125, dec-126, dec-128, dec-102, dec-165, dec-104, dec-124,
+    dec-131, dec-132, dec-148, dec-159, dec-161, dec-163. RELATED/background only: dec-48, dec-55,
+    dec-70, dec-130, dec-166, dec-143."
+  - >-
+    "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Scout flag 1 (Decision 131, WARN) -- RESOLVED. Verified by running the mapper:
+    map_source_to_test(src/common/outbox_retirement.py) returns tests/test_outbox_retirement.py, NOT
+    tests/common/. The src/-generic branch fires because the module is in neither
+    _ALL_MIRROR_TARGET_HOMES nor _RETIRING_GRANDFATHER_HOMES. Verification step 7 re-runs the mapper
+    so this cannot silently regress.
+  - >-
+    Scout flag 2 (Decision 159, NOTE) -- PARTIALLY CORRECTED. The scout claimed neither touched check
+    is baselined; in fact scripts/checks/ops_governance/validate_outbox_staleness.py IS baselined at
+    95.8 (config/coverage_baseline.yaml:16). scripts/convergence_health/code_drift.py is NOT
+    baselined, so it needs 100%. Both test homes exist and are in scope.
+  - >-
+    Scout flag 3 (Decision 84, SPIRIT) -- ACCEPTED AS A NAMED RESIDUAL. Guarding drain() while
+    write()/compact() still treat migrated tables as live Iceberg leaves one door of the same defect
+    class open. Deferred deliberately: the write() door is already guarded statically repo-wide by
+    validate_warehouse_write_sources.py, with exactly one tracked exemption (s3_log_store.py, parked
+    pending the T2.26 producer repoint). A runtime guard there is behaviour-changing for that
+    exempted producer, so it cannot be cheap. Residual owner is T2.26 -- but T2.26 does not currently
+    list scripts/ops_writer.py in files_in_scope and no exit criterion names the TABLE_NAMES removal,
+    so this plan files a rec against T2.26 to give the residual an owner rather than a mention.
+  - >-
+    SLOC framing (Decision 128, dec-102, dec-165): Decision 128's decompose-by-default trigger does
+    NOT fire here -- it fires when a change pushes a file PAST budget, and the chosen design lands at
+    570 against 571 (validate fails on `sloc > budget`, so 571 is legal). The genuine design driver
+    is Lambda importability, not the ceiling: the classification MUST live under src/ because neither
+    manifest includes scripts/sync/. The +1 SLOC follows from that, it was not engineered around.
+  - >-
+    Why NOT decompose scripts/ops_writer.py now, despite Decision 128's general preference: a facade
+    decomposition keeps the `scripts.ops_writer` import path (dodging ~27 import refs) but still
+    rewrites SIX literal file-path governance surfaces -- both Lambda manifests' includes,
+    PROD_SOURCE_PATHSPECS (code_drift.py:196), deploy-prod-lambdas.yml on.push.paths (line 69),
+    config/sloc_budgets.yaml:17, and _CONCERN_SPLIT_TEST_PACKAGES (test_coverage_checker.py:214,
+    which hardcodes the literal string "scripts/ops_writer.py"). Those are exactly the coordinated
+    same-commit rewrite surfaces roadmap item T-1.24 exists to pay for once ("HIGHEST fan-out of the
+    six families: 27+ external refs... deliberately deferred"), and are what scripts/CLAUDE.md's "do
+    not migrate it ad hoc" is protecting. Decomposition remains correct -- at T-1.24, under its plan,
+    not as a rider on a 6-SLOC guard fix. Assessed via a fable advice-consult this session.
+  - >-
+    Design trade-off accepted: filtering the loop with a generator expression costs +1 SLOC but drops
+    the per-table warning that scripts/sync/ops.py:298 emits. This loses no signal --
+    validate_outbox_staleness HARD-FAILS CI on ANY file in a retired outbox dir, so the loud signal
+    exists upstream of the drain path.
+  - >-
+    The scripts/sync/ops.py re-export of DUCKLAKE_MIGRATED_TABLES is a Decision 80/104 facade, not a
+    Decision 55 import shim. The no-import-shims clause is scoped to T-1.24's relocation (leaving no
+    stub at a vacated module path); a surviving module re-exporting a constant it used to define is
+    the repo's own sanctioned pattern.
+  - >-
+    Pre-existing systemic gap, OUT OF SCOPE, file a rec: the whole of src/common/** is bundled into
+    both prod zips via the `includes: - src/` wildcard, yet NO src/common path appears in
+    PROD_SOURCE_PATHSPECS or the deploy workflow filter. Every non-ducklake src/common edit today
+    silently skips the governed deploy AND blinds the code_drift sensor. This plan registers only the
+    one file it creates; the systemic fix needs its own slice.
+  - >-
+    Preflight at planning time: venv ok, creds ok, branch
+    claude/opswriter-drain-guard-retired-kophmg, main 0 behind / 0 ahead (no Main Divergence
+    Assessment needed), ci_rca_unresolved_recs EMPTY (no HARD BLOCK), ops_outbox empty of anomalies.
+    open_recs=970, non_automatable=837 (softcap breached -- informational per Decision 73).
+    data_quality has never run (checks_defined=0); telemetry_health is the expected Decision 84
+    Phase-4 stub. rec-2929 relevance gate returned `unknown` (no signals), so bundling is safe.
+  - >-
+    Deploy channel (Decision 125/126, docs/contracts/build-lambda.yaml deploy_channels): both
+    affected artifacts are channel_class decoupled_build_pipeline with governed_channel
+    .github/workflows/deploy-prod-lambdas.yml. NOTE a stale cross-reference: the planning skill's
+    Lambda Deployment Assessment still says local `build_lambda --deploy` is the routine step for
+    this class. The contract is newer (T2.43) and wins -- the local invocation is break_glass_only.
+  - >-
+    scripts/ops_writer.py and scripts/sync/ops.py both measure 100% line coverage today and have no
+    coverage_baseline.yaml entry, so new code in them must be fully covered to avoid a regression.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read (84 I-1/I-4, 79, 104, 124, 125, 126, 128, 131, 132,
+    148, 159, 163, 165) -- do not load DECISIONS.md in full
+  - AGENTS.md Warehouse-as-source-of-truth invariant and SLOC governance sections read
+  - >-
+    docs/contracts/build-lambda.yaml deploy_channels section read (prod_functions, ops_compaction)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create src/common/outbox_retirement.py -- module docstring naming Decision 84 I-4 as the
+    invariant it enforces; DUCKLAKE_MIGRATED_TABLES moved VERBATIM from scripts/sync/ops.py:56 (do
+    not retype the members); is_retired_dir(dirname) implementing `dirname in
+    DUCKLAKE_MIGRATED_TABLES or dirname.endswith("_pending")`. Pure stdlib, no scripts.* imports.
+  - >-
+    Modify scripts/sync/ops.py -- import DUCKLAKE_MIGRATED_TABLES and is_retired_dir from the sole
+    home, keep DUCKLAKE_MIGRATED_TABLES a module-level public name so existing importers still
+    resolve, delete the moved literal, and replace the inline predicate at line 298 with
+    is_retired_dir(table). Leave the warning message and control flow unchanged.
+  - >-
+    Modify scripts/ops_writer.py -- add the sole-home import, and change drain()'s `for table in
+    TABLE_NAMES:` to a generator-filtered loop over the non-retired tables. Keep `results` seeded
+    from the full TABLE_NAMES so retired tables still report 0. Confirm the file lands at 570 SLOC.
+  - >-
+    Modify tests/fixtures/outbox_guard.py -- import is_retired_dir from the sole home instead of
+    redefining it (re-export it so tests importing it from the fixture still work), and correct the
+    module docstring, which currently names scripts.sync.ops as the verbatim source.
+  - >-
+    Modify scripts/checks/ops_governance/validate_outbox_staleness.py -- delete the private
+    _is_retired_dir and consume is_retired_dir from the sole home; update its call sites.
+  - >-
+    Modify scripts/convergence_health/code_drift.py -- add 'src/common/outbox_retirement.py' to
+    PROD_SOURCE_PATHSPECS, and .github/workflows/deploy-prod-lambdas.yml -- add the matching entry to
+    on.push.paths. Both must land together (no automated sync check exists).
+  - >-
+    Create tests/test_outbox_retirement.py and extend tests/ops_writer/test_drain.py with the
+    retired-skip tests. The drain tests must assert on the put_object mock's call args (never called
+    for a migrated table) AND that the outbox file survives -- asserting only the latter would pass a
+    guard that stages but fails to unlink. Update tests/sync/ops/test_sync_cli.py,
+    tests/checks/ops_governance/test_validate_outbox_staleness.py and
+    tests/convergence_health/test_code_drift.py as needed.
+  - >-
+    File two recommendations via `bin/venv-python -m scripts.ops_data_portal` (call
+    get_rec_write_guidance() first): (a) the systemic src/common/** PROD_SOURCE_PATHSPECS gap; (b) a
+    rec against T2.26 to own the deferred TABLE_NAMES removal + legacy staging write-path retirement.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until pass. Steps 1-8 are
+    pre-deploy and must be green before the PR. On an unrecoverable V3 failure at steps 9-11, stop
+    and RCA (Decision 55) rather than falling back to a local deploy.
+  - >-
+    Commit with a `Resolves: rec-2929` trailer in the squash-merge body, hold the PR subscription
+    through the post-merge deploy-prod-lambdas run, then run verification steps 9-11.
+  - 'Report: what was implemented, verification results, and the two recs filed.'
+work_areas: []
+rollback: >-
+  Revert the squash-merge commit. The guard is purely subtractive at runtime (it only stops writes
+  that Decision 84 I-4 forbids), so reverting restores the prior unguarded drain rather than
+  corrupting state. Because scripts/ops_writer.py is in PROD_SOURCE_PATHSPECS, the revert merge
+  itself re-triggers deploy-prod-lambdas and redeploys the prior code to both functions -- confirm
+  that run goes green rather than assuming the revert alone is sufficient. No data migration, no
+  Terraform, and no IAM change is involved.
