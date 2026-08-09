@@ -53,6 +53,17 @@ scope:
     purpose: >-
       Update the DUCKLAKE_MIGRATED_TABLES set-equality assertion if the re-export changes how it
       resolves; the assertion must keep proving the re-export is live, not merely that a name exists.
+  - file: tests/sync/ops/test_drain.py
+    action: Modify
+    purpose: >-
+      PRE-AUTHORIZED, likely a no-op. Holds the existing sync_ops.drain() retired-skip test that the
+      predicate swap must keep green. Listed so constraint 1 does not strand the implementer if
+      consuming the sole home perturbs it.
+  - file: tests/test_outbox_hermeticity_guard.py
+    action: Modify
+    purpose: >-
+      PRE-AUTHORIZED, likely a no-op. Unit-tests tests/fixtures/outbox_guard.py directly, so
+      re-pointing that fixture at the sole home could perturb it. Listed for the same reason.
   - file: scripts/checks/ops_governance/validate_outbox_staleness.py
     action: Modify
     purpose: >-
@@ -87,9 +98,17 @@ bundled_recommendations:
 infrastructure_dependencies: []
 acceptance_criteria:
   - >-
-    OpsWriter.drain() never calls put_object() for, and never unlinks, a file under a retired outbox
-    dir (a DUCKLAKE_MIGRATED_TABLES member or any *_pending sibling), while still draining
-    ops_session_log and telemetry_* tables exactly as before.
+    OpsWriter.drain() never calls put_object() for, and never unlinks, a file under the
+    logs/.ops-outbox/ops_decisions/ or logs/.ops-outbox/ops_priority_queue/ dirs, while still
+    draining ops_session_log and every telemetry_* table exactly as before. Those two names are the
+    ONLY ones for which this guard is a behaviour change: drain() iterates the fixed TABLE_NAMES
+    list, which contains no *_pending member and neither ops_recommendations nor
+    ops_execution_plans -- so a test staged under any of those would pass identically before and
+    after and proves nothing.
+  - >-
+    The guard is expressed as the general retired-dir predicate (is_retired_dir), not as a hardcoded
+    two-name check, so it forward-guards any future TABLE_NAMES addition of a migrated table or a
+    *_pending dir. This is a code-shape criterion, not a behaviour change demonstrable today.
   - >-
     src/common/outbox_retirement.py is the SOLE definition of the retired-dir classification: no
     other file in scripts/, src/ or tests/ redefines the `in DUCKLAKE_MIGRATED_TABLES or
@@ -144,7 +163,10 @@ verification_plan:
     fix_if: >-
       Count 2 or 3 means a private copy survived -- re-point that consumer at the sole home. Count 0
       means the sole home phrased the predicate differently; either restate it in this form or update
-      this step's pattern to match the real single definition.
+      this step's pattern to match the real single definition. FALSE POSITIVE to avoid: the pattern is
+      a plain recursive grep over tests/ too, so quoting the predicate verbatim in the new
+      tests/test_outbox_retirement.py docstring inflates the count to 2 and this fix_if would
+      misdiagnose it as a surviving copy. Describe the predicate in prose there, do not quote it.
     hermetic: true
     graduation: graduate
     graduation_check_id: outbox-retirement-single-definition
@@ -157,13 +179,18 @@ verification_plan:
       bin/venv-python -m pytest tests/ops_writer/test_drain.py tests/test_outbox_retirement.py
       tests/sync/ops/test_drain.py tests/test_outbox_hermeticity_guard.py -q
     expected: >-
-      All pass. The new drain tests must assert BOTH negatives (no put_object call for the migrated
-      table, and the outbox file still exists afterwards) and the positives (ops_session_log and a
-      telemetry_* table still drain and still unlink).
+      All pass. The new drain tests MUST stage their retired-dir fixture under ops_decisions and/or
+      ops_priority_queue -- the only two TABLE_NAMES members the guard changes behaviour for -- and
+      must assert BOTH negatives (put_object never called for that table, and the outbox file still
+      exists afterwards) and the positives (ops_session_log and a telemetry_* table still drain and
+      still unlink). At least one new test node id must contain the substring `retired` (see step 4).
     fix_if: >-
-      A test asserting the file survives but not that put_object was never called is too weak -- a
-      guard that stages then fails to unlink would pass it. Assert on the mock's call args, not just
-      on filesystem state.
+      A test staged under ops_recommendations, ops_execution_plans or any *_pending dir is
+      NON-DISCRIMINATING: drain() iterates the fixed TABLE_NAMES list, which contains none of them, so
+      such a test passes identically with and without the guard. Re-stage it under ops_decisions or
+      ops_priority_queue. Separately, a test asserting the file survives but not that put_object was
+      never called is too weak -- a guard that stages then fails to unlink would pass it. Assert on
+      the mock's call args, not just on filesystem state.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -173,21 +200,30 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      rec-2929's stored acceptance command passes verbatim -- the guard name is load-bearing code in
-      scripts/ops_writer.py, not a comment.
+      rec-2929's stored acceptance command passes VERBATIM -- both halves. The guard name is
+      load-bearing code in scripts/ops_writer.py (not a comment), AND at least one test node id under
+      tests/ops_writer/ contains `retired`.
     command: >-
       grep -q 'is_retired_dir\|DUCKLAKE_MIGRATED_TABLES\|_RETIRED' scripts/ops_writer.py &&
-      grep -q 'is_retired_dir' scripts/ops_writer.py &&
+      bin/venv-python -m pytest tests/ops_writer -q -k retired &&
       test "$(grep -c 'is_retired_dir' scripts/ops_writer.py)" -ge 2
     expected: >-
-      Exit 0. At least two occurrences: the import and the call site in drain(). A single occurrence
-      would mean the name is imported but unused, or present only in a comment.
+      Exit 0. Measured baseline before this plan: the grep half exits 1 and the pytest half exits 5
+      (101 collected, 101 deselected, 0 selected) -- so BOTH halves are genuinely red today. After:
+      the grep matches at least twice (the import and the drain() call site -- a single occurrence
+      would mean the name is imported but unused, or present only in a comment), and `-k retired`
+      selects at least one passing test.
     fix_if: >-
-      Zero matches means the guard was written with a differently-named helper -- do NOT add a comment
-      naming is_retired_dir to satisfy this grep (that is acceptance-theatre). Either call
-      is_retired_dir directly, or update rec-2929's acceptance string via
-      `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2929` and record the change in the
-      resolution.
+      Zero grep matches means the guard was written with a differently-named helper -- do NOT add a
+      comment naming is_retired_dir to satisfy the grep (that is acceptance-theatre); call
+      is_retired_dir directly. Pytest exit 5 means no new test node id contains `retired` -- rename
+      one (e.g. test_drain_skips_retired_migrated_table_outbox) rather than weakening this step.
+      NOTE: tests/CLAUDE.md bans `pytest -k` selectors in recommendation acceptance commands
+      ("LLM-generated test names are unpredictable and rename between runs"), so rec-2929's stored
+      command violates repo convention. Satisfying it by naming is cheap and is the chosen route; if
+      it proves genuinely unsatisfiable, update the acceptance string via `bin/venv-python -m
+      scripts.ops_data_portal --update-rec rec-2929` and record the change in the resolution -- never
+      silently drop the pytest half from this step.
     hermetic: true
     graduation: graduate
     graduation_check_id: ops-writer-drain-guard-load-bearing
@@ -200,15 +236,18 @@ verification_plan:
       bin/venv-python -c "import pathlib; n=len([l for l in
       pathlib.Path('scripts/ops_writer.py').read_text().splitlines() if l.strip() and not
       l.strip().startswith('#')]); print(n); assert n <= 571, f'{n} SLOC exceeds budget 571'" &&
-      git diff origin/main -- config/sloc_budgets.yaml | grep -q 'raise-approved' && exit 1 || exit 0
+      ! git diff origin/main -- config/sloc_budgets.yaml | grep -q '^+.*raise-approved'
     expected: >-
-      Prints a number <= 571 and exits 0, with no 'raise-approved' marker added to the budget diff.
+      Prints a number <= 571 and exits 0, with no ADDED 'raise-approved' marker in the budget diff.
       Expected landing value is 570.
     fix_if: >-
       Over 571 means the guard was written as an if/continue block. Use a generator filter on the
       existing loop line instead. Do NOT raise the budget: Decision 128's decompose-by-default applies
       and no existing Decision authorizes a raise here (Decision 165), so a marker would be
-      unauthorized and validate_sloc_budget_raises would fail the PR.
+      unauthorized and validate_sloc_budget_raises would fail the PR. The `^+` anchor is deliberate:
+      an unanchored grep also matches REMOVED marker lines, and config/sloc_budgets.yaml already
+      carries a legitimate dec-159 marker on tests/test_checks_registry.py that a downward ratchet may
+      drop -- that is permitted and must not false-fail this step.
     hermetic: true
     graduation: graduate
     graduation_check_id: ops-writer-sloc-within-budget
@@ -269,7 +308,14 @@ verification_plan:
       Forward-fix on the branch; never auto-revert. If the run times out, treat the handoff as blocked
       per handoff_policy.timeout_disposition and rerun the full tier from the start.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      The command IS expressible as the command_exit_zero slot, so not-applicable would be
+      misclassification. Graduating it is nonetheless circular: it would register the full validator
+      as a check inside the very registry that validator consumes and executes. The obligation is
+      already structurally enforced by validate_handoff_full_tier (Decision 163), which fails any plan
+      declaring handoff_policy.full_validation_required_before_commit whose VP runs only the fast
+      tier -- so a registry row would add a recursion hazard and no coverage.
   - step: 9
     phase: post-deploy
     action: >-
@@ -317,20 +363,30 @@ verification_plan:
   - step: 11
     phase: post-deploy
     action: >-
-      rec-2929 is closed in the warehouse and the read cache reflects it.
+      rec-2929 is closed in the warehouse, the read cache reflects it, AND both follow-on recs from
+      execution step 8 actually landed.
     command: >-
       bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json, pathlib; rows =
       [json.loads(l) for l in
       pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; r =
       next(x for x in rows if x.get('id') == 'rec-2929'); assert r['status'] == 'closed', r['status'];
-      print(r['resolution'][:200])"
+      print('rec-2929:', r['resolution'][:200]); f = [x for x in rows if x.get('status') == 'open' and
+      ('outbox_retirement' in (x.get('context') or '') or 'PROD_SOURCE_PATHSPECS' in (x.get('context')
+      or '') or 'TABLE_NAMES' in (x.get('context') or ''))]; assert len(f) >= 2, f'expected both
+      follow-on recs, found {[x[\"id\"] for x in f]}'; print('follow-ons:', [x['id'] for x in f])"
     expected: >-
-      Status is closed and the resolution explicitly records the TABLE_NAMES decision the rec asked
-      for ("removal deferred to T2.26 with the producer repoint").
+      rec-2929 status is closed and its resolution explicitly records the TABLE_NAMES decision the rec
+      asked for ("removal deferred to T2.26 with the producer repoint"). Both follow-on recs are
+      present and open: the systemic src/common/** pathspec gap, and the T2.26 TABLE_NAMES residual
+      owner.
     fix_if: >-
-      If the Resolves: trailer did not fire rec-autoclose, close it manually via
+      If the Resolves: trailer did not fire rec-autoclose, close rec-2929 manually via
       `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2929 --status closed --resolution
-      "..."`. Never edit logs/.recommendations-log.jsonl directly -- it is a read cache.
+      "..."`. If the follow-on assertion fails, the recs were never filed -- file them now via the
+      portal (call get_rec_write_guidance() first). This matters most for the T2.26 rec: it is the
+      SOLE carrier of the deliberate TABLE_NAMES deferral, so if it silently fails to file, the
+      residual degrades from an owned item to an unowned mention in this plan's Context. Never edit
+      logs/.recommendations-log.jsonl directly -- it is a read cache.
     hermetic: false
     graduation: not-applicable
 test_obligations:
@@ -349,8 +405,10 @@ test_obligations:
     verification_step: 3
     test_selector: tests/ops_writer/test_drain.py
     red_green_expectation: >-
-      Red before (drain() has no guard, so a migrated-table outbox file is staged and unlinked), green
-      after.
+      Red before, green after -- but ONLY if the fixture is staged under ops_decisions or
+      ops_priority_queue. Those are the only two TABLE_NAMES members the guard affects; a fixture
+      under ops_recommendations, ops_execution_plans or a *_pending dir is green before AND after and
+      would make this obligation non-discriminating.
   - source: scripts/sync/ops.py
     behavior: >-
       sync_ops.drain() keeps skipping retired dirs with a loud warning after the predicate moves to
@@ -415,6 +473,13 @@ constraints:
     decompose the file into a facade package in this plan -- see the Context entries on Decision 128
     and T-1.24.
   - >-
+    Do NOT run `bin/venv-python -m scripts.validate --update-sloc-budgets` at any point in this plan.
+    sloc_limits.py emits an advisory recommending it on every run, but it ratchets budgets DOWN to
+    current SLOC -- running it before the edit would pin scripts/ops_writer.py at 569, and the +1
+    change would then land at 570 > 569, inverting this plan's entire "Decision 128 does not fire"
+    argument into a forced decompose-or-raise. If a genuine budget regeneration is needed, that is a
+    separate PR.
+  - >-
     The sole home must be a pure stdlib leaf. No boto3, awswrangler, pandas or scripts.* imports: it
     is bundled into two Lambda zips via the `includes: - src/` wildcard and imported at
     scripts/ops_writer.py module scope.
@@ -438,7 +503,20 @@ context:
     dec-131, dec-132, dec-148, dec-159, dec-161, dec-163. RELATED/background only: dec-48, dec-55,
     dec-70, dec-130, dec-166, dec-143."
   - >-
-    "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<verdict> after <N> round(s)"
+    "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=PROCEED after 2 round(s)"
+  - >-
+    Plan-critique round 1 returned REVISE with three findings, all verified and fixed. F1: VP step 4
+    silently dropped the `pytest tests/ops_writer -q -k retired` half of rec-2929's stored acceptance
+    (measured: exits 5 today, 101 deselected) -- step 4 now runs the stored command verbatim and the
+    test-naming requirement is an explicit execution step. F2: the guard changes behaviour for exactly
+    ops_decisions and ops_priority_queue (measured against TABLE_NAMES: no *_pending member,
+    ops_recommendations and ops_execution_plans absent), so the acceptance criteria, VP step 3 and the
+    ops_writer test_obligation now pin those two names and the *_pending clause is reworded as a
+    forward-guard rather than a demonstrable behaviour change. F3: VP step 8's graduation flipped from
+    not-applicable to waive with a circularity reason. Five non-blocking risks also folded in: the
+    --update-sloc-budgets ordering trap, the sign-blind raise-approved grep, VP step 2's docstring
+    false-positive, pre-authorization of two refactor-adjacent test files, and a filed-rec check in
+    step 11.
   - >-
     Scout flag 1 (Decision 131, WARN) -- RESOLVED. Verified by running the mapper:
     map_source_to_test(src/common/outbox_retirement.py) returns tests/test_outbox_retirement.py, NOT
@@ -547,11 +625,18 @@ execution_steps:
     on.push.paths. Both must land together (no automated sync check exists).
   - >-
     Create tests/test_outbox_retirement.py and extend tests/ops_writer/test_drain.py with the
-    retired-skip tests. The drain tests must assert on the put_object mock's call args (never called
-    for a migrated table) AND that the outbox file survives -- asserting only the latter would pass a
-    guard that stages but fails to unlink. Update tests/sync/ops/test_sync_cli.py,
-    tests/checks/ops_governance/test_validate_outbox_staleness.py and
-    tests/convergence_health/test_code_drift.py as needed.
+    retired-skip tests. Three hard requirements: (a) stage the retired-dir fixture under ops_decisions
+    and/or ops_priority_queue -- the ONLY two TABLE_NAMES members the guard changes behaviour for; a
+    fixture under ops_recommendations, ops_execution_plans or a *_pending dir proves nothing because
+    drain() never iterates those names; (b) at least one new test node id must contain the substring
+    `retired`, because rec-2929's stored acceptance runs `pytest tests/ops_writer -q -k retired`
+    (verified: exits 5 today); (c) assert on the put_object mock's call args (never called for that
+    table) AND that the outbox file survives -- asserting only the latter would pass a guard that
+    stages but fails to unlink. Do not quote the `in DUCKLAKE_MIGRATED_TABLES or ...` predicate
+    verbatim in any test docstring (it would inflate verification step 2's count). Update
+    tests/sync/ops/test_sync_cli.py, tests/checks/ops_governance/test_validate_outbox_staleness.py and
+    tests/convergence_health/test_code_drift.py as needed; tests/sync/ops/test_drain.py and
+    tests/test_outbox_hermeticity_guard.py are pre-authorized but expected to need no change.
   - >-
     File two recommendations via `bin/venv-python -m scripts.ops_data_portal` (call
     get_rec_write_guidance() first): (a) the systemic src/common/** PROD_SOURCE_PATHSPECS gap; (b) a
