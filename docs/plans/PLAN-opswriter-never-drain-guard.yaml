@@ -85,8 +85,12 @@ scope:
   - file: tests/convergence_health/test_code_drift.py
     action: Modify
     purpose: >-
-      Cover the new pathspec entry. code_drift.py has no coverage_baseline.yaml entry, so the
-      diff-gated per-file check requires 100%.
+      Add a membership assertion that PROD_SOURCE_PATHSPECS contains the sole-home path. NOT a
+      coverage requirement: PROD_SOURCE_PATHSPECS is a module-level tuple, so adding an element adds
+      no statement and cannot move line coverage. The file currently has no PROD_SOURCE_PATHSPECS
+      reference at all, and the existing test_git_runner_receives_prod_source_pathspecs uses
+      membership rather than an exact count, so adding an entry breaks nothing (no count-coupling
+      hazard per tests/CLAUDE.md).
   - file: .github/workflows/deploy-prod-lambdas.yml
     action: Modify
     purpose: >-
@@ -95,6 +99,7 @@ scope:
       (verified), so the two edits must land together in this PR.
 bundled_recommendations:
   - rec-2929
+  - rec-2895
 infrastructure_dependencies: []
 acceptance_criteria:
   - >-
@@ -191,7 +196,7 @@ verification_plan:
       ops_priority_queue. Separately, a test asserting the file survives but not that put_object was
       never called is too weak -- a guard that stages then fails to unlink would pass it. Assert on
       the mock's call args, not just on filesystem state.
-    hermetic: false
+    hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
       The evidence is a multi-file pytest invocation over four suites, not one of the six canonical
@@ -286,7 +291,8 @@ verification_plan:
     expected: >-
       Mapper prints OK. ops_writer.py, sync/ops.py, outbox_retirement.py and code_drift.py all report
       100% (none has a coverage_baseline.yaml entry); validate_outbox_staleness.py reports >= 95.8
-      (its baseline entry).
+      (its baseline entry). Deliberately hermetic:false unlike steps 3 and 4: this is a five-target
+      coverage run, too slow for the fast-tier budget that validate_vp_replay executes under.
     fix_if: >-
       A mapper mismatch means the test file is in the wrong place and check_test_file_exists will fail
       -- move it rather than registering a new roster entry. A coverage drop on ops_writer.py or
@@ -363,30 +369,38 @@ verification_plan:
   - step: 11
     phase: post-deploy
     action: >-
-      rec-2929 is closed in the warehouse, the read cache reflects it, AND both follow-on recs from
-      execution step 8 actually landed.
+      Both bundled recs are closed in the warehouse, the read cache reflects it, AND both follow-on
+      recs from execution step 8 actually landed -- proven by a token measured to match ZERO open recs
+      today, so the assertion is a genuine delta rather than a vacuous pass.
     command: >-
-      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json, pathlib; rows =
-      [json.loads(l) for l in
-      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; r =
-      next(x for x in rows if x.get('id') == 'rec-2929'); assert r['status'] == 'closed', r['status'];
-      print('rec-2929:', r['resolution'][:200]); f = [x for x in rows if x.get('status') == 'open' and
-      ('outbox_retirement' in (x.get('context') or '') or 'PROD_SOURCE_PATHSPECS' in (x.get('context')
-      or '') or 'TABLE_NAMES' in (x.get('context') or ''))]; assert len(f) >= 2, f'expected both
-      follow-on recs, found {[x[\"id\"] for x in f]}'; print('follow-ons:', [x['id'] for x in f])"
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json, pathlib;
+      rows = [json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; by_id =
+      {x.get('id'): x for x in rows};
+      [print(i, by_id[i]['status'], (by_id[i].get('resolution') or '')[:160]) for i in ('rec-2929',
+      'rec-2895')]; assert all(by_id[i]['status'] == 'closed' for i in ('rec-2929', 'rec-2895')),
+      'both bundled recs must be closed'; new = [x['id'] for x in rows if x.get('status') == 'open'
+      and 'src/common/outbox_retirement.py' in (x.get('context') or '')]; assert len(new) >= 2,
+      f'expected 2 follow-on recs naming the sole home, found {new}'; print('follow-ons:', new)"
     expected: >-
-      rec-2929 status is closed and its resolution explicitly records the TABLE_NAMES decision the rec
-      asked for ("removal deferred to T2.26 with the producer repoint"). Both follow-on recs are
-      present and open: the systemic src/common/** pathspec gap, and the T2.26 TABLE_NAMES residual
-      owner.
+      rec-2929 and rec-2895 both closed. rec-2929's resolution explicitly records the TABLE_NAMES
+      decision the rec asked for ("removal deferred to T2.26 with the producer repoint"); rec-2895's
+      records that it is a duplicate of rec-2929 resolved by the same commit. At least 2 OPEN recs
+      whose context names `src/common/outbox_retirement.py`: the systemic src/common/** pathspec gap
+      and the T2.26 TABLE_NAMES residual owner.
     fix_if: >-
-      If the Resolves: trailer did not fire rec-autoclose, close rec-2929 manually via
-      `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2929 --status closed --resolution
-      "..."`. If the follow-on assertion fails, the recs were never filed -- file them now via the
-      portal (call get_rec_write_guidance() first). This matters most for the T2.26 rec: it is the
-      SOLE carrier of the deliberate TABLE_NAMES deferral, so if it silently fails to file, the
-      residual degrades from an owned item to an unowned mention in this plan's Context. Never edit
-      logs/.recommendations-log.jsonl directly -- it is a read cache.
+      MEASURED PRE-STATE (do not weaken this assertion without re-measuring): zero open recs contain
+      the string `src/common/outbox_retirement.py` today, so a passing assertion means both follow-ons
+      genuinely landed. The earlier draft filtered on 'outbox_retirement|PROD_SOURCE_PATHSPECS|
+      TABLE_NAMES', which already matched five open recs (rec-1951, rec-2691, rec-2895, rec-2901,
+      rec-2929) and could never fail -- if you loosen this filter, re-measure first or you reproduce
+      that defect. Both follow-on recs MUST therefore name the sole-home path verbatim in their
+      context. If a closure assertion fails, close via `bin/venv-python -m scripts.ops_data_portal
+      --update-rec <id> --status closed --resolution "..."`. If a follow-on is missing, file it now
+      via the portal (call get_rec_write_guidance() first) -- the T2.26 rec is the SOLE carrier of the
+      deliberate TABLE_NAMES deferral, so a silent filing failure degrades the residual from an owned
+      item to an unowned mention. Never edit logs/.recommendations-log.jsonl directly -- it is a read
+      cache.
     hermetic: false
     graduation: not-applicable
 test_obligations:
@@ -503,7 +517,26 @@ context:
     dec-131, dec-132, dec-148, dec-159, dec-161, dec-163. RELATED/background only: dec-48, dec-55,
     dec-70, dec-130, dec-166, dec-143."
   - >-
-    "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=PROCEED after 2 round(s)"
+    "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=PROCEED after 3 round(s)"
+  - >-
+    Plan-critique round 2 confirmed F1/F2/F3 resolved and raised three NEW blocking findings, all
+    verified and fixed. (1) VP step 11's follow-on-rec assertion was VACUOUS: its
+    'outbox_retirement|PROD_SOURCE_PATHSPECS|TABLE_NAMES' filter already matched five open recs
+    (rec-1951, rec-2691, rec-2895, rec-2901, rec-2929), so it could never fail -- the same
+    non-discriminating defect class the plan forbids in step 3. Re-pinned to the token
+    `src/common/outbox_retirement.py`, measured to match ZERO open recs today, with the pre-state
+    recorded in fix_if. (2) rec-2895 is an open DUPLICATE of rec-2929 (same defect, same file) that
+    this work resolves; it is now bundled, in the Resolves: trailer, and asserted closed in step 11 --
+    with an execution step to update its stale acceptance string, which the sole-home design does not
+    satisfy. (3) VP step 3 was hermetic:false despite Decision 148 clause 3 making hermetic:true the
+    default for pre-deploy feature-verification steps -- as written, validate_vp_replay would have
+    EXCLUDED the plan's SOLE behavioural-proof step as not-hermetic, reverting it to agent
+    self-report. Flipped to true (step 4 already ran pytest hermetically, so the plan was internally
+    inconsistent). Four non-blocking corrections also applied: the "loses no signal" overclaim now
+    concedes the ops-compaction Lambda surface; step 11 uses the portal --sync surface rather than
+    calling scripts.sync.ops directly (AGENTS.md Single Portal Invariant); the code_drift test
+    rationale drops its incorrect coverage framing; and the T-1.24 entry no longer conflates
+    relocation with facade decomposition.
   - >-
     Plan-critique round 1 returned REVISE with three findings, all verified and fixed. F1: VP step 4
     silently dropped the `pytest tests/ops_writer -q -k retired` half of rec-2929's stored acceptance
@@ -552,13 +585,19 @@ context:
     which hardcodes the literal string "scripts/ops_writer.py"). Those are exactly the coordinated
     same-commit rewrite surfaces roadmap item T-1.24 exists to pay for once ("HIGHEST fan-out of the
     six families: 27+ external refs... deliberately deferred"), and are what scripts/CLAUDE.md's "do
-    not migrate it ad hoc" is protecting. Decomposition remains correct -- at T-1.24, under its plan,
-    not as a rider on a 6-SLOC guard fix. Assessed via a fable advice-consult this session.
+    not migrate it ad hoc" is protecting. PRECISION: T-1.24's c1 is a RELOCATION (scripts/ops_writer.py
+    -> scripts/ops/writer.py), not a facade decomposition -- they are different operations, and only
+    the relocation changes the import path. They are grouped here because the six-surface file-path
+    fan-out above is identical for both, so doing the decomposition now would pay that cost twice
+    rather than once. The right sequencing is to fold any facade split into T-1.24's single rewrite,
+    not to rider it onto a 6-SLOC guard fix. Assessed via a fable advice-consult this session.
   - >-
     Design trade-off accepted: filtering the loop with a generator expression costs +1 SLOC but drops
-    the per-table warning that scripts/sync/ops.py:298 emits. This loses no signal --
-    validate_outbox_staleness HARD-FAILS CI on ANY file in a retired outbox dir, so the loud signal
-    exists upstream of the drain path.
+    the per-table warning that scripts/sync/ops.py:298 emits. This loses no signal ON THE CI SURFACE
+    -- validate_outbox_staleness HARD-FAILS on ANY file in a retired outbox dir, so the loud signal
+    exists upstream of the drain path. It IS a real (accepted) loss inside the ops-compaction Lambda,
+    where that check never runs and a retired-dir file would now be skipped with no log line. Silent
+    skip is strictly better than resurrection, which is the behaviour being replaced.
   - >-
     The scripts/sync/ops.py re-export of DUCKLAKE_MIGRATED_TABLES is a Decision 80/104 facade, not a
     Decision 55 import shim. The no-import-shims clause is scoped to T-1.24's relocation (leaving no
@@ -641,14 +680,30 @@ execution_steps:
     File two recommendations via `bin/venv-python -m scripts.ops_data_portal` (call
     get_rec_write_guidance() first): (a) the systemic src/common/** PROD_SOURCE_PATHSPECS gap; (b) a
     rec against T2.26 to own the deferred TABLE_NAMES removal + legacy staging write-path retirement.
+    BOTH must name `src/common/outbox_retirement.py` verbatim in their context field -- verification
+    step 11 asserts on that exact token, chosen because it matches zero open recs today.
+  - >-
+    Handle rec-2895, the open duplicate of rec-2929 (same defect, same file, filed while implementing
+    the outbox-test-hermeticity plan). It is resolved by this work, so it is bundled and belongs in
+    the Resolves: trailer. Its stored acceptance is `grep -q "DUCKLAKE_MIGRATED_TABLES"
+    scripts/ops_writer.py`, which this plan's design does NOT satisfy -- the sole-home refactor that
+    rec-2929 itself asked for puts that constant in src/common/outbox_retirement.py and imports only
+    is_retired_dir into ops_writer.py. Before closing, update its acceptance via `bin/venv-python -m
+    scripts.ops_data_portal --update-rec rec-2895 --acceptance "..."` to match the sole-home design,
+    and record in the resolution that it is a duplicate of rec-2929 resolved by the same commit and
+    why the original acceptance string no longer describes the shipped fix. Do NOT import
+    DUCKLAKE_MIGRATED_TABLES into ops_writer.py just to satisfy the stale grep -- it would be an
+    unused import (ruff F401) and is acceptance-theatre of the same kind constraint 8 forbids.
   - >-
     Execute the Verification Plan -- run each step in order; loop until pass. Steps 1-8 are
     pre-deploy and must be green before the PR. On an unrecoverable V3 failure at steps 9-11, stop
     and RCA (Decision 55) rather than falling back to a local deploy.
   - >-
-    Commit with a `Resolves: rec-2929` trailer in the squash-merge body, hold the PR subscription
-    through the post-merge deploy-prod-lambdas run, then run verification steps 9-11.
-  - 'Report: what was implemented, verification results, and the two recs filed.'
+    Commit with a `Resolves: rec-2929, rec-2895` trailer in the squash-merge body, hold the PR
+    subscription through the post-merge deploy-prod-lambdas run, then run verification steps 9-11.
+  - >-
+    'Report: what was implemented, verification results, both bundled recs closed, and the two
+    follow-on recs filed.'
 work_areas: []
 rollback: >-
   Revert the squash-merge commit. The guard is purely subtractive at runtime (it only stops writes
