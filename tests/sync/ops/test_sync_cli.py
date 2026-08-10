@@ -178,10 +178,13 @@ class TestTelemetryMappings:
     def test_migrated_ops_tables_present(self):
         """All four migrated tables are cached locally; the Athena view map is deleted (Decision 84 I-1)."""
         import scripts.sync.ops as sync_ops
+        from src.common.outbox_retirement import DUCKLAKE_MIGRATED_TABLES as _sole_home_tables
 
         expected = {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_execution_plans"}
         assert set(sync_ops._TABLE_TO_LOCAL) == expected
         assert sync_ops.DUCKLAKE_MIGRATED_TABLES == frozenset(expected)
+        # The re-export must be the SAME object as the sole home, not a coincidentally-equal copy.
+        assert sync_ops.DUCKLAKE_MIGRATED_TABLES is _sole_home_tables
         # The Athena pull estate is gone: no view map, no per-table Athena pull.
         assert not hasattr(sync_ops, "_TABLE_TO_VIEW")
         assert not hasattr(sync_ops, "_pull_single_table_athena")

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from scripts.aws_profile import resolve_aws_profile
+from src.common.outbox_retirement import is_retired_dir
 
 ROOT = Path(__file__).resolve().parent.parent
 _OUTBOX_BASE = ROOT / "logs" / ".ops-outbox"
@@ -680,7 +681,7 @@ class OpsWriter:
         if not bucket:
             return results
 
-        for table in TABLE_NAMES:
+        for table in (t for t in TABLE_NAMES if not is_retired_dir(t)):
             table_dir = _OUTBOX_BASE / table
             if not table_dir.exists():
                 continue

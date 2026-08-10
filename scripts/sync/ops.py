@@ -33,6 +33,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.common.outbox_retirement import DUCKLAKE_MIGRATED_TABLES, is_retired_dir  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
@@ -53,9 +55,9 @@ _TABLE_TO_LOCAL: dict[str, str] = {
 
 # Tables on the DuckLake closed boundary: their outbox dirs are never drained to Iceberg
 # (stale-store hazard) and their pulls have no Athena fallback (Decision 84 I-1).
-DUCKLAKE_MIGRATED_TABLES: frozenset[str] = frozenset(
-    {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_execution_plans"}
-)
+# DUCKLAKE_MIGRATED_TABLES is re-exported (imported above) from its sole home,
+# src/common/outbox_retirement.py, so every existing `from scripts.sync.ops import
+# DUCKLAKE_MIGRATED_TABLES` site still resolves.
 
 _DATABASE = "agent_platform"
 _WORKGROUP = "agent-platform-production"
@@ -295,7 +297,7 @@ def drain() -> dict[str, int]:
             if not table_dir.is_dir():
                 continue
             table = table_dir.name
-            if table in DUCKLAKE_MIGRATED_TABLES or table.endswith("_pending"):
+            if is_retired_dir(table):
                 logger.warning(
                     "sync_ops.drain: skipping %s outbox dir -- the table transits the DuckLake "
                     "closed boundary (Decision 84 I-1) and the offline outbox is retired (I-4). "

@@ -1,23 +1,18 @@
 """Pure snapshot/diff helper for the tests/conftest.py outbox hermeticity guard.
 
 Kept importable outside conftest so tests/test_outbox_hermeticity_guard.py can unit-test the
-detection logic directly. Consumes scripts.sync.ops.DUCKLAKE_MIGRATED_TABLES VERBATIM as the
-retired-table set -- no subtraction, no locally-derived copy (single source of truth).
+detection logic directly. Re-points at src/common/outbox_retirement.py, the sole home of the
+retired-table classification (Decision 84 I-4) -- no subtraction, no locally-derived copy.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.sync.ops import DUCKLAKE_MIGRATED_TABLES
+from src.common.outbox_retirement import is_retired_dir
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTBOX_BASE = REPO_ROOT / "logs" / ".ops-outbox"
-
-
-def is_retired_dir(dirname: str) -> bool:
-    """A retired-outbox subdirectory is a migrated table or its *_pending sibling."""
-    return dirname in DUCKLAKE_MIGRATED_TABLES or dirname.endswith("_pending")
 
 
 def snapshot(base: Path = OUTBOX_BASE) -> frozenset[Path]:

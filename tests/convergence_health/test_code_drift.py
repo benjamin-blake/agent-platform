@@ -432,6 +432,13 @@ class TestDetectProdCodeDrift:
         assert "config/lambda/data-pipeline" in argv
         assert "config/lambda/ops-compaction" in argv
 
+    def test_prod_source_pathspecs_includes_outbox_retirement_sole_home(self) -> None:
+        """PLAN-opswriter-never-drain-guard: the sole home is a prod source, so an edit to it
+        triggers the governed deploy and is visible to the drift sensor (rec-2929)."""
+        from scripts.convergence_health import PROD_SOURCE_PATHSPECS
+
+        assert "src/common/outbox_retirement.py" in PROD_SOURCE_PATHSPECS
+
     def test_rec_fields_shape_on_file(self) -> None:
         captured: dict[str, Any] = {}
 

@@ -4737,3 +4737,71 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/checks/contracts/validate_contract_drift/test_grandfather_only.py::TestGrandfatherOnly::test_absent_to_none_grandfathered_on_baseline_present_file_is_permitted
+  - check_id: outbox-retirement-sole-home-exports
+    primitive_slot: command_exit_zero
+    guard_target: src/common/outbox_retirement.py
+    guard_symbol: null
+    plan_slug: opswriter-never-drain-guard
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - from src.common.outbox_retirement import DUCKLAKE_MIGRATED_TABLES, is_retired_dir; assert DUCKLAKE_MIGRATED_TABLES
+        == frozenset({'ops_recommendations', 'ops_decisions', 'ops_priority_queue', 'ops_execution_plans'}), DUCKLAKE_MIGRATED_TABLES;
+        assert is_retired_dir('ops_decisions') and is_retired_dir('ops_priority_queue') and is_retired_dir('anything_pending');
+        assert not is_retired_dir('ops_session_log') and not is_retired_dir('telemetry_sessions'); print('OK')
+  - check_id: outbox-retirement-single-definition
+    primitive_slot: command_exit_zero
+    guard_target: src/common/outbox_retirement.py
+    guard_symbol: is_retired_dir
+    plan_slug: opswriter-never-drain-guard
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - test "$(grep -rn 'in DUCKLAKE_MIGRATED_TABLES or' --include='*.py' scripts/ src/ tests/ | wc -l)" -eq 1
+  - check_id: ops-writer-drain-guard-load-bearing
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ops_writer.py
+    guard_symbol: drain
+    plan_slug: opswriter-never-drain-guard
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - grep -q 'is_retired_dir\|DUCKLAKE_MIGRATED_TABLES\|_RETIRED' scripts/ops_writer.py && bin/venv-python -m pytest
+        tests/ops_writer/test_drain.py -q -k retired && test "$(grep -c 'is_retired_dir' scripts/ops_writer.py)" -ge
+        2 && grep -q 'is_retired_dir' scripts/ops_writer.py && grep -q 'DUCKLAKE_MIGRATED_TABLES' src/common/outbox_retirement.py
+  - check_id: outbox-retirement-prod-pathspec-synced
+    primitive_slot: command_exit_zero
+    guard_target: scripts/convergence_health/code_drift.py
+    guard_symbol: PROD_SOURCE_PATHSPECS
+    plan_slug: opswriter-never-drain-guard
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - from scripts.convergence_health import PROD_SOURCE_PATHSPECS; import pathlib; wf = pathlib.Path('.github/workflows/deploy-prod-lambdas.yml').read_text();
+        p = 'src/common/outbox_retirement.py'; assert p in PROD_SOURCE_PATHSPECS, PROD_SOURCE_PATHSPECS; assert p
+        in wf, 'workflow on.push.paths missing the entry'; print('OK')
+  - check_id: outbox-retirement-staged-into-both-prod-zips
+    primitive_slot: command_exit_zero
+    guard_target: src/common/outbox_retirement.py
+    guard_symbol: null
+    plan_slug: opswriter-never-drain-guard
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import tempfile,pathlib;from scripts.lambda_manifest import load,stage_bundle;f=lambda s:(lambda d:(stage_bundle(load(pathlib.Path('src/lambdas')/s/'manifest.yaml'),d,skip_pip=True),(d/'src'/'common'/'outbox_retirement.py').exists())[1])(pathlib.Path(tempfile.mkdtemp()));r={s:f(s)
+        for s in ('data-pipeline','ops-compaction')};print(r);assert all(r.values()),r
