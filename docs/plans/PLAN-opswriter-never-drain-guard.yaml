@@ -91,6 +91,13 @@ scope:
       reference at all, and the existing test_git_runner_receives_prod_source_pathspecs uses
       membership rather than an exact count, so adding an entry breaks nothing (no count-coupling
       hazard per tests/CLAUDE.md).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Add one row per graduating VP step (steps 1, 2, 4, 5, 6, 9 carry graduation: graduate with a
+      graduation_check_id). validate_graduation_completeness's implement-PR leg requires a
+      new-in-diff registry row for each, so this file must be in Scope or constraint 1 would forbid
+      the very bookkeeping the dispositions oblige.
   - file: .github/workflows/deploy-prod-lambdas.yml
     action: Modify
     purpose: >-
@@ -188,7 +195,14 @@ verification_plan:
       ops_priority_queue -- the only two TABLE_NAMES members the guard changes behaviour for -- and
       must assert BOTH negatives (put_object never called for that table, and the outbox file still
       exists afterwards) and the positives (ops_session_log and a telemetry_* table still drain and
-      still unlink). At least one new test node id must contain the substring `retired` (see step 4).
+      still unlink), and that drain()'s returned results dict is still seeded from the FULL
+      TABLE_NAMES so retired tables report 0 rather than vanishing from the return shape. At least one
+      new test node id must contain the substring retired -- see step 4. NOTE (deliberate): the word
+      retired is written WITHOUT backticks here. validate_vp_replay extracts backtick-delimited
+      literals from expected and requires each to appear in the replayed command's stdout+stderr;
+      pytest -q prints paths and progress dots, never node ids for passing tests, so a backticked
+      literal here would hard-fail replay on a correct implementation. Do not add backticks to this
+      field.
     fix_if: >-
       A test staged under ops_recommendations, ops_execution_plans or any *_pending dir is
       NON-DISCRIMINATING: drain() iterates the fixed TABLE_NAMES list, which contains none of them, so
@@ -205,19 +219,24 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      rec-2929's stored acceptance command passes VERBATIM -- both halves. The guard name is
-      load-bearing code in scripts/ops_writer.py (not a comment), AND at least one test node id under
-      tests/ops_writer/ contains `retired`.
+      BOTH bundled recs' acceptance commands pass. rec-2929's stored command runs VERBATIM (both
+      halves); rec-2895's REPLACEMENT command (see execution step 9) runs alongside it. The guard name
+      is load-bearing code in scripts/ops_writer.py, not a comment.
     command: >-
       grep -q 'is_retired_dir\|DUCKLAKE_MIGRATED_TABLES\|_RETIRED' scripts/ops_writer.py &&
       bin/venv-python -m pytest tests/ops_writer -q -k retired &&
-      test "$(grep -c 'is_retired_dir' scripts/ops_writer.py)" -ge 2
+      test "$(grep -c 'is_retired_dir' scripts/ops_writer.py)" -ge 2 &&
+      grep -q 'is_retired_dir' scripts/ops_writer.py &&
+      grep -q 'DUCKLAKE_MIGRATED_TABLES' src/common/outbox_retirement.py
     expected: >-
-      Exit 0. Measured baseline before this plan: the grep half exits 1 and the pytest half exits 5
-      (101 collected, 101 deselected, 0 selected) -- so BOTH halves are genuinely red today. After:
-      the grep matches at least twice (the import and the drain() call site -- a single occurrence
-      would mean the name is imported but unused, or present only in a comment), and `-k retired`
-      selects at least one passing test.
+      Exit 0. Measured baseline before this plan: rec-2929's grep half exits 1 and its pytest half
+      exits 5 (101 collected, 101 deselected, 0 selected) -- so BOTH halves are genuinely red today.
+      After: the grep matches at least twice (the import and the drain() call site -- a single
+      occurrence would mean the name is imported but unused, or present only in a comment), the
+      -k retired selector selects at least one passing test, and rec-2895's replacement acceptance
+      (the last two conjuncts, which are its exact new string) passes. NOTE (deliberate): no
+      backticks in this field -- see step 3's note; validate_vp_replay would require any backticked
+      literal to appear in pytest -q output, which never prints node ids or argv.
     fix_if: >-
       Zero grep matches means the guard was written with a differently-named helper -- do NOT add a
       comment naming is_retired_dir to satisfy the grep (that is acceptance-theatre); call
@@ -323,47 +342,60 @@ verification_plan:
       declaring handoff_policy.full_validation_required_before_commit whose VP runs only the fast
       tier -- so a registry row would add a recursion hazard and no coverage.
   - step: 9
+    phase: pre-deploy
+    action: >-
+      PRE-MERGE proof that both Lambda zips actually stage the new sole home, and that ops_writer.py
+      can import it from inside the staged tree. This is the plan's highest-consequence check: the
+      guard adds a module-scope import to a file bundled into two active artifacts, so an unstaged or
+      unimportable leaf would ImportError at Lambda cold start -- worse than the bug being fixed.
+      Deliberately pre-deploy (not post-deploy) so the failure is caught before merge.
+    command: >-
+      bin/venv-python -c "import tempfile,pathlib;from scripts.lambda_manifest import
+      load,stage_bundle;f=lambda s:(lambda
+      d:(stage_bundle(load(pathlib.Path('src/lambdas')/s/'manifest.yaml'),d,skip_pip=True),(d/'src'/'common'/'outbox_retirement.py').exists())[1])(pathlib.Path(tempfile.mkdtemp()));r={s:f(s)
+      for s in ('data-pipeline','ops-compaction')};print(r);assert all(r.values()),r"
+    expected: >-
+      Prints {'data-pipeline': True, 'ops-compaction': True} and exits 0. Both manifests pick the
+      module up via their src/ wildcard include; neither ducklake-only excludes list may catch it.
+      MEASURED both directions before writing this step: it exits 1 today with both False (the module
+      does not exist yet -- genuine red), and exits 0 with both True when pointed at an existing
+      src/common file, proving the staging mechanism resolves src/common/* correctly. The trailing
+      assert is load-bearing: an earlier draft only printed the booleans and would have exited 0 even
+      when the module was absent.
+    fix_if: >-
+      A False means an excludes entry over-matches or the module was placed outside src/ -- fix the
+      placement, do not weaken the check. If this exact invocation does not run, the real API surface
+      is scripts.lambda_manifest.load(manifest_path) / stage_bundle(manifest, stage_dir,
+      skip_pip=True) / cmd_check_bundles (verified -- there is NO load_manifest, NO staged_paths, and
+      NO build_lambda --list-contents); rewrite against those names rather than skipping the step.
+      Keep skip_pip=True so no network fetch is needed and the step stays hermetic.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: outbox-retirement-staged-into-both-prod-zips
+  - step: 10
     phase: post-deploy
     action: >-
       The governed code-deploy channel actually ran for the merge commit and deployed BOTH affected
       active artifacts (Decision 125/126: this channel is the default; build_lambda --deploy is
       break-glass and must NOT be run here).
     command: >-
-      bin/venv-python -c "import subprocess, json; print(subprocess.run(['gh','run','list',
-      '--workflow','deploy-prod-lambdas.yml','--limit','3','--json',
-      'conclusion,headSha,displayTitle'], capture_output=True, text=True).stdout)" ||
-      echo "NOTE: gh CLI is unavailable in CC-web -- read the run via
-      mcp__github__actions_list(workflow='deploy-prod-lambdas.yml') instead"
+      gh run list --workflow deploy-prod-lambdas.yml --limit 3 --json conclusion,headSha,displayTitle
     expected: >-
       The most recent deploy-prod-lambdas run whose headSha is this PR's merge commit has
       conclusion=success, with its per-function smoke gate green for
       agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor and
       agent-platform-ops-compaction.
     fix_if: >-
-      No run triggered means the push touched no path in the on.push.paths filter -- re-check step 6.
-      A red smoke gate is a real deploy failure: diagnose and forward-fix; do NOT fall back to local
-      `build_lambda --deploy`, which is break-glass-only and needs explicit human direction.
-    hermetic: false
-    graduation: not-applicable
-  - step: 10
-    phase: post-deploy
-    action: >-
-      The deployed package actually contains the guard -- proving the manifest bundled the new
-      src/common leaf rather than silently excluding it.
-    command: >-
-      bin/venv-python -m scripts.build_lambda --list-contents ops-compaction 2>/dev/null | grep -c
-      'outbox_retirement' || bin/venv-python -c "from scripts.lambda_manifest import load_manifest,
-      staged_paths; print([p for p in staged_paths(load_manifest('ops-compaction')) if
-      'outbox_retirement' in str(p)])"
-    expected: >-
-      src/common/outbox_retirement.py appears in the staged contents of BOTH data-pipeline.zip and
-      ops-compaction.zip (it is picked up by the `includes: - src/` wildcard; it must NOT be caught by
-      either manifest's ducklake-only excludes list).
-    fix_if: >-
-      Absent means an excludes entry is over-matching, or the module was placed outside src/. If the
-      helper name differs from the real build_lambda/lambda_manifest API, substitute the equivalent
-      staging-inspection call rather than skipping the step -- an unbundled sole home would make
-      drain() ImportError inside the Lambda, which is worse than the bug being fixed.
+      OPERATOR-READ STEP, and it is designed to FAIL rather than report a false green. gh is NOT on
+      PATH in CC-web, so this command exits non-zero there; that is deliberate -- the earlier draft
+      appended a `|| echo ...` fallback which made the step always exit 0 and therefore incapable of
+      failing. When gh is absent, satisfy this step by reading the run via
+      mcp__github__actions_list(workflow='deploy-prod-lambdas.yml') and recording the conclusion and
+      headSha in the implement report; the authoritative machine verdict is the workflow's own
+      per-function smoke gate, not this command. No run triggered at all means the push touched no
+      path in the on.push.paths filter -- re-check step 6. A red smoke gate is a real deploy failure:
+      diagnose and forward-fix; do NOT fall back to local build_lambda --deploy, which is
+      break-glass-only and needs explicit human direction.
     hermetic: false
     graduation: not-applicable
   - step: 11
@@ -379,28 +411,35 @@ verification_plan:
       {x.get('id'): x for x in rows};
       [print(i, by_id[i]['status'], (by_id[i].get('resolution') or '')[:160]) for i in ('rec-2929',
       'rec-2895')]; assert all(by_id[i]['status'] == 'closed' for i in ('rec-2929', 'rec-2895')),
-      'both bundled recs must be closed'; new = [x['id'] for x in rows if x.get('status') == 'open'
-      and 'src/common/outbox_retirement.py' in (x.get('context') or '')]; assert len(new) >= 2,
-      f'expected 2 follow-on recs naming the sole home, found {new}'; print('follow-ons:', new)"
+      'both bundled recs must be closed'; gap = [x['id'] for x in rows if x.get('status') == 'open'
+      and x.get('file') == 'scripts/convergence_health/code_drift.py']; resid = [x['id'] for x in rows
+      if x.get('status') == 'open' and 'rec-2929' in (x.get('dependencies') or [])]; assert gap,
+      'pathspec-gap follow-on rec not filed'; assert resid, 'T2.26 residual follow-on rec not filed';
+      print('follow-ons:', gap, resid)"
     expected: >-
       rec-2929 and rec-2895 both closed. rec-2929's resolution explicitly records the TABLE_NAMES
-      decision the rec asked for ("removal deferred to T2.26 with the producer repoint"); rec-2895's
-      records that it is a duplicate of rec-2929 resolved by the same commit. At least 2 OPEN recs
-      whose context names `src/common/outbox_retirement.py`: the systemic src/common/** pathspec gap
-      and the T2.26 TABLE_NAMES residual owner.
+      decision the rec asked for (removal deferred to T2.26 with the producer repoint); rec-2895's
+      records that it is a duplicate of rec-2929 resolved by the same commit. At least one OPEN rec
+      carries file=scripts/convergence_health/code_drift.py (the systemic src/common/** pathspec gap)
+      and at least one OPEN rec declares rec-2929 in its dependencies (the T2.26 TABLE_NAMES residual
+      owner).
     fix_if: >-
-      MEASURED PRE-STATE (do not weaken this assertion without re-measuring): zero open recs contain
-      the string `src/common/outbox_retirement.py` today, so a passing assertion means both follow-ons
-      genuinely landed. The earlier draft filtered on 'outbox_retirement|PROD_SOURCE_PATHSPECS|
-      TABLE_NAMES', which already matched five open recs (rec-1951, rec-2691, rec-2895, rec-2901,
-      rec-2929) and could never fail -- if you loosen this filter, re-measure first or you reproduce
-      that defect. Both follow-on recs MUST therefore name the sole-home path verbatim in their
-      context. If a closure assertion fails, close via `bin/venv-python -m scripts.ops_data_portal
-      --update-rec <id> --status closed --resolution "..."`. If a follow-on is missing, file it now
-      via the portal (call get_rec_write_guidance() first) -- the T2.26 rec is the SOLE carrier of the
-      deliberate TABLE_NAMES deferral, so a silent filing failure degrades the residual from an owned
-      item to an unowned mention. Never edit logs/.recommendations-log.jsonl directly -- it is a read
-      cache.
+      MEASURED PRE-STATE (do not weaken these assertions without re-measuring): today ZERO open recs
+      carry file=scripts/convergence_health/code_drift.py, and ZERO open recs list rec-2929 in
+      dependencies -- so a pass means both follow-ons genuinely landed. Two earlier drafts of this
+      step were defective and both defects must stay fixed: (i) a filter on
+      'outbox_retirement|PROD_SOURCE_PATHSPECS|TABLE_NAMES' already matched five open recs (rec-1951,
+      rec-2691, rec-2895, rec-2901, rec-2929) and could never fail; (ii) its replacement demanded both
+      recs embed 'src/common/outbox_retirement.py' verbatim in context, which shaped rec prose to
+      satisfy a grep -- distorting the T2.26 rec, which is about TABLE_NAMES in ops_writer.py, not
+      about the sole home. The current anchors are NATURAL rec metadata: the gap rec genuinely targets
+      code_drift.py, and the residual rec genuinely is a follow-on of rec-2929. If you change them,
+      re-measure the pre-state first. If a closure assertion fails, close via bin/venv-python -m
+      scripts.ops_data_portal --update-rec <id> --status closed --resolution "...". If a follow-on is
+      missing, file it via the portal (call get_rec_write_guidance() first) -- the T2.26 rec is the
+      SOLE carrier of the deliberate TABLE_NAMES deferral, so a silent filing failure degrades the
+      residual from an owned item to an unowned mention. Never edit
+      logs/.recommendations-log.jsonl directly -- it is a read cache.
     hermetic: false
     graduation: not-applicable
 test_obligations:
@@ -517,7 +556,31 @@ context:
     dec-131, dec-132, dec-148, dec-159, dec-161, dec-163. RELATED/background only: dec-48, dec-55,
     dec-70, dec-130, dec-166, dec-143."
   - >-
-    "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=PROCEED after 3 round(s)"
+    "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=PROCEED after 4 round(s)"
+  - >-
+    Plan-critique round 3 returned REVISE, hitting the 3-round convergence cap. Escalated to the
+    human, who authorized a 4th round (the findings were mechanical, not structural: across three
+    independent fresh contexts no round challenged the design, and the Decision 75 frame challenge
+    came back clean). Round-3 fixes, all verified by measurement: (F1, blocking) VP steps 3 and 4
+    enforced backtick literals `retired` and `-k retired` in their expected fields;
+    validate_vp_replay extracts those and requires them in the replayed command's output, but
+    pytest -q prints neither node ids nor argv -- measured 0 occurrences of each, so the implement PR
+    would have gone RED on a CORRECT implementation. Step 3's exposure was CREATED by round 2's
+    (correct) hermetic flip, which activated a previously-inert backtick. Both stripped, with an
+    in-field warning against re-adding them; the full audit that all three prior rounds skipped --
+    re-extracting literals from every replayed step and measuring each against real output -- now
+    reports zero. (F2) VP step 10's command called a non-existent API (verified: there is no
+    build_lambda --list-contents, no lambda_manifest.load_manifest, no staged_paths); rewritten
+    against the real surface (load / stage_bundle / cmd_check_bundles), given a load-bearing assert
+    (the first rewrite only printed booleans and would have exited 0 on a missing module), promoted to
+    step 9 and re-tagged pre-deploy so the in-Lambda ImportError risk is caught before merge. Measured
+    both directions: exits 1 today, exits 0 against an existing src/common file. (F3) rec-2895's
+    replacement acceptance string is now fixed by the plan rather than left to the implementer, and
+    step 4 runs it. (F4) step 10's `|| echo` fallback made it incapable of failing; removed. (F5) the
+    follow-on-rec anchors moved from grep-shaped context prose to natural rec metadata (file field;
+    dependencies on rec-2929), both measured to match zero open recs today. Two minors: registry.yaml
+    added to Scope for the six graduating steps' bookkeeping, and the F401/__all__ plus
+    full-width-results requirements written into the execution steps.
   - >-
     Plan-critique round 2 confirmed F1/F2/F3 resolved and raised three NEW blocking findings, all
     verified and fixed. (1) VP step 11's follow-on-rec assertion was VACUOUS: its
@@ -646,11 +709,17 @@ execution_steps:
     Modify scripts/sync/ops.py -- import DUCKLAKE_MIGRATED_TABLES and is_retired_dir from the sole
     home, keep DUCKLAKE_MIGRATED_TABLES a module-level public name so existing importers still
     resolve, delete the moved literal, and replace the inline predicate at line 298 with
-    is_retired_dir(table). Leave the warning message and control flow unchanged.
+    is_retired_dir(table). Leave the warning message and control flow unchanged. The re-exported
+    DUCKLAKE_MIGRATED_TABLES becomes unused WITHIN this module, so declare it in __all__ (or mark the
+    import `# noqa: F401`) or ruff F401 fails step 8. Same requirement applies to the is_retired_dir
+    re-export in tests/fixtures/outbox_guard.py.
   - >-
     Modify scripts/ops_writer.py -- add the sole-home import, and change drain()'s `for table in
     TABLE_NAMES:` to a generator-filtered loop over the non-retired tables. Keep `results` seeded
-    from the full TABLE_NAMES so retired tables still report 0. Confirm the file lands at 570 SLOC.
+    from the full TABLE_NAMES so retired tables still report 0 -- narrowing the seed would change
+    drain()'s return shape, and a new test must ASSERT the full-width shape rather than leaving it to
+    the existing test_drain_returns_zeros_when_outbox_base_missing to catch by luck. Confirm the file
+    lands at 570 SLOC.
   - >-
     Modify tests/fixtures/outbox_guard.py -- import is_retired_dir from the sole home instead of
     redefining it (re-export it so tests importing it from the fixture still work), and correct the
@@ -689,11 +758,18 @@ execution_steps:
     scripts/ops_writer.py`, which this plan's design does NOT satisfy -- the sole-home refactor that
     rec-2929 itself asked for puts that constant in src/common/outbox_retirement.py and imports only
     is_retired_dir into ops_writer.py. Before closing, update its acceptance via `bin/venv-python -m
-    scripts.ops_data_portal --update-rec rec-2895 --acceptance "..."` to match the sole-home design,
-    and record in the resolution that it is a duplicate of rec-2929 resolved by the same commit and
-    why the original acceptance string no longer describes the shipped fix. Do NOT import
-    DUCKLAKE_MIGRATED_TABLES into ops_writer.py just to satisfy the stale grep -- it would be an
-    unused import (ruff F401) and is acceptance-theatre of the same kind constraint 8 forbids.
+    scripts.ops_data_portal --update-rec rec-2895 --acceptance "..."`. The REPLACEMENT STRING IS
+    FIXED BY THIS PLAN, not left to the implementer's discretion -- use exactly:
+    `grep -q 'is_retired_dir' scripts/ops_writer.py && grep -q 'DUCKLAKE_MIGRATED_TABLES'
+    src/common/outbox_retirement.py`. It asserts the same two facts the original intended (the guard
+    is live in ops_writer.py; the migrated-table set is present) against the shipped sole-home
+    layout, contains no `python -c` one-liner and no `pytest -k` selector (both banned by
+    tests/CLAUDE.md for acceptance commands), and verification step 4 runs it as its final two
+    conjuncts so the rewrite is exercised, not merely asserted. Record in the resolution that
+    rec-2895 is a duplicate of rec-2929 resolved by the same commit and why the original acceptance
+    string no longer describes the shipped fix. Do NOT import DUCKLAKE_MIGRATED_TABLES into
+    ops_writer.py just to satisfy the stale grep -- it would be an unused import (ruff F401) and is
+    acceptance-theatre of the same kind constraint 8 forbids.
   - >-
     Execute the Verification Plan -- run each step in order; loop until pass. Steps 1-8 are
     pre-deploy and must be green before the PR. On an unrecoverable V3 failure at steps 9-11, stop
