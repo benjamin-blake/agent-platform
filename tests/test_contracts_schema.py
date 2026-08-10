@@ -17,6 +17,7 @@ from scripts.contracts_schema import (
     ContractGovernance,
     ContractMeta,
     ContractStatus,
+    EvaluatorSpec,
     FieldSpec,
     VerbSpec,
 )
@@ -30,6 +31,7 @@ def _class_a_doc() -> dict:
             "contract_version": 1,
             "status": "ratified",
             "ratified_at": "2026-05-21",
+            "ratified_via": "test-decision",
             "description": "Class A contract for ops_recommendations.",
             "projects_to": {"pydantic_model": "src/schemas/rec.py::RecPayload"},
             "governance": {
@@ -92,6 +94,7 @@ def _class_c_doc() -> dict:
             "class": "C",
             "contract_version": 1,
             "status": "ratified",
+            "ratified_via": "test-decision",
             "description": "Canonical source lineage key contract.",
         },
         "governance": {
@@ -266,3 +269,92 @@ class TestRejectsMalformed:
     def test_fieldspec_unknown_field_rejected(self) -> None:
         with pytest.raises(ValidationError):
             FieldSpec.model_validate({"type": "str", "not_a_field": True})
+
+
+def _class_d_meta(**overrides: object) -> dict:
+    meta = {
+        "id": "cd-test",
+        "class": "D",
+        "contract_version": 1,
+        "status": "ratified",
+        "ratified_via": "test-decision",
+        "subject": "cd-test-subject",
+        "evaluator": {"check": "validate_placement"},
+    }
+    meta.update(overrides)
+    return meta
+
+
+class TestClassDEnumWidenings:
+    """Coverage for the two enum widenings (contracts-first-class-migration)."""
+
+    def test_contract_class_admits_d(self) -> None:
+        assert ContractClass("D") is ContractClass.D
+        assert {c.value for c in ContractClass} == {"A", "B", "C", "D"}
+
+    def test_contract_status_admits_active(self) -> None:
+        assert ContractStatus("active") is ContractStatus.active
+
+
+class TestEvaluatorSpec:
+    def test_exactly_one_kind_required(self) -> None:
+        EvaluatorSpec.model_validate({"check": "validate_placement"})
+        EvaluatorSpec.model_validate({"agent_surface": ".claude/skills/foo/SKILL.md"})
+        EvaluatorSpec.model_validate({"none_grandfathered": "pending ratification"})
+
+    def test_zero_kinds_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            EvaluatorSpec.model_validate({})
+
+    def test_two_kinds_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            EvaluatorSpec.model_validate({"check": "validate_placement", "agent_surface": "x.md"})
+
+    def test_unknown_field_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            EvaluatorSpec.model_validate({"check": "x", "extra": 1})
+
+
+class TestContractMetaClassDRequirements:
+    def test_class_d_requires_subject_and_evaluator(self) -> None:
+        ContractMeta.model_validate(_class_d_meta())
+
+        no_subject = _class_d_meta()
+        del no_subject["subject"]
+        with pytest.raises(ValidationError, match="subject"):
+            ContractMeta.model_validate(no_subject)
+
+        no_evaluator = _class_d_meta()
+        del no_evaluator["evaluator"]
+        with pytest.raises(ValidationError, match="evaluator"):
+            ContractMeta.model_validate(no_evaluator)
+
+    def test_non_d_classes_do_not_require_subject_or_evaluator(self) -> None:
+        ContractMeta.model_validate({"id": "x", "class": "A", "contract_version": 1, "status": "draft"})
+
+    @pytest.mark.parametrize("cls", ["A", "B", "C", "D"])
+    def test_ratified_status_requires_ratified_via_for_every_class(self, cls: str) -> None:
+        if cls == "D":
+            meta = _class_d_meta()
+            del meta["ratified_via"]
+        else:
+            meta = {"id": "x", "class": cls, "contract_version": 1, "status": "ratified"}
+        with pytest.raises(ValidationError, match="ratified_via"):
+            ContractMeta.model_validate(meta)
+
+    def test_ratified_with_ratified_via_passes(self) -> None:
+        ContractMeta.model_validate(
+            {"id": "x", "class": "A", "contract_version": 1, "status": "ratified", "ratified_via": "test"}
+        )
+
+
+class TestValidateClassShapeRaisesForD:
+    def test_full_contract_document_raises_for_class_d(self) -> None:
+        # A Class D file must never construct a ContractDocument -- load_contract_meta
+        # (envelope-only) is the sole legal loader. _validate_class_shape's explicit D branch
+        # raises rather than silently falling through to the Class C else-branch. A genuinely
+        # heterogeneous D body would ALSO be rejected earlier by extra="forbid" on the shared
+        # top-level fields -- this fixture carries none, isolating the D-branch raise itself.
+        doc = {"contract": _class_d_meta()}
+        with pytest.raises(ValidationError, match="load_contract_meta"):
+            ContractDocument.model_validate(doc)

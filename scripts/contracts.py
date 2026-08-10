@@ -21,7 +21,9 @@ import yaml
 from pydantic import ValidationError
 
 from scripts.contracts_schema import (
+    ContractClass,
     ContractDocument,
+    ContractMeta,
     ContractStatus,
     FieldSpec,
 )
@@ -45,6 +47,12 @@ _INLINE_DEFINITION_KEYS = (
 # the default posture is forbidden, NOT permanent terminality -- the ceremonial revival path
 # (a fresh contract_version N+1 block at status ratified, INTENT line 560) is intentionally
 # implemented elsewhere, not in this default helper.
+#
+# `active` (contracts-first-class-migration, Class D grandfather-only status) gets three
+# OUTBOUND edges -- a grandfathered file can be ratified, deprecated, or superseded like any
+# other in-force contract -- but deliberately NO INBOUND edge: nothing transitions INTO active.
+# It is seeded only by pre-existing files the population sweep classifies as grandfathered;
+# a file that starts elsewhere in the state machine can never arrive at active.
 _ALLOWED_TRANSITIONS: frozenset[tuple[ContractStatus, ContractStatus]] = frozenset(
     {
         (ContractStatus.draft, ContractStatus.ratified),
@@ -54,6 +62,9 @@ _ALLOWED_TRANSITIONS: frozenset[tuple[ContractStatus, ContractStatus]] = frozens
         (ContractStatus.provisional_v0, ContractStatus.superseded),
         (ContractStatus.ratified, ContractStatus.deprecated),
         (ContractStatus.ratified, ContractStatus.superseded),
+        (ContractStatus.active, ContractStatus.ratified),
+        (ContractStatus.active, ContractStatus.deprecated),
+        (ContractStatus.active, ContractStatus.superseded),
     }
 )
 
@@ -90,12 +101,19 @@ def load_contract(path: str | Path) -> ContractDocument:
 
 
 def load_all_contracts(contracts_dir: str | Path) -> dict[str, ContractDocument]:
-    """Load every ritual-format contract under `contracts_dir`, keyed by contract id.
+    """Load every Class A/B/C ritual contract under `contracts_dir`, keyed by contract id.
 
     Skips any *.yaml whose top level is not a mapping carrying a `contract:` mapping with a
     `class:` field -- pre-ritual free-form docs (e.g. read-engine.yaml's top-level `version:`)
     are not Class A/B/C contracts and are silently ignored. A non-existent directory yields an
     empty mapping (import/collection safety).
+
+    Class D (mechanism contracts, contracts-first-class-migration) is EXPLICITLY skipped here
+    too -- never passed to load_contract, which would raise (a D body cannot satisfy
+    ContractDocument's extra="forbid"). This is load-bearing, not cosmetic: a caller like
+    context_docs.py wraps this in a bare `except Exception: pass`, which would silently swallow
+    that raise and kill the whole provisional-contract scan for every contract, not just the D
+    file that triggered it. Use load_contract_meta for Class D.
     """
     directory = Path(contracts_dir)
     out: dict[str, ContractDocument] = {}
@@ -109,6 +127,8 @@ def load_all_contracts(contracts_dir: str | Path) -> dict[str, ContractDocument]
             continue
         if not _is_ritual_contract(data):
             continue
+        if data["contract"].get("class") == ContractClass.D.value:
+            continue
         doc = load_contract(yaml_path)
         out[doc.contract.id] = doc
     return out
@@ -120,6 +140,44 @@ def _is_ritual_contract(data: Any) -> bool:
         return False
     contract = data.get("contract")
     return isinstance(contract, dict) and "class" in contract
+
+
+def load_contract_meta(path: str | Path) -> ContractMeta:
+    """Parse and schema-validate ONLY a contract's `contract:` envelope (Class D).
+
+    Unlike load_contract, this never constructs a ContractDocument -- it validates
+    `data["contract"]` alone as a ContractMeta, so the surrounding body (a Class D mechanism
+    contract's heterogeneous, non-ritual keys) is never subject to ContractDocument's
+    extra="forbid". This is how Class D escapes that shared model without relaxing it for
+    Class A/B/C.
+
+    Raises ContractValidationError on unreadable/non-mapping YAML, a YAML parse error, a missing
+    or non-mapping `contract:` block, or any Pydantic schema violation on the envelope itself
+    (unknown field, missing subject/evaluator for class D, missing ratified_via for a ratified
+    status, etc.).
+    """
+    p = Path(path)
+    try:
+        raw_text = p.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ContractValidationError(f"cannot read contract file {p}: {exc}") from exc
+
+    try:
+        data = yaml.safe_load(raw_text)
+    except yaml.YAMLError as exc:
+        raise ContractValidationError(f"invalid YAML in {p}: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ContractValidationError(f"contract {p} must be a YAML mapping, got {type(data).__name__}")
+
+    contract_block = data.get("contract")
+    if not isinstance(contract_block, dict):
+        raise ContractValidationError(f"contract {p} has no top-level `contract:` mapping")
+
+    try:
+        return ContractMeta.model_validate(contract_block)
+    except ValidationError as exc:
+        raise ContractValidationError(f"schema validation failed for {p} contract envelope: {exc}") from exc
 
 
 def resolve_refs(doc: ContractDocument, contracts_dir: str | Path) -> dict[str, FieldSpec]:

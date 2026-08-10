@@ -1,0 +1,165 @@
+contract:
+  id: contract-population
+  class: D
+  contract_version: 1
+  status: ratified
+  ratified_via: "Decision 168 / PLAN-contracts-first-class-migration"
+  description: >-
+    The Class D mechanism-contract population gate (T2.56, migration step 3 of
+    audits/contract-first-governance-33c8667.yaml, MECHANISM half only). Self-hosting: this file
+    is itself the first Class D contract, and its own evaluator (validate_contract_drift) is the
+    gate that enforces every rule this document declares -- the file defining the obligation
+    satisfies it, rather than merely asserting it.
+  subject: contract-population
+  evaluator:
+    check: validate_contract_drift
+
+# Top-level, sibling of `contract:` -- same convention as a ritual document's amendment_log.
+# Empty at authoring time: this file has no prior version to amend against.
+amendment_log: []
+
+honesty_clauses:
+  not_a_new_bar: >-
+    The evaluator obligation makes an already-implicit assertion explicit (the audit's CFG-03
+    finding: "a rule with no evaluator is not a rule") rather than adding a new bar. Every Class D
+    contract that predates this plan is grandfathered, never retroactively failed.
+  not_step_3_completion: >-
+    This plan is EXPLICITLY NOT migration-step-3 completion and does NOT fire Decision 167 clause
+    3. The completing act is the population sweep (seeding the 21 existing free-form files as
+    grandfathered Class D contracts), which this plan declares but does not perform -- forward-only
+    by design (see the grandfather_only_forms section below).
+  subject_uniqueness_is_precision_not_recall: >-
+    Subject uniqueness PREVENTS future duplicate-subject claims and DETECTS NONE of CFG-05's
+    existing named instances (a precision-optimal, recall-poor detector by design -- it has no
+    population to check uniqueness against until the sweep lands).
+
+shape_grammar:
+  declared_shape_obligation: >-
+    A NEW (absent from the merge-base baseline) depth-1 docs/contracts/*.yaml or *.yml file must
+    carry either a ritual (Class A/B/C) `contract:` block or a valid Class D `contract:` block
+    (class D, non-empty `subject`, non-empty `evaluator` resolving per evaluator_kinds below).
+    Neither -> FAIL, naming the file and the missing shape. A baseline-present file carrying
+    neither is grandfathered (the 21 free-form files this plan does not touch).
+  extension_and_depth: >-
+    A NEW tracked file under docs/contracts that is not depth-1 with a `.yaml` or `.yml`
+    extension FAILS unless it is baseline-present. Case-sensitive by construction (mirrors
+    `Path.glob("*.yaml")`): a `.YAML` file is not governed and is treated as ungoverned-extension,
+    not as a silently-scanned contract. The two pre-existing grandfathered members
+    (delegate-cli.md, environment-taxonomy.md) are baseline-present and stay grandfathered; the
+    file-router prose_allowlist is narrowed to those two by name so no guard advertises a
+    permission this gate revokes.
+  smuggling_detection: >-
+    A Class D body may never smuggle Class A (field-shaped) or Class B (verb-shaped) content
+    under a Class D label -- Class D exists for heterogeneous MECHANISM content, not as an
+    escape hatch from Class A/B's per-field obligations. Two independent detectors, both
+    retained: (1) a literal top-level `fields:` or `verbs:` key is rejected by name; (2) any
+    top-level key whose value is a mapping of mappings, where every leaf mapping carries at
+    least two of a class's descriptor keys, is rejected by shape -- Class A's
+    type/nullable/description/semantics/populated_by/dq_intent, or Class B's
+    payload_schema_ref/response_codes/typed_errors. This closes the renamed-key evasion (e.g.
+    `columns:` standing in for `fields:`) that a name-only rule cannot catch.
+
+evaluator_kinds:
+  check: >-
+    `{check: <name>}`. Resolves iff `<name>` is a member of registry.all_checks() AND of
+    pre_sequence()/full_sequence() (registration alone is insufficient), AND the check's own
+    module -- or a one-hop scripts/ module it imports -- contains the contract's BASENAME as an
+    exact string-literal match in EXECUTABLE context. Docstrings and `#` comments are excluded;
+    matched on the basename (not a joined path), because the genuine idiom is segmented
+    (validate_placement.py:19 builds `_common.ROOT / "docs" / "contracts" / "file-router.yaml"`
+    piecewise).
+  agent_surface: >-
+    `{agent_surface: <repo-relative-path>}`. Resolves iff the named path exists and its text
+    contains the contract's basename -- the non-Python analogue of the check AST scan, for
+    evaluators that are skills or slash commands rather than registered checks.
+  none_grandfathered: >-
+    `{none_grandfathered: <reason>}`. Never resolves -- it is the grandfather-only form, not a
+    fourth resolving kind. States WHY a file carries no genuine evaluator (a pre-ritual free-form
+    doc pending its own future ratification), rather than a bare countable `{none: ...}` that
+    would carry no explanation.
+
+grandfather_only_forms:
+  status_active: >-
+    `contract.status: active` is grandfather-only. A NEW Class D file may never declare it
+    (closed at birth by the gate's new-vs-baseline check); a baseline-present file legitimately
+    carrying it loads successfully at the schema layer (scripts/contracts_schema.py has no
+    baseline-dependent rule) so the sweep is never blocked by this plan's own substrate. There is
+    no transition rule producing `active` -- scripts/contracts.py's _ALLOWED_TRANSITIONS carries
+    three OUTBOUND edges (active->ratified, active->deprecated, active->superseded) and
+    deliberately no inbound edge.
+  evaluator_none_grandfathered: >-
+    `evaluator.none_grandfathered` is grandfather-only in the SAME two senses: closed at birth
+    (a new file may not declare it) AND closed on KIND CHANGE (a Class D file whose base carried
+    a resolving evaluator -- check or agent_surface -- may never transition its head to
+    none_grandfathered; that is a regression, not a sweep). It is explicitly PERMITTED to arrive
+    at none_grandfathered from an ABSENT base (the base document was not a valid Class D envelope
+    at all) on a baseline-present file -- that is exactly the population sweep's own shape, and a
+    literal reading that failed it would block this plan's declared completing act.
+  counters_open_at_zero: >-
+    Both grandfather-only counters (evaluator_none_grandfathered, status_active) open at exactly
+    ZERO at this plan's landing -- verified: no `subject:` key exists anywhere in docs/contracts
+    today, and `active` is not yet a ContractStatus member before this plan's schema edit lands.
+    They are reported in the census every run but deliberately NOT pinned by the ratchet below,
+    because the sweep must be able to raise them once; the kind-change rule is what guards them
+    in the interim, not a pinned ceiling.
+
+subject_namespace:
+  uniqueness: >-
+    Every Class D `subject` must be unique over the union of all declared Class D subjects and
+    all ritual (Class A/B/C) contract ids in the current population, deduped per file (a file
+    never collides with itself). Two Class D files sharing a subject FAILS; a Class D subject
+    colliding with a ritual contract's own id FAILS; a ritual contract merely declaring its own
+    id is never itself a failure of this rule.
+  topic_equals_subject: >-
+    A Class D file registered in docs/contracts/file-router.yaml's `routes:` must have its
+    `subject` equal that route's `topic` -- the file-router topic BECOMES the file's subject.
+    Mismatch FAILS. A Class D file with no matching route is outside this rule's scope (router
+    registration completeness is validate_placement's concern, not this gate's).
+
+change_detection:
+  amendment_log: >-
+    A Class D file's canonical dump (every top-level key except `amendment_log`) changing with
+    no new `amendment_log[]` entry FAILS. A comment-only or formatting-only edit never changes
+    the parsed dict, so it always passes.
+  base_resolution: >-
+    Base content for Pass 2 is resolved as a UNION, in order: (1) the file's own path present at
+    the merge-base baseline, (2) the `-M` rename map (a path git detects as a rename past its
+    ~50% similarity default), (3) `contract.id` matched against every baseline Class D envelope.
+    A file is genuinely NEW only if all three miss -- path alone is defeated by a rename, `-M`
+    alone is defeated by a rewrite past the similarity threshold, id alone is defeated by editing
+    the id (a one-line, cheaper-than-either evasion).
+  evaluator_kind_change: >-
+    FAILS iff the base document carried a resolving evaluator (check or agent_surface) and the
+    head carries none_grandfathered -- see grandfather_only_forms.evaluator_none_grandfathered
+    above for the full statement, including the permitted absent->none_grandfathered case.
+  conformance_loss: >-
+    FAILS iff the base carried a valid shape (ritual or Class D) and the head does not -- this,
+    not the ratchet pin's exact value, is the primary defence against a delete-the-contract-block
+    fallback: identity-based, so it fires regardless of what the resulting non-ritual population
+    count happens to be.
+
+census:
+  fields: [scanned, ritual, declared, grandfathered, evaluator_none_grandfathered, status_active, skipped]
+  discriminating_assertions: >-
+    scanned > 0, ritual > 0, and skipped == 0 against the real tree. The bucket identity
+    (scanned == ritual + declared + grandfathered + skipped) is retained only as a
+    forgot-a-bucket guard with independently computed counters -- it is true by construction over
+    a mutually exclusive partition and is explicitly NOT claimed as evidence against a vacuous
+    pass. Counts are always derived from the scan, never hardcoded.
+
+ratchet:
+  # The gate-visible non-ritual population: 37 depth-1 *.yaml files at this plan's landing = 16
+  # ritual + 21 non-ritual, plus 2 grandfathered .md members (verified independently four times).
+  # ZERO SLACK BY DESIGN -- do not round up. An increase is gated through the RATIFIED
+  # raise-approved mechanism (docs/contracts/marker-grammar.yaml tokens.raise-approved), never a
+  # private existence-only marker; a decrease always passes; a base in which this file does not
+  # exist skips the direction comparison (this plan's own landing PR).
+  grandfathered_max: 21
+  raise_mechanism: >-
+    An inline `# raise-approved: dec-NNN <reason>` comment on the grandfathered_max entry line,
+    routed through scripts.checks._marker_guard.authorization_failure via the RegistrySpec this
+    file's evaluator (validate_contract_drift, delegating to scripts/checks/contracts/
+    _population.py) constructs -- rel_path docs/contracts/contract-population.yaml, token
+    raise-approved, gated_direction up, flat extractor on grandfathered_max. Registered in
+    docs/contracts/marker-grammar.yaml tokens.raise-approved.used_by. No edit to
+    scripts/checks/_marker_guard.py itself was required.

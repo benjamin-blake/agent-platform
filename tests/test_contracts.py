@@ -15,6 +15,7 @@ from scripts.contracts import (
     ContractValidationError,
     load_all_contracts,
     load_contract,
+    load_contract_meta,
     resolve_refs,
     validate_status_transition,
 )
@@ -39,7 +40,13 @@ def _class_c_target(field_name: str = "registry_key", *, enforced: bool = True, 
         }
     )
     return {
-        "contract": {"id": "source-lineage", "class": "C", "contract_version": 1, "status": "ratified"},
+        "contract": {
+            "id": "source-lineage",
+            "class": "C",
+            "contract_version": 1,
+            "status": "ratified",
+            "ratified_via": "test-decision",
+        },
         "fields": {field_name: field},
     }
 
@@ -48,7 +55,13 @@ def _class_a_with_ref(ref: str = "docs/contracts/source-lineage.yaml#/contract/f
     source_field: dict = {"$ref": ref}
     source_field.update(field_extra)
     return {
-        "contract": {"id": "ops_recommendations", "class": "A", "contract_version": 1, "status": "ratified"},
+        "contract": {
+            "id": "ops_recommendations",
+            "class": "A",
+            "contract_version": 1,
+            "status": "ratified",
+            "ratified_via": "test-decision",
+        },
         "fields": {
             "id": {"type": "str", "nullable": False, "description": "id"},
             "source": source_field,
@@ -107,7 +120,13 @@ class TestRefResolver:
         _write(
             tmp_path / "source-lineage.yaml",
             {
-                "contract": {"id": "source-lineage", "class": "C", "contract_version": 1, "status": "ratified"},
+                "contract": {
+                    "id": "source-lineage",
+                    "class": "C",
+                    "contract_version": 1,
+                    "status": "ratified",
+                    "ratified_via": "test-decision",
+                },
                 "fields": {"registry_key": {"type": "str", "nullable": False, "description": "key"}},
             },
         )
@@ -157,7 +176,13 @@ class TestRejectsMalformed:
         path = _write(
             tmp_path / "a.yaml",
             {
-                "contract": {"id": "x", "class": "A", "contract_version": 1, "status": "ratified"},
+                "contract": {
+                    "id": "x",
+                    "class": "A",
+                    "contract_version": 1,
+                    "status": "ratified",
+                    "ratified_via": "test-decision",
+                },
             },
         )  # Class A without fields
         with pytest.raises(ContractValidationError):
@@ -254,7 +279,13 @@ class TestFieldSpecDerivation:
         path = _write(
             tmp_path / "a.yaml",
             {
-                "contract": {"id": "x", "class": "A", "contract_version": 1, "status": "ratified"},
+                "contract": {
+                    "id": "x",
+                    "class": "A",
+                    "contract_version": 1,
+                    "status": "ratified",
+                    "ratified_via": "test-decision",
+                },
                 "fields": {
                     "priority": {
                         "type": "int",
@@ -279,7 +310,13 @@ class TestFieldSpecDerivation:
         path = _write(
             tmp_path / "a.yaml",
             {
-                "contract": {"id": "x", "class": "A", "contract_version": 1, "status": "ratified"},
+                "contract": {
+                    "id": "x",
+                    "class": "A",
+                    "contract_version": 1,
+                    "status": "ratified",
+                    "ratified_via": "test-decision",
+                },
                 "fields": {
                     "id": {
                         "type": "str",
@@ -327,3 +364,138 @@ class TestStatusTransitions:
     def test_unknown_new_status_rejected(self) -> None:
         with pytest.raises(ContractValidationError, match="unknown"):
             validate_status_transition("ratified", "retired")
+
+    @pytest.mark.parametrize("new", ["ratified", "deprecated", "superseded"])
+    def test_active_outbound_edges_allowed(self, new: str) -> None:
+        assert validate_status_transition("active", new) is True
+
+    @pytest.mark.parametrize("old", ["draft", "provisional_v0", "ratified", "deprecated"])
+    def test_no_inbound_edge_to_active(self, old: str) -> None:
+        # active (contracts-first-class-migration) is grandfather-only -- no transition rule
+        # produces it, from any source state.
+        with pytest.raises(ContractValidationError, match="forbidden"):
+            validate_status_transition(old, "active")
+
+
+def _class_d_envelope(**overrides: object) -> dict:
+    envelope = {
+        "id": "cd-test",
+        "class": "D",
+        "contract_version": 1,
+        "status": "ratified",
+        "ratified_via": "test-decision",
+        "subject": "cd-test-subject",
+        "evaluator": {"check": "validate_placement"},
+    }
+    envelope.update(overrides)
+    return envelope
+
+
+class TestLoadContractMeta:
+    def test_class_d_envelope_validates_with_arbitrary_body_keys(self, tmp_path: Path) -> None:
+        path = _write(
+            tmp_path / "d.yaml",
+            {
+                "contract": _class_d_envelope(),
+                "some_heterogeneous_mechanism_section": {"a": "b", "c": [1, 2, 3]},
+            },
+        )
+        meta = load_contract_meta(path)
+        assert meta.id == "cd-test"
+        assert meta.class_.value == "D"
+        assert meta.subject == "cd-test-subject"
+        assert meta.evaluator.check == "validate_placement"
+
+    def test_missing_subject_raises(self, tmp_path: Path) -> None:
+        envelope = _class_d_envelope()
+        del envelope["subject"]
+        path = _write(tmp_path / "d.yaml", {"contract": envelope})
+        with pytest.raises(ContractValidationError):
+            load_contract_meta(path)
+
+    def test_missing_evaluator_raises(self, tmp_path: Path) -> None:
+        envelope = _class_d_envelope()
+        del envelope["evaluator"]
+        path = _write(tmp_path / "d.yaml", {"contract": envelope})
+        with pytest.raises(ContractValidationError):
+            load_contract_meta(path)
+
+    def test_ratified_without_ratified_via_raises(self, tmp_path: Path) -> None:
+        envelope = _class_d_envelope()
+        del envelope["ratified_via"]
+        path = _write(tmp_path / "d.yaml", {"contract": envelope})
+        with pytest.raises(ContractValidationError):
+            load_contract_meta(path)
+
+    def test_grandfathered_file_carrying_active_status_loads(self, tmp_path: Path) -> None:
+        # The guard against reintroducing the sweep-blocking contradiction: a grandfathered file
+        # legitimately carrying active status must still LOAD at the schema layer (this plan's
+        # own substrate must never block the population sweep).
+        envelope = _class_d_envelope(status="active", ratified_via=None)
+        path = _write(tmp_path / "d.yaml", {"contract": envelope})
+        meta = load_contract_meta(path)
+        assert meta.status.value == "active"
+
+    def test_grandfathered_file_carrying_none_grandfathered_evaluator_loads(self, tmp_path: Path) -> None:
+        envelope = _class_d_envelope(evaluator={"none_grandfathered": "pre-ritual free-form doc"})
+        path = _write(tmp_path / "d.yaml", {"contract": envelope})
+        meta = load_contract_meta(path)
+        assert meta.evaluator.none_grandfathered == "pre-ritual free-form doc"
+
+    def test_no_top_level_contract_block_raises(self, tmp_path: Path) -> None:
+        path = _write(tmp_path / "d.yaml", {"not_contract": {}})
+        with pytest.raises(ContractValidationError, match="no top-level"):
+            load_contract_meta(path)
+
+    def test_top_level_non_mapping_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "d.yaml"
+        path.write_text("- a\n- b\n", encoding="utf-8")
+        with pytest.raises(ContractValidationError, match="YAML mapping"):
+            load_contract_meta(path)
+
+    def test_unreadable_file_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ContractValidationError, match="cannot read"):
+            load_contract_meta(tmp_path / "does_not_exist.yaml")
+
+    def test_invalid_yaml_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "d.yaml"
+        path.write_text("{bad: [unclosed", encoding="utf-8")
+        with pytest.raises(ContractValidationError, match="invalid YAML"):
+            load_contract_meta(path)
+
+
+class TestLoadAllContractsSkipsClassD:
+    def test_class_d_file_is_skipped_not_raised(self, tmp_path: Path) -> None:
+        # load_all_contracts must never construct a ContractDocument for a Class D file -- that
+        # would raise, and a caller wrapping this in a bare `except Exception: pass` (e.g.
+        # context_docs.py) would silently swallow it and kill the whole provisional-contract
+        # scan. Class D is explicitly skipped instead.
+        _write(tmp_path / "d.yaml", {"contract": _class_d_envelope()})
+        contracts = load_all_contracts(tmp_path)
+        assert contracts == {}
+
+    def test_class_a_still_loads_alongside_an_ignored_class_d_file(self, tmp_path: Path) -> None:
+        _write(tmp_path / "d.yaml", {"contract": _class_d_envelope()})
+        _write(
+            tmp_path / "a.yaml",
+            {
+                "contract": {
+                    "id": "alpha",
+                    "class": "A",
+                    "contract_version": 1,
+                    "status": "draft",
+                },
+                "fields": {
+                    "f1": {
+                        "type": "str",
+                        "nullable": False,
+                        "description": "d",
+                        "semantics": "s",
+                        "populated_by": "writer",
+                        "dq_intent": {"not_null": {"enforced": True}},
+                    }
+                },
+            },
+        )
+        contracts = load_all_contracts(tmp_path)
+        assert set(contracts) == {"alpha"}
