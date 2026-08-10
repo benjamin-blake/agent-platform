@@ -1,0 +1,246 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "validate-driver-test-seams"
+intent: >-
+  Migrate the validate.py driver tests off the blanket `patch("validate.<check>")` hub seam onto
+  explicit stub-sequence injection, and re-point the remaining `from scripts.validate import X`
+  test consumers at their defining modules. Behaviour-neutral and independently revertible: it
+  touches no runtime code, and it removes the test-coupling that would otherwise have to be
+  migrated in the same PR as the facade deletion.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-validate-driver-test-seams.yaml
+phase: >-
+  Platform hygiene / SLOC governance (Decision 128). PR1 of a two-PR split; PR2 deletes the
+  207-SLOC facade re-export block and rewires dispatch to per-domain manifests.
+scope:
+  - file: tests/conftest.py
+    action: Modify
+    purpose: >-
+      Replace the `_neutralized_pre_registry` fixture -- which patches `validate.<name>` for every
+      check-kind step of pre_sequence() -- with a stub-sequence injection fixture that patches
+      registry.pre_sequence to return only the steps a test declares it exercises.
+  - file: tests/validate/test_driver_seam.py
+    action: Create
+    purpose: >-
+      Guard the new seam: the driver iterates the injected stub sequence, and no fixture
+      blanket-patches check names on the validate namespace.
+  - file: tests/validate/test_tiers.py
+    action: Modify
+    purpose: Declare explicit stub sequences instead of relying on blanket neutralization. Must not grow.
+  - file: tests/validate/test_budget.py
+    action: Modify
+    purpose: Declare explicit stub sequences for the budget-assertion tests.
+  - file: tests/validate/test_manifest_isolation.py
+    action: Modify
+    purpose: Declare explicit stub sequences for the manifest-isolation tests.
+  - file: tests/validate/test_scaffold_gates.py
+    action: Modify
+    purpose: Declare explicit stub sequences; scaffolding/stdlib patches are unchanged.
+  - file: tests/validate/test_terraform_checks.py
+    action: Modify
+    purpose: Declare explicit stub sequences; stdlib patches are unchanged.
+  - file: tests/checks/roadmap/test_check_graduation_guard.py
+    action: Modify
+    purpose: >-
+      Cross-tree consumer of the retired fixture; move to the stub-sequence fixture. Its two
+      explicit check patches stay on the validate namespace until PR2 changes dispatch.
+  - file: tests/checks/decisions/test_conformance_registration.py
+    action: Modify
+    purpose: >-
+      Re-point the module-level `from scripts.validate import validate_decision_entry_conformance`
+      at its defining module. Safe now because the test calls the function directly rather than
+      relying on dispatch interception.
+  - file: tests/test_plan_document.py
+    action: Modify
+    purpose: Re-point `from scripts.validate import validate_plan_documents` at its defining module.
+  - file: tests/test_ci_claude_p_retry.py
+    action: Modify
+    purpose: >-
+      Re-point the five function-scope `from scripts.validate import _check_claude_p_raw_invocations`
+      imports at their defining module.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/validate.py is byte-identical to its pre-change state -- this PR changes no runtime code.
+  - No fixture patches check names on the validate namespace en masse; `_neutralized_pre_registry`'s blanket loop is gone.
+  - Driver tests declare the step sequence they exercise, rather than inheriting a globally neutralized registry.
+  - No `from scripts.validate import ...` remains anywhere under tests/ (excluding the reachability tests in tests/test_checks_registry.py, which assert that surface deliberately and are PR2's to retire).
+  - tests/validate/test_tiers.py SLOC does not increase (it starts at 499 against a 500 limit with no budget entry).
+  - No file in scope crosses its SLOC budget, and config/sloc_budgets.yaml gains no new entry and no raised entry.
+  - The full presubmit tier passes with the same check roster and the same pass/fail outcome as before the change.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Prove this PR touches no runtime code.
+    command: 'bin/venv-python -c "import subprocess,sys; r=subprocess.run([\"git\",\"diff\",\"origin/main\",\"--name-only\"],capture_output=True,text=True); files=[f for f in r.stdout.split() if f]; bad=[f for f in files if not (f.startswith(\"tests/\") or f.startswith(\"docs/plans/\"))]; print(\"changed:\", len(files), \"non-test:\", bad); sys.exit(1 if bad else 0)"'
+    expected: Every changed path is under tests/ or docs/plans/. Zero runtime files touched.
+    fix_if: Any scripts/ or config/ path here means the change is no longer behaviour-neutral and belongs in PR2.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a property of THIS migration's diff against origin/main, not a durable repo invariant;
+      graduating it would permanently forbid runtime changes to files this plan happens to touch.
+  - step: 2
+    phase: pre-deploy
+    action: The blanket hub-patching fixture is gone and nothing reintroduces it.
+    command: 'bin/venv-python -c "import pathlib,sys,re; src=pathlib.Path(\"tests/conftest.py\").read_text(); bad=re.findall(r\"patch\\(f?.validate\\.\\{\", src); print(\"blanket hub patches in conftest:\", bad); sys.exit(1 if bad else 0)"'
+    expected: No f-string-interpolated `patch("validate.{...}")` loop remains in the root conftest.
+    fix_if: A surviving loop means the driver tests still neutralize the whole registry through the hub namespace.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "no-blanket-validate-hub-patching"
+  - step: 3
+    phase: pre-deploy
+    action: No test imports symbols from the scripts.validate hub (reachability tests excepted).
+    command: 'bin/venv-python -c "import subprocess,sys; r=subprocess.run([\"git\",\"grep\",\"-n\",\"from scripts.validate import\",\"--\",\"tests/\"],capture_output=True,text=True); hits=[l for l in r.stdout.splitlines() if \"test_checks_registry.py\" not in l]; print(chr(10).join(hits) or \"clean\"); sys.exit(1 if hits else 0)"'
+    expected: Only tests/test_checks_registry.py (the deliberate reachability assertions, PR2's to retire) references the hub import surface.
+    fix_if: Any other hit is an un-migrated consumer that will break at collection time when PR2 deletes the facade.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "no-hub-imports-in-tests"
+  - step: 4
+    phase: pre-deploy
+    action: The at-ceiling test file did not grow.
+    command: 'bin/venv-python -c "import pathlib,sys; n=len([l for l in pathlib.Path(\"tests/validate/test_tiers.py\").read_text().splitlines() if l.strip() and not l.strip().startswith(chr(35))]); print(\"test_tiers.py SLOC:\", n); sys.exit(0 if n<=499 else 1)"'
+    expected: At or below 499 SLOC -- the stub-sequence rewrite should be net-neutral or negative versus the decorator stacks it replaces.
+    fix_if: Growth here forces a decomposition or an unmarked budget raise, both of which Decision 128/165 disallow.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the standing validate_sloc_limits gate for this file; pinning 499 as a registry
+      check would freeze a transient number that the PR2 decomposition is expected to move.
+  - step: 5
+    phase: pre-deploy
+    action: The migrated driver tests genuinely exercise the injected sequence (red without the change).
+    command: 'bin/venv-python -m pytest tests/validate/test_driver_seam.py -q'
+    expected: The driver iterates exactly the injected stub steps; a check absent from the stub never runs.
+    fix_if: A failure means the injection seam does not intercept -- verify registry.pre_sequence is still resolved as a call-time module attribute.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "driver-iterates-injected-sequence"
+  - step: 6
+    phase: pre-deploy
+    action: The whole migrated driver-test surface passes.
+    command: 'bin/venv-python -m pytest tests/validate/ tests/checks/roadmap/test_check_graduation_guard.py tests/test_plan_document.py tests/test_ci_claude_p_retry.py tests/checks/decisions/test_conformance_registration.py -q'
+    expected: All green. No collection-time ImportError anywhere in the migrated set.
+    fix_if: A collection error means a re-pointed import names a symbol its defining module does not export.
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: Full presubmit passes with an unchanged check roster.
+    command: 'bin/venv-python -m scripts.validate'
+    expected: Exit 0; the summary lists the same checks as before the change.
+    fix_if: Any regression blocks the migration.
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: tests/conftest.py
+    behavior: >-
+      The driver-neutralization fixture injects an explicit step sequence rather than patching
+      check names on the validate namespace, and the driver honours the injected sequence.
+    verification_step: 5
+    test_selector: tests/validate/test_driver_seam.py
+    red_green_expectation: >-
+      red before (the blanket fixture patches the hub namespace and the driver still iterates the
+      real pre_sequence, so an injected-sequence assertion fails), green after
+constraints:
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    This PR must not modify scripts/validate.py. Its whole value is being behaviour-neutral and
+    independently revertible; a runtime change forfeits both.
+  - >-
+    Check-name patches CANNOT be moved to defining modules in this PR. Verified empirically: while
+    the facade binds names eagerly, patching the defining module leaves validate.py's globals()
+    holding the original function object and the real check runs. Those patches move in PR2, in the
+    same change as the dispatch swap.
+  - >-
+    The injection seam works because scripts/validate.py calls registry.pre_sequence() /
+    registry.full_sequence() as call-time module attribute access. Do not refactor those into
+    eagerly-bound local names -- that would silently sever the seam.
+  - >-
+    tests/validate/test_tiers.py is at 499/500 SLOC with no budget entry and
+    tests/test_checks_registry.py is at 643 = exactly its raise-approved budget. Neither may grow.
+  - Do not touch tests/test_checks_registry.py in this PR -- its reachability tests are PR2's to retire.
+context:
+  - >-
+    "Decision-scout verdict + CITE list: FLAGS_FOUND (scoped against the combined plan this one was
+    split from). CITE: dec-104, dec-128, dec-131, dec-159, dec-165, dec-73. Decision 104 documents
+    the `patch(\"validate.<name>\")` interception contract that this PR narrows but does not retire;
+    the retirement itself is PR2's, carrying the explicit amends clause. Decision 131 governs test
+    placement for the new tests/validate/test_driver_seam.py. Decisions 159/165 forbid growing
+    tests/test_checks_registry.py or tests/validate/test_tiers.py without a marked raise."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    This is PR1 of a two-PR split. The combined single-PR version was reviewed by three zero-context
+    reviewers and returned REVISE from both completed reviewers on scope grounds: ~80 scope files, a
+    seam migration and a dispatch swap in one squash-merged diff that no reviewer could mechanically
+    verify.
+  - >-
+    Ordering rationale: seams FIRST is only possible for the driver-test cluster, not for the
+    residual explicit check patches. Verified empirically this session -- with the facade binding
+    names eagerly, patching a defining module does not intercept globals()-based dispatch (the real
+    check ran). So PR1 takes the blanket fixture, PR2 takes the residual patches together with the
+    dispatch change.
+  - >-
+    Why this ordering beats the alternative: migrating seams while the facade still exists needs no
+    PEP 562 compatibility bridge and leaves no hybrid intermediate state on main -- the objection
+    that argued against splitting in the first place.
+  - >-
+    The blanket fixture is the bulk of the coupling: `_neutralized_pre_registry` (tests/conftest.py)
+    patches `validate.<name>` for EVERY check-kind step of pre_sequence(), and is consumed by 14
+    usages across 4 files including a cross-tree consumer in tests/checks/roadmap/.
+  - >-
+    Touching tests/conftest.py sets full_suite_forced=True in the affected-set derivation, so this
+    PR's own --pre run executes the full suite against the 1500s forced-run ceiling rather than the
+    300s fast-tier budget. Expect a long --pre; this is deterministic, not drift.
+  - >-
+    Findings carried forward to PR2 (do not re-derive): registry.yaml holds 22 references to
+    validate (path or dotted) across ~14 entries including executable facade assertions -- not the
+    single grep-shaped verifier an earlier pass reported; map_source_to_test demands mirror test
+    files for every new _manifest.py and for _schema.py; a derived DOMAIN_ORDER composition cannot
+    reproduce today's tier order (full tier has 45 domain runs across 18 domains, ops_governance
+    alone in 7 non-contiguous blocks), so byte-parity is unachievable and order must be re-derived
+    once with real dependencies pinned; registry.all_checks() returns 97 under eager import and 0
+    under lazy resolution, with production consumers at validate_ci_rca_taxonomy.py:38 and
+    contracts/_population.py:244; and a check-module change currently selects 18 tests and zero
+    tests/validate/*, with CAP=35 truncation making a 1-file chain sentinel vacuous.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections (104, 128, 131, 159, 165, 73)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Baseline captured -- record tests/validate/test_tiers.py SLOC and the full-tier check roster before editing
+execution_steps:
+  - >-
+    Capture the baseline: record the full-tier check roster and tests/validate/test_tiers.py SLOC so
+    the behaviour-neutrality and no-growth claims are checkable at the end.
+  - >-
+    Replace `_neutralized_pre_registry` in tests/conftest.py with a stub-sequence fixture that
+    patches scripts.checks.registry.pre_sequence to return a caller-declared list of Step objects,
+    defaulting to scaffold-only. Keep the fixture in the root conftest -- it has a cross-tree
+    consumer in tests/checks/roadmap/.
+  - >-
+    Create tests/validate/test_driver_seam.py asserting the driver iterates exactly the injected
+    sequence and that a check absent from the stub never runs. This test must fail against the
+    pre-change fixture.
+  - >-
+    Migrate the five tests/validate/ driver-test modules and the cross-tree
+    tests/checks/roadmap/test_check_graduation_guard.py onto the stub-sequence fixture, declaring
+    per-class the steps each exercises. Leave residual explicit check patches on the validate
+    namespace -- they are PR2's. Keep test_tiers.py at or below its current SLOC.
+  - >-
+    Re-point the module-level hub imports in tests/checks/decisions/test_conformance_registration.py
+    and tests/test_plan_document.py, and the five function-scope imports in
+    tests/test_ci_claude_p_retry.py, at their defining modules.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results, and the confirmed baseline comparison'
+work_areas: []
+rollback: >-
+  Revert the single squash commit. Because no runtime file is touched, a revert restores the
+  previous test topology exactly and cannot affect the CI gate's behaviour -- which is the reason
+  this work was separated from the facade deletion.
