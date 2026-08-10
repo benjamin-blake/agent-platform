@@ -1,9 +1,15 @@
 """Tests for validate_acceptance_literals() -- repo-wide static acceptance-literal lint guard."""
 
+import ast
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.checks.ops_governance.validate_acceptance_literals import validate_acceptance_literals
+from scripts.checks.ops_governance.validate_acceptance_literals import (
+    _find_violations,
+    _resolve_string_value,
+    _scan_file,
+    validate_acceptance_literals,
+)
 
 
 class TestValidateAcceptanceLiterals:
@@ -102,3 +108,40 @@ class TestValidateAcceptanceLiterals:
             failed: list[str] = []
             validate_acceptance_literals(failed)
         assert failed == []
+
+    def test_resolve_string_value_returns_none_for_non_string_joinedstr_segment(self) -> None:
+        """A JoinedStr segment that is neither a str Constant nor a FormattedValue (defensive
+        branch -- not reachable via any real f-string, but the resolver must not guess) resolves
+        to None."""
+        node = ast.JoinedStr(values=[ast.Constant(value=1)])
+        assert _resolve_string_value(node) is None
+
+    def test_scan_file_returns_empty_on_os_error(self, tmp_path: Path) -> None:
+        """A path that cannot be read (e.g. deleted between glob and read) is skipped, not raised."""
+        missing = tmp_path / "does-not-exist.py"
+        assert _scan_file(missing) == []
+
+    def test_scan_file_returns_empty_on_syntax_error(self, tmp_path: Path) -> None:
+        """A .py file with invalid syntax is skipped, not raised."""
+        bad_syntax = tmp_path / "bad_syntax.py"
+        bad_syntax.write_text("def broken(:\n", encoding="utf-8")
+        assert _scan_file(bad_syntax) == []
+
+    def test_find_violations_includes_personal_scripts_when_present(self, tmp_path: Path) -> None:
+        """personal_scripts/ is scanned too, when it exists alongside scripts/."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        personal_dir = tmp_path / "personal_scripts"
+        personal_dir.mkdir()
+        bad_file = personal_dir / "bad_personal_filer.py"
+        bad_file.write_text(
+            "def _build_rec_fields():\n"
+            "    return {\n"
+            '        "acceptance": "the rec\'s condition clears and it closes automatically.",\n'
+            "    }\n",
+            encoding="utf-8",
+        )
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations()
+        assert len(violations) == 1
+        assert "bad_personal_filer.py" in violations[0]
