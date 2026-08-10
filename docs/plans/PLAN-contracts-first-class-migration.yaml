@@ -1,0 +1,415 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "contracts-first-class-migration"
+intent: >-
+  Make docs/contracts/ a first-class destination for MECHANISM content by giving mechanism
+  contracts a real class in the CD.25 taxonomy (Class D), so that routing specification OUT of
+  docs/DECISIONS.md stops meaning routing it to a less-governed surface. Installs the obligation
+  forward-only on NEW contract files, makes subject-uniqueness well-posed for the first time,
+  extends amendment-log-on-change to the new class, and pins the grandfathered population as a
+  visible downward-only ratchet.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-contracts-first-class-migration.yaml
+phase: >-
+  Migration step 3 (MECHANISM HALF ONLY) of audits/contract-first-governance-33c8667.yaml --
+  findings CFG-04 (no mechanism class in the ritual taxonomy), CFG-05 (parallel/contradictory
+  assertion undetectable because no contract declares its subject), CFG-09 (the migration
+  destination is governance-weaker than the source, so correct routing is punished today).
+  Step 1 (PLAN-decision-ceiling-bridge, PR #863) and step 2 (PLAN-decision-entry-flow-governance,
+  Decision 167, PR #871) have both landed. Platform tier_item T2.56 is the eventual owner of this
+  corpus's shape; this plan closes none of its exit criteria and declares no closes_criteria.
+  EXPLICITLY NOT step-3 completion -- the population sweep is the completing act (see Decision
+  clause 6 and the constraints below).
+scope:
+  - file: scripts/contracts_schema.py
+    action: Modify
+    purpose: >-
+      (a) Add `D` to ContractClass -- the mechanism/procedure class, whose body is heterogeneous by
+      nature and whose shape authority is its declared evaluator, NOT a body schema. (b) Add
+      `active` to ContractStatus: in force and consumed by its declared evaluator, but never put
+      through the CD.25 ratification ritual. It exists so the population sweep can seed the 23
+      grandfathered files honestly instead of asserting they are `ratified` -- translating them
+      would claim they passed a ritual that has never run, manufacturing the exact false assurance
+      this plan removes. (c) Add optional typed `subject: str | None` and `evaluator:
+      DeclaredEvaluator | None` fields to ContractMeta, required-for-D via a model validator.
+      (d) Extend _validate_class_shape with a Class D branch: D MUST NOT define `fields` or
+      `verbs`, and MUST carry both `subject` and `evaluator`. Adding an enum member is additive --
+      no existing contract's status or class changes, and validate_status_transition raises on
+      unknown values, so the widening is safe by construction.
+  - file: scripts/contracts.py
+    action: Modify
+    purpose: >-
+      (a) Add `load_contract_meta(path) -> ContractMeta`: an ENVELOPE-ONLY loader that validates
+      only `data["contract"]` and never constructs ContractDocument. This is how Class D escapes
+      `extra="forbid"` (contracts_schema.py:155) without relaxing the shared model. The rejected
+      alternative -- nesting D bodies under a `spec:` key -- would force every consumer of the
+      free-form population one level down, INCLUDING the guards that read their own config
+      (validate_placement reads file-router.yaml's top-level `routes:`; _marker_guard reads
+      marker-grammar.yaml), i.e. churn inside enforcement code for zero governance gain.
+      (b) Add the `active` edges to _ALLOWED_TRANSITIONS: active->ratified (the sweep's intended
+      terminus), active->deprecated, active->superseded. Deliberately NO ratified->active and NO
+      draft->active edge: `active` is reachable only as a grandfathering seed state, never as a
+      destination a ratified contract can regress to. (c) load_all_contracts CONTINUES to return
+      only Class A/B/C ContractDocuments -- it explicitly skips class D, so its sole consumer
+      (scripts/preflight/context_docs.py:259-267) is untouched and the provisional-contract scan
+      keeps its current behaviour.
+  - file: scripts/checks/contracts/validate_contract_drift.py
+    action: Modify
+    purpose: >-
+      The whole mechanism, in the gate that already owns this population. (a) NARROW the skip
+      branch at lines 64-72: a file carrying neither a `contract:` block with `class:` nor a
+      recognised declared shape is a failure IF it is new vs the origin/main baseline, and is
+      counted as grandfathered otherwise. (b) New-file baseline via one memoized
+      `git ls-tree -r --name-only origin/main -- docs/contracts/` read, reachability delegated to
+      the existing _common.origin_main_reachable -- never a private duplicate (Decision 134 clause
+      3). (c) Class D structural validation via load_contract_meta. (d) SUBJECT-UNIQUENESS over a
+      namespace that is the union of declared `subject:` values AND the 16 ritual `contract.id`
+      values -- a split namespace would let a Class D file silently parallel ops_recommendations,
+      which is precisely the CFG-05 risk. (e) Pass 2 amendment-log-on-change for Class D: compare
+      canonical yaml.safe_load dumps at merge-base vs HEAD with the `amendment_log` key excluded;
+      any parsed-content change requires a new amendment_log[] entry, while comment-only and
+      formatting edits pass free. (f) CENSUS on the PASS/FAIL line every run:
+      scanned / ritual / declared / grandfathered / evaluator_none / status_active / skipped --
+      the production complement to the red fixture (rec-2915's shape, scoped to this gate).
+      (g) Enforce the grandfathered ratchet: the count MUST NOT exceed the pin read from
+      contract-population.yaml at check time. Advisory-SKIP semantics: when origin/main is
+      unreachable the NEW-FILE obligation and the ratchet skip with a printed reason, but
+      subject-uniqueness and Class D structural validation still run -- the gate is never wholly
+      disabled offline.
+  - file: docs/contracts/contract-population.yaml
+    action: Create
+    purpose: >-
+      The mechanism's own semantics, and the first Class D contract -- self-hosting, so the file
+      that defines the obligation must satisfy it. Carries: subject (`contract-population`),
+      evaluator (`{check: validate_contract_drift}`), the declared-shape key grammar, the
+      evaluator-kind union and its verification rules, the subject namespace rule, the
+      amendment-log change-detection rule, the census field list, and the `ratchet:` block whose
+      `grandfathered_max: 23` pin the gate reads at check time (never a hardcoded copy, mirroring
+      how validate_decision_entry_conformance reads decision-entry.yaml). Records that the
+      evaluator_none and status_active pins are deliberately NOT set here -- their true opening
+      balance is unknown until the sweep runs, and the sweep sets them.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      One route row for contract-population.yaml so the obligation is discoverable BEFORE an author
+      composes a new contract, not only as a CI rejection afterwards (Decision 66 precision-context
+      injection; the decision-scout gate raised this as a NOTE-tier spirit flag). Description names
+      the two admissible shapes so the router row itself answers "what must a new contract carry?".
+  - file: tests/checks/contracts/test_validate_contract_drift.py
+    action: Modify
+    purpose: >-
+      Synthetic-fixture coverage for every new behaviour, using the existing `contracts_dir=tmp_path`
+      injection seam and _FakeGit harness. The seam is what makes the golden rule expressible for an
+      absence-shaped subject: the guarded defect (a non-conforming NEW contract file) cannot exist in
+      the tree, so it is SYNTHESISED through the seam and asserted to fail. Includes the real-population
+      regression (docs/contracts/ still passes) and the rename case.
+  - file: tests/test_contracts.py
+    action: Modify
+    purpose: >-
+      Unit coverage for load_contract_meta (Class D envelope validates; heterogeneous body keys do
+      NOT raise; a D file missing subject or evaluator DOES raise) and for the three new
+      _ALLOWED_TRANSITIONS edges plus the deliberately-absent ratified->active and draft->active
+      edges.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      EXACTLY ONE new numbered entry (Decision 168 at authoring time -- re-check the current max
+      header at implement time, numbers are not reserved at draft time). Records the RULING only:
+      one unified taxonomy rather than a second lighter tier, Class D's shape authority delegated
+      to its evaluator, `active` as a grandfathering-only status, the ratchet, and the explicit
+      statement that this plan is NOT migration-step-3 completion. Every KEY SHAPE lives in
+      contract-population.yaml and is cited, never restated -- Decision 150's field_semantics row
+      routes shapes to the owning contract, and Decision 167 clause 2 makes claiming that row on a
+      new entry an outright rejection. Carries the Decision 167 typed metadata envelope with
+      `significance.value: numbered_decision` and should fit under the 6,144-byte WARN norm.
+  - file: audits/contract-first-governance-33c8667.yaml
+    action: Modify
+    purpose: >-
+      Append ONE dated amendment note under meta.contract_notes, mirroring the file's own
+      established `amendment_2026-08-07:` in-place precedent (line 27). Records the ratchet's WHY
+      (the exemption gets a balance sheet; a drain obligation with no standing consumer is the
+      significance bar's failure mode wearing a rec id) and POINTS AT contract-population.yaml for
+      the HOW -- the mechanism spec is not restated here, because dumping specification into a
+      run-record would re-commit the exact routing defect this audit diagnoses. States that
+      findings, severities and Q1-Q9 verdicts are unchanged. audits/*.yaml is `governed: false` in
+      the workflow_outputs structural-size class, so no size gate applies.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - A NEW docs/contracts/*.yaml file carrying neither a `contract:` block with `class:` nor a valid
+    Class D declared shape FAILS validate_contract_drift; the same file present at the origin/main
+    baseline passes and is counted as grandfathered.
+  - "A NEW file declaring a grandfather-only `active` status FAILS -- that status is reachable only
+    as a grandfathering seed state, never mintable by a new author, so the cheaper self-selected
+    path does not exist."
+  - Two files declaring the same subject FAIL, where the namespace is the union of declared
+    subjects and the 16 ritual contract ids.
+  - A Class D file whose parsed content changed vs the merge-base with no new amendment_log[] entry
+    FAILS Pass 2; a comment-only or formatting-only edit to the same file passes.
+  - Renaming a grandfathered file makes it new-vs-baseline and therefore subject to the obligation
+    (deliberate and countable, not a silent exemption).
+  - docs/contracts/contract-population.yaml passes the gate it defines, as a Class D contract with a
+    declared subject and a registry-resolvable evaluator.
+  - The gate prints a census (scanned / ritual / declared / grandfathered / evaluator_none /
+    status_active / skipped) on every run, so a vacuous pass is distinguishable from an enforced one.
+  - The grandfathered count exceeding contract-population.yaml's `grandfathered_max` pin FAILS the
+    gate; the pin is read from the contract at check time, never hardcoded.
+  - The existing live population -- 16 ritual + 23 grandfathered -- still passes unchanged, and
+    scripts/preflight/context_docs.py's provisional scan is unaffected.
+  - With origin/main unreachable, the new-file obligation and the ratchet advisory-SKIP with a
+    printed reason while subject-uniqueness and Class D structural validation still run.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      RED FIXTURE -- synthesise the absence-shaped defect through the contracts_dir seam: a NEW
+      contract file carrying neither admissible shape must fail the gate.
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py::TestDeclaredShapeObligation -q"
+    expected: "All tests pass; the non-conforming new-file case asserts a failure naming the file and the missing shape."
+    fix_if: "The gate returns no failure for a new keyless file -- the skip branch narrowing did not take effect."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-new-file-declared-shape-required"
+  - step: 2
+    phase: pre-deploy
+    action: "`active` is grandfathering-only -- a NEW file declaring it is rejected."
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py::TestActiveStatusIsGrandfatherOnly -q"
+    expected: "New-file-with-active fails; a baseline-present file carrying active passes."
+    fix_if: "A new file mints itself into the unverified band -- the gradient this plan exists to prevent."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-active-status-grandfather-only"
+  - step: 3
+    phase: pre-deploy
+    action: "Subject-uniqueness over the union namespace (declared subjects + ritual contract ids)."
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py::TestSubjectUniqueness -q"
+    expected: "Two files declaring one subject fail; a declared subject colliding with a ritual contract id also fails."
+    fix_if: "Collisions pass, or the namespace was split so a Class D file can silently parallel a ritual contract."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-subject-uniqueness"
+  - step: 4
+    phase: pre-deploy
+    action: "Pass 2 amendment-log-on-change for Class D, including the comment-only negative case."
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py::TestDeclaredAmendmentLog -q"
+    expected: "Parsed-content change without a new amendment_log entry fails; comment-only and formatting edits pass."
+    fix_if: "Either direction is wrong -- a silent semantic edit passes, or a whitespace edit is rejected as an amendment."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-declared-amendment-log-on-change"
+  - step: 5
+    phase: pre-deploy
+    action: "Rename of a grandfathered file is treated as new, and the ratchet pin is enforced."
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py::TestGrandfatherRatchet -q"
+    expected: "A renamed grandfathered file must conform; a grandfathered count over the pin fails naming the pin's source."
+    fix_if: "A rename silently inherits the exemption, or the ratchet reads a hardcoded value instead of the contract."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-grandfather-ratchet"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      REGRESSION -- the real live population (16 ritual + 23 grandfathered) still passes, and the
+      new self-hosting contract passes the gate it defines.
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py -q -k 'real_live_contracts or SelfHosting'"
+    expected: "Zero failures against docs/contracts/; contract-population.yaml validates as Class D."
+    fix_if: "An existing contract regressed, or the self-hosting file cannot satisfy its own obligation."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-live-population-regression"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      CENSUS -- confirm the gate reports examined-input counts, so an enforced pass is
+      distinguishable from a vacuous one.
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py::TestCensusLine -q"
+    expected: "The printed line carries scanned / ritual / declared / grandfathered / evaluator_none / status_active / skipped with non-zero scanned."
+    fix_if: "The gate prints a bare PASS, leaving a vacuous pass indistinguishable from an enforced one."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-census-counts-reported"
+  - step: 8
+    phase: pre-deploy
+    action: "Schema and loader unit coverage -- Class D envelope, heterogeneous body, new status transitions."
+    command: "bin/venv-python -m pytest tests/test_contracts.py tests/test_contracts_schema.py -q"
+    expected: "load_contract_meta accepts a D envelope with arbitrary body keys; a D file missing subject or evaluator raises; active->ratified allowed, ratified->active and draft->active forbidden."
+    fix_if: "extra=forbid still rejects heterogeneous bodies, or an illegitimate status edge is permitted."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-class-d-schema-and-transitions"
+  - step: 9
+    phase: pre-deploy
+    action: "Offline degradation -- origin/main unreachable advisory-SKIPs only the baseline-dependent legs."
+    command: "bin/venv-python -m pytest tests/checks/contracts/test_validate_contract_drift.py::TestBaselineUnreachable -q"
+    expected: "New-file obligation and ratchet print a skip reason and append nothing; uniqueness and D structural validation still append on a defect."
+    fix_if: "The whole gate fails open offline, or it hard-fails where it should advisory-SKIP."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "contracts-baseline-unreachable-partial-skip"
+  - step: 10
+    phase: pre-deploy
+    action: "Full fast-tier presubmit -- the authoritative pre-merge gate, including fast-tier budget."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0. The contract drift gate's census line appears; the fast-tier budget assertion still passes with the added git read."
+    fix_if: "Any check regresses, or the added merge-base/ls-tree reads push the fast tier over its Decision 153 budget."
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: scripts/checks/contracts/validate_contract_drift.py
+    behavior: >-
+      A NEW contract file must carry one of the two admissible shapes; subjects are unique across the
+      union namespace; Class D content changes require an amendment_log entry; the grandfathered
+      count is pinned and the census is printed every run.
+    verification_step: 1
+    test_selector: tests/checks/contracts/test_validate_contract_drift.py::TestDeclaredShapeObligation
+    red_green_expectation: >-
+      Red before, green after. Reverting the skip-branch narrowing makes the synthetic new keyless
+      file pass, so the fixture fails -- the check is not tautological (scripts/verification_checks.py
+      is_admitted: a check that passes both before and after the change must be rejected).
+  - source: scripts/contracts_schema.py
+    behavior: >-
+      ContractClass admits D; ContractStatus admits active; a Class D contract must declare subject
+      and evaluator and must not define fields or verbs.
+    verification_step: 8
+    test_selector: tests/test_contracts_schema.py
+    red_green_expectation: >-
+      Red before, green after. Without the enum and validator additions, constructing a Class D
+      ContractMeta raises on the unknown class value, so the acceptance assertions fail.
+  - source: scripts/contracts.py
+    behavior: >-
+      load_contract_meta validates a Class D envelope without constructing ContractDocument, so
+      heterogeneous body keys survive extra=forbid; the three active edges are permitted and
+      ratified->active / draft->active are not; load_all_contracts still skips class D.
+    verification_step: 8
+    test_selector: tests/test_contracts.py
+    red_green_expectation: >-
+      Red before, green after. Without load_contract_meta the Class D fixture raises
+      ContractValidationError on its top-level body keys, and the new transition assertions fail
+      against the unmodified _ALLOWED_TRANSITIONS frozenset.
+constraints:
+  - EXACTLY ONE new numbered Decision entry. Nothing else in this plan touches docs/DECISIONS.md,
+    and no second Decision-surface change is in scope.
+  - The Decision entry records the RULING only. Every key shape, enum value, census field and pin
+    lives in docs/contracts/contract-population.yaml and is cited from the entry, never restated
+    (Decision 150 field_semantics row; Decision 167 clause 2 rejects claiming that row on a new entry).
+  - FORWARD-ONLY. The 23 existing free-form files are NOT seeded here -- that is the follow-on
+    population sweep. No existing contract file is edited except file-router.yaml (one route row).
+  - This plan does NOT flip Decision 167 clause 3's WARN-tier per-entry cap to hard-fail, and does
+    NOT constitute migration-step-3 completion. The Decision entry states this explicitly so the
+    judgement is recorded rather than left to whichever future session next touches
+    validate_decisions_size.
+  - CFG-11 (the two .md contracts' invisibility to the *.yaml glob and the structural size engine)
+    is OUT OF SCOPE. Noted as inherited by the sweep, whose completion test requires skipped=0
+    across all 39 files including both .md members.
+  - No new module under scripts/. The mechanism lands in the gate that already owns this population;
+    schema changes land in the two existing contracts modules (Decision 104 one-concern-per-file).
+  - "Do not relax extra=forbid on the shared ContractDocument, and do not nest Class D bodies under
+    a `spec:` key -- either would put the 16 ritual contracts or the guards that read their own
+    config at regression risk for no governance gain."
+  - No rescue agents or workaround loops (Decision 55). An unrecoverable verification failure stops
+    and routes to RCA rather than being patched inline.
+  - Tests are synthetic-fixture only, via the existing contracts_dir=tmp_path seam, plus the real
+    live-population regression assertion. No network, no credentials.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (120 of 120 triaged).
+    CITE: Decision 118, Decision 86, Decision 127, Decision 167, Decision 150, Decision 104,
+    Decision 165, Decision 166, Decision 134, Decision 153, Decision 131, Decision 105."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "Scout flag resolution -- Decision 130 [NOTE] implicit vs enumerated grandfather: resolved by
+    the ratchet. The grandfathered population is pinned at 23 in contract-population.yaml, printed
+    in the census every run, and downward-only, so the exemption has a visible balance sheet in the
+    Decision 130 spirit without seeding the 23 files here."
+  - "Scout flag resolution -- Decision 150 [NOTE] key shapes must not live in the entry: resolved by
+    the ruling/shape split in the constraints above (the Decision 166 pattern)."
+  - "Scout flag resolution -- Decision 163 [WARN, spirit] universal obligation with an invisible
+    exempt population: resolved by the pinned, printed, downward-only ratchet plus a Critical
+    drain rec filed at implement time, plus rec-3054 which gives that rec a standing consumer."
+  - "Scout flag resolution -- Decision 118 [NOTE, spirit] body-unvalidated tier: resolved by the
+    one-taxonomy ruling. Class D pays the identical envelope cost and the identical Pass 2
+    obligations as A/B/C; only the body shape rule differs, exactly as A's `fields` differs from
+    B's `verbs`. Body shape authority is delegated to the declared evaluator, which for the
+    guard-config population parses the body on every CI run."
+  - "Scout flag resolution -- Decision 66 [NOTE, spirit] post-rejection vs pre-composition:
+    partially resolved by the file-router route row naming both admissible shapes. Full resolution
+    (surfacing the shape at contract-authoring time in the planning skill) is deferred to the sweep."
+  - "Fable advice-consults (three rounds) informed this design. Adopted: the one-taxonomy reading
+    with equalised envelope cost; envelope-only validation over a nested spec: key; the evaluator
+    typed union with a countable {none: reason} form; the canonical-dump change-detection rule; the
+    red-fixture-plus-census two-halves proof. Adapted: the grandfather form became a pinned ratchet
+    rather than a seeded roster, since seeding is out of scope. Rejected: translating `status:
+    active` to `ratified` (it would assert 23 contracts passed a ritual that has never run)."
+  - "Human rulings recorded at Step 6b: (1) one unified taxonomy, on the ground that a self-selected
+    lighter tier is a gradient rather than a classification; (2) extend ContractStatus rather than
+    translate, so no contract is marked ratified without verification; (3) the ratchet's why is
+    persisted to the audit file as a dated amendment note pointing at the contract for the how;
+    (4) `active` is grandfathering-only and unavailable to new authors."
+  - "rec-2915 (open, High) -- registered checks must report examined-input counts so a vacuous pass
+    is distinguishable from an enforced pass. This plan implements that shape for THIS gate only and
+    does NOT close the repo-wide rec; it is deliberately not bundled."
+  - "Follow-on work filed and NOT in scope: rec-3053 (ratify the share-the-artifact principle as a
+    numbered Decision), rec-3054 (/orient must surface Critical recs -- the standing consumer the
+    drain rec needs), rec-3055 (decision-scout status filter misses typed supersession), rec-3056
+    (derive a currency field in decisions-index and repoint the scout)."
+  - "A Critical recommendation obliging machine enforcers for contracts declaring evaluator {none}
+    is filed at implement time, after the mechanism lands, so the drain obligation exists the moment
+    the ratchet does. Its standing consumer is rec-3054."
+  - "Numbering race: decision numbers are not reserved at draft time. The current max header is
+    Decision 167; re-check at implement time and shift to the next free number if a concurrent PR
+    claimed it. validate_candidate_decision_ratification catches any resulting mismatch."
+  - "Fast-tier budget (Decision 153): the gate gains one memoized `git ls-tree` per run on top of the
+    existing merge-base and per-changed-file `git show` calls. Pass 2's per-file cost stays scoped to
+    CHANGED contracts, not the whole population. Step 10 is the budget check."
+  - "Branch was 0 commits behind origin/main at planning time; no scope-file overlap with
+    main_files_changed_since_branch, so no rebase decision was deferred."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Re-checked the current max '## Decision NNN:' header before authoring the entry
+execution_steps:
+  - "scripts/contracts_schema.py -- add ContractClass.D and ContractStatus.active; add optional
+    typed subject/evaluator to ContractMeta with a required-for-D validator; add the Class D branch
+    to _validate_class_shape (no fields, no verbs, subject and evaluator both present)."
+  - "scripts/contracts.py -- add load_contract_meta (envelope-only, never constructs
+    ContractDocument); add the three active edges to _ALLOWED_TRANSITIONS and deliberately omit
+    ratified->active and draft->active; make load_all_contracts skip class D explicitly with a
+    docstring note naming preflight/context_docs.py as the consumer being protected."
+  - "docs/contracts/contract-population.yaml -- author the Class D self-hosting contract: subject,
+    evaluator, the declared-shape grammar, the evaluator-kind union and its verification rules, the
+    subject namespace rule, the change-detection rule, the census field list, and ratchet.grandfathered_max: 23
+    with a note that evaluator_none and status_active pins are the sweep's to set."
+  - "scripts/checks/contracts/validate_contract_drift.py -- narrow the skip branch; add the memoized
+    origin/main file-set baseline delegating reachability to _common.origin_main_reachable; validate
+    Class D via load_contract_meta; add subject-uniqueness over the union namespace; extend Pass 2
+    with the canonical-dump amendment rule for Class D; print the census; enforce the pin read from
+    the contract at check time; advisory-SKIP only the baseline-dependent legs when origin/main is
+    unreachable."
+  - "docs/contracts/file-router.yaml -- add the contract-population route row naming both admissible shapes."
+  - "tests/checks/contracts/test_validate_contract_drift.py and tests/test_contracts.py --
+    add the fixture classes named in the Verification Plan. Every new-behaviour fixture must fail
+    against the pre-change gate; a fixture that passes both before and after is tautological and
+    must be replaced, not waived."
+  - "docs/DECISIONS.md -- author exactly one entry with the Decision 167 typed envelope
+    (significance.value: numbered_decision, amends: [118, 167]), recording the ruling and citing
+    contract-population.yaml for every shape. Keep it under 6,144 bytes. Include the explicit clause
+    that this is NOT migration-step-3 completion and that the population sweep is the completing act."
+  - "audits/contract-first-governance-33c8667.yaml -- append one dated amendment note under
+    meta.contract_notes in the amendment_2026-08-07 form: the ratchet's why, a pointer to
+    contract-population.yaml for the how, and an explicit statement that findings, severities and
+    Q1-Q9 verdicts are unchanged."
+  - "File the Critical drain recommendation via the ops portal (machine enforcers for contracts
+    declaring evaluator {none}), citing rec-3054 as its standing consumer."
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)"
+  - "Report: what was implemented, verification results"
+work_areas: []
+rollback: >-
+  Every change is additive and forward-only. Reverting the commit restores the original skip branch;
+  no existing contract file's content changed except one file-router route row, no decision entry is
+  edited (the new one would be removed by the revert), and the audit amendment note is a single
+  appended key. The enum widenings are additive, so no persisted contract status or class value
+  becomes invalid on revert -- except contract-population.yaml itself, which the same revert deletes.
