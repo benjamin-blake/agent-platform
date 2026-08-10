@@ -5,8 +5,8 @@ handoff_policy:
 slug: "escalation-acceptance-lint"
 intent: >-
   Restore the autonomous sensor-escalation safety net by making every programmatic rec-filer emit a
-  lint-valid acceptance command, and close the defect class repo-wide so a sixth filer cannot
-  silently reintroduce it.
+  lint-valid acceptance command, and close the defect class with a static guard over scripts/ and
+  personal_scripts/ so a sixth filer there cannot silently reintroduce it.
 plan_type: IMPLEMENTATION
 verification_tier: V2
 plan_path: docs/plans/PLAN-escalation-acceptance-lint.yaml
@@ -41,8 +41,11 @@ scope:
   - file: scripts/checks/ops_governance/validate_acceptance_literals.py
     action: Create
     purpose: >-
-      Repo-wide AST guard: lint every static acceptance string literal at any programmatic rec-filing
-      site, closing the defect class rather than the five known instances.
+      AST guard over scripts/ and personal_scripts/: lint every static acceptance string literal at
+      any programmatic rec-filing site under those trees, closing the defect class rather than the
+      five known instances. Disclosed gap: src/lambdas/ducklake_writer/smoke_actions.py and
+      src/lambdas/ducklake_maintenance/handler.py are also rec-filing sites and are NOT walked;
+      neither carries a static acceptance literal today.
   - file: scripts/checks/registry.py
     action: Modify
     purpose: Register the new check in both the pre and full tier sequences.
@@ -65,6 +68,18 @@ scope:
   - file: tests/checks/ops_governance/test_validate_acceptance_literals.py
     action: Create
     purpose: Colocated tests for the new guard (planted-violation red case + clean-tree green case).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Add the six graduated check rows this plan's graduate-disposition VP steps oblige under
+      Decision 132 point 2. Without them validate_graduation_completeness's implement-PR leg fails
+      the PR in both tiers.
+  - file: tests/ops_data_portal/test_reader_transient.py
+    action: Modify
+    purpose: >-
+      Extend the existing TestTransientSetParity class with a writer-side pin. Its current
+      test_classifier_set_equals_reader_authority covers classifier-vs-reader only, so nothing today
+      catches _WRITER_TRANSIENT_STATUS drifting away from _READER_TRANSIENT_STATUS.
 bundled_recommendations:
   - rec-2772
 infrastructure_dependencies: []
@@ -77,7 +92,8 @@ acceptance_criteria:
     portal's real write-time validators run against the built fields.
   - >-
     A registered validate.py check fails any static acceptance string literal at a programmatic
-    rec-filing site that does not pass the lint, and runs in both the --pre and full tiers.
+    rec-filing site under scripts/ or personal_scripts/ that does not pass the lint, and runs in
+    both the --pre and full tiers.
   - >-
     _escalate_ci_rca_probe_health and _escalate_dedup_effectiveness swallow only exceptions
     classified transient by scripts.ops_portal.reader_transient.is_reader_unavailable; every other
@@ -97,7 +113,7 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Assert every sensor rec-fields builder produces an acceptance that passes the real linter.
-    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py::test_escalate_acceptance_lint_valid tests/convergence_health/test_code_drift.py::test_ducklake_drift_acceptance_lint_valid tests/convergence_health/test_code_drift.py::test_prod_drift_acceptance_lint_valid tests/test_ci_rca_probe_health.py::test_probe_health_acceptance_lint_valid tests/test_ci_rca_gauges.py::test_dedup_acceptance_lint_valid -q
+    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py::TestAcceptanceLint::test_escalate_acceptance_lint_valid tests/convergence_health/test_code_drift.py::TestAcceptanceLint::test_ducklake_drift_acceptance_lint_valid tests/convergence_health/test_code_drift.py::TestAcceptanceLint::test_prod_drift_acceptance_lint_valid tests/test_ci_rca_probe_health.py::TestAcceptanceLint::test_probe_health_acceptance_lint_valid tests/test_ci_rca_gauges.py::TestAcceptanceLint::test_dedup_acceptance_lint_valid -q
     expected: >-
       All five node ids resolve and pass; each asserts lint_acceptance_command(fields["acceptance"])
       == (True, None) against the real validator (bash -n), not a mock. Explicit node ids are
@@ -116,7 +132,7 @@ verification_plan:
     action: >-
       Assert escalate() files rather than raises on a persistently-red high-severity verdict, with
       the portal's real write-time validators applied to the built fields.
-    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py -q -k persistent_red_files_rec
+    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py::TestEscalatePortalValidators::test_persistent_red_files_rec -q
     expected: >-
       escalate() returns {"action": "file", "rec_id": ...} through an injected portal_caller; the
       built fields pass _load_write_time_validators("ops_recommendations") without raising.
@@ -165,12 +181,15 @@ verification_plan:
     action: >-
       Assert the narrowed exception handling: a classified transient reader outage is still swallowed
       to a warning, and any other exception propagates.
-    command: bin/venv-python -m pytest tests/test_ci_rca_gauges.py::test_probe_health_escalation_transient_swallowed tests/test_ci_rca_gauges.py::test_probe_health_escalation_non_transient_reraises tests/test_ci_rca_gauges.py::test_dedup_escalation_transient_swallowed tests/test_ci_rca_gauges.py::test_dedup_escalation_non_transient_reraises -q
+    command: bin/venv-python -m pytest tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_probe_health_escalation_transient_swallowed tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_probe_health_escalation_non_transient_reraises tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_dedup_escalation_transient_swallowed tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_dedup_escalation_non_transient_reraises tests/ops_data_portal/test_reader_transient.py::TestTransientSetParity::test_writer_set_equals_classifier_authority -q
     expected: >-
       All four node ids resolve and pass. Both wrappers live in scripts/preflight/ci_rca_gauges.py
       (_escalate_ci_rca_probe_health at :32, _escalate_dedup_effectiveness at :427), so all four tests
       belong in tests/test_ci_rca_gauges.py. A raised reader-unavailable exception returns None with
-      the warning printed; a raised non-transient exception propagates out of BOTH wrappers.
+      the warning printed; a raised non-transient exception propagates out of BOTH wrappers. The
+      fifth node id pins _WRITER_TRANSIENT_STATUS against _READER_TRANSIENT_STATUS, since the
+      existing TestTransientSetParity covers classifier-vs-reader only and nothing today catches the
+      writer set drifting.
     fix_if: >-
       A blanket except Exception remains, so the ValueError is still swallowed and the regression that
       hid this bug for its entire life is not actually closed.
@@ -181,7 +200,7 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Assert both new exit-code CLIs invert correctly and need no AWS credentials.
-    command: bin/venv-python -m pytest tests/test_ci_rca_probe_health.py::test_assert_clear_exit_codes tests/test_ci_rca_gauges.py::test_assert_dedup_clear_exit_codes -q
+    command: bin/venv-python -m pytest tests/test_ci_rca_probe_health.py::TestAssertClearCli::test_assert_clear_exit_codes tests/test_ci_rca_gauges.py::TestAssertDedupClearCli::test_assert_dedup_clear_exit_codes -q
     expected: >-
       Both node ids resolve and pass; each CLI returns 0 for a below-threshold fixture and non-zero
       for an over-threshold fixture, reading only the local cache rows passed in. Explicit node ids
@@ -224,6 +243,27 @@ verification_plan:
       inside, and the same recursion argument as step 4. Registering the full-tier run as a standing
       registry check would make validate.py invoke itself on every run.
   - step: 9
+    phase: pre-deploy
+    action: >-
+      Discharge the Decision 132 point-2 graduation obligation: assert every graduate-disposition
+      step's check_id now has a row in the verification registry carrying this plan's slug.
+    command: |-
+      for cid in sensor-acceptance-lint-clean escalate-files-on-persistent-red acceptance-literal-lint-guard gauge-escalation-reraises-non-transient gauge-assert-clear-exit-codes sensor-no-decision-70-miscite; do grep -q "check_id: $cid" config/agent/verification_registry/registry.yaml || { echo "MISSING registry row: $cid"; exit 1; }; done
+    expected: >-
+      All six check_ids are present; the loop exits 0. Verified absent at planning time against the
+      355-row registry, so this is genuinely red before and green after.
+    fix_if: >-
+      A check_id is missing. validate_graduation_completeness's implement-PR leg (registered in BOTH
+      tiers) fails the PR once a feat(escalation-acceptance-lint) commit exists, so this must be
+      green before pushing the implement PR. Fix by adding the row, or by flipping that VP step to
+      waive with a concrete reason if it proved un-graduatable.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step asserts the contents of the verification registry itself. Graduating it would add a
+      registry row whose only job is to assert that registry rows exist -- circular, and it would
+      need to assert its own presence.
+  - step: 10
     phase: post-deploy
     action: >-
       Live end-to-end proof through the real portal: the fixed probe_health filer lands a rec in the
@@ -234,12 +274,15 @@ verification_plan:
       Preflight escalates, the portal allocates a rec-NNNN, the sync pull brings it back, and the
       title greps clean out of the rebuilt cache.
     fix_if: >-
-      The rec is absent -- inspect preflight stderr for a "[WARN] preflight: ci_rca_probe_health"
-      line, which now indicates a non-lint write-time rejection since the lint path is fixed. If the
+      The rec is absent. Note the diagnostic changed with this plan's own narrowing: a non-transient
+      write-time rejection NO LONGER prints "[WARN] preflight: ci_rca_probe_health" -- it propagates
+      and aborts preflight, so the && chain stops at the first command and the traceback names the
+      rejecting validator directly. A surviving [WARN] now means only a classified transient reader
+      outage, which is retryable. If the
       abstention rate has recovered below 0.30 since planning, the escalation correctly returns
       "none" and this step cannot prove anything: record that outcome explicitly rather than
       manufacturing an over-threshold state, and rely on steps 1-8 plus the class-level guard.
-  - step: 10
+  - step: 11
     phase: post-deploy
     action: >-
       Discharge the closure obligation for the bundled recommendation: confirm rec-2772 is closed in
@@ -257,14 +300,14 @@ test_obligations:
       Every escalation condition's built acceptance stays a lint-valid shell command, and escalate()
       files rather than raises on a persistently-red high-severity verdict.
     verification_step: 2
-    test_selector: tests/convergence_health/test_escalate.py::test_persistent_red_files_rec
+    test_selector: tests/convergence_health/test_escalate.py::TestEscalatePortalValidators::test_persistent_red_files_rec
     red_green_expectation: >-
       Red before (ValueError from the acceptance lint), green after.
   - source: scripts/convergence_health/code_drift.py
     behavior: >-
       Both drift builders emit a lint-valid acceptance probing the deploy-record source_git_sha.
     verification_step: 1
-    test_selector: tests/convergence_health/test_code_drift.py::test_ducklake_drift_acceptance_lint_valid
+    test_selector: tests/convergence_health/test_code_drift.py::TestAcceptanceLint::test_ducklake_drift_acceptance_lint_valid
     red_green_expectation: >-
       Red before (bash syntax error on the prose parentheses), green after.
   - source: scripts/ci_rca/probe_health.py
@@ -272,7 +315,7 @@ test_obligations:
       The builder emits a lint-valid acceptance, and --assert-clear exits non-zero only while the
       abstention rate is over threshold.
     verification_step: 6
-    test_selector: tests/test_ci_rca_probe_health.py::test_assert_clear_exit_codes
+    test_selector: tests/test_ci_rca_probe_health.py::TestAssertClearCli::test_assert_clear_exit_codes
     red_green_expectation: >-
       Red before (no CLI mode exists; acceptance fails the lint), green after.
   - source: scripts/preflight/ci_rca_gauges.py
@@ -280,7 +323,7 @@ test_obligations:
       The dedup builder emits a lint-valid acceptance, --assert-dedup-clear inverts correctly, and
       only classified transient reader outages are swallowed.
     verification_step: 5
-    test_selector: tests/test_ci_rca_gauges.py::test_dedup_escalation_non_transient_reraises
+    test_selector: tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_dedup_escalation_non_transient_reraises
     red_green_expectation: >-
       Red before (blanket except Exception swallows the ValueError), green after.
   - source: scripts/checks/ops_governance/validate_acceptance_literals.py
@@ -521,20 +564,48 @@ execution_steps:
     check). Keep the header stable; rewording it silently disarms both steps.
   - >-
     scripts/checks/registry.py and scripts/validate.py -- insert the check into pre_sequence (with a
-    scripts/**/*.py pre_glob) and full_sequence, and add the facade re-export line. The re-export is
+    scripts/** pre_glob -- NOT scripts/**/*.py, which fnmatch does not match against depth-1 paths
+    like scripts/ops_writer.py, silently skipping root-level filers in the authoritative --pre
+    tier) and full_sequence, and add the facade re-export line. The re-export is
     117 chars, so it stays one physical line under the 127 limit and lands validate.py at 498/500.
   - >-
     Add the colocated tests in the four mirror homes plus the new check's test file, per the mirror
     map recorded in Context. Every acceptance assertion calls the real lint_acceptance_command. Test
     names are load-bearing and pinned, because VP steps 1, 5 and 6 select them by EXPLICIT NODE ID
-    and error if a name does not resolve. One acceptance-lint test per builder:
-    test_escalate_acceptance_lint_valid (test_escalate.py), test_ducklake_drift_acceptance_lint_valid
-    and test_prod_drift_acceptance_lint_valid (test_code_drift.py),
-    test_probe_health_acceptance_lint_valid (test_ci_rca_probe_health.py), and
-    test_dedup_acceptance_lint_valid (test_ci_rca_gauges.py). The escalate one is deliberately named
+    and error if a name does not resolve. CRITICAL: all four in-scope test files are 100%
+    class-nested (zero module-level test functions), so every pinned node id is THREE-part
+    (file::Class::method) and the new tests are methods on the classes named here, matching the
+    surrounding convention. Add class TestAcceptanceLint to each of the four files holding one
+    acceptance-lint test per builder: test_escalate_acceptance_lint_valid (test_escalate.py),
+    test_ducklake_drift_acceptance_lint_valid and test_prod_drift_acceptance_lint_valid
+    (test_code_drift.py), test_probe_health_acceptance_lint_valid (test_ci_rca_probe_health.py),
+    test_dedup_acceptance_lint_valid (test_ci_rca_gauges.py). Also add class
+    TestEscalatePortalValidators::test_persistent_red_files_rec (test_escalate.py), class
+    TestAssertClearCli::test_assert_clear_exit_codes (test_ci_rca_probe_health.py), class
+    TestAssertDedupClearCli::test_assert_dedup_clear_exit_codes (test_ci_rca_gauges.py), and
+    class TestEscalationExceptionNarrowing holding the four narrowing tests (test_ci_rca_gauges.py). The escalate one is deliberately named
     to contain "escalate_acceptance_lint" so rec-2772's own stored acceptance command
     (pytest tests/convergence_health/ -q -k escalate_acceptance_lint) selects a real test and can
     reach a deterministic satisfied verdict in scripts/rec_relevance.py (Decision 103).
+  - >-
+    tests/ops_data_portal/test_reader_transient.py -- add
+    TestTransientSetParity::test_writer_set_equals_classifier_authority, asserting
+    scripts.ops_portal.writer_transport._WRITER_TRANSIENT_STATUS equals
+    src.common.iceberg_reader._READER_TRANSIENT_STATUS. The existing
+    test_classifier_set_equals_reader_authority pins classifier-vs-reader only, so nothing today
+    catches the writer set drifting -- and this plan newly applies the reader-scoped classifier on a
+    writer failure path. VP step 5 selects this node id.
+  - >-
+    config/agent/verification_registry/registry.yaml -- add one row per graduate-disposition VP step
+    (Decision 132 point 2), each carrying plan_slug: escalation-acceptance-lint plus check_id,
+    primitive_slot, guard_target, guard_symbol, graduated_at, graduated_by and check_spec, matching
+    the shape of the existing 355 rows. Slot assignment matters: TestSelectorCheck.node_id takes a
+    SINGLE node id and GrepCountCheck.path a SINGLE path, so only step 2
+    (escalate-files-on-persistent-red) fits test_selector. Steps 1, 5 and 6 are multi-node-id and
+    step 7 greps three paths, so those four rows use command_exit_zero with an explicit
+    ["bash", "-c", "<command>"] argv; step 3 (acceptance-literal-lint-guard) is a whole-file pytest
+    run and fits test_selector on the module path. Each row is admitted by the VF-06 differential,
+    which runs a real git worktree per row -- budget for that, it is not free.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55)
