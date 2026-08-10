@@ -1,0 +1,557 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "decision-corpus-currency"
+intent: >-
+  Give the decision corpus a derived, deterministic per-entry currency projection in the generated
+  docs/decisions-index.json and repoint the BLOCKING decision-scout gate onto it, so the gate stops
+  branching on free-text status prose and stops treating a partially-superseded entry as fully current.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-decision-corpus-currency.yaml
+phase: >-
+  Platform governance / decision-corpus read model. Not a tier_item slice: this is an ad_hoc_rec
+  pairing (rec-3055 defect + rec-3056 mechanism) against the decision-scout gate. Adjacent to T1.5
+  (the STRATEGIC, CD.17-frozen portal cutover that eventually retires docs/decisions-index.json);
+  closes none of T1.5's criteria and is designed to survive that cutover unchanged, since the cutover
+  swaps the SOURCE of these same fields and the scout's Phase 1 contract already anticipates it.
+scope:
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      Promote the compaction-stub predicate out of the checks layer into the shared parser as a public
+      is_compacted_stub(block), and add derive_currency(row) returning exactly one currency token. The
+      DAF-03 single-parser rule requires ONE derivation with two consumers; a second copy in the index
+      generator is the anti-pattern the generator's own docstring already forbids.
+  - file: scripts/checks/decisions/validate_decision_entry_conformance.py
+    action: Modify
+    purpose: >-
+      Delete the private _is_compacted_stub copy and import the promoted predicate from
+      scripts.decisions_md. Behaviour must be byte-identical; this is a de-duplication, not a rule change.
+  - file: scripts/decisions_index.py
+    action: Modify
+    purpose: >-
+      Project a currency value onto live rows only, sourcing the token vocabulary from
+      docs/contracts/decision-entry.yaml at generation time (not a hardcoded literal) so the contract
+      section is genuinely read rather than merely mentioned.
+  - file: docs/contracts/decision-entry.yaml
+    action: Modify
+    purpose: >-
+      Add the currency section: the four-token vocabulary, each token's derivation rule, and the consumer
+      contract that ONLY superseded may filter. Decision 86/127 routing homes field semantics in the
+      owning contract, and the prose-budget relief valve names this same relocation.
+  - file: .claude/skills/decision-scout/SKILL.md
+    action: Modify
+    purpose: >-
+      Repoint Phase 2 step 7 from status-prose judgment onto the typed currency field, and delete the
+      now-moot "Citing reversed decisions as governing" anti-pattern. Must land net-neutral or smaller
+      against the 11,325-byte prose budget (no Decision is minted by this plan, so no raise marker is
+      available).
+  - file: config/prose_budgets.yaml
+    action: Modify
+    purpose: >-
+      Ratchet the S4 .claude/skills/decision-scout/SKILL.md entry DOWN to the post-edit size. A decrease
+      is always unrestricted by validate_prose_budget_raises and avoids leaving a stale under-budget entry.
+  - file: tests/decisions_md/test_currency.py
+    action: Create
+    purpose: >-
+      Unit coverage for is_compacted_stub and derive_currency across all four token classes plus the
+      boundary cases (bare pointer on an intact body; status-prose "Amended" with no typed edge).
+      Placed here because scripts/decisions_md.py mirrors to the tests/decisions_md/ package.
+  - file: tests/test_decisions_index.py
+    action: Modify
+    purpose: >-
+      Integration spot-checks against the real corpus (D44/D58, D37, D43, D67, a control current entry),
+      the live-rows-only invariant, and the generator-token-set-equals-contract binding. Kept small
+      deliberately: this file is at 457 SLOC against the 500 limit.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerated committed artifact. Never hand-edited; produced by
+      bin/venv-python -m scripts.decisions_index --write.
+bundled_recommendations:
+  - rec-3055
+  - rec-3056
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/decisions-index.json carries a currency field on every live:true entry and on no live:false
+    entry, with values drawn only from the vocabulary declared in docs/contracts/decision-entry.yaml.
+  - >-
+    Decision 44 and Decision 58 derive currency 'superseded'; Decision 37 derives 'superseded_cited';
+    Decision 43 (inbound amends edge) and Decision 67 (status-prose amendment, no typed edge) derive
+    'amended'; a control entry with no supersession or amendment signal derives 'current'.
+  - >-
+    Every entry deriving 'superseded' is a Decision 149 compaction stub (a **Status:** Superseded marker
+    AND a **Superseded by: Decision N** pointer). No entry with an intact body ever derives 'superseded'.
+  - >-
+    scripts/decisions_index.py obtains its currency token vocabulary by reading
+    docs/contracts/decision-entry.yaml, and the generator's token set equals the contract's declared set.
+  - >-
+    Exactly one compaction-stub predicate exists in the repository: scripts/decisions_md.py defines it and
+    scripts/checks/decisions/validate_decision_entry_conformance.py imports it.
+  - >-
+    .claude/skills/decision-scout/SKILL.md Phase 2 step 7 branches on the currency field, no longer
+    contains the status-prose instruction "whose status is active", and the file is at or below its
+    config/prose_budgets.yaml entry.
+  - >-
+    docs/decisions-index.json remains under the 131,000-byte pin (Decision 166 point 9) with headroom
+    reported, and bin/venv-python -m scripts.validate --pre exits 0.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the derivation end to end against the real corpus and assert the token for each of the
+      five representative classes, including the two cases the old status-prose rule got wrong.
+    command: >-
+      bin/venv-python -c "from scripts.decisions_index import build_index; d={e['number']:e for e in
+      build_index()['decisions']}; exp={44:'superseded',58:'superseded',37:'superseded_cited',43:'amended',67:'amended',168:'current'};
+      bad={n:(d[n].get('currency'),v) for n,v in exp.items() if d[n].get('currency')!=v};
+      assert not bad, bad; print('currency spot-checks OK', exp)"
+    expected: >-
+      Exits 0 and prints the mapping. D37 is 'superseded_cited' (never 'superseded', which would filter it
+      out of a blocking gate while 49 files still cite it), and D67 is 'amended' despite having no typed
+      amends edge.
+    fix_if: >-
+      A KeyError means the currency key is missing on a live row. A mismatch on 37 means the bare-pointer
+      branch is collapsing into the compaction-stub branch (the aggressive-filter defect). A mismatch on 67
+      means the status-prose "Amended" branch is missing.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "decisions-index-currency-spot-checks"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert the load-bearing safety invariant directly: the only filterable token is never applied to an
+      entry that still has a body to read.
+    command: >-
+      bin/venv-python -c "from scripts.decisions_md import parse_decisions_md, is_compacted_stub;
+      from scripts.decisions_index import build_index; rows={r['decision_id']:r for r in parse_decisions_md()};
+      bad=[e['number'] for e in build_index()['decisions'] if e.get('currency')=='superseded'
+      and not is_compacted_stub(rows[e['number']]['raw_block'])]; assert not bad, bad;
+      print('superseded implies compaction stub OK')"
+    expected: >-
+      Exits 0. Every 'superseded' entry is a Decision 149 compaction stub, so demoting it to RELATED
+      discards nothing a reader needed.
+    fix_if: >-
+      A non-empty list means the superseded predicate has widened past the compaction stub (most likely by
+      keying on superseded_by, or on a status substring match rather than an exact marker).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "currency-superseded-implies-compaction-stub"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert the live-rows-only projection, so archive rows are not thickened ahead of rec-3012's
+      skeletonization.
+    command: >-
+      bin/venv-python -c "from scripts.decisions_index import build_index;
+      ds=build_index()['decisions']; miss=[e['number'] for e in ds if e['live'] and 'currency' not in e];
+      extra=[e['number'] for e in ds if not e['live'] and 'currency' in e];
+      assert not miss and not extra, (miss, extra); print('live-only projection OK; live', sum(1 for e in ds if e['live']))"
+    expected: >-
+      Exits 0. Every live:true row has a currency key; no live:false row has one.
+    fix_if: >-
+      Entries in 'miss' mean the projection is conditional on something other than live. Entries in 'extra'
+      mean archive rows are being thickened, which is what Decision 166's deferral to rec-3012 asks to avoid.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "currency-live-rows-only"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Assert the contract is genuinely read, not merely mentioned (Decision 168's evaluator obligation):
+      the generator's token vocabulary must equal the contract's declared vocabulary.
+    command: "bin/venv-python -c \"import yaml,pathlib; from scripts.decisions_index import _currency_tokens; c=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())['currency']['values']; assert set(_currency_tokens())==set(c), (sorted(_currency_tokens()), sorted(c)); print('token binding OK', sorted(c))\" && bin/venv-python -c \"import yaml,pathlib; from scripts.decisions_index import build_index; c=set(yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())['currency']['values']); used={e['currency'] for e in build_index()['decisions'] if 'currency' in e}; assert used<=c, used-c; print('emitted values within vocabulary', sorted(used))\""
+    expected: >-
+      Exits 0 and prints the four tokens. The generator sources its vocabulary from the contract, and no
+      emitted value falls outside it.
+    fix_if: >-
+      An AssertionError means the generator hardcodes its own token list, which reduces the new contract
+      section to a mention with no reader.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "currency-tokens-match-contract"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the single-parser rule: exactly one compaction-stub derivation exists, defined in the shared
+      parser and imported by the conformance check.
+    command: >-
+      bash -c "rg -c '^def is_compacted_stub' scripts/decisions_md.py &&
+      rg -q 'is_compacted_stub' scripts/checks/decisions/validate_decision_entry_conformance.py &&
+      test $(rg -c 'def _is_compacted_stub' scripts/checks/decisions/validate_decision_entry_conformance.py || echo 0) -eq 0 &&
+      echo 'single-parser rule OK'"
+    expected: >-
+      Prints 1 then 'single-parser rule OK'. The predicate is defined once in scripts/decisions_md.py and
+      the checks module holds no private copy.
+    fix_if: >-
+      A non-zero private-copy count means the de-duplication was skipped and the two derivations can drift,
+      which is the exact failure the generator docstring's DAF-03 rule exists to prevent.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "compaction-stub-predicate-single-source"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Assert the scout gate actually branches on the typed field and no longer carries the status-prose
+      instruction the defect was filed against.
+    command: "bash -c \"rg -q currency .claude/skills/decision-scout/SKILL.md && test $(rg -c 'whose status is active' .claude/skills/decision-scout/SKILL.md || echo 0) -eq 0 && echo 'step 7 repointed OK'\""
+    expected: >-
+      Prints 'step 7 repointed OK'. The skill references the currency field and the old status-prose
+      instruction is gone.
+    fix_if: >-
+      A surviving 'whose status is active' means step 7 was augmented rather than repointed, leaving the
+      LLM a prose branch to fall back on and reproducing rec-3055.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "decision-scout-step7-keys-on-currency"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Assert the skill file landed within its prose budget, since no Decision is minted by this plan and
+      therefore no raise-approved marker is available.
+    command: "bin/venv-python -c \"import yaml,pathlib; b=yaml.safe_load(pathlib.Path('config/prose_budgets.yaml').read_text())['S4']['.claude/skills/decision-scout/SKILL.md']; n=len(pathlib.Path('.claude/skills/decision-scout/SKILL.md').read_bytes()); assert n<=b, (n,b); print(f'skill {n} B within budget {b} B')\""
+    expected: >-
+      Exits 0, printing the measured size at or below the registered budget (baseline 11,325 B before the
+      ratchet-down).
+    fix_if: >-
+      Over budget means the step-7 rewrite did not pay for itself. Trim further or relocate detail into the
+      contract's currency section; do NOT add a raise marker, which under Decision 165 would require a
+      Decision body naming this skill path, and this plan mints none.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_prose_limits already enforces every S4 entry against config/prose_budgets.yaml on every
+      --pre run, so a registry row here would duplicate a live pre-merge gate rather than add coverage.
+  - step: 8
+    phase: pre-deploy
+    action: Regenerate the committed index and confirm it is drift-free against the generator.
+    command: bin/venv-python -m scripts.decisions_index --write && bin/venv-python -m scripts.decisions_index --check
+    expected: "Prints 'Decisions index is current.' and exits 0."
+    fix_if: >-
+      Drift means the committed artifact was not regenerated after the generator change;
+      validate_decisions_index_freshness is registered UNGATED in --pre and would fail the PR.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_decisions_index_freshness is already a registered, UNGATED --pre check performing exactly
+      this drift comparison (scripts/checks/registry.py:116); a second registry row would duplicate it.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm the index stays under its byte pin and report the remaining headroom, since Decision 166
+      reversal condition (g) makes approaching the pin a trigger to land rec-3012 rather than bump again.
+    command: >-
+      bin/venv-python -c "import pathlib; n=len(pathlib.Path('docs/decisions-index.json').read_bytes());
+      assert n<=131000, n; print(f'index {n} B, headroom {131000-n} B of the 131,000 B pin')"
+    expected: >-
+      Exits 0. Expected around 116,400 B with roughly 14.6 KB of headroom (baseline before this change is
+      112,314 B; the measured cost of a currency string on live rows is under 4,292 B).
+    fix_if: >-
+      Materially less headroom than projected means more was projected than the currency string (for
+      example an amended_by list or a currency_basis field crept in). Remove the extra field; do not raise
+      the pin.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      tests/test_decisions_index.py already pins the committed index against _COMMITTED_INDEX_MAX_BYTES in
+      a standing assertion; graduating a second byte check would duplicate that guard.
+  - step: 10
+    phase: pre-deploy
+    action: Run the full test suite for every touched module, including the new unit coverage.
+    command: >-
+      bin/venv-python -m pytest tests/decisions_md/ tests/test_decisions_index.py
+      tests/checks/decisions/test_validate_decision_entry_conformance.py -q
+    expected: All tests pass, including the new currency derivation cases and the unchanged conformance behaviour.
+    fix_if: >-
+      A conformance-check regression means the promoted predicate is not byte-identical to the private copy
+      it replaced; diff the two implementations before changing any test expectation.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      These selectors already run under both validate tiers via the standing pytest gate; a registry row
+      would restate the pytest invocation without adding an independent signal.
+  - step: 11
+    phase: pre-deploy
+    action: Run the authoritative fast-tier presubmit.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0, with validate_decisions_index_freshness, validate_prose_limits, and validate_sloc_limits all passing.
+    fix_if: >-
+      A validate_sloc_limits failure on tests/test_decisions_index.py means the integration additions
+      crossed 500 SLOC; per Decision 128 decompose into the tests/decisions_index/ mirror package rather
+      than registering a new over-500 budget entry.
+    hermetic: false
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Confirm the bundled recommendations closed after the squash merge carried the Resolves trailer
+      (closure obligation).
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json, pathlib;
+      rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      latest={r['id']: r for r in rows};
+      bad={i: latest[i]['status'] for i in ('rec-3055','rec-3056') if latest.get(i,{}).get('status')!='closed'};
+      assert not bad, bad; print('rec-3055 and rec-3056 closed')"
+    expected: Exits 0. Both recommendations report status 'closed' in the refreshed read cache.
+    fix_if: >-
+      A non-closed status means rec-autoclose.yml did not fire. Fall back to
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "..."
+      per Decision 70. Never hand-edit the read cache.
+test_obligations:
+  - source: scripts/decisions_md.py
+    behavior: >-
+      derive_currency returns 'superseded' only for a Decision 149 compaction stub, 'superseded_cited' for a
+      bare supersession pointer on an intact body, 'amended' for an inbound amends edge or a status-prose
+      amendment, and 'current' otherwise; is_compacted_stub requires both the status marker and the pointer.
+    verification_step: 10
+    test_selector: tests/decisions_md/test_currency.py
+    red_green_expectation: >-
+      Red before (neither symbol exists, so the module fails to import), green after. The bare-pointer case
+      is the discriminating test: an implementation keying on superseded_by alone passes every other case
+      and fails this one.
+  - source: scripts/decisions_index.py
+    behavior: >-
+      The index projects currency onto live:true rows only, sourcing its token vocabulary from
+      docs/contracts/decision-entry.yaml rather than a hardcoded literal, and stays byte-stable across two
+      consecutive build_index() calls.
+    verification_step: 10
+    test_selector: tests/test_decisions_index.py
+    red_green_expectation: >-
+      Red before (no currency key on any row, and the token-binding assertion has no symbol to read),
+      green after; the existing determinism and byte-pin tests must stay green throughout.
+  - source: scripts/checks/decisions/validate_decision_entry_conformance.py
+    behavior: >-
+      Compacted-stub exemption behaviour is unchanged after the private predicate is replaced by the
+      imported one; the check still exempts a Decision 149 stub from the envelope obligation and still
+      enforces it on every non-stub new entry.
+    verification_step: 10
+    test_selector: tests/checks/decisions/test_validate_decision_entry_conformance.py
+    red_green_expectation: >-
+      Green before and green after: this is a pure de-duplication, so the existing suite is the regression
+      oracle and any behavioural delta is a defect in the promotion, not an expectation to update.
+  - source: .claude/skills/decision-scout/SKILL.md
+    behavior: >-
+      Phase 2 step 7 branches on the typed currency field and retains no status-prose fallback, while the
+      file stays within its registered prose budget.
+    verification_step: 6
+    command: "rg -c 'whose status is active' .claude/skills/decision-scout/SKILL.md"
+    red_green_expectation: >-
+      Red before (the file contains 'whose status is active' and no 'currency'), green after.
+  - source: docs/contracts/decision-entry.yaml
+    behavior: >-
+      The currency section declares the token vocabulary that the generator actually reads, so the contract
+      is evaluated rather than merely mentioned (Decision 168's evaluator obligation): the generator's
+      token set equals the contract's declared values, and no emitted value falls outside them.
+    verification_step: 4
+    command: "bin/venv-python -c \"import yaml,pathlib; from scripts.decisions_index import _currency_tokens; c=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())['currency']['values']; assert set(_currency_tokens())==set(c), (sorted(_currency_tokens()), sorted(c)); print('token binding OK', sorted(c))\""
+    red_green_expectation: >-
+      Red before (the contract has no currency key and _currency_tokens does not exist, so the command
+      raises), green after. A regression to a hardcoded token list in the generator turns it red again,
+      which is the point.
+  - source: config/prose_budgets.yaml
+    behavior: >-
+      The S4 entry for .claude/skills/decision-scout/SKILL.md stays at or above the file's measured size
+      after the ratchet-down, so the skill edit is provably within budget without a raise marker.
+    verification_step: 7
+    command: "bin/venv-python -c \"import yaml,pathlib; b=yaml.safe_load(pathlib.Path('config/prose_budgets.yaml').read_text())['S4']['.claude/skills/decision-scout/SKILL.md']; n=len(pathlib.Path('.claude/skills/decision-scout/SKILL.md').read_bytes()); assert n<=b, (n,b); print(f'skill {n} B within budget {b} B')\""
+    waiver_reason: >-
+      A budget registry has no behaviour of its own to red/green: it is a declarative pin whose enforcement
+      lives in validate_prose_limits, which already runs on every --pre invocation. The linked command is
+      the meaningful assertion (file size at or below the registered entry) and duplicating it as a
+      standing test would restate a live pre-merge gate.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The committed artifact matches what the generator produces, so the currency projection is actually
+      present in the file decision-scout reads rather than only in memory.
+    verification_step: 8
+    command: "bin/venv-python -m scripts.decisions_index --check"
+    waiver_reason: >-
+      A generated artifact is never hand-authored and has no behaviour independent of its generator, whose
+      derivation is covered by tests/decisions_md/test_currency.py and tests/test_decisions_index.py. Drift
+      is already enforced by validate_decisions_index_freshness, registered UNGATED in the --pre tier.
+constraints:
+  - >-
+    Projection-only. No corpus edits, no retroactive rewriting, no new authoring obligation on the
+    grandfathered entries, and nothing that touches the 19,753 inbound "Decision N" citations.
+  - >-
+    ONLY the currency value 'superseded' may filter, and it derives ONLY from a Decision 149 compaction
+    stub. A supersession pointer, a superseded_by edge, and an amends edge annotate and never filter. The
+    guard that mints these pointers (validate_supersession_annotations, DPI-01) matches
+    "Supersedes/amends/partially supersedes" identically and therefore cannot distinguish full from partial
+    supersession, so the pointer is structurally unfit as a filter signal.
+  - >-
+    No numbered Decision is minted by this plan (operator ruling, this session: the proof of the decision
+    lives in the code and the contract). This makes the prose budget a hard constraint: the
+    .claude/skills/decision-scout/SKILL.md edit must land at or below 11,325 bytes, because a
+    raise-approved marker under Decision 165 would require a Decision body naming that path verbatim.
+  - >-
+    No amends_scope envelope field (operator ruling, this session: the corpus supersedes and rewrites
+    rather than amending scope in place, and the history record is kept by the superseded entry). Decision
+    167's envelope is unchanged by this plan.
+  - Do NOT mint clause identifiers. Clause-level currency stays out of scope entirely.
+  - >-
+    Must survive T1.5's portal cutover unchanged: the cutover swaps the SOURCE of these fields, and
+    decision-scout's Phase 1 stable-interface contract already anticipates it. Do not couple the scout's
+    step 7 to the JSON file's path or shape beyond the currency field name.
+  - >-
+    Only files in the Scope table may be modified. No corpus entry may be re-annotated to make the
+    derivation cleaner; if an entry's markers are wrong, that is a recommendation, not an inline fix.
+  - >-
+    docs/decisions-index.json is generated. Never hand-edit it; regenerate with
+    bin/venv-python -m scripts.decisions_index --write.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Single Portal Invariant: recommendation closure goes through scripts.ops_data_portal or the Resolves
+    trailer. Never edit logs/.recommendations-log.jsonl directly.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 160, Decision
+    166, Decision 149, Decision 152, Decision 165, Decision 128, Decision 167, Decision 86. CONTRADICT:
+    Decision 150 (WARN, resolved by minting no Decision at all per operator ruling); Decision 146 (NOTE,
+    resolved by adopting the scout's proposed vocabulary split -- 'superseded_cited' is Decision 146's own
+    phrase 'superseded-but-still-cited', so the typed field reconciles with the governing entry rather than
+    contradicting it). SPIRIT: Decision 168 (WARN, resolved -- the generator reads the token vocabulary
+    from the contract, per VP step 4); Decision 166 (NOTE, resolved -- currency is projected on live rows
+    only, per VP step 3). RELATED: Decision 37, Decision 134, Decision 151, Decision 131, Decision 105."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Verified live 2026-08-10 against the working tree. The index holds 148 entries (121 live), 14 with a
+    populated superseded_by. Decision 37 has status 'Decided', superseded_by 116, a fully intact body, and
+    carries the exact marker "**Superseded by: Decision 116**" at docs/DECISIONS.md:5638. Decision 116's own
+    title claims it supersedes Decision 49 and never names 37. 49 files cite "Decision 37" by name,
+    including live terraform/personal/*.tf and src/lambdas/ducklake_catalog_dr/handler.py. This is the proof
+    case that a supersession pointer can overstate, and why filtering on it would be the worse error.
+  - >-
+    The original framing of rec-3055 ("key step 7 on superseded_by and archive residence") is deliberately
+    NOT implemented: doing so would demote Decision 37 out of a blocking gate while 49 files still cite it.
+    The rec's underlying defect -- step 7 keying on status PROSE -- is what this plan fixes. Record this
+    reframe in the rec's resolution text at closure so the divergence between the filed fix and the shipped
+    fix is not lost.
+  - >-
+    The scout's Decision 146 NOTE is the reason for a four-token vocabulary rather than the three the
+    intake proposed. Decision 146's text names "Decision 37 -> 116" alongside 44 and 58 as
+    superseded-but-still-cited, so labelling Decision 37 'amended' would contradict a governing entry;
+    labelling it 'superseded' would license the filter this plan exists to prevent. Note that Decision 146's
+    own per-entry test for "fully superseded" (a repo-wide search returns only annotated mentions) excludes
+    Decision 37, so the entry is loose in its example list and precise in its test.
+  - >-
+    Decision 67 is the second discriminating case: its status prose reads "Amended by Decision 79
+    (2026-06-03)" but Decision 79 declares no typed amends edge, so an amends-edge-only rule would derive
+    'current'. It is part of Decision 160 point 8's named terse-historical residual band (63, 64, 65, 67).
+    The status-prose "Amended" branch exists for exactly this case and is a deterministic Python parse, not
+    a restoration of LLM prose judgment.
+  - >-
+    Measured budget positions at planning time. docs/decisions-index.json 112,314 B of the 131,000 B pin
+    (Decision 166 point 9); adding a currency string to all 148 entries measured +4,292 B, and live-only is
+    less. An amended_by list would have cost +8,421 B and a currency_basis field +17,301 B, the latter
+    leaving only 1,385 B and tripping Decision 166 reversal condition (g); both were rejected. The scout
+    can invert the amends edges itself from the index it already loads, which is a mechanical set operation
+    needing no projected field.
+  - >-
+    .claude/skills/decision-scout/SKILL.md is at exactly its 11,325-byte budget, and Decision 160 point 7
+    ratcheted it DOWN to that figure and REMOVED its dec-152 raise marker. A measured net-neutral
+    formulation exists: repointing step 7 inline and deleting the "Citing reversed decisions as governing"
+    anti-pattern (made moot by a mechanical branch) lands the file at roughly 11,301 B. Keep the per-token
+    behaviour INLINE in the skill; do not make the scout read decision-entry.yaml at dispatch time, because
+    that file is 34,588 B and the gate is deliberately bounded.
+  - >-
+    tests/test_decisions_index.py is at 457 SLOC against the 500 limit (43 lines of headroom, docstrings
+    counted). Unit coverage therefore lands in tests/decisions_md/test_currency.py, which is the mirror
+    home for scripts/decisions_md.py; only compact integration spot-checks go in test_decisions_index.py.
+    If it still crosses 500, decompose into the tests/decisions_index/ mirror package per Decision 128/131,
+    never register a new over-500 budget entry.
+  - >-
+    rec-3054 (/orient must surface open Critical recs as a non-blocking lane) was assessed for bundling and
+    deliberately excluded by operator ruling: zero file overlap, zero shared verification, a different
+    subsystem, and its own separate prose-budget wall on .claude/skills/orient/SKILL.md (also at exactly its
+    23,595-byte cap). Its premise was verified live -- /orient contains no occurrence of "critical", and
+    there are 12 open Critical recs with no surfacing lane. It remains a clean standalone next plan.
+  - >-
+    Branch was 1 commit behind origin/main at planning time with zero overlap against the Scope table
+    (main touched ops_writer, sync, outbox and convergence-health surfaces only), so no rebase decision was
+    required at assessment time. The implementing session still performs the normal commit-flow rebase.
+  - >-
+    Preflight was clean: creds ok, no uncommitted changes, empty ops outbox, and no unresolved ci-rca recs
+    (so no HARD BLOCK). budget_bypass_alert reported 10 entries, all from an unrelated branch.
+  - >-
+    Decision 168's evaluator obligation is why VP step 4 exists. Homing the currency semantics in
+    decision-entry.yaml while hardcoding the tokens in the generator would record the rule by mention only,
+    which is the shape CFG-03 ("a rule with no evaluator is not a rule") names. Reading required_markers
+    from the same contract in validate_decision_entry_conformance is the precedent being mirrored.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read (149 compaction grammar, 146 archival test, 166 point 9
+    byte pin, 165 marker authorization, 128 decompose-by-default, 167 envelope, 168 evaluator obligation,
+    86 routing)
+  - >-
+    docs/contracts/decision-entry.yaml compaction and metadata_envelope sections read, since the currency
+    section sits alongside them and must not restate them
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/decisions_md.py -- promote the compaction-stub predicate from
+    scripts/checks/decisions/validate_decision_entry_conformance.py as a public is_compacted_stub(block)
+    with identical semantics (a **Status:** Superseded marker whose value, split on '--' and stripped,
+    equals 'Superseded', AND a resolvable **Superseded by: Decision N** pointer). Add derive_currency(row)
+    returning one token, evaluated in this order: 'superseded' if is_compacted_stub; else
+    'superseded_cited' if the row has a superseded_by pointer; else 'amended' if the row has any inbound
+    amends edge OR its status begins with 'Amended'; else 'current'. Inbound amends requires corpus-wide
+    context, so accept the inverted edge map as a parameter rather than recomputing it per row.
+  - >-
+    scripts/checks/decisions/validate_decision_entry_conformance.py -- delete the private _is_compacted_stub
+    and import the promoted predicate. Change no other behaviour; the existing suite is the oracle.
+  - >-
+    docs/contracts/decision-entry.yaml -- add a currency section declaring values (the four tokens), a
+    per-token derivation rule, and a consumer_contract stating that only 'superseded' may remove an entry
+    from a consumer's active set while every other value annotates. Cross-reference the compaction section
+    for the stub grammar rather than restating it, and record why the pointer is unfit as a filter signal
+    (DPI-01 matches full and partial supersession identically).
+  - >-
+    scripts/decisions_index.py -- add a module-level _currency_tokens() that reads the vocabulary from
+    docs/contracts/decision-entry.yaml, build the inverted amends map once per build_index() call, and
+    project currency onto live rows only. Preserve byte-stability: no timestamps, no set iteration order
+    leaking into output. Extend the module docstring's field-derivation list to cover currency.
+  - >-
+    .claude/skills/decision-scout/SKILL.md -- replace Phase 2 step 7 with the currency branch (all four
+    tokens, their handling, and the note that a row with no currency key is archived and out of scope), and
+    delete the "Citing reversed decisions as governing" anti-pattern. Verify the byte count before and
+    after; the file must not grow.
+  - >-
+    config/prose_budgets.yaml -- ratchet the S4 .claude/skills/decision-scout/SKILL.md entry down to the
+    measured post-edit size. A decrease needs no marker.
+  - >-
+    tests/decisions_md/test_currency.py -- create unit coverage for is_compacted_stub and derive_currency
+    across all four tokens, with explicit cases for a bare pointer on an intact body, a compaction stub, an
+    inbound amends edge, a status-prose amendment with no typed edge, and a plain current entry.
+  - >-
+    tests/test_decisions_index.py -- add compact integration spot-checks (the step 1 mapping), the
+    live-rows-only invariant, and the generator-token-set-equals-contract assertion. Watch the 500 SLOC
+    limit; decompose per Decision 128/131 if it is crossed.
+  - >-
+    Regenerate the committed index -- bin/venv-python -m scripts.decisions_index --write.
+  - >-
+    Execute the Verification Plan -- run each step, loop until pass. On an unrecoverable failure, stop and
+    run RCA rather than working around it (Decision 55).
+  - >-
+    Commit with the Resolves trailer so rec-autoclose fires -- "Resolves: rec-3055, rec-3056" in the
+    squash-merge commit body. When closing rec-3055, state in its resolution that the shipped fix reframes
+    the filed one (status-prose keying was the defect; keying on superseded_by would have been the more
+    dangerous bug).
+  - >-
+    Report: what was implemented, the measured index size and headroom, the measured skill file size
+    against its budget, and the verification results.
+work_areas: []
+rollback: >-
+  Fully revertible in one commit: the change is additive to a generated projection plus a prose repoint.
+  Reverting scripts/decisions_index.py and regenerating with
+  bin/venv-python -m scripts.decisions_index --write restores the previous index byte-for-byte (build_index
+  is deterministic and excludes volatile fields). Reverting the skill and prose-budget edits restores the
+  status-prose branch. The predicate promotion in scripts/decisions_md.py is behaviour-preserving and may
+  be left in place independently. No corpus entry, warehouse row, or deployed artifact is touched, so there
+  is no data migration to unwind.
