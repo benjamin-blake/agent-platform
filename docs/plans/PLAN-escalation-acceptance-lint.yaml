@@ -334,6 +334,17 @@ test_obligations:
     test_selector: tests/checks/ops_governance/test_validate_acceptance_literals.py
     red_green_expectation: >-
       Red before (the module does not exist), green after.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Every graduate-disposition VP step in this plan has a matching registry row carrying
+      plan_slug escalation-acceptance-lint, so validate_graduation_completeness's implement-PR leg
+      passes in both tiers.
+    verification_step: 9
+    command: |-
+      for cid in sensor-acceptance-lint-clean escalate-files-on-persistent-red acceptance-literal-lint-guard gauge-escalation-reraises-non-transient gauge-assert-clear-exit-codes sensor-no-decision-70-miscite; do grep -q "check_id: $cid" config/agent/verification_registry/registry.yaml || { echo "MISSING registry row: $cid"; exit 1; }; done
+    red_green_expectation: >-
+      Red before -- verified at planning time, the loop exits 1 on the first missing check_id
+      against the 355-row registry. Green after all six rows are admitted.
   - source: scripts/checks/registry.py
     behavior: The new check is present in both the pre and full tier sequences and resolves.
     verification_step: 4
