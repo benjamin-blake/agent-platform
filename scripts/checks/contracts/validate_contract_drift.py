@@ -158,10 +158,23 @@ def validate_contract_drift(
         yaml_paths: list[Path] = sorted({*target_dir.glob("*.yaml"), *target_dir.glob("*.yml")})
         ritual_contracts: list[tuple[Path, ContractDocument]] = []
         class_d_metas: dict[str, ContractMeta] = {}  # resolved+admitted D files, by name
+        self_hosting_seen = False
 
         for p in yaml_paths:
             name = p.name
             rel_path = f"{_DOCS_CONTRACTS_PREFIX}{name}"
+            if name == _CONTRACT_POPULATION:
+                # Genuine runtime use of _CONTRACT_POPULATION (not merely an assignment): this
+                # gate's own evaluator declaration, {check: validate_contract_drift}, only
+                # resolves because THIS comparison executes -- an unreferenced literal
+                # assignment would be exactly the "mention, not reading" loophole this rule
+                # exists to close.
+                self_hosting_seen = True
+            # Every file examined counts toward `scanned` exactly once, unconditionally --
+            # every branch below increments EXACTLY ONE of ritual/declared/grandfathered/skipped
+            # before its next `continue`, so the bucket identity holds by construction rather
+            # than by each branch remembering to keep it in sync.
+            census.scanned += 1
             try:
                 raw_text = p.read_text(encoding="utf-8")
                 data = _yaml.safe_load(raw_text)
@@ -175,7 +188,6 @@ def validate_contract_drift(
                 census.skipped += 1
                 continue
 
-            census.scanned += 1
             shape = _population.classify_file(data)
             is_new = baseline_available and rel_path not in baseline_paths
 
@@ -185,6 +197,7 @@ def validate_contract_drift(
                         f"Contract drift (shape): {name}: no ritual (A/B/C) contract block and no valid "
                         "Class D shape (declare `contract.class` as A, B, C, or D)."
                     )
+                    census.skipped += 1
                 else:
                     census.grandfathered += 1
                 continue
@@ -213,12 +226,14 @@ def validate_contract_drift(
             smuggled = _population.detect_smuggled_shape(data)
             if smuggled:
                 failed.append(f"Contract drift (smuggling): {name}: {smuggled}")
+                census.skipped += 1
                 continue
 
             try:
                 meta = load_contract_meta(p)
             except ContractValidationError as exc:
                 failed.append(f"Contract drift (schema): {name}: {exc}")
+                census.skipped += 1
                 continue
             # Guaranteed by ContractMeta's Class D validator (contracts_schema.py) -- a Class D
             # envelope cannot pass schema validation without a non-None evaluator.
@@ -230,18 +245,21 @@ def validate_contract_drift(
                         f"Contract drift (grandfather): {name}: a NEW Class D file may not declare "
                         "status: active (grandfather-only)."
                     )
+                    census.skipped += 1
                     continue
                 if meta.evaluator.none_grandfathered is not None:
                     failed.append(
                         f"Contract drift (grandfather): {name}: a NEW Class D file may not declare "
                         "evaluator.none_grandfathered (grandfather-only)."
                     )
+                    census.skipped += 1
                     continue
 
             if meta.evaluator.none_grandfathered is None:
                 resolves, detail = _population.resolve_evaluator(name, meta.evaluator, root=_common.ROOT)
                 if not resolves:
                     failed.append(f"Contract drift (evaluator): {name}: evaluator does not resolve -- {detail}")
+                    census.skipped += 1
                     continue
 
             grandfather_kind = meta.status.value == "active" or meta.evaluator.none_grandfathered is not None
@@ -357,6 +375,8 @@ def validate_contract_drift(
         print(f"  Census: {census.render()}")
         if not census.bucket_identity_holds():
             failed.append(f"Contract drift (census): bucket identity failed -- {census.render()}")
+        if self_hosting_seen:
+            print(f"  Self-hosting: {_CONTRACT_POPULATION} was scanned by this run.")
 
         new_failures = len(failed) - error_count_before
         if new_failures == 0:
