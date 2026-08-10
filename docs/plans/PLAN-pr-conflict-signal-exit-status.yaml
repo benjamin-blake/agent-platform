@@ -54,6 +54,18 @@ scope:
     purpose: >-
       Lower the r3_workflows ceiling for this body from 36 to its post-extraction count. A
       DECREASE, which is unrestricted and must NOT carry a raise-approved marker (Decision 165).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Guard the ONE other live instance of this defect class, found by the round-2 critique: the
+      `evidence` step's CATEGORIES=$(... | sort -u | paste -sd ',' -) at lines 302-304 is unguarded
+      at the assignment level (its || echo "unknown" guards the inner python inside the loop, not
+      the substitution). Under inherited errexit a sort/paste failure aborts the step, and because
+      it is continue-on-error the job stays green while lines 306+ never run -- so bundle_sha,
+      bundle_s3_uri and bundle_path reach the downstream dedup/mark steps SILENTLY EMPTY. Fix by
+      appending `|| CATEGORIES=""` to the closing line, matching the fail-closed CATEGORIES=""
+      pre-write already on line 300. The edit is LINE-NEUTRAL, so the r3_workflows ceiling of 44
+      for this body is untouched.
   - file: scripts/checks/ci_guards/validate_masked_errexit_steps.py
     action: Create
     purpose: >-
@@ -114,9 +126,13 @@ acceptance_criteria:
     validate_pr_conflict_signal resolves the delegate, asserts every gh call site handles its exit
     status, and passes against the real workflow file.
   - >-
+    ci-rca.yml's evidence step no longer carries an unguarded CATEGORIES assignment, so a sort/paste
+    failure can no longer skip the step-output writes on lines 306+ and hand downstream steps empty
+    bundle_sha / bundle_s3_uri / bundle_path.
+  - >-
     validate_masked_errexit_steps is registered in both presubmit tiers and reports zero violations
-    across the INLINE run bodies in .github/workflows/, with its scanned file set asserted rather
-    than assumed.
+    across the INLINE run bodies in .github/workflows/, with its scanned file set proven equal to an
+    independently computed glob rather than taken from the guard's own self-report.
   - >-
     The r3_workflows ceiling for this body is lowered to its measured post-extraction count, with
     no raise-approved marker on the entry.
@@ -218,15 +234,17 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: >-
-      Run the new guard across the real tree AND assert the file set it actually scanned, so a
-      silently workflows-narrower-than-claimed implementation cannot report a passing zero.
-    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps, scanned_workflow_files as s; f=[]; validate_masked_errexit_steps(f); assert f==[], f; n=[str(p) for p in s()]; assert any('pr-conflict-signal.yml' in x for x in n) and any('ci.yml' in x for x in n) and len(n)>=15, n; print('zero violations over', len(n), 'workflow files')"
-    expected: Prints zero violations over a file count of 15 or more.
+      Run the new guard across the real tree AND prove its scanned file set equals an INDEPENDENTLY
+      computed glob, so a silently narrower implementation cannot report a passing zero.
+    command: bin/venv-python -c "import pathlib; from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps, scanned_workflow_files as s; f=[]; validate_masked_errexit_steps(f); assert f==[], f; got={pathlib.Path(p).name for p in s()}; want={p.name for p in pathlib.Path('.github/workflows').glob('*.y*ml')}; assert got==want, sorted(want^got); print('zero violations over', len(got), 'workflow files')"
+    expected: Prints zero violations over a file count equal to every workflow file on disk.
     fix_if: >-
-      A non-empty failure list means either the fix is incomplete, or the rule is broader than the
-      measured silent subset (19 LOUD instances exist and are deliberately out of scope) -- narrow
-      the rule, do not baseline the difference. An assertion failure on the file set means the scan
-      silently covered less than claimed.
+      A non-empty failure list means either a fix is incomplete, or the rule is broader than the
+      silent subset (19 LOUD instances exist and are deliberately out of scope) -- narrow the rule,
+      do not baseline the difference. A set-difference failure means the scan covered less (or more)
+      than the real workflow directory. Set equality against a locally recomputed glob is deliberate:
+      asserting on the guard's own self-report alone would be circular, and a >= floor would tolerate
+      silently dropping files.
     hermetic: true
     graduation: graduate
     graduation_check_id: masked-errexit-zero-violations-over-asserted-file-set
@@ -344,6 +362,15 @@ test_obligations:
     red_green_expectation: >-
       Red before the guard exists (no such module); green with both the firing case and every
       negative case asserted.
+  - source: .github/workflows/ci-rca.yml
+    behavior: >-
+      The evidence step's CATEGORIES assignment is guarded, so a sort/paste failure can no longer
+      abort the step before its GITHUB_OUTPUT writes and hand downstream steps empty bundle values.
+    verification_step: 7
+    command: bin/venv-python -c "import pathlib; from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps, scanned_workflow_files as s; f=[]; validate_masked_errexit_steps(f); assert f==[], f; got={pathlib.Path(p).name for p in s()}; want={p.name for p in pathlib.Path('.github/workflows').glob('*.y*ml')}; assert got==want, sorted(want^got); print('zero violations over', len(got), 'workflow files')"
+    red_green_expectation: >-
+      Red before the guard edit -- the new guard flags this body by name, which is precisely how the
+      round-2 critique found it; green once the assignment is guarded.
   - source: scripts/checks/registry.py
     behavior: The new check runs in both the fast and full presubmit tiers.
     verification_step: 8
@@ -428,8 +455,18 @@ constraints:
     composite leg would have an empty universe. State this boundary in the guard's docstring rather
     than leaving it implicit.
   - >-
-    Do not widen the guard to the 19 loud instances. Widening requires a grandfather roster and a
+    Do not widen the guard to the loud instances. Widening requires a grandfather roster and a
     numbered Decision, which is exactly what scoping to a zero population avoids.
+  - >-
+    The guard's detector MUST join backslash continuations before deciding an assignment is
+    unguarded, and MUST treat a body with no `set` line as errexit-inheriting. Both are failure modes
+    the round-1 census actually exhibited: a per-line regex reports ci-rca.yml's ARTIFACT_ID as
+    unguarded, and a declares-set filter misses 10 of the 11 candidate bodies entirely.
+  - >-
+    Do NOT resolve the ci-rca.yml instance by narrowing the rule to exclude it. The only feature
+    distinguishing it from pr-conflict-signal is that it declares no `set` line, which makes it more
+    exposed rather than less; excluding it would be classification-gaming to make the population
+    number come out right. Fix it instead -- the edit is one line and line-neutral.
   - No rescue agents or workaround loops (Decision 55).
   - Only files listed in Scope may be modified.
 context:
@@ -476,17 +513,30 @@ context:
     available post-merge as an optional confidence check (execution_steps) via
     mcp__github__actions_run_trigger -- the gh CLI is not available in CC-web.
   - >-
-    Measured population of the defect class at plan time, independently reproduced by the critique
-    gate: 44 CI shell bodies declare set -u / set -o pipefail without ever clearing errexit; 20 of
-    those hold at least one bare X=$(...) assignment. Of those 20, exactly ONE is masked by
-    continue-on-error into a green job -- this workflow. The other 19 fail loudly (they red the step
-    or job) and are out of scope.
+    CENSUS CORRECTION (round 2, decisive -- the earlier number was measured with the WRONG
+    predicate). Round 1 filtered on bodies that DECLARE set -u / set -o pipefail without clearing
+    errexit (44 bodies, 20 with a bare X=$(...), 1 masked). That filter is strictly narrower than the
+    predicate this guard actually enforces ("inherits errexit"), and it excluded 10 of the 11
+    continue-on-error inline bodies outright, because only pr-conflict-signal declares a set line at
+    all. A body with NO set line still inherits errexit under bash -e {0} -- it is MORE exposed, not
+    less. Re-measured under the guard's real predicate, with backslash continuations joined before
+    testing for a guard.
   - >-
-    The zero is earned, not contrived: 11 continue-on-error steps carry inline run bodies, and the
-    critique gate read every sibling (reconcile.yml and terraform-apply-sandbox.yml best-effort wake
-    comments, ci.yml signal-green, ci-rca.yml's four fetch steps) confirming each passes for a
-    substantive reason -- || true, || echo "", && break || sleep 3 -- not by accident of phrasing.
-    Those near-misses are the guard's required negative test cases (VP6).
+    Full enumeration under the correct predicate -- 11 continue-on-error inline bodies, every one
+    read: ci-rca.yml jobs_json, two artifact fetches and signal-green hold NO assignments; ci-rca.yml's
+    selection-manifest fetch (3 assignments), both reconcile.yml and both terraform-apply-sandbox.yml
+    best-effort wake comments (1 each) are all guarded with || true / || echo ""; ci-rca.yml evidence
+    holds 5, of which 4 are guarded and ONE -- CATEGORIES -- is not; pr-conflict-signal holds 3, of
+    which 2 are unguarded. So the live population is TWO, not one: this workflow and ci-rca.yml
+    evidence. Both are in Scope, which is what restores a true zero and keeps the guard installable
+    with no roster and no Decision.
+  - >-
+    The zero is therefore earned by fixing, not by narrowing: every remaining sibling passes for a
+    substantive reason (|| true, || echo "", && break || sleep 3), not by accident of phrasing, and
+    those real near-misses are the guard's required negative test cases (VP6). Note the detector must
+    join backslash continuations before judging: ci-rca.yml's ARTIFACT_ID guard sits on a
+    continuation line two lines below its assignment, and a naive per-line regex reports it as
+    unguarded (the round-1 scan did exactly that).
   - >-
     KNOWN COVERAGE GAP, recorded deliberately rather than papered over: the new guard scans inline
     bodies, and Decision 162 R3's own remedy (extract to scripts/ci/) moves risky code OUT of that
@@ -594,15 +644,28 @@ execution_steps:
     Create scripts/checks/ci_guards/validate_masked_errexit_steps.py -- filesystem-only walk of
     .github/workflows/*.yml and *.yaml; flag any step with continue-on-error true whose INLINE body
     inherits errexit and holds an unguarded command substitution. Expose scanned_workflow_files()
-    so VP7 can assert the scan surface. Reuse _workflow_shell_bodies.py's shell-governance helpers
-    (_is_governed_shell, _default_shell) for shell resolution ONLY -- that module is workflows-only
-    by its own docstring, which matches this guard's deliberate scope; do not attempt to reuse it as
-    a composite-action walker. Record the delegated-script and composite-action boundary in the
-    module docstring, citing follow-on rec (a) as the mechanism that covers delegates.
+    as the SINGLE SOURCE of the guard's file set -- validate_masked_errexit_steps() must iterate
+    exactly what that function returns and never its own private glob, or VP7's equality assertion
+    is circular. Prefer delegating that walk to the existing _workflow_shell_bodies._iter_workflows()
+    rather than minting a second walker. Reuse that module's shell-governance helpers
+    (_is_governed_shell, _default_shell) for shell resolution ONLY -- it is workflows-only by its own
+    docstring, which matches this guard's deliberate scope; do not attempt to reuse it as a
+    composite-action walker. Join backslash continuations before testing an assignment for a guard,
+    and treat an absent set line as errexit-inheriting. Record the delegated-script and
+    composite-action boundary in the module docstring, citing follow-on rec (a) as the mechanism
+    that covers delegates.
   - >-
     Create tests/checks/ci_guards/test_validate_masked_errexit_steps.py -- the firing case on a
     synthetic violator shaped like the pre-fix body, plus negatives drawn from the REAL near-misses
-    in the tree (|| true, || echo "", && break || sleep 3) and a loud step with no continue-on-error.
+    in the tree and a loud step with no continue-on-error. Copy each negative fixture BYTE-FOR-BYTE
+    from the live workflow, including ci-rca.yml's ARTIFACT_ID guard on its backslash-continuation
+    line; do NOT paraphrase them into single-line equivalents, because a per-line detector passes the
+    paraphrase and then fires on the real tree.
+  - >-
+    Modify .github/workflows/ci-rca.yml -- append `|| CATEGORIES=""` to the closing line of the
+    CATEGORIES assignment (line 304), matching the fail-closed CATEGORIES="" pre-write on line 300.
+    Keep the edit LINE-NEUTRAL so the r3_workflows ceiling of 44 for this body is untouched. Change
+    nothing else in this workflow.
   - >-
     Modify scripts/checks/registry.py -- add the new check to both pre_sequence() and full_sequence(),
     adjacent to validate_pr_conflict_signal at lines 162 and 204.
