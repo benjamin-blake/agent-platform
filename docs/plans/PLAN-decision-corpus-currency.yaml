@@ -75,7 +75,8 @@ scope:
       Append the graduation row owed by VP step 1. In scope deliberately: Decision 166 point 6 calibrated
       this file's 6,000-line ceiling precisely because "every graduating /implement plan appends to it",
       and the never-a-second-raise pre-commitment governs what happens when the ceiling FIRES, not whether
-      to graduate. Measured at 4,739 lines with 1,261 free.
+      to graduate. Measured at 4,561 EFFECTIVE lines against the 6,000 limit (config/structural_size_budgets
+      .yaml declares unit: effective-lines), so 1,439 free; the raw line count is 4,739.
   - file: tests/decisions_md/test_currency.py
     action: Create
     purpose: >-
@@ -119,9 +120,12 @@ acceptance_criteria:
     scripts/validate.py, and each of its five invariants has a synthetic fixture proving it FAILS when
     violated.
   - >-
-    Invariant I1 asserts the DISCRIMINATING direction -- every entry carrying a '**Status:** Superseded'
-    marker derives 'superseded_compacted' -- so a malformed compaction that a human reads as superseded but
-    which silently falls out of the filterable class fails the build.
+    Invariant I1 asserts the DISCRIMINATING direction -- every LIVE entry whose status marker resolves to
+    'Superseded' derives 'superseded_compacted' -- so a malformed compaction that a human reads as superseded
+    but which silently falls out of the filterable class fails the build. The predicate is pinned: FIRST
+    match of scripts.decisions_md._BOLD_STATUS_RE, group(1) split on '--', stripped, compared == 'Superseded'.
+    A substring or findall match is FORBIDDEN: measured, it matches 15 entries including live Decisions 149
+    and 160, which merely QUOTE the marker in their bodies, and would red-line CI on day one.
   - >-
     The decision-scout skill's step 7 branches on currency, names 'superseded_compacted' as the only
     demoting value, states 'superseded_pointer' is never filtered and never severity-reduced, and the skill
@@ -160,7 +164,7 @@ verification_plan:
       Prove invariant I1 is DISCRIMINATING rather than definitional, using the check's own synthetic
       failing fixtures. No tracked file is mutated: the failing corpora are injected, so there is no
       restore path to get wrong.
-    command: "bash -c \"n=$(bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py --collect-only -q -k fails_when 2>/dev/null | grep -c '::'); test \\\"$n\\\" -ge 5 || { echo \\\"only $n fails_when fixtures collected, expected >=5 (one per invariant)\\\"; exit 1; }; bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py -q -k fails_when\""
+    command: "bash -c \"grep -q 'class TestInvariantsFailWhenViolated' tests/checks/decisions/test_validate_decision_currency.py || { echo 'required failing-fixture class absent'; exit 1; }; bin/venv-python -m pytest 'tests/checks/decisions/test_validate_decision_currency.py::TestInvariantsFailWhenViolated' -q\""
     expected: >-
       Collects at least five 'fails_when' fixtures (one per invariant) and all pass. The collection-count
       guard is mandatory: `pytest -k` that matches nothing exits 0 with '0 selected', so a selector-only step
@@ -196,7 +200,7 @@ verification_plan:
     action: >-
       Prove the contract vocabulary is causal by removing it: confirm the check FAILS against a contract
       copy whose currency vocabulary omits a token the corpus actually emits.
-    command: "bash -c \"n=$(bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py --collect-only -q -k vocabulary 2>/dev/null | grep -c '::'); test \\\"$n\\\" -ge 1 || { echo 'no vocabulary fixture collected'; exit 1; }; bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py -q -k vocabulary\""
+    command: "bash -c \"grep -q 'class TestContractVocabularyIsCausal' tests/checks/decisions/test_validate_decision_currency.py || { echo 'required vocabulary fixture class absent'; exit 1; }; bin/venv-python -m pytest 'tests/checks/decisions/test_validate_decision_currency.py::TestContractVocabularyIsCausal' -q\""
     expected: >-
       Collects at least one vocabulary fixture and it passes. The fixture feeds the check a contract whose
       values list omits 'superseded_pointer' while the corpus emits it, and the check must report a
@@ -222,11 +226,8 @@ verification_plan:
       An identity failure means the alias was implemented as a wrapper function or a second definition; make
       it a direct module-level alias so the two consumers cannot drift.
     hermetic: true
-    graduation: waive
-    graduation_waiver_reason: >-
-      At origin/main this fails only by AttributeError on a symbol that does not yet exist -- the
-      ImportError-shaped vacuous pass the VF-06 differential is meant to reject, so it is not honestly
-      admissible as a standing registry row.
+    graduation: graduate
+    graduation_check_id: "compaction-stub-predicate-single-source"
   - step: 6
     phase: pre-deploy
     action: >-
@@ -325,7 +326,9 @@ verification_plan:
     fix_if: >-
       A KeyError on validate_decision_currency means the scripts/validate.py facade re-export line is
       missing. A validate_sloc_limits failure names the file: scripts/validate.py is at 497 of 500 SLOC, so
-      the re-export leaves 2 lines of headroom; tests/test_decisions_index.py is at 457. Per Decision 128
+      the re-export leaves 2 lines of headroom -- if it crosses, the re-export block is the wrong place to
+      absorb it, so decompose per Decision 80's facade pattern rather than registering a budget entry for
+      the repo's central gate file; tests/test_decisions_index.py is at 457. Per Decision 128
       decompose (tests/decisions_index/ mirror package) rather than registering a new over-500 entry.
     hermetic: false
     graduation: waive
@@ -413,7 +416,7 @@ test_obligations:
       the reversed/deferred grandfather hook; the registered check reads the vocabulary from it, so a token
       removed from the contract fails the build.
     verification_step: 4
-    command: "bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py -q -k vocabulary"
+    command: "bin/venv-python -m pytest 'tests/checks/decisions/test_validate_decision_currency.py::TestContractVocabularyIsCausal' -q"
     red_green_expectation: >-
       Red before (no currency key in the contract, so the check cannot load a vocabulary), green after. The
       fixture feeds a truncated vocabulary and requires a violation, so a generator-sourced token list turns
@@ -474,8 +477,11 @@ constraints:
     registered in --pre. No numbered Decision is minted (operator ruling: the proof of a decision belongs in
     the code). This routing is compelled, not merely permitted: Decision 150's field_semantics row routes
     exactly this content to the owning contract and says "Never a numbered Decision", and Decision 167 clause
-    2 rejects that claim outright on any entry minting a number. What a Decision would have added -- a
-    reversal-conditions block -- is recorded in the contract's currency section instead.
+    2 rejects that claim outright on any entry minting a number. ACCEPTED COST, stated plainly: reversal
+    conditions are MONITORED only as a fenced ```yaml reversal-conditions stanza inside a DECISIONS.md entry
+    (scripts/preflight/decision_conditions.py). The block this plan writes into the contract's currency
+    section is documentation with no monitor, no review_by, and no preflight surfacing -- it does not
+    reproduce what a Decision would have provided, and no claim is made that it does.
   - >-
     The prose budget is hard: the .claude/skills/decision-scout/SKILL.md edit must land at or below 11,325
     bytes measured against the ORIGIN/MAIN budget value. A raise-approved marker is unavailable under
@@ -487,9 +493,11 @@ constraints:
   - >-
     Reversed and Deferred are deliberately NOT in the vocabulary: the live census is zero such entries, so a
     token would be dead vocabulary. Invariant I4 fails the build if one appears, and ships with an
-    empty-at-install grandfather hook in the contract (the Decision 149 clause 3 orphan_baseline and Decision
-    165 clause 4 RETRO_SCAN_GRANDFATHER precedent) so the first legitimate Reversed entry has a cited exit
-    that does not red-light unrelated PRs.
+    empty-at-install grandfather hook declared as a MODULE-LEVEL CONSTANT IN THE CHECK, never as a contract
+    key -- Decision 165 clause 4's RETRO_SCAN_GRANDFATHER precedent is explicit that "growing the hook later
+    is a reviewed code edit, never a config edit", and putting it in YAML would invert the half of the
+    precedent that makes it a control. Decision 149 clause 3 is NOT cited here: its orphan_baseline seeds
+    dec-010 rather than shipping empty, so it is not an empty-at-install precedent.
   - >-
     Must survive T1.5's portal cutover unchanged. Do not couple the scout's step 7 to the JSON file's path
     or shape beyond the currency field name.
@@ -603,6 +611,12 @@ context:
     False, so it derives a non-filterable token while still carrying the marker -- exactly the condition I1
     fires on. That is the malformed-compaction case worth catching.
   - >-
+    Round-3 finding, recorded not silenced: this plan deletes BOTH the skill's status-active filter
+    (SKILL.md:65) and its "Citing reversed decisions as governing" anti-pattern (SKILL.md:145), partly to
+    stay inside a 10-byte prose margin. That leaves marker-exact invariant I4 as the SOLE guard against a
+    reversed entry being cited as governing. The live census is zero such entries, but a safety net partly
+    funded by a byte margin is a trade worth naming explicitly rather than discovering later.
+  - >-
     Known limitation, not mitigated: invariant I5 and VP step 6 are string-presence checks on the skill text.
     They prove the safety clause is PRESENT; neither can prove the LLM honours it at dispatch time. The gate's
     end-to-end safety property is not mechanically enforceable, which is part of why the amended branch is
@@ -662,8 +676,11 @@ execution_steps:
     currency onto live rows only. The generator does NOT validate or raise. Preserve byte-stability. Extend
     the module docstring's field-derivation list.
   - >-
-    scripts/checks/decisions/validate_decision_currency.py -- five invariants: I1 every entry with a
-    '**Status:** Superseded' marker derives superseded_compacted; I2 currency present on exactly the live
+    scripts/checks/decisions/validate_decision_currency.py -- five invariants: I1 every LIVE entry whose
+    status marker resolves to 'Superseded' derives superseded_compacted, using the FIRST match of
+    _BOLD_STATUS_RE with '--' normalization (never a substring/findall match, which hits live Decisions 149
+    and 160 where the marker is merely QUOTED; note I1 is live-scoped because currency is, so the 11 archive
+    entries carrying the marker are deliberately out of its reach); I2 currency present on exactly the live
     rows; I3 every emitted value is in the contract vocabulary; I4 no live entry carries a Reversed or
     Deferred status marker outside the grandfather hook; I5 the decision-scout skill contains both
     consumer-contract clauses. Accept an injectable root/reader so fixtures can feed synthetic corpora.
@@ -700,7 +717,16 @@ execution_steps:
     Execute the Verification Plan -- run each step, loop until pass. On an unrecoverable failure, stop and
     run RCA rather than working around it (Decision 55).
   - >-
-    Commit with "Resolves: rec-3055, rec-3056" in the squash-merge commit body. When closing rec-3055, state
+    File the carrier for the deferred scope BEFORE closing anything: rec-3056 explicitly specifies the
+    scout branch ("amended never filtered but flagged 'read with amendments'"), and this plan ships the
+    projection without that branch. Call get_rec_write_guidance() then file_rec() for a follow-on rec
+    covering the decision-scout amended branch, referencing this plan and the residual-risk finding (26 of
+    121 live entries, governance backbone included). A merged plan document is not a work-tracking surface;
+    AGENTS.md routes deferred scope to file_rec.
+  - >-
+    Commit with "Resolves: rec-3055, rec-3056" in the squash-merge commit body, and in rec-3056's resolution
+    text name the follow-on rec id that carries the deferred branch, so its closure is honest about being
+    partial. When closing rec-3055, state
     that the shipped fix reframes the filed one (status-prose keying was the defect; keying on superseded_by
     would have been the more dangerous bug).
   - >-
