@@ -109,8 +109,11 @@ acceptance_criteria:
     Decision 44 and Decision 58 derive 'superseded_compacted'; Decision 37 (victim-side pointer) and
     Decision 80 (inbound supersedes edge from Decision 104's "partially supersedes Decision 80 point 3"
     heading) both derive 'superseded_pointer'; Decision 43 and Decision 67 derive 'amended'; Decision 168
-    derives 'current'. Measured distribution over 121 live entries: 91 current, 26 amended, 2
-    superseded_pointer, 2 superseded_compacted.
+    derives 'current'. Additionally the superseded_compacted SET equals the set of live entries carrying a
+    '**Status:** Superseded' marker -- structural and count-free, so it survives corpus growth (both are
+    {44, 58} today). The live distribution measured at planning time (91 current, 26 amended, 2
+    superseded_pointer, 2 superseded_compacted) is INFORMATIONAL: no verification step pins those counts,
+    because VP step 1 is graduated and a pinned count would red-line every unrelated PR adding a Decision.
   - >-
     validate_decision_currency is registered, glob-gated, sequenced into --pre and full, re-exported in
     scripts/validate.py, and each of its five invariants has a synthetic fixture proving it FAILS when
@@ -136,16 +139,18 @@ verification_plan:
     action: >-
       Exercise the derivation against the real corpus and assert the token for each representative class,
       including the inbound-edge case an earlier draft of this plan missed.
-    command: "bin/venv-python -c \"from scripts.decisions_index import build_index; ds=build_index()['decisions']; d={e['number']:e for e in ds}; exp={44:'superseded_compacted',58:'superseded_compacted',37:'superseded_pointer',80:'superseded_pointer',43:'amended',67:'amended',168:'current'}; bad={n:(d[n].get('currency'),v) for n,v in exp.items() if d[n].get('currency')!=v}; assert not bad, bad; import collections; c=collections.Counter(e['currency'] for e in ds if e['live']); assert c=={'current':91,'amended':26,'superseded_pointer':2,'superseded_compacted':2}, dict(c); print('derivation OK', dict(c))\""
+    command: "bin/venv-python -c \"import re, yaml, pathlib; from scripts.decisions_index import build_index; from scripts.decisions_md import parse_decisions_md; ds=build_index()['decisions']; d={e['number']:e for e in ds}; exp={44:'superseded_compacted',58:'superseded_compacted',37:'superseded_pointer',80:'superseded_pointer',43:'amended',67:'amended',168:'current'}; bad={n:(d[n].get('currency'),v) for n,v in exp.items() if d[n].get('currency')!=v}; assert not bad, bad; vocab=set(yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())['currency']['values']); live=[e for e in ds if e['live']]; assert all(e.get('currency') in vocab for e in live), [e['number'] for e in live if e.get('currency') not in vocab]; rows={r['decision_id']:r['raw_block'] for r in parse_decisions_md()}; marked={n for n,b in rows.items() if re.search(r'^\\*\\*Status:\\*\\*\\s*Superseded\\s*$', b, re.M)}; compacted={e['number'] for e in live if e['currency']=='superseded_compacted'}; assert compacted==(marked & {e['number'] for e in live}), (sorted(compacted), sorted(marked)); print('derivation OK; compacted set ==', sorted(compacted))\""
     expected: >-
-      Exits 0 and prints the distribution. D37 and D80 are both 'superseded_pointer' (never the filterable
-      token), D67 is 'amended' despite no typed amends edge, and the whole-corpus distribution is pinned so
-      a misclassification anywhere fails, not only on the seven named entries.
+      Exits 0. The seven named entries carry their expected tokens, every live entry's token is in the
+      contract vocabulary, and the superseded_compacted SET equals the set of live entries carrying a
+      '**Status:** Superseded' marker. All three assertions are structural and count-free, so they survive
+      corpus growth.
     fix_if: >-
       A mismatch on 37 or 80 means supersession is being read from only one edge direction; both the
-      victim-side pointer and the inbound supersedes edge must yield 'superseded_pointer'. A distribution
-      mismatch with all seven spot-checks passing means an unnamed entry is misclassified -- diff the full
-      mapping rather than adjusting the expected counts.
+      victim-side pointer and the inbound supersedes edge must yield 'superseded_pointer'. A set mismatch on
+      the last assertion means a marked entry failed to derive the filterable token (a malformed compaction)
+      or an unmarked entry acquired it. Do NOT pin raw counts here: this step is graduated, and a count would
+      red-line every unrelated PR that adds a Decision.
     hermetic: true
     graduation: graduate
     graduation_check_id: "decisions-index-currency-distribution"
@@ -155,13 +160,13 @@ verification_plan:
       Prove invariant I1 is DISCRIMINATING rather than definitional, using the check's own synthetic
       failing fixtures. No tracked file is mutated: the failing corpora are injected, so there is no
       restore path to get wrong.
-    command: >-
-      bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py -q
-      -k "fails_when or failing"
+    command: "bash -c \"n=$(bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py --collect-only -q -k fails_when 2>/dev/null | grep -c '::'); test \\\"$n\\\" -ge 5 || { echo \\\"only $n fails_when fixtures collected, expected >=5 (one per invariant)\\\"; exit 1; }; bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py -q -k fails_when\""
     expected: >-
-      All five failing-fixture tests pass, one per invariant. The I1 fixture is the load-bearing one: an
-      entry carrying '**Status:** Superseded' whose pointer is absent must FAIL the check, proving I1
-      asserts status-marker implies compacted rather than restating the derivation.
+      Collects at least five 'fails_when' fixtures (one per invariant) and all pass. The collection-count
+      guard is mandatory: `pytest -k` that matches nothing exits 0 with '0 selected', so a selector-only step
+      would pass vacuously if the fixtures were named differently or never written. The I1 fixture is the
+      load-bearing one: an entry carrying '**Status:** Superseded' whose pointer is absent must FAIL the
+      check, proving I1 asserts status-marker implies compacted rather than restating the derivation.
     fix_if: >-
       If an I1 fixture passes the check instead of failing it, the invariant was written in the definitional
       direction (compacted implies markers), which can never fire because the derivation IS that predicate.
@@ -191,10 +196,11 @@ verification_plan:
     action: >-
       Prove the contract vocabulary is causal by removing it: confirm the check FAILS against a contract
       copy whose currency vocabulary omits a token the corpus actually emits.
-    command: "bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py -q -k vocabulary"
+    command: "bash -c \"n=$(bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py --collect-only -q -k vocabulary 2>/dev/null | grep -c '::'); test \\\"$n\\\" -ge 1 || { echo 'no vocabulary fixture collected'; exit 1; }; bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_currency.py -q -k vocabulary\""
     expected: >-
-      Passes. The fixture feeds the check a contract whose values list omits 'superseded_pointer' while the
-      corpus emits it, and the check must report a violation.
+      Collects at least one vocabulary fixture and it passes. The fixture feeds the check a contract whose
+      values list omits 'superseded_pointer' while the corpus emits it, and the check must report a
+      violation. The collection-count guard is mandatory for the same reason as step 2.
     fix_if: >-
       If the check passes against the truncated vocabulary, it is reading its token list from the generator
       rather than the contract, which reduces the contract section to a mention with no reader.
@@ -580,6 +586,22 @@ context:
     fits -- narrowed step 7 (no amended branch), currency added to the Phase 1 field enumeration, and the
     "Citing reversed decisions as governing" anti-pattern deleted -- measures 11,315 B, 10 B under. That
     margin is thin by construction; step 7's fix_if names the abort path rather than pretending otherwise.
+  - >-
+    Round-3 self-check, actioned before dispatch: the graduated step 1 originally pinned the exact live
+    token distribution. That is the tests/CLAUDE.md count-coupling anti-pattern on a GRADUATED check -- the
+    next Decision entry to land flips current from 91 to 92 and red-lines an unrelated PR. Replaced with
+    structural, count-free assertions: the seven named spot-checks, vocabulary membership, and
+    superseded_compacted-set == status-marker-set.
+  - >-
+    Round-3 self-check, actioned before dispatch: VP steps 2 and 4 selected failing fixtures with `pytest
+    -k`. Measured: `pytest -k` matching nothing exits 0 ("61 deselected, 0 selected"), so both steps would
+    have passed vacuously if the fixtures were never written or were named differently. Both now assert a
+    minimum collected count before running the selection.
+  - >-
+    Round-3 self-check, verified sound: invariant I1 is genuinely discriminating, not a third tautology. A
+    synthetic entry carrying '**Status:** Superseded' with no resolvable pointer yields is_compacted_stub
+    False, so it derives a non-filterable token while still carrying the marker -- exactly the condition I1
+    fires on. That is the malformed-compaction case worth catching.
   - >-
     Known limitation, not mitigated: invariant I5 and VP step 6 are string-presence checks on the skill text.
     They prove the safety clause is PRESENT; neither can prove the LLM honours it at dispatch time. The gate's
