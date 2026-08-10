@@ -97,13 +97,17 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Assert every sensor rec-fields builder produces an acceptance that passes the real linter.
-    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py tests/convergence_health/test_code_drift.py tests/test_ci_rca_probe_health.py tests/test_ci_rca_gauges.py -q -k acceptance_lint
+    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py::test_escalate_acceptance_lint_valid tests/convergence_health/test_code_drift.py::test_ducklake_drift_acceptance_lint_valid tests/convergence_health/test_code_drift.py::test_prod_drift_acceptance_lint_valid tests/test_ci_rca_probe_health.py::test_probe_health_acceptance_lint_valid tests/test_ci_rca_gauges.py::test_dedup_acceptance_lint_valid -q
     expected: >-
-      All selected tests pass; each asserts lint_acceptance_command(fields["acceptance"]) == (True, None)
-      against the real validator (bash -n), not a mock.
+      All five node ids resolve and pass; each asserts lint_acceptance_command(fields["acceptance"])
+      == (True, None) against the real validator (bash -n), not a mock. Explicit node ids are
+      deliberate: a -k substring selector silently deselects builders whose test name does not contain
+      the substring, and pytest exits 5 only when ZERO tests match -- so a -k selector would report
+      green while leaving three of the five builders unproven.
     fix_if: >-
-      A builder still emits prose or shell-unsafe text; the failure message prints the offending
-      command and the bash syntax error.
+      A builder still emits prose or shell-unsafe text (the failure prints the offending command and
+      the bash syntax error), or a node id does not resolve, which means a required per-builder test
+      was never written.
     hermetic: true
     graduation: graduate
     graduation_check_id: sensor-acceptance-lint-clean
@@ -141,13 +145,16 @@ verification_plan:
     action: >-
       Confirm the guard is actually reachable through validate.py dispatch (registry entry plus
       facade re-export), not merely registered.
-    command: bin/venv-python -m pytest tests/test_checks_registry.py -q && bin/venv-python -m scripts.validate --pre
+    command: set -o pipefail && bin/venv-python -m pytest tests/test_checks_registry.py -q && bin/venv-python -m scripts.validate --pre 2>&1 | tee /tmp/pre-tier.log && grep -q "Acceptance literal lint" /tmp/pre-tier.log
     expected: >-
-      The registry reachability tests pass, then the --pre run reaches and prints the new check's
-      section header and exits 0; no KeyError on the check name.
+      The registry reachability tests pass, the --pre run exits 0 with no KeyError, AND the grep finds
+      the new check's section header in the captured output. The header grep is the load-bearing half:
+      without it this step cannot detect the inverse wiring failure (re-export present but the name
+      missing from pre_sequence), which makes validate exit 0 while silently never running the check.
     fix_if: >-
-      KeyError on the check name means the scripts/validate.py re-export line is missing; absence of
-      the section header means the registry tier sequence entry is missing.
+      KeyError on the check name means the scripts/validate.py re-export line is missing. Exit 0 with
+      no header match means the scripts/checks/registry.py pre_sequence entry is missing. set -o
+      pipefail is required so a validate failure is not masked by tee's exit status.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -158,10 +165,12 @@ verification_plan:
     action: >-
       Assert the narrowed exception handling: a classified transient reader outage is still swallowed
       to a warning, and any other exception propagates.
-    command: bin/venv-python -m pytest tests/test_ci_rca_gauges.py -q -k transient_or_reraise
+    command: bin/venv-python -m pytest tests/test_ci_rca_gauges.py::test_probe_health_escalation_transient_swallowed tests/test_ci_rca_gauges.py::test_probe_health_escalation_non_transient_reraises tests/test_ci_rca_gauges.py::test_dedup_escalation_transient_swallowed tests/test_ci_rca_gauges.py::test_dedup_escalation_non_transient_reraises -q
     expected: >-
-      A raised reader-unavailable exception returns None with the warning printed; a raised
-      ValueError propagates out of _escalate_ci_rca_probe_health and _escalate_dedup_effectiveness.
+      All four node ids resolve and pass. Both wrappers live in scripts/preflight/ci_rca_gauges.py
+      (_escalate_ci_rca_probe_health at :32, _escalate_dedup_effectiveness at :427), so all four tests
+      belong in tests/test_ci_rca_gauges.py. A raised reader-unavailable exception returns None with
+      the warning printed; a raised non-transient exception propagates out of BOTH wrappers.
     fix_if: >-
       A blanket except Exception remains, so the ValueError is still swallowed and the regression that
       hid this bug for its entire life is not actually closed.
@@ -172,10 +181,12 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Assert both new exit-code CLIs invert correctly and need no AWS credentials.
-    command: bin/venv-python -m pytest tests/test_ci_rca_probe_health.py tests/test_ci_rca_gauges.py -q -k assert_clear
+    command: bin/venv-python -m pytest tests/test_ci_rca_probe_health.py::test_assert_clear_exit_codes tests/test_ci_rca_gauges.py::test_assert_dedup_clear_exit_codes -q
     expected: >-
-      Each CLI returns 0 for a below-threshold fixture and non-zero for an over-threshold fixture,
-      reading only the local cache rows passed in.
+      Both node ids resolve and pass; each CLI returns 0 for a below-threshold fixture and non-zero
+      for an over-threshold fixture, reading only the local cache rows passed in. Explicit node ids
+      are required here: "assert_clear" is NOT a substring of "assert_dedup_clear", so a -k
+      assert_clear selector deselects the dedup test and proves only half of AC5.
     fix_if: >-
       A CLI returns 0 unconditionally, reaches for a live reader, or requires a profile -- any of
       which makes it useless as the rec's relevance oracle (Decision 103).
@@ -199,11 +210,13 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Discharge the full-tier handoff obligation before any commit or PR (Decision 163).
-    command: bin/venv-python -m scripts.validate
-    expected: Completed full run exits 0 with no failed checks.
+    command: set -o pipefail && bin/venv-python -m scripts.validate 2>&1 | tee /tmp/full-tier.log && grep -q "Acceptance literal lint" /tmp/full-tier.log
+    expected: >-
+      Completed full run exits 0 with no failed checks, AND the new check's section header appears in
+      the output -- proving the full_sequence entry exists, which an exit-code-only assertion cannot.
     fix_if: >-
       Any check fails; forward-fix on the branch and rerun the full tier from the start rather than
-      reverting.
+      reverting. Exit 0 with no header match means the full_sequence registry entry is missing.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -251,7 +264,7 @@ test_obligations:
     behavior: >-
       Both drift builders emit a lint-valid acceptance probing the deploy-record source_git_sha.
     verification_step: 1
-    test_selector: tests/convergence_health/test_code_drift.py::test_drift_acceptance_lint_valid
+    test_selector: tests/convergence_health/test_code_drift.py::test_ducklake_drift_acceptance_lint_valid
     red_green_expectation: >-
       Red before (bash syntax error on the prose parentheses), green after.
   - source: scripts/ci_rca/probe_health.py
@@ -267,7 +280,7 @@ test_obligations:
       The dedup builder emits a lint-valid acceptance, --assert-dedup-clear inverts correctly, and
       only classified transient reader outages are swallowed.
     verification_step: 5
-    test_selector: tests/test_ci_rca_gauges.py::test_transient_or_reraise
+    test_selector: tests/test_ci_rca_gauges.py::test_dedup_escalation_non_transient_reraises
     red_green_expectation: >-
       Red before (blanket except Exception swallows the ValueError), green after.
   - source: scripts/checks/ops_governance/validate_acceptance_literals.py
@@ -324,6 +337,12 @@ constraints:
     stop and decompose per Decision 128 -- never raise the budget, never run --update-sloc-budgets to
     reseed it. Decomposing validate.py is a large unplanned scope expansion, so treat a second line
     as a hard stop and re-plan.
+  - >-
+    tests/convergence_health/test_code_drift.py is the second-tightest file in scope: 440 SLOC (Decision
+    130 gates tests/ whole-repo) against the unregistered 500 default, so only 60 lines of headroom for
+    the two new per-builder acceptance-lint tests. Measure after the edit; if it crosses 500, decompose
+    per Decision 128 -- never raise. For reference the other three test homes are comfortable:
+    test_escalate.py 327, test_ci_rca_probe_health.py 340, test_ci_rca_gauges.py 240.
   - >-
     tests/test_checks_registry.py sits at EXACTLY its registered 643 budget (raise-approved
     dec-159) and is deliberately NOT in scope. Do not add assertions to it. If the implementation
@@ -383,6 +402,24 @@ context:
     anti-proliferation concern point 3 protects is not engaged. If a reviewer disagrees, the fallback
     is a Decision 155 amendment naming _escalate_ci_rca_probe_health and _escalate_dedup_effectiveness
     -- not a widening of the swallow.
+  - >-
+    Narrowed-handler blast radius -- INTENDED, and stated so the implementer does not try to bound it.
+    scripts/session/preflight.py:311 and :322 call _escalate_ci_rca_probe_health and
+    _escalate_dedup_effectiveness with NO surrounding try/except, and preflight.py is deliberately out
+    of scope. After the narrowing, any exception is_reader_unavailable does not classify -- a portal
+    ValueError schema-gate rejection, an OCC-budget RuntimeError, an SSM/URL-resolution RuntimeError --
+    propagates out of main() and aborts the entire session preflight rather than degrading to a [WARN].
+    That is the Decision 55 fail-loud trade being made deliberately: a silent [WARN] is exactly what hid
+    this defect for the sensors' entire life. Do NOT add a compensating try/except in preflight.py; it
+    is out of scope and would reinstate the swallow one layer up. If the blast radius proves
+    unacceptable in practice, that is a follow-on plan, not an in-flight widening.
+  - >-
+    is_reader_unavailable is a Decision 155 READER-scoped classifier whose accepted set is pinned to
+    src.common.iceberg_reader._READER_TRANSIENT_STATUS. It classifies WRITER transients correctly today
+    only because scripts/ops_portal/writer_transport.py:181 phrases its message as "... failed (HTTP
+    {status}): ..." (matching _TRANSIENT_HTTP_RE) and _WRITER_TRANSIENT_STATUS currently equals the
+    reader's set. That coupling is undeclared upstream -- add a test pinning it so a future divergence
+    between the two status sets fails loudly instead of silently mis-classifying.
   - >-
     Decision 70 mis-cite targeting, corrected after plan critique: grep confirms the string appears
     ONLY at scripts/ci_rca/probe_health.py:179 and scripts/preflight/ci_rca_gauges.py:347.
@@ -467,25 +504,37 @@ execution_steps:
     Rewrite tests/test_ci_rca_gauges.py::test_exception_in_escalate_is_caught_and_logged. It
     currently feeds {"total_fingerprinted": "not-a-number"} to produce a TypeError and asserts the
     TypeError IS swallowed to a warning -- the exact inverse of acceptance criterion 4. Split it into
-    two tests: a classified transient reader outage that is still swallowed to a warning, and a
-    TypeError that now propagates. This is a known, expected red at VP step 5, not a surprise.
+    test_dedup_escalation_transient_swallowed and test_dedup_escalation_non_transient_reraises, and
+    add the matching pair for the other wrapper (test_probe_health_escalation_transient_swallowed,
+    test_probe_health_escalation_non_transient_reraises) -- AC4 names both wrappers and both live in
+    ci_rca_gauges.py. These four names are what VP step 5 selects by explicit node id. This is a
+    known, expected red at VP step 5, not a surprise.
   - >-
     scripts/checks/ops_governance/validate_acceptance_literals.py -- new AST check: walk every .py
     under scripts/ (and personal_scripts/ when present), find dict-literal "acceptance" keys whose
     value is statically resolvable (Constant, implicitly concatenated Constants, or a JoinedStr whose
     FormattedValue segments are substituted with a placeholder token), run lint_acceptance_command on
     the resolved text, and report file:line for each failure. Skip values that cannot be statically
-    resolved rather than guessing.
+    resolved rather than guessing. The check MUST print the section header "=== Acceptance literal
+    lint ===" -- VP steps 4 and 8 grep for that exact string, and it is the only oracle that detects a
+    missing registry tier-sequence entry (an absent entry makes validate exit 0 having never run the
+    check). Keep the header stable; rewording it silently disarms both steps.
   - >-
     scripts/checks/registry.py and scripts/validate.py -- insert the check into pre_sequence (with a
-    scripts/**/*.py pre_glob) and full_sequence, and add the facade re-export line.
+    scripts/**/*.py pre_glob) and full_sequence, and add the facade re-export line. The re-export is
+    117 chars, so it stays one physical line under the 127 limit and lands validate.py at 498/500.
   - >-
     Add the colocated tests in the four mirror homes plus the new check's test file, per the mirror
-    map recorded in Context. Every acceptance assertion calls the real lint_acceptance_command. Name
-    the convergence lint test test_escalate_acceptance_lint_valid so that rec-2772's own stored
-    acceptance command (pytest tests/convergence_health/ -q -k escalate_acceptance_lint) selects a
-    real test and can reach a deterministic satisfied verdict in scripts/rec_relevance.py
-    (Decision 103).
+    map recorded in Context. Every acceptance assertion calls the real lint_acceptance_command. Test
+    names are load-bearing and pinned, because VP steps 1, 5 and 6 select them by EXPLICIT NODE ID
+    and error if a name does not resolve. One acceptance-lint test per builder:
+    test_escalate_acceptance_lint_valid (test_escalate.py), test_ducklake_drift_acceptance_lint_valid
+    and test_prod_drift_acceptance_lint_valid (test_code_drift.py),
+    test_probe_health_acceptance_lint_valid (test_ci_rca_probe_health.py), and
+    test_dedup_acceptance_lint_valid (test_ci_rca_gauges.py). The escalate one is deliberately named
+    to contain "escalate_acceptance_lint" so rec-2772's own stored acceptance command
+    (pytest tests/convergence_health/ -q -k escalate_acceptance_lint) selects a real test and can
+    reach a deterministic satisfied verdict in scripts/rec_relevance.py (Decision 103).
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55)
