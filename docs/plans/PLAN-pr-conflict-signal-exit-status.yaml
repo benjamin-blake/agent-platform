@@ -78,8 +78,13 @@ scope:
   - file: config/ci_rca_taxonomy.yaml
     action: Modify
     purpose: >-
-      Map the new check into function_to_category (Decision 60 Priority-0 attribution
-      precondition). validate_ci_rca_taxonomy fails on ANY registered check missing from that map,
+      Map the new check into function_to_category. The map's totality is a precondition of the
+      ci-rca Priority-0 attribution path, a concept owned by scripts/ci_rca/taxonomy.py and this
+      config's own header comment -- NOT by a numbered Decision (an earlier draft mis-cited
+      "Decision 60", which is the two-tier validation architecture and says nothing about
+      attribution; "Priority-0" appears nowhere in DECISIONS.md). Do not propagate that citation
+      into the config comment or the commit message.
+      validate_ci_rca_taxonomy fails on ANY registered check missing from that map,
       and it runs in BOTH sequences (registry.py:143 pre, :259 full) -- so omitting this reds the
       FAST tier, the authoritative pre-merge gate under Decision 73. Reproduced at plan time:
       "registered check 'validate_masked_errexit_steps' absent from function_to_category". Without
@@ -431,7 +436,7 @@ test_obligations:
     command: bin/venv-python -c "from scripts.checks.structural.size_limits import effective_lines; import pathlib; n=effective_lines(pathlib.Path('scripts/validate.py').read_text()); assert n<=500, n; print('validate.py effective lines:', n)"
     waiver_reason: >-
       Re-export only -- a single import line with no branching or behaviour of its own, so there is
-      no behaviour to drive red-then-green. Its correctness is fully observed by verification step 8
+      no behaviour to drive red-then-green. Its correctness is fully observed by verification step 8 (linked here to step 10, which asserts the SLOC headroom this file's one real risk lives in)
       (the check must appear in both registry sequences, which requires this module to import
       cleanly); the only genuine risk this file carries is the 3-line SLOC headroom, which is what
       the linked step asserts.
@@ -520,6 +525,21 @@ constraints:
     distinguishing it from pr-conflict-signal is that it declares no `set` line, which makes it more
     exposed rather than less; excluding it would be classification-gaming to make the population
     number come out right. Fix it instead -- the edit is one line and line-neutral.
+  - >-
+    Both NEW test files are capped at 500 effective lines (unregistered, so the implicit default
+    applies), and both are line-expensive by mandate: the wiring test parameterises seven behaviours
+    over two argvs plus an argv-fidelity case and a real-YAML-executing class, and the guard's mirror
+    carries byte-literal multi-line fixtures that must not be paraphrased. For calibration, the
+    precedent this plan mirrors -- tests/test_subagent_review_wiring.py -- already sits at 465/500
+    while covering strictly LESS. If either file crosses, DECOMPOSE into a mirror package (Decision
+    128 makes decomposition the default, and it is not a scope deviation); do NOT seek a raise. A
+    raise is effectively unavailable here anyway: a 2-segment key generates no ancestor candidate in
+    _marker_guard, so only a Decision naming that exact filename could authorize one, and none exists.
+  - >-
+    validate_test_coverage runs in full_sequence() and defaults an UNREGISTERED file to a 100.0
+    threshold, so VP11 will demand full coverage of validate_masked_errexit_steps.py. This is
+    satisfiable entirely within the in-scope mirror test -- budget for it when writing the fixtures
+    rather than discovering it at VP11.
   - No rescue agents or workaround loops (Decision 55).
   - Only files listed in Scope may be modified.
 context:
@@ -529,8 +549,8 @@ context:
     Decision 130, Decision 131, Decision 83, Decision 76, Decision 73, Decision 153, Decision 132,
     Decision 163, Decision 100, Decision 75, Decision 154, Decision 149.
   - >-
-    "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s)" -- recorded as the
-    ACTUAL state at the time of writing, never a predicted verdict. Rounds 1-3 each returned REVISE
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 5 round(s)" -- recorded only
+    once actually granted, never predicted. Rounds 1-4 each returned REVISE
     (round 1: errexit framing and verification-registry scope; round 2: the census predicate error
     that hid a second live instance; round 3: the under-determined detector rule). This line is
     updated to the granted verdict only once a round actually returns PROCEED.
@@ -783,7 +803,10 @@ execution_steps:
   - >-
     Modify config/agent/verification_registry/registry.yaml -- add one row per graduate-disposition
     VP step (steps 1, 2, 3, 4, 6, 7, 8), using each step's graduation_check_id verbatim as the row
-    identity. Slot selection is not uniform: steps 2 and 3 pin a single node id and use
+    identity. Every row MUST also carry `plan_slug: pr-conflict-signal-exit-status` --
+    validate_graduation_completeness's implement-PR leg matches on the (check_id, plan_slug) PAIR,
+    not check_id alone, so a row missing the slug is invisible to it. Slot selection is not
+    uniform: steps 2 and 3 pin a single node id and use
     test_selector; steps 1 and 6 run a whole file and may use test_selector on that path; step 4 must
     use command_exit_zero with the full pytest argv, because its evidence is a four-way -k filter and
     TestSelectorCheck accepts only a single node_id; steps 7 and 8 are command_exit_zero one-liners. Confirm each added row genuinely
@@ -793,9 +816,13 @@ execution_steps:
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55).
   - >-
-    Commit with a Resolves trailer for rec-2735, and record in the closing resolution that the rec's
-    original acceptance command is superseded (it specified an unreachable post-assignment $? check,
-    and the line it greps for now lives in the extracted script).
+    Commit with a Resolves trailer for rec-2735, and record in the closing resolution BOTH parts of
+    its disposition: (i) the rec's original acceptance command is superseded (it specified an
+    unreachable post-assignment $? check, and the line it greps for now lives in the extracted
+    script); and (ii) the adjacent ci.yml mirror_gate instance the rec names as "worth folding in"
+    (NEON_VERSION= and the sed > RESOLVED_TFRC, lines ~202-232) was deliberately NOT folded in --
+    it belongs to the loud class, which reds the build rather than failing silently, and is deferred
+    to follow-on rec (b). Closing with only (i) would leave the rec's full scope unaccounted for.
   - >-
     Post-merge, file the two follow-on recs named in Context via file_rec, after calling
     get_rec_write_guidance(). Rec (a) -- extend R2 to the workflow leg -- closes this plan's known
