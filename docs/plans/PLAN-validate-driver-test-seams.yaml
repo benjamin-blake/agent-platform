@@ -50,7 +50,8 @@ scope:
     purpose: >-
       Migrate ALL fixture consumers including TestPreGlobsGateEndToEnd (derived Steps carry real
       pre_globs, so nothing is lost). TestPreModeRegistryIsolation keeps driving main() and keeps
-      its banner assertion -- only its failure-message string changes.
+      its banner assertion, but must SELECT and PATCH validate_import_contracts rather than rely on
+      scaffold-only exclusion -- see constraints.
   - file: tests/validate/test_budget.py
     action: Modify
     purpose: Migrate the four consumers onto the factory; delete stand-in triples no longer needed.
@@ -60,7 +61,7 @@ scope:
   - file: tests/checks/roadmap/test_check_graduation_guard.py
     action: Modify
     purpose: >-
-      Remove the class-level fixture marker from TestGraduationGuard (inert for 8 of its 9 tests,
+      Remove the class-level fixture marker from TestGraduationGuard (inert for 7 of its 8 tests,
       which call _check_graduation_guard directly) and convert
       test_pre_mode_does_not_call_guard into a hermetic registry assertion -- present in
       full_sequence(), absent from pre_sequence() -- with no main() run at all.
@@ -79,8 +80,9 @@ scope:
     action: Modify
     purpose: >-
       RETIRE `graduation-guard-pre-registry-neutralized` (its premise dies with the fixture);
-      keep `pre-tier-registry-isolation-guard` unchanged (its node_id survives, its guarded property
-      survives); add the one new row this plan graduates.
+      keep `pre-tier-registry-isolation-guard` unchanged (its node_id survives, and the guarded
+      property is preserved by selecting+patching rather than excluding); add the THREE new rows
+      this plan graduates (VP steps 3, 7 and 8).
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -97,9 +99,15 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: Prove this PR changes no runtime code (tests, plan, and the verification registry only).
-    command: 'bin/venv-python -c "import subprocess,sys; r=subprocess.run([\"git\",\"diff\",\"origin/main\",\"--name-only\"],capture_output=True,text=True); allowed=(\"tests/\",\"docs/plans/\",\"config/agent/verification_registry/registry.yaml\"); files=[f for f in r.stdout.split() if f]; bad=[f for f in files if not f.startswith(allowed)]; print(\"changed:\",len(files),\"disallowed:\",bad); sys.exit(1 if bad else 0)"'
-    expected: Every changed path is under tests/, docs/plans/, or the verification registry.
-    fix_if: A scripts/ path means the change is no longer behaviour-neutral and belongs in PR2.
+    command: 'bin/venv-python -c "import subprocess,sys; subprocess.run([\"git\",\"fetch\",\"origin\",\"main\",\"--quiet\"],check=False); r=subprocess.run([\"git\",\"diff\",\"origin/main\",\"--name-only\"],capture_output=True,text=True,check=True); u=subprocess.run([\"git\",\"status\",\"--porcelain\",\"--untracked-files=all\"],capture_output=True,text=True,check=True); allowed=(\"tests/\",\"docs/plans/\",\"config/agent/verification_registry/registry.yaml\"); tracked=[f for f in r.stdout.split() if f]; untracked=[l[3:] for l in u.stdout.splitlines() if l.startswith(\"??\")]; files=tracked+untracked; assert files, \"empty diff -- origin/main unfetched or shallow; refusing to pass vacuously\"; bad=[f for f in files if not f.startswith(allowed)]; print(\"tracked\",len(tracked),\"untracked\",len(untracked),\"disallowed:\",bad); sys.exit(1 if bad else 0)"'
+    expected: >-
+      Every changed path -- tracked OR untracked -- is under tests/, docs/plans/, or the
+      verification registry, and the diff is non-empty (an empty diff is treated as a broken
+      harness, not a pass).
+    fix_if: >-
+      A scripts/ path means the change is no longer behaviour-neutral and belongs in PR2. An empty
+      diff means origin/main was never fetched -- this step is hermetic and replayed in CI by
+      validate_vp_replay, where a shallow clone would otherwise make it pass vacuously.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -108,11 +116,17 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: No BLANKET neutralization loop survives (bounded explicit patches are allowed by design).
-    command: 'bin/venv-python -c "import pathlib,re,sys; bad=[]; [bad.append((str(p),m.group(0)[:70])) for p in pathlib.Path(\"tests\").rglob(\"*.py\") for m in re.finditer(r\"for\\s+\\w+\\s+in\\s+[^\\n]*_sequence\\(\\)[\\s\\S]{0,200}?patch\\(f\", p.read_text(encoding=\"utf-8\"))]; print(bad or \"no blanket neutralization loop\"); sys.exit(1 if bad else 0)"'
+    command: 'bin/venv-python -c "import pathlib,re,sys; skip={\"tests/validate/test_driver_seam.py\"}; bad=[]; [bad.append((str(p),m.group(0)[:70])) for p in pathlib.Path(\"tests\").rglob(\"*.py\") if p.as_posix() not in skip for m in re.finditer(r\"for\\s+\\w+\\s+in\\s+[^\\n]*_sequence\\(\\)[\\s\\S]{0,200}?patch\\(f\", p.read_text(encoding=\"utf-8\"))]; print(bad or \"no blanket neutralization loop\"); sys.exit(1 if bad else 0)"'
     expected: >-
-      Zero matches. Targets the loop SHAPE (iterate a registry sequence, patch each name), not any
-      f-string patch -- TestPreGlobsGateEndToEnd's bounded five-check loop is legitimate and stays.
-    fix_if: A surviving blanket loop means the whole-tier hub coupling PR2 must remove is still present.
+      Zero matches. Targets the loop SHAPE (iterate a registry sequence, then patch by interpolated
+      name), not any f-string patch -- TestPreGlobsGateEndToEnd's bounded five-check loop is
+      legitimate and stays. Verified against the current tree: matches tests/conftest.py and does
+      NOT match tests/validate/test_tiers.py:597.
+    fix_if: >-
+      A surviving blanket loop means the whole-tier hub coupling PR2 must remove is still present.
+      tests/validate/test_driver_seam.py is excluded by name because it legitimately iterates a
+      sequence AND patches by name in order to TEST the selector -- without that exclusion the
+      proximity window false-fails on the one file that must do both.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -133,7 +147,7 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: MUTATION with control arm -- reordering the live registry must redden the migrated tests.
-    command: 'bin/venv-python -c "import pathlib,shutil,subprocess,sys,tempfile; q=chr(34); CC=\"_c(\"+q+\"validate_cc_limits\"+q+\"),\"; SL=\"_c(\"+q+\"validate_sloc_limits\"+q+\"),\"; tmp=pathlib.Path(tempfile.mkdtemp())/\"wt\"; subprocess.run([\"git\",\"worktree\",\"add\",\"--detach\",str(tmp)],check=True,capture_output=True); shutil.copytree(\"tests\",tmp/\"tests\",dirs_exist_ok=True); sel=[\"tests/validate/test_tiers.py\",\"tests/validate/test_budget.py\",\"tests/validate/test_manifest_isolation.py\"]; run=lambda: subprocess.run([sys.executable,\"-m\",\"pytest\",*sel,\"-q\"],cwd=tmp,capture_output=True,text=True).returncode; ctl=run(); assert ctl==0, (\"CONTROL ARM FAILED -- harness broken, result is meaningless\", ctl); p=tmp/\"scripts/checks/registry.py\"; s=p.read_text(); s2=s.replace(CC,\"__SWAP__\",1).replace(SL,CC,1).replace(\"__SWAP__\",SL,1); assert s2!=s, \"mutation target not found\"; p.write_text(s2); mut=run(); subprocess.run([\"git\",\"worktree\",\"remove\",\"--force\",str(tmp)],capture_output=True); print(\"control\",ctl,\"mutant\",mut); sys.exit(0 if mut!=0 else 1)"'
+    command: 'bin/venv-python -c "import pathlib,re,shutil,subprocess,sys,tempfile; q=chr(34); CC=\"_c(\"+q+\"validate_cc_limits\"+q+\", pre_globs=(\"+q+\"**/*.py\"+q+\",)),\"; SL=\"_c(\"+q+\"validate_sloc_limits\"+q+\"),\"; PAD=chr(10)+\"        \"; tmp=pathlib.Path(tempfile.mkdtemp())/\"wt\"; subprocess.run([\"git\",\"worktree\",\"add\",\"--detach\",str(tmp)],check=True,capture_output=True); shutil.copytree(\"tests\",tmp/\"tests\",dirs_exist_ok=True); sel=[\"tests/validate/test_tiers.py\",\"tests/validate/test_budget.py\",\"tests/validate/test_manifest_isolation.py\"]; run=lambda: subprocess.run([sys.executable,\"-m\",\"pytest\",*sel,\"-q\"],cwd=tmp,capture_output=True,text=True).returncode; ctl=run(); assert ctl==0, (\"CONTROL ARM FAILED -- harness broken, result is meaningless\", ctl); p=tmp/\"scripts/checks/registry.py\"; s=p.read_text(); old=CC+PAD+SL; assert old in s, \"adjacent pre_sequence pair not found -- registry.py changed shape\"; s2=s.replace(old, SL+PAD+CC, 1); nm=lambda t: re.findall(r\"_c\\(.(\\w+).\", t.split(\"def pre_sequence\")[1].split(\"def \")[0]); a=nm(s); b=nm(s2); assert sorted(a)==sorted(b), \"MUTATION IS NOT A PURE REORDER -- membership changed, harness invalid\"; assert a!=b, \"mutation did not change order\"; p.write_text(s2); mut=run(); subprocess.run([\"git\",\"worktree\",\"remove\",\"--force\",str(tmp)],capture_output=True); print(\"control\",ctl,\"mutant\",mut,\"| reorder verified: membership preserved, order changed\"); sys.exit(0 if mut!=0 else 1)"'
     expected: >-
       Control arm exits 0 (harness sound), mutant exits non-zero. Swapping cc_limits/sloc_limits
       keeps both names resolvable, so ONLY a test bound to real tier order can detect it.
@@ -155,8 +169,13 @@ verification_plan:
       registry unmocked; that fix must survive the fixture's removal.
     fix_if: A run near 78s means un-neutralized checks are executing for real again.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: "graduation-guard-tests-stay-fast"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Cannot be graduated: verified that this file already passes in ~1.1s on origin/main, so the
+      differential admission gate (run_differential requires FAIL at main) would reject the row as
+      tautological. It is also self-limiting -- this plan removes the last main() call from the
+      file, so post-change the property can never approach 30s from this cause. Kept as a one-time
+      regression check for this migration only.
   - step: 6
     phase: pre-deploy
     action: At-ceiling files did not grow.
@@ -177,18 +196,21 @@ verification_plan:
     command: 'bin/venv-python -c "import pathlib,sys; root=pathlib.Path(\"tests/conftest.py\").read_text(); assert \"_neutralized_pre_registry\" not in root, \"blanket fixture still in root conftest\"; pkg=[p for p in (pathlib.Path(\"tests/validate/conftest.py\"),pathlib.Path(\"tests/checks/conftest.py\")) if p.exists()]; assert len(pkg)==2, pkg; bad=[str(p) for p in pkg if \"autouse=True\" in p.read_text()]; assert not bad, (\"package conftest declares autouse -- still forces full suite\", bad); print(\"fixture is package-scoped and non-autouse\")" && bin/venv-python -m pytest tests/validate/test_driver_seam.py -q -k "package or factory"'
     expected: Root conftest is clean; both package conftests exist and declare no autouse fixture.
     fix_if: >-
-      An autouse declaration or a root-conftest home re-triggers affected_tests.py's full-suite
-      forcing, restoring the 1500s-ceiling tax this move exists to remove.
+      Verified: full_suite_forced keys on the literal path tests/conftest.py alone, so leaving the
+      fixture at root scope restores the 1500s-ceiling tax. An autouse package conftest does NOT
+      force the full suite -- it promotes only its own subtree to the uncapped channel -- but is
+      still barred here to keep the selection cappable.
     hermetic: true
     graduation: graduate
     graduation_check_id: "pre-sequence-fixture-is-package-scoped"
   - step: 8
     phase: pre-deploy
     action: Every graduated row referencing an in-scope path still resolves, or is deliberately retired.
-    command: 'bin/venv-python -c "import yaml,pathlib,sys; raw=yaml.safe_load(pathlib.Path(\"config/agent/verification_registry/registry.yaml\").read_text()); rows=raw if isinstance(raw,list) else next((v for v in raw.values() if isinstance(v,list)),[]); scope=[\"tests/validate/test_tiers.py\",\"tests/validate/test_budget.py\",\"tests/validate/test_manifest_isolation.py\",\"tests/checks/roadmap/test_check_graduation_guard.py\",\"tests/conftest.py\"]; touched=[r for r in rows if isinstance(r,dict) and any(p in yaml.safe_dump(r) for p in scope)]; print(\"rows referencing in-scope paths:\",[r.get(\"check_id\") for r in touched]); stale=[r.get(\"check_id\") for r in touched if \"_neutralized_pre_registry\" in yaml.safe_dump(r)]; assert not stale, (\"row still references the retired fixture\", stale); print(\"no row references the retired fixture\")"'
+    command: 'bin/venv-python -c "import yaml,pathlib,sys,subprocess; raw=yaml.safe_load(pathlib.Path(\"config/agent/verification_registry/registry.yaml\").read_text()); rows=raw if isinstance(raw,list) else next((v for v in raw.values() if isinstance(v,list)),[]); scope=[\"tests/validate/test_tiers.py\",\"tests/validate/test_budget.py\",\"tests/validate/test_manifest_isolation.py\",\"tests/checks/roadmap/test_check_graduation_guard.py\",\"tests/conftest.py\"]; touched=[r for r in rows if isinstance(r,dict) and any(p in yaml.safe_dump(r) for p in scope)]; print(\"rows referencing in-scope paths:\",[r.get(\"check_id\") for r in touched]); stale=[r.get(\"check_id\") for r in touched if \"_neutralized_pre_registry\" in yaml.safe_dump(r)]; assert not stale, (\"row still references the retired fixture\", stale); gone=[r.get(\"check_id\") for r in touched if r.get(\"check_spec\",{}).get(\"path\") and not pathlib.Path(r[\"check_spec\"][\"path\"]).exists()]; assert not gone, (\"check_spec.path no longer exists\", gone); nid=[r for r in touched if r.get(\"check_spec\",{}).get(\"node_id\")]; broken=[r.get(\"check_id\") for r in nid if subprocess.run([sys.executable,\"-m\",\"pytest\",r[\"check_spec\"][\"node_id\"],\"--collect-only\",\"-q\"],capture_output=True).returncode!=0]; assert not broken, (\"node_id no longer collects -- row silently orphaned\", broken); print(\"all in-scope rows resolve:\",len(touched),\"checked,\",len(nid),\"node_ids collected\")"'
     expected: >-
-      Enumerates every row touching an in-scope file and confirms none still references the retired
-      fixture. graduation-guard-pre-registry-neutralized must be gone, not rewritten.
+      Enumerates every row touching an in-scope file, confirms none references the retired fixture,
+      AND confirms every node_id still collects under pytest. graduation-guard-pre-registry-neutralized
+      must be gone, not rewritten.
     fix_if: >-
       validate_verification_registry differentials only NEWLY-ADDED rows, so an invalidated existing
       row stays green while guarding nothing -- it must be caught here.
@@ -209,8 +231,11 @@ verification_plan:
   - step: 10
     phase: pre-deploy
     action: Full presubmit passes and emits the same check roster as the captured baseline.
-    command: 'bin/venv-python -c "import subprocess,sys,pathlib; base=pathlib.Path(\"logs/.roster-baseline.txt\"); assert base.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; r=subprocess.run([sys.executable,\"-m\",\"scripts.validate\"],capture_output=True,text=True,encoding=\"utf-8\",errors=\"replace\"); now=sorted(l for l in r.stdout.splitlines() if l.startswith(\"=== \")); before=sorted(base.read_text().splitlines()); missing=[x for x in before if x not in now]; print(\"exit\",r.returncode,\"roster before/after\",len(before),len(now)); assert not missing, missing; sys.exit(r.returncode)"'
-    expected: Exit 0 and every check heading present before the change is still present -- a real diff, not an eyeballed claim.
+    command: 'bin/venv-python -c "import subprocess,sys,pathlib; base=pathlib.Path(\"logs/.roster-baseline.txt\"); assert base.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; r=subprocess.run([sys.executable,\"-m\",\"scripts.validate\"],capture_output=True,text=True,encoding=\"utf-8\",errors=\"replace\"); now=sorted(l for l in r.stdout.splitlines() if l.startswith(\"=== \")); before=sorted(base.read_text().splitlines()); missing=[x for x in before if x not in now]; added=[x for x in now if x not in before]; print(\"exit\",r.returncode,\"roster before/after\",len(before),len(now),\"added\",added); assert not missing, (\"check heading disappeared\", missing); sys.exit(r.returncode)"'
+    expected: >-
+      Exit 0 and every check heading present before the change is still present; additions are
+      reported too. Note this is a PARTIAL projection -- a check that prints no heading cannot be
+      detected this way, so it complements rather than replaces step 9.
     fix_if: A missing heading means the migration silently dropped a check from a tier.
     hermetic: false
     graduation: waive
@@ -278,9 +303,11 @@ constraints:
     was checked and found false.
   - >-
     TestPreModeRegistryIsolation KEEPS driving main() and KEEPS its validate_import_contracts
-    banner assertion -- under a scaffold-only selection that assertion still holds and is the
-    standing guard behind graduated row pre-tier-registry-isolation-guard. Edit only its
-    failure-message string.
+    banner assertion, but must SELECT that check and patch it rather than rely on scaffold-only
+    exclusion. Verified: validate_import_contracts IS in pre_sequence(), so under a scaffold-only
+    selection the banner cannot print regardless of neutralization -- the assertion would be true
+    by exclusion and the graduated row pre-tier-registry-isolation-guard would survive in name
+    while guarding nothing. Selecting and patching keeps it a real interception guard.
   - >-
     graduation-guard-pre-registry-neutralized is RETIRED, not rewritten: its premise (that the class
     needs blanket neutralization) is false once test_pre_mode_does_not_call_guard becomes a hermetic
@@ -345,8 +372,8 @@ context:
     New graduated rows this plan adds -- specify all fields so the same-PR verifier guard and the
     differential admission gate both resolve: (1) pre-sequence-stub-derives-from-live-registry,
     primitive_slot test_selector, guard_target tests/fixtures/pre_sequence_stub.py, guard_symbol
-    select_steps; (2) graduation-guard-tests-stay-fast, primitive_slot command_exit_zero,
-    guard_target tests/checks/roadmap/test_check_graduation_guard.py; (3)
+    select_steps; (2) [WITHDRAWN -- the ~1.1s property already holds at origin/main, so the differential
+    admission gate would reject it as tautological; VP step 5 is waived instead]; (3)
     pre-sequence-fixture-is-package-scoped, primitive_slot command_exit_zero, guard_target
     tests/validate/conftest.py; (4) in-scope-graduated-rows-still-resolve, primitive_slot
     command_exit_zero, guard_target config/agent/verification_registry/registry.yaml. Each is
