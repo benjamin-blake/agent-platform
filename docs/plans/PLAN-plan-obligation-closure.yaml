@@ -1,0 +1,580 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "plan-obligation-closure"
+intent: >-
+  Make the mechanically-decidable half of a plan's obligations computable at plan-authoring time
+  instead of discoverable one plan-critique round at a time, so the fresh-context critic spends its
+  judgement on adequacy and frame rather than on arithmetic the repo can already do.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-plan-obligation-closure.yaml
+phase: >-
+  Platform governance / plan-loop control surface. Adjacent to T2.54 (clause-to-check index,
+  not_started) but deliberately narrower: this plan closes obligations for PLAN documents only and
+  files the general clause-to-check index as a follow-on rec against T2.54.
+scope:
+  - file: scripts/checks/planning/__init__.py
+    action: Create
+    purpose: package marker for the new check domain
+  - file: scripts/checks/planning/_obligations.py
+    action: Create
+    purpose: >-
+      Shared, read-only obligation engine plus its agent-facing CLI. Computes scope-closure (given
+      scope files + actions, which coupled registry/config rows become obligatory) and dispatches
+      existing validators. Reused by both the registered check and the CLI so there is one
+      implementation, per Decision 104 sole-home discipline.
+  - file: scripts/checks/planning/validate_plan_obligations.py
+    action: Create
+    purpose: >-
+      The single registered check. Subject: a PLAN-*.yaml's mechanically-decidable obligations.
+      Four legs - scope-closure, pre-deploy tautology, selector vacuity, gate-provenance
+      consistency. One check name because all four share the one predicate; splitting would cost
+      three more validate.py re-export lines against 3 lines of headroom.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_plan_obligations in both tier sequences, AND correct the module docstring's
+      registration procedure, which omits the ci_rca_taxonomy and verification_registry surfaces.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: one re-export line for the new check (497 -> 498 effective; hard 500 ceiling)
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: function_to_category row for validate_plan_obligations (Priority-0 attribution precondition)
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: registry rows for this plan's graduate-disposition verification steps
+  - file: docs/contracts/plan-obligations.yaml
+    action: Create
+    purpose: >-
+      Class D mechanism contract owning the obligation-set semantics (which scope shapes oblige
+      which coupled rows). status provisional_v0, so no ratified_via is required
+      (contracts_schema.py:193). Also the relocation target that keeps planning/SKILL.md net-neutral.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Add the obligation-query call sites (Step 4, Step 6b on scope change, pre-critique-round), the
+      pre-6b measurement re-derivation gate, the convergence-cap finding-origin attribution with
+      split-as-first-class, and the provenance prohibition. Net byte delta MUST be <= 0 via
+      relocation to the contract - the entry has 6 bytes of headroom and prose budgets forbid a
+      fragmenting split.
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: >-
+      Consume the obligation report instead of re-deriving mechanical facts by hand; add
+      finding-origin attribution to the structured output so the convergence-cap escalation can
+      localise findings to a scope segment.
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: Steps 4, 6b and 9 wording for the obligation query and the revised escalation
+  - file: scripts/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Complete the "Adding a validate.py check" procedure with the ci_rca_taxonomy and
+      verification_registry surfaces. Net byte delta MUST be <= 0 (entry is 2984/2984, zero headroom)
+      by tightening the existing prose rather than appending.
+  - file: scripts/roadmap/plan_document.py
+    action: Modify
+    purpose: >-
+      Optional gate-provenance field on PlanDocument. MUST be optional - validate_plan_documents
+      re-validates the whole plan directory (Decision 85), so a required field would retroactively
+      fail every historical plan (Decision 132 clause 1 precedent).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: Decision 169 - the gate-contract change (drafted here, written at implement time)
+  - file: tests/checks/planning/test__obligations.py
+    action: Create
+    purpose: unit tests for the closure engine and CLI report shape
+  - file: tests/checks/planning/test_validate_plan_obligations.py
+    action: Create
+    purpose: discriminating tests for all four check legs
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `bin/venv-python -m scripts.checks.planning._obligations --plan <path>` prints a structured
+    obligation report and exits 0 whether or not obligations are unmet; it never writes to any file.
+  - >-
+    Given a plan whose scope creates a scripts/checks/**/validate_*.py file but omits
+    config/ci_rca_taxonomy.yaml, the report names that file as an unmet obligation.
+  - >-
+    Given a plan with a pre-deploy verification step whose command exits 0 against the current tree,
+    the report flags that step as non-discriminating.
+  - >-
+    Given a plan with a pytest verification command using a `-k` selector that matches at least one
+    pre-existing test, the report flags the selector as vacuous.
+  - >-
+    `validate_plan_obligations` is reachable from both tier sequences and appears in
+    config/ci_rca_taxonomy.yaml's function_to_category map.
+  - scripts/validate.py remains at or below 500 effective lines after the re-export line is added.
+  - >-
+    .claude/skills/planning/SKILL.md and scripts/CLAUDE.md each have a net byte delta <= 0, and
+    config/prose_budgets.yaml carries no new or raised entry for either.
+  - >-
+    scripts/CLAUDE.md's and scripts/checks/registry.py's registration procedures each name all five
+    registration surfaces: the check module, registry.py, the validate.py re-export,
+    config/ci_rca_taxonomy.yaml, and config/agent/verification_registry/registry.yaml.
+  - >-
+    The gate-provenance field on PlanDocument is optional, and validate_plan_documents still returns
+    zero failures across the existing docs/plans/ corpus.
+  - Decision 169 is present in docs/DECISIONS.md carrying the Decision 167 typed envelope.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: The closure engine flags an omitted taxonomy row for a check-creating plan
+    command: >-
+      bin/venv-python -m pytest tests/checks/planning/test__obligations.py::TestScopeClosure::test_check_creation_obliges_taxonomy_row -q
+    expected: passes; the report names config/ci_rca_taxonomy.yaml as unmet
+    fix_if: closure returns no obligation - the scope-shape trigger is not matching validate_*.py creation
+    graduation: graduate
+    graduation_check_id: plan-obligations-closure-taxonomy
+  - step: 2
+    phase: pre-deploy
+    action: The tautology leg flags a pre-deploy step that passes against the unchanged tree
+    command: >-
+      bin/venv-python -m pytest tests/checks/planning/test_validate_plan_obligations.py::TestTautologyLeg::test_flags_step_passing_on_current_tree -q
+    expected: passes; the flagged step id is reported
+    fix_if: no flag raised - the leg is not executing the candidate command, or is swallowing exit 0
+    graduation: graduate
+    graduation_check_id: plan-obligations-tautology-leg
+  - step: 3
+    phase: pre-deploy
+    action: The selector-vacuity leg flags a `-k` selector matching a pre-existing test
+    command: >-
+      bin/venv-python -m pytest tests/checks/planning/test_validate_plan_obligations.py::TestSelectorLeg::test_flags_vacuous_k_selector -q
+    expected: passes
+    fix_if: no flag - the leg is not resolving the selector against the collected test set
+    graduation: graduate
+    graduation_check_id: plan-obligations-selector-vacuity
+  - step: 4
+    phase: pre-deploy
+    action: The provenance leg rejects a planner-authored gate verdict
+    command: >-
+      bin/venv-python -m pytest tests/checks/planning/test_validate_plan_obligations.py::TestProvenanceLeg::test_rejects_self_certified_verdict -q
+    expected: passes; a plan whose gates line claims a verdict with no machine record is flagged
+    fix_if: accepted - the leg is comparing prose to prose rather than to the machine-written record
+    graduation: graduate
+    graduation_check_id: plan-obligations-provenance-leg
+  - step: 5
+    phase: pre-deploy
+    action: The CLI is read-only - no file in the tree changes when it runs
+    command: >-
+      bash -c 'H=$(git status --porcelain | md5sum); bin/venv-python -m scripts.checks.planning._obligations --plan docs/plans/PLAN-plan-obligation-closure.yaml > /dev/null || { echo "CLI failed"; exit 1; }; A=$(git status --porcelain | md5sum); [ "$H" = "$A" ] || { echo "tree mutated"; exit 1; }; echo readonly ok'
+    expected: exit 0, prints readonly ok - the CLI runs successfully AND leaves the tree identical
+    fix_if: >-
+      "CLI failed" means the module or its entry point is missing; "tree mutated" means the engine
+      writes a cache, a registry row, or a report file. The success requirement is what makes this
+      step discriminating - a bare tree-comparison passes vacuously when the CLI does not exist.
+    graduation: graduate
+    graduation_check_id: plan-obligations-cli-readonly
+  - step: 6
+    phase: pre-deploy
+    action: The new check is reachable from both tier sequences and dispatchable from validate.py
+    command: >-
+      bin/venv-python -m pytest tests/test_checks_registry.py -q && bin/venv-python -c "import
+      scripts.validate as v; assert 'validate_plan_obligations' in dir(v), 'missing re-export'"
+    expected: registry reachability tests pass and the name is a module-level global of validate.py
+    fix_if: KeyError or assertion - the re-export line or a sequence entry is missing
+    graduation: graduate
+    graduation_check_id: plan-obligations-registry-reachable
+  - step: 7
+    phase: pre-deploy
+    action: The taxonomy row exists, so the fast tier is not reddened by a registered-but-unmapped check
+    command: >-
+      bin/venv-python -c "import yaml;m=yaml.safe_load(open('config/ci_rca_taxonomy.yaml'))['function_to_category'];assert
+      'validate_plan_obligations' in m, 'unmapped check reds the fast tier'"
+    expected: exit 0
+    fix_if: assertion - add the function_to_category row (this is #874's round-4 blocker, reproduced)
+    graduation: graduate
+    graduation_check_id: plan-obligations-taxonomy-mapped
+  - step: 8
+    phase: pre-deploy
+    action: validate.py stays within the 500-line residual ceiling after the re-export
+    command: >-
+      bin/venv-python -c "import pathlib;n=len([l for l in
+      pathlib.Path('scripts/validate.py').read_text().splitlines() if l.strip() and not
+      l.strip().startswith('#')]);print(n);assert n <= 500, f'{n} > 500'"
+    expected: exit 0, prints 498
+    fix_if: >-
+      over 500 - do NOT raise the budget (Decision 128 applies to SLOC); decompose the re-export
+      facade per Decision 80 and file the remainder
+    graduation: waive
+    graduation_waiver_reason: >-
+      Measured tautological: validate.py is 497/500 today, so this assertion exits 0 against the
+      unchanged tree and would be refused by VF-06 differential admission. It is a regression
+      ceiling, not a feature assertion, and the standing guard for it is the already-registered
+      validate_sloc_limits. Retained as a VP step because 498/500 leaves two lines of repo-wide
+      headroom and the implementer must see the number.
+  - step: 9
+    phase: pre-deploy
+    action: Both prose surfaces are net-neutral-or-smaller and no budget entry was raised
+    command: >-
+      bash -c 'grep -q "plan-obligations.yaml" .claude/skills/planning/SKILL.md || { echo "no anchor+pointer"; exit 1; }; for p in .claude/skills/planning/SKILL.md scripts/CLAUDE.md; do b=$(git show origin/main:$p | wc -c); a=$(wc -c < $p); [ "$a" -le "$b" ] || { echo "$p grew $b->$a"; exit 1; }; done; echo net-neutral ok'
+    expected: exit 0, prints net-neutral ok
+    fix_if: >-
+      "no anchor+pointer" means the relocation was not performed; "grew" means relocate more detail
+      into docs/contracts/plan-obligations.yaml. Do NOT raise a prose budget (Decision 166 spirit:
+      a second raise is the accretion pattern). The anchor assertion is what makes this step
+      discriminating - a bare byte comparison passes vacuously on an unchanged tree.
+    graduation: graduate
+    graduation_check_id: plan-obligations-prose-net-neutral
+  - step: 10
+    phase: pre-deploy
+    action: No raise-approved marker was added to either prose entry
+    command: >-
+      bash -c 'git diff origin/main -- config/prose_budgets.yaml | grep -E "^\+.*raise-approved" && exit 1 || exit 0'
+    expected: exit 0 - no added raise marker
+    fix_if: >-
+      a marker was added - Decision 165 requires an authorizing Decision body naming the 2-segment
+      key verbatim; the dec-150 marker authorizes only significance-gate content
+    graduation: waive
+    graduation_waiver_reason: >-
+      Measured tautological: a negative assertion over a diff that is empty on the unchanged tree
+      exits 0 today, so VF-06 differential admission would refuse the row. It cannot be made
+      discriminating without asserting on a marker this plan deliberately never adds. The standing
+      guard is validate_sloc_budget_raises, which already validates marker authorization
+      retroactively on every run (Decision 165).
+  - step: 11
+    phase: pre-deploy
+    action: The new contract is a valid Class D contract and needs no ratified_via
+    command: >-
+      bin/venv-python -c "import yaml;c=yaml.safe_load(open('docs/contracts/plan-obligations.yaml'))['contract'];assert c['class']=='D';assert c['status']=='provisional_v0';assert not c.get('ratified_via');assert c.get('subject') and c.get('evaluator') and c.get('amendment_log') is not None;print('class D provisional ok')"
+    expected: exit 0
+    fix_if: >-
+      shape failure - Decision 168 requires class/subject/evaluator/amendment_log; ratified_via is
+      required only at status ratified (contracts_schema.py:193)
+    graduation: graduate
+    graduation_check_id: plan-obligations-contract-class-d
+  - step: 12
+    phase: pre-deploy
+    action: The contract's declared evaluator actually resolves and demonstrably reads it
+    command: bin/venv-python -m scripts.checks.contracts.validate_contract_drift 2>&1 | tail -5
+    expected: no failure naming plan-obligations.yaml
+    fix_if: >-
+      evaluator-resolution failure - the agent_surface target must contain the contract basename in
+      its text (Decision 168); a docstring mention alone was ruled insufficient
+    graduation: waive
+    graduation_waiver_reason: >-
+      The drift validator is already a registered check running in both tiers, so graduating this
+      would mint a duplicate registry row for a gate that already fires on every run. The
+      contract-shape assertions this plan owns are graduated at step 11 instead.
+  - step: 13
+    phase: pre-deploy
+    action: The optional provenance field does not retroactively fail the historical plan corpus
+    command: >-
+      bin/venv-python -c "from scripts.checks.roadmap.validate_plan_documents import
+      validate_plan_documents; f=[]; validate_plan_documents(f); print(len(f)); assert not f, f"
+    expected: exit 0, prints 0
+    fix_if: >-
+      failures naming historical plans - the field was made required; make it optional per Decision
+      85 / Decision 132 clause 1
+    graduation: graduate
+    graduation_check_id: plan-obligations-provenance-field-optional
+  - step: 14
+    phase: pre-deploy
+    action: Both registration procedures name all five surfaces
+    command: >-
+      bash -c 'for p in scripts/CLAUDE.md scripts/checks/registry.py; do for s in ci_rca_taxonomy verification_registry registry.py validate.py; do grep -q "$s" "$p" || { echo "$p omits $s"; exit 1; }; done; done; echo both procedures complete'
+    expected: exit 0, prints both procedures complete
+    fix_if: a surface is missing from either copy - both are agent-facing procedures and both must be complete
+    graduation: graduate
+    graduation_check_id: plan-obligations-procedure-complete
+  - step: 15
+    phase: pre-deploy
+    action: Full fast tier is green
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0
+    fix_if: any check fails - fix forward; never disable a check to pass the tier
+    graduation: not-applicable
+  - step: 16
+    phase: pre-deploy
+    action: The critique skill consumes the obligation report and emits finding-origin attribution
+    command: >-
+      bin/venv-python -c "import pathlib;t=pathlib.Path('.claude/skills/plan-critique/SKILL.md').read_text().lower();assert 'obligation report' in t, 'critic does not consume the report';assert 'attribution' in t, 'no finding-origin attribution'"
+    expected: exit 0
+    fix_if: assertion - the critic still re-derives mechanical facts, or the output shape lacks attribution
+    graduation: graduate
+    graduation_check_id: plan-obligations-critic-consumes-report
+  - step: 17
+    phase: pre-deploy
+    action: The plan command invokes the obligation query at its authoring steps
+    command: >-
+      bin/venv-python -c "import pathlib;t=pathlib.Path('.claude/commands/plan.md').read_text();assert 'scripts.checks.planning._obligations' in t, 'Step 4/6b do not invoke the obligation query'"
+    expected: exit 0
+    fix_if: assertion - the command file was not wired to the query
+    graduation: graduate
+    graduation_check_id: plan-obligations-command-wired
+  - step: 18
+    phase: pre-deploy
+    action: Decision 169 is present in the corpus
+    command: >-
+      bin/venv-python -c "import pathlib;t=pathlib.Path('docs/DECISIONS.md').read_text();assert '## Decision 169:' in t, 'Decision 169 absent'"
+    expected: exit 0
+    fix_if: >-
+      absent - write it; if a concurrent PR claimed 169, shift to the next free number and update
+      every reference in this plan
+    graduation: waive
+    graduation_waiver_reason: >-
+      The header number is not stable at plan time (numbering is not reserved), so a registry row
+      pinned to '## Decision 169:' would break the moment a concurrent PR claims that number. The
+      durable graduated guard for Decision entries is validate_decision_entry_conformance, which
+      already runs in both tiers.
+test_obligations:
+  - source: scripts/checks/planning/__init__.py
+    behavior: The package is importable so the check module resolves under globals() dispatch.
+    verification_step: 6
+    command: >-
+      bin/venv-python -c "import scripts.validate as v; assert 'validate_plan_obligations' in dir(v), 'missing re-export'"
+    waiver_reason: >-
+      An empty package marker has no behaviour of its own to guard. Its only observable property -
+      that the package resolves so the check module is importable - is exercised transitively by
+      step 6, which fails outright if the package does not import. A dedicated test would assert
+      nothing the import chain does not already prove.
+  - source: scripts/checks/planning/_obligations.py
+    behavior: >-
+      Scope-closure derives the coupled registry/config obligations from scope shape, and the engine
+      never mutates any file.
+    verification_step: 1
+    test_selector: tests/checks/planning/test__obligations.py::TestScopeClosure::test_check_creation_obliges_taxonomy_row
+    red_green_expectation: >-
+      red before (module absent, ImportError), green after
+  - source: scripts/checks/planning/validate_plan_obligations.py
+    behavior: >-
+      All four legs flag their defect and stay silent on a clean plan.
+    verification_step: 2
+    test_selector: tests/checks/planning/test_validate_plan_obligations.py::TestTautologyLeg::test_flags_step_passing_on_current_tree
+    red_green_expectation: red before (check absent), green after
+  - source: scripts/checks/registry.py
+    behavior: The new check is sequenced in both tiers and remains reachable.
+    verification_step: 6
+    test_selector: tests/test_checks_registry.py
+    red_green_expectation: >-
+      red before (registered name not reachable / not sequenced), green after
+  - source: scripts/validate.py
+    behavior: The check name is a module-level global so globals()[name] dispatch resolves.
+    verification_step: 6
+    command: >-
+      bin/venv-python -c "import scripts.validate as v; assert 'validate_plan_obligations' in dir(v), 'missing re-export'"
+    red_green_expectation: red before (AssertionError), green after
+  - source: scripts/roadmap/plan_document.py
+    behavior: The gate-provenance field is optional and the historical corpus still validates.
+    verification_step: 13
+    command: >-
+      bin/venv-python -c "from scripts.checks.roadmap.validate_plan_documents import validate_plan_documents; f=[]; validate_plan_documents(f); print(len(f)); assert not f, f"
+    red_green_expectation: >-
+      red before if authored required (historical plans fail), green after with optional
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: Every registered check has a function_to_category row.
+    verification_step: 7
+    command: >-
+      bin/venv-python -c "import yaml;m=yaml.safe_load(open('config/ci_rca_taxonomy.yaml'))['function_to_category'];assert 'validate_plan_obligations' in m, 'unmapped check reds the fast tier'"
+    red_green_expectation: >-
+      red before (registered-but-unmapped once the check lands), green after
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: Each graduate-disposition step has a registry row carrying plan_slug.
+    verification_step: 15
+    command: bin/venv-python -m scripts.validate --pre
+    red_green_expectation: red before (rows absent for the new check_ids), green after
+  - source: docs/contracts/plan-obligations.yaml
+    behavior: Valid Class D contract at provisional_v0 whose evaluator resolves.
+    verification_step: 11
+    command: >-
+      bin/venv-python -c "import yaml;c=yaml.safe_load(open('docs/contracts/plan-obligations.yaml'))['contract'];assert c['class']=='D';assert c['status']=='provisional_v0';assert not c.get('ratified_via');assert c.get('subject') and c.get('evaluator') and c.get('amendment_log') is not None;print('class D provisional ok')"
+    red_green_expectation: red before (file absent), green after
+  - source: scripts/CLAUDE.md
+    behavior: The registration procedure names all five surfaces, at net-neutral bytes.
+    verification_step: 14
+    command: >-
+      bash -c 'for p in scripts/CLAUDE.md scripts/checks/registry.py; do for s in ci_rca_taxonomy verification_registry registry.py validate.py; do grep -q "$s" "$p" || { echo "$p omits $s"; exit 1; }; done; done; echo both procedures complete'
+    red_green_expectation: red before (both absent), green after
+  - source: .claude/skills/planning/SKILL.md
+    behavior: Carries the obligation-query call sites and the revised convergence rule, net-neutral.
+    verification_step: 9
+    command: >-
+      bash -c 'grep -q "plan-obligations.yaml" .claude/skills/planning/SKILL.md || { echo "no anchor+pointer"; exit 1; }; for p in .claude/skills/planning/SKILL.md scripts/CLAUDE.md; do b=$(git show origin/main:$p | wc -c); a=$(wc -c < $p); [ "$a" -le "$b" ] || { echo "$p grew $b->$a"; exit 1; }; done; echo net-neutral ok'
+    waiver_reason: >-
+      This is agent-instruction prose, not executable behaviour; its enforceable properties are the
+      net-neutral byte assertion (step 9) and the no-new-marker assertion (step 10), both of which
+      are graduated. There is no unit-testable behaviour in a markdown instruction surface, and
+      Decision 163's structural-enforcement requirement is discharged for this file by those two
+      assertions plus the registered check that consumes what the prose instructs.
+  - source: .claude/skills/plan-critique/SKILL.md
+    behavior: Consumes the obligation report and emits finding-origin attribution.
+    verification_step: 16
+    command: >-
+      bin/venv-python -c "import pathlib;t=pathlib.Path('.claude/skills/plan-critique/SKILL.md').read_text().lower();assert 'obligation report' in t, 'critic does not consume the report';assert 'attribution' in t, 'no finding-origin attribution'"
+    waiver_reason: >-
+      Same class as planning/SKILL.md - instruction prose with no executable surface of its own. Its
+      one machine-checkable property (the structured output gains an attribution field) is exercised
+      by the critique gate itself at Step 9 of the next planning session, not by a unit test.
+  - source: .claude/commands/plan.md
+    behavior: Step 4/6b/9 wording invokes the obligation query.
+    verification_step: 17
+    command: >-
+      bin/venv-python -c "import pathlib;t=pathlib.Path('.claude/commands/plan.md').read_text();assert 'scripts.checks.planning._obligations' in t, 'Step 4/6b do not invoke the obligation query'"
+    waiver_reason: >-
+      Layer-3 command prose; S3 is measured-only with no budget entry and no executable surface.
+      Behavioural enforcement lives in the planning skill's invariant block, not here.
+  - source: docs/DECISIONS.md
+    behavior: Decision 169 present with the Decision 167 typed envelope.
+    verification_step: 18
+    command: >-
+      bin/venv-python -c "import pathlib;t=pathlib.Path('docs/DECISIONS.md').read_text();assert '## Decision 169:' in t, 'Decision 169 absent'"
+    red_green_expectation: red before (absent), green after
+constraints:
+  - >-
+    READ-ONLY means the engine never modifies the plan, any registry, any config, or any cache. It
+    does NOT mean it runs nothing - the tautology leg executes candidate pre-deploy commands. Any
+    implementation that writes a report file, a cache, or a registry row violates this constraint.
+  - >-
+    Do NOT call validate_vp_replay from the engine. Decision 148 clause 1 rules plan-time replay
+    invalid by construction (the implementation is absent; the plan-only leg defers). The tautology
+    leg is a distinct operation - it proves a step DISCRIMINATES, it does not verify the feature.
+  - >-
+    Decision 128 does NOT apply to config/prose_budgets.yaml. That registry deliberately diverges
+    from the SLOC decompose-by-default valve, and Decisions 114/110 forbid fragmenting a prose
+    surface. Relocation to a contract with an anchor+pointer is permitted and is the chosen remedy.
+  - >-
+    Decision 128 DOES apply to scripts/validate.py (SLOC, unregistered, 500 residual default). If
+    the re-export pushes it over 500, decompose the facade per Decision 80 - never raise.
+  - >-
+    Exactly ONE new registered check. Three more re-export lines would breach the 500 ceiling
+    (497 today). Do not split validate_plan_obligations into per-leg checks.
+  - >-
+    The PlanDocument provenance field MUST be optional (Decision 85 - validate_plan_documents
+    re-validates the whole corpus; Decision 132 clause 1 is the precedent).
+  - >-
+    Reuse scripts/checks/_common.py plan-resolution helpers (load_plan, plan_paths_from_changed,
+    feat_commit_slugs) and scripts/verification_checks.py CANONICAL_SLOTS. Do not re-implement
+    selector logic - Decision 135 owns affected-set derivation via map_source_to_test.
+  - >-
+    The obligation report is ADVISORY to the plan-critique gate. Decision 132 limitation A rules
+    graduation-classification correctness "a human/plan-critique call, at plan time, never
+    mechanized" - the critic must never defer its verdict to this report.
+  - Test files colocate per the Decision 131 mirror rule (tests/checks/planning/).
+  - No rescue agents or workaround loops (Decision 55)
+  - No emojis; ASCII hyphens only; ruff formatting at line length 127
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND, 121 of 121 triaged.
+    CITE: dec-168, dec-152, dec-165, dec-150, dec-167, dec-132, dec-87, dec-104, dec-85, dec-55,
+    dec-86, dec-127. CONTRADICT: dec-128 [WARN], dec-148 [WARN], dec-163 [WARN], dec-87 [NOTE],
+    dec-165 [NOTE]. SPIRIT: dec-166 [WARN], dec-43 [NOTE]. RELATED: dec-135, dec-131, dec-118,
+    dec-142, dec-105 (inert), dec-90."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending>"
+  - >-
+    Motivating evidence - every recent plan PR hit or exceeded the 3-round convergence cap: #874 (5
+    rounds), #875 (>=4), #872 (4), #870 (3), #873 (3, operator halted at 3/3 REVISE), #866 (3). The
+    recurring blocking findings are three mechanical classes: missing verification-registry /
+    test-obligation rows, tautological pre-deploy VP steps, and vacuous -k selectors.
+  - >-
+    All five validators this engine dispatches already exist on disk (validate_vp_replay,
+    validate_graduation_completeness, validate_verification_registry, validate_plan_documents,
+    validate_ci_rca_taxonomy) plus TestSelectorCheck. The machinery was never missing - it is
+    positioned to run after the plan is written, when the only way to consume its verdict is another
+    critique round. This plan repositions the query, it does not invent the checks.
+  - >-
+    Rejected alternative, recorded so it is not silently re-litigated: a typed implement-time escape
+    hatch letting the implementer add validator-demanded companion edits (a registration row, a
+    one-line import). Rejected on the operator's ruling that a sanctioned in-scope bypass becomes the
+    path of least resistance and erodes the closed-world plan contract. Decision 55 names this exact
+    instinct ("the supervisor's instinct was --skip-critique").
+  - >-
+    Rejected alternative: reframing the re-derivation gate and convergence-cap change as advisory
+    tooling to avoid clearing the Decision 150 bar. Rejected as gaming the discriminator - an
+    advisory obligation the planner may skip under load is precisely the Decision 163 failure mode.
+  - >-
+    Decision routing worked out explicitly: Decision 168 forces no Decision because a contract at
+    status provisional_v0 needs no ratified_via (contracts_schema.py:193). Decision 165 forces none
+    because the chosen remedy takes no budget raise. What remains is decision-entry.yaml's
+    three-question rule applied to the gate-contract change, which clears all three - hence
+    Decision 169. Registering checks satisfies Decision 163 (is it enforced) but does not touch
+    Decision 150 (is it significant); they answer different questions.
+  - >-
+    Two copies of the registration procedure are incomplete in the same way: scripts/CLAUDE.md and
+    scripts/checks/registry.py's module docstring both name registry.py plus the validate.py
+    re-export and omit the ci_rca_taxonomy and verification_registry surfaces. That omission produced
+    #874's round-4 hard blocker. Fixing one copy and not the other reproduces the defect.
+  - >-
+    Measured constraints at authoring time: scripts/validate.py 497/500 effective;
+    .claude/skills/planning/SKILL.md 55810/55816 bytes (6 bytes); scripts/CLAUDE.md 2984/2984 (zero);
+    .claude/skills/plan-critique/SKILL.md 16645/17156 (511 bytes); .claude/commands/plan.md S3
+    measured-only, no entry. Max Decision header is 168, so 169 is next - re-check at implement time,
+    a concurrent PR may have claimed it.
+  - >-
+    Branch rebased onto origin/main dc87337 before authoring, so Decision 168 and
+    docs/contracts/contract-population.yaml are in the working tree. A scout run from the pre-rebase
+    tree would have silently missed Decision 168 (its decisions-index listed 120 live, not 121).
+  - >-
+    Split seam for implementation: commit 1 = the engine, the registered check, and its registration
+    surfaces (scope rows 1-8, 15-16); commit 2 = the skill/command prose wiring and Decision 169
+    (scope rows 9-12, 14) plus the plan_document field (row 13). Commit 1 is independently valuable
+    and independently green; if commit 2 stalls, the engine still exists and is callable.
+  - >-
+    Follow-on recs to file at implement time: (a) the general clause-to-check index with orphan
+    detection both ways, against tier_item T2.54 (not_started) - this plan closes obligations for
+    PLAN documents only; (b) decomposition of scripts/validate.py's re-export facade per Decision 80,
+    since 498/500 after this plan leaves two lines for the whole repo and every future check-adding
+    plan pays an "exactly one line" tax; (c) the empirical-claim provenance mechanism (plans carry
+    the producing command for load-bearing measurements), deferred from this plan's scope.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Re-check the max Decision header before writing Decision 169 (numbering is not reserved at draft time)
+  - Confirm scripts/validate.py effective SLOC before and after the re-export line
+execution_steps:
+  - >-
+    Create scripts/checks/planning/__init__.py and scripts/checks/planning/_obligations.py - the
+    read-only closure engine plus its CLI. Closure maps scope shape to coupled obligations (a created
+    scripts/checks/**/validate_*.py obliges a registry.py sequence entry, a validate.py re-export, a
+    ci_rca_taxonomy row; a graduate-disposition VP step obliges a verification_registry row carrying
+    plan_slug; a behavior-capable scope file obliges a test_obligations row). Reuse _common helpers.
+  - >-
+    Create scripts/checks/planning/validate_plan_obligations.py with the four legs (scope-closure,
+    tautology, selector vacuity, provenance consistency), decorated @register(...). It must delegate
+    to _obligations.py, not duplicate it.
+  - >-
+    Register the check - insert into both sequences in scripts/checks/registry.py, add exactly one
+    re-export line to scripts/validate.py, add the config/ci_rca_taxonomy.yaml function_to_category
+    row, and add config/agent/verification_registry/registry.yaml rows for every graduate step above.
+  - >-
+    Correct BOTH registration procedures (scripts/CLAUDE.md and registry.py's module docstring) to
+    name all five surfaces. scripts/CLAUDE.md must land at net-neutral-or-smaller bytes - tighten the
+    existing paragraph rather than appending.
+  - >-
+    Create docs/contracts/plan-obligations.yaml as a Class D contract at status provisional_v0 with a
+    unique subject, an evaluator of the {agent_surface: ...} kind resolving to the file that names
+    the contract basename in its text, and an amendment_log. Do NOT set ratified_via.
+  - >-
+    Relocate obligation-set detail out of .claude/skills/planning/SKILL.md into that contract, leaving
+    an anchor+pointer, so the net byte delta is <= 0 while adding the obligation-query call sites, the
+    pre-6b measurement re-derivation gate, the convergence-cap finding-origin attribution with
+    split-as-first-class, and the provenance prohibition. Add the corresponding behavioural invariants
+    to the skill's machine-readable invariant block.
+  - >-
+    Update .claude/skills/plan-critique/SKILL.md to consume the obligation report and emit
+    finding-origin attribution, and .claude/commands/plan.md for Steps 4, 6b and 9.
+  - >-
+    Add the optional gate-provenance field to scripts/roadmap/plan_document.py and confirm the whole
+    docs/plans/ corpus still validates.
+  - >-
+    Re-check the max Decision header, then write Decision 169 with the Decision 167 typed envelope and
+    a significance routing claim of numbered_decision, recording the gate-contract change and its
+    reversal conditions.
+  - Create both test modules under tests/checks/planning/ per the Decision 131 mirror rule.
+  - >-
+    File the three follow-on recs named in Context via bin/venv-python -m scripts.ops_data_portal
+    (call get_rec_write_guidance() first, per the Precision Context Injection rule).
+  - Execute Verification Plan - run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Every element is additive or net-neutral except the two prose edits and the registry sequence
+  entry. To roll back: remove the sequence entry and the validate.py re-export line first (the check
+  stops running), then the taxonomy and verification-registry rows, then delete the new modules.
+  Decision 169 is immutable once written - reverse it with a superseding entry, never by deletion.
