@@ -227,7 +227,7 @@ verification_plan:
       is load-bearing code in scripts/ops_writer.py, not a comment.
     command: >-
       grep -q 'is_retired_dir\|DUCKLAKE_MIGRATED_TABLES\|_RETIRED' scripts/ops_writer.py &&
-      bin/venv-python -m pytest tests/ops_writer -q -k retired &&
+      bin/venv-python -m pytest tests/ops_writer/test_drain.py -q -k retired &&
       test "$(grep -c 'is_retired_dir' scripts/ops_writer.py)" -ge 2 &&
       grep -q 'is_retired_dir' scripts/ops_writer.py &&
       grep -q 'DUCKLAKE_MIGRATED_TABLES' src/common/outbox_retirement.py
@@ -239,18 +239,32 @@ verification_plan:
       -k retired selector selects at least one passing test, and rec-2895's replacement acceptance
       (the last two conjuncts, which are its exact new string) passes. NOTE (deliberate): no
       backticks in this field -- see step 3's note; validate_vp_replay would require any backticked
-      literal to appear in pytest -q output, which never prints node ids or argv.
+      literal to appear in pytest -q output, which never prints node ids or argv. AMENDED post-PR
+      (pr-validate red on ba3570a): the pytest target is scoped to
+      tests/ops_writer/test_drain.py, not the whole tests/ops_writer/ directory. Measured on the
+      real GitHub-hosted pr-validate fast-tier runner: collecting the whole directory pulls in
+      tests/ops_writer/test_compact.py, test_compact_paths.py (unconditional import pandas) and
+      test_outbox_emit.py, test_write.py (unconditional import boto3) -- both deliberately absent
+      from requirements-fast.txt -- so collection hard-fails with ModuleNotFoundError before -k
+      can deselect anything. This session's sandbox has the full dependency set installed, so the
+      failure was invisible there; only the actual fast-tier CI runner surfaced it.
+      tests/ops_writer/test_drain.py and its tests/fixtures/ops_writer_helpers.py dependency import
+      neither package, so scoping to it collects cleanly in the fast tier.
     fix_if: >-
       Zero grep matches means the guard was written with a differently-named helper -- do NOT add a
       comment naming is_retired_dir to satisfy the grep (that is acceptance-theatre); call
       is_retired_dir directly. Pytest exit 5 means no new test node id contains `retired` -- rename
-      one (e.g. test_drain_skips_retired_migrated_table_outbox) rather than weakening this step.
+      one (e.g. test_drain_skips_retired_migrated_table_outbox) rather than weakening this step. A
+      ModuleNotFoundError during collection (boto3/pandas) means the pytest target widened back to
+      a directory that includes heavy-dep test files -- re-narrow to test_drain.py rather than
+      widening requirements-fast.txt (that would slow every fast-tier run to fix one VP step).
       NOTE: tests/CLAUDE.md bans `pytest -k` selectors in recommendation acceptance commands
       ("LLM-generated test names are unpredictable and rename between runs"), so rec-2929's stored
       command violates repo convention. Satisfying it by naming is cheap and is the chosen route; if
       it proves genuinely unsatisfiable, update the acceptance string via `bin/venv-python -m
       scripts.ops_data_portal --update-rec rec-2929` and record the change in the resolution -- never
-      silently drop the pytest half from this step.
+      silently drop the pytest half from this step. rec-2929's stored acceptance was updated to the
+      same test_drain.py-scoped form for the same fast-tier-collectability reason.
     hermetic: true
     graduation: graduate
     graduation_check_id: ops-writer-drain-guard-load-bearing
