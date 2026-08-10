@@ -522,3 +522,46 @@ class TestDetectProdCodeDrift:
             )
         run.assert_called_once()
         assert result == {"action": "none", "rec_id": None}
+
+
+class TestUnknownActionFallsThroughToSkipped:
+    """escalation_action's truth table has exactly four outcomes (file/update/close/none);
+    this exercises each detector's defensive fallback for anything else it might ever return."""
+
+    def test_ducklake_drift_unknown_action_falls_through_to_skipped(self) -> None:
+        with patch("scripts.convergence_health.code_drift.escalation_action", return_value="bogus"):
+            result = detect_ducklake_code_drift(
+                git_runner=lambda argv: "SHA_NEW",
+                s3_client=_FakeDeployRecordsS3(default_sha="SHA_OLD"),
+                portal_caller=lambda a, f: "rec-x",
+                open_recs=[],
+            )
+        assert result == {"action": "skipped", "rec_id": None}
+
+    def test_prod_drift_unknown_action_falls_through_to_skipped(self) -> None:
+        with patch("scripts.convergence_health.code_drift.escalation_action", return_value="bogus"):
+            result = detect_prod_code_drift(
+                git_runner=lambda argv: "SHA_NEW",
+                s3_client=_FakeDeployRecordsS3(default_sha="SHA_OLD"),
+                portal_caller=lambda a, f: "rec-x",
+                open_recs=[],
+            )
+        assert result == {"action": "skipped", "rec_id": None}
+
+
+class TestAcceptanceLint:
+    """VP step 8: both drift builders emit a lint-valid acceptance, no mocking of the validator."""
+
+    def test_ducklake_drift_acceptance_lint_valid(self) -> None:
+        from scripts.convergence_health.code_drift import _build_ducklake_drift_rec_fields
+        from scripts.executor.acceptance_lint import lint_acceptance_command
+
+        fields = _build_ducklake_drift_rec_fields([_DUCKLAKE_WRITER_FUNCTION], "abc123def456")
+        assert lint_acceptance_command(fields["acceptance"]) == (True, None)
+
+    def test_prod_drift_acceptance_lint_valid(self) -> None:
+        from scripts.convergence_health.code_drift import _build_prod_drift_rec_fields
+        from scripts.executor.acceptance_lint import lint_acceptance_command
+
+        fields = _build_prod_drift_rec_fields(["agent-platform-scheduled-agent-dispatcher"], "abc123def456")
+        assert lint_acceptance_command(fields["acceptance"]) == (True, None)

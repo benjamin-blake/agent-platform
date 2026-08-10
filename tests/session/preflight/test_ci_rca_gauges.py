@@ -83,11 +83,24 @@ class TestAbstentionGauge:
         # open_recs filtered to status='open' only, from the injected cache -- no reader call.
         assert args[3] == [{"id": "rec-1", "status": "open"}]
 
-    def test_escalate_failure_is_non_fatal(self) -> None:
+    def test_escalate_transient_swallowed(self) -> None:
+        """VP step 8 / AC4: a classified-transient reader outage (Decision 155) is still
+        swallowed to a [WARN], not raised."""
         gauge = {"low_or_undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
-        with patch("scripts.ci_rca.probe_health.escalate", side_effect=RuntimeError("portal down")):
+        transient = RuntimeError("ducklake_writer file_ops ops_recommendations failed (HTTP 503): backend unavailable")
+        with patch("scripts.ci_rca.probe_health.escalate", side_effect=transient):
             result = _preflight._escalate_ci_rca_probe_health("ok", [], gauge)
         assert result is None
+
+    def test_escalate_non_transient_reraises(self) -> None:
+        """VP step 8 / AC4: replaces the old test_escalate_failure_is_non_fatal, which asserted
+        a non-transient RuntimeError("portal down") WAS swallowed -- the exact inverse of AC4.
+        is_reader_unavailable(RuntimeError("portal down")) is False, so after the narrowing this
+        propagates instead of degrading to a [WARN]."""
+        gauge = {"low_or_undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
+        with patch("scripts.ci_rca.probe_health.escalate", side_effect=RuntimeError("portal down")):
+            with pytest.raises(RuntimeError, match="portal down"):
+                _preflight._escalate_ci_rca_probe_health("ok", [], gauge)
 
     def test_print_gauge_line_format(self, capsys: pytest.CaptureFixture) -> None:
         gauge = {"low_or_undetermined_count": 2, "total_count": 8, "rate": 0.25, "window_days": 14}

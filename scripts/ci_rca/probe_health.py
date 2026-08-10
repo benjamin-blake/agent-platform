@@ -15,6 +15,9 @@ open_recs must be supplied by the caller (the preflight warm cache).
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
@@ -172,12 +175,7 @@ def _build_rec_fields(undetermined_count: int, total_count: int, rate: float, wi
         "risk": "medium",
         "verification_tier": "V2",
         "context": _build_context(undetermined_count, total_count, rate, window_days),
-        "acceptance": (
-            "The low-confidence/undetermined rate (undetermined_count/total_count for source=ci_rca recs "
-            f"filed in the trailing {window_days} days) returns below the {ABSTENTION_RATE_THRESHOLD:.0%} "
-            "threshold, and this rec is closed automatically by ci_rca_probe_health.escalate() with the "
-            "sub-threshold rate recorded as the closure proof (Decision 103/70)."
-        ),
+        "acceptance": "bin/venv-python -m scripts.ci_rca.probe_health --assert-clear",
     }
 
 
@@ -256,3 +254,52 @@ def escalate(
         return {"action": "close", "rec_id": existing["id"]}
 
     return {"action": "skipped", "rec_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Exit-code CLI (Decision 103 relevance oracle): credential-free, reads only the local
+# recommendations cache -- never constructs a DuckLake reader (mirrors the module docstring's
+# zero-new-reader-egress contract).
+# ---------------------------------------------------------------------------
+
+
+def assert_clear_exit_code(
+    cache_rows: list[dict],
+    threshold: float = ABSTENTION_RATE_THRESHOLD,
+    min_sample: int = ABSTENTION_MIN_SAMPLE,
+    window_days: int = DEFAULT_WINDOW_DAYS,
+    now: Optional[datetime] = None,
+) -> int:
+    """Return 0 when the abstention rate is below threshold (clear), 1 while it holds."""
+    _undetermined_count, total_count, rate = compute_abstention_rate(cache_rows, window_days=window_days, now=now)
+    over_threshold = total_count >= min_sample and rate >= threshold
+    return 1 if over_threshold else 0
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="CI-RCA probe-health exit-code CLI.")
+    parser.add_argument(
+        "--assert-clear",
+        action="store_true",
+        help="Exit 0 if the abstention rate is below threshold, non-zero while it holds. "
+        "Reads only the local recommendations cache; no AWS credentials required.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.assert_clear:
+        from scripts.executor.jsonl_store import RECS_JSONL  # noqa: PLC0415
+
+        cache_rows: list[dict] = []
+        if RECS_JSONL.exists():
+            for line in RECS_JSONL.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    cache_rows.append(json.loads(line))
+        return assert_clear_exit_code(cache_rows)
+
+    parser.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -100,3 +100,24 @@ class TestTransientSetParity:
         rejected = set(range(400, 600)) - set(_READER_TRANSIENT_STATUS)
         for status in rejected:
             assert is_reader_unavailable(RuntimeError(f"failed (HTTP {status})")) is False
+
+    def test_writer_set_equals_classifier_authority(self) -> None:
+        """Nothing today catches _WRITER_TRANSIENT_STATUS drifting away from
+        _READER_TRANSIENT_STATUS -- this plan newly applies the reader-scoped classifier on a
+        writer failure path (scripts/preflight/ci_rca_gauges.py's narrowed exception handling).
+        Pins both the status SET and the writer's actual message SHAPE. That shape is an inline
+        f-string at writer_transport.py:181 ("... failed (HTTP {status}): ..."), not a
+        module-level constant, and writer_transport.py is not in this plan's scope -- so the
+        message is replicated here rather than imported. This pin catches classifier-regex
+        drift but NOT a reword of the writer's own message (a follow-on rec, not in scope).
+        _WRITER_TRANSIENT_STATUS is importable without requests (writer_transport imports it
+        lazily inside a function), so this node id is safe in a hermetic step."""
+        from scripts.ops_portal.reader_transient import is_reader_unavailable
+        from scripts.ops_portal.writer_transport import _WRITER_TRANSIENT_STATUS
+        from src.common.iceberg_reader import _READER_TRANSIENT_STATUS
+
+        assert set(_WRITER_TRANSIENT_STATUS) == set(_READER_TRANSIENT_STATUS)
+
+        for status in _WRITER_TRANSIENT_STATUS:
+            message = f"ducklake_writer file_ops ops_recommendations failed (HTTP {status}): backend unavailable"
+            assert is_reader_unavailable(RuntimeError(message)) is True

@@ -169,6 +169,7 @@ from scripts.checks.misc.validate_invariants import validate_invariants  # noqa:
 from scripts.checks.misc.validate_scheduled_agent_logs import validate_scheduled_agent_logs  # noqa: F401,E402
 from scripts.checks.misc.validate_test_coverage import _load_coverage_checker, validate_test_coverage  # noqa: F401,E402
 from scripts.checks.ops_governance.check_source_registry import check_source_registry  # noqa: F401,E402
+from scripts.checks.ops_governance.validate_acceptance_literals import validate_acceptance_literals  # noqa: F401,E402
 from scripts.checks.ops_governance.validate_decisions_local_writes import (  # noqa: F401,E402
     validate_decisions_local_writes,
 )

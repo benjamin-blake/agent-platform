@@ -12,11 +12,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from scripts.executor.acceptance_lint import lint_acceptance_command
 from scripts.preflight.ci_rca_gauges import (
     DEDUP_EFFECTIVENESS_MIN_SAMPLE,
     DEDUP_EFFECTIVENESS_THRESHOLD,
+    _build_dedup_effectiveness_fields,
     _compute_dedup_effectiveness,
+    _escalate_ci_rca_probe_health,
     _escalate_dedup_effectiveness,
+    assert_dedup_clear_exit_code,
     escalate_dedup_effectiveness,
     find_open_dedup_effectiveness_rec,
     print_dedup_effectiveness_gauge,
@@ -300,11 +304,55 @@ class TestEscalateDedupEffectivenessWiring:
         result = _escalate_dedup_effectiveness("ok", [], gauge)
         assert result == {"action": "none", "rec_id": None}
 
-    def test_exception_in_escalate_is_caught_and_logged(self, capsys) -> None:
-        bad_gauge = {"total_fingerprinted": "not-a-number"}
-        result = _escalate_dedup_effectiveness("ok", [], bad_gauge)
+
+# ---------------------------------------------------------------------------
+# VP step 5 / AC4: only a classified-transient reader outage (is_reader_unavailable, Decision
+# 155) is swallowed to a [WARN]; every other exception propagates. Replaces the old
+# test_exception_in_escalate_is_caught_and_logged, which fed a TypeError-inducing bad_gauge and
+# asserted it WAS swallowed -- the exact inverse of this acceptance criterion.
+# ---------------------------------------------------------------------------
+
+
+class TestEscalationExceptionNarrowing:
+    def test_dedup_escalation_transient_swallowed(self, capsys) -> None:
+        gauge = _gauge(total=10, duplicates=0)
+        transient = RuntimeError("ducklake_writer file_ops ops_recommendations failed (HTTP 503): backend unavailable")
+        with pytest.MonkeyPatch.context() as mp:
+            import scripts.preflight.ci_rca_gauges as m
+
+            mp.setattr(m, "escalate_dedup_effectiveness", MagicMock(side_effect=transient))
+            result = m._escalate_dedup_effectiveness("ok", [], gauge)
         assert result is None
         assert "escalate_dedup_effectiveness() failed" in capsys.readouterr().err
+
+    def test_dedup_escalation_non_transient_reraises(self) -> None:
+        gauge = _gauge(total=10, duplicates=0)
+        with pytest.MonkeyPatch.context() as mp:
+            import scripts.preflight.ci_rca_gauges as m
+
+            mp.setattr(m, "escalate_dedup_effectiveness", MagicMock(side_effect=ValueError("acceptance is lint-invalid")))
+            with pytest.raises(ValueError):
+                m._escalate_dedup_effectiveness("ok", [], gauge)
+
+    def test_probe_health_escalation_transient_swallowed(self, capsys) -> None:
+        gauge = {"low_or_undetermined_count": 1, "total_count": 5, "rate": 0.2}
+        transient = RuntimeError("ducklake_writer file_ops ops_recommendations failed (HTTP 502): backend unavailable")
+        with pytest.MonkeyPatch.context() as mp:
+            import scripts.ci_rca.probe_health as ph
+
+            mp.setattr(ph, "escalate", MagicMock(side_effect=transient))
+            result = _escalate_ci_rca_probe_health("ok", [], gauge)
+        assert result is None
+        assert "ci_rca_probe_health.escalate() failed" in capsys.readouterr().err
+
+    def test_probe_health_escalation_non_transient_reraises(self) -> None:
+        gauge = {"low_or_undetermined_count": 1, "total_count": 5, "rate": 0.2}
+        with pytest.MonkeyPatch.context() as mp:
+            import scripts.ci_rca.probe_health as ph
+
+            mp.setattr(ph, "escalate", MagicMock(side_effect=ValueError("acceptance is lint-invalid")))
+            with pytest.raises(ValueError):
+                _escalate_ci_rca_probe_health("ok", [], gauge)
 
 
 # ---------------------------------------------------------------------------
@@ -323,3 +371,22 @@ class TestPrintDedupEffectivenessGauge:
         out = capsys.readouterr().out
         assert "90%" in out
         assert "CI-RCA dedup effectiveness" in out
+
+
+class TestAcceptanceLint:
+    """VP step 1 / AC1: the dedup builder's acceptance must pass the REAL linter, no mocking."""
+
+    def test_dedup_acceptance_lint_valid(self) -> None:
+        gauge = _gauge(total=DEDUP_EFFECTIVENESS_MIN_SAMPLE, duplicates=2)
+        fields = _build_dedup_effectiveness_fields(gauge)
+        assert lint_acceptance_command(fields["acceptance"]) == (True, None)
+
+
+class TestAssertDedupClearCli:
+    """VP step 6 / AC5: --assert-dedup-clear inverts correctly, reading only injected rows."""
+
+    def test_assert_dedup_clear_exit_codes(self) -> None:
+        clear_rows = [_rec(f"rec-{i}", f"fp-{i}") for i in range(DEDUP_EFFECTIVENESS_MIN_SAMPLE)]
+        over_rows = [_rec("rec-dup-1", "fp-a"), _rec("rec-dup-2", "fp-a"), _rec("rec-dup-3", "fp-a")]
+        assert assert_dedup_clear_exit_code(clear_rows, now=NOW) == 0
+        assert assert_dedup_clear_exit_code(over_rows, now=NOW) != 0

@@ -151,6 +151,17 @@ class TestEscalate:
         assert calls[0][0] == "update"
 
 
+class TestEscalateUnknownActionFallsThroughToSkipped:
+    """escalation_action's truth table has exactly four outcomes (file/update/close/none);
+    this exercises escalate()'s defensive fallback for anything else it might ever return."""
+
+    def test_unknown_action_falls_through_to_skipped(self) -> None:
+        verdict = HealthVerdict(status="red", red_age_hours=10.0, unapplied_backlog=0, severity="high")
+        with patch("scripts.convergence_health.escalate.escalation_action", return_value="bogus"):
+            result = escalate(verdict, portal_caller=lambda a, f: None, open_recs=[])
+        assert result == {"action": "skipped", "rec_id": None}
+
+
 class TestEscalateReconcileInFlight:
     def _make_verdict(self, red_age: float = 10.0, status: str = "red") -> HealthVerdict:
         return HealthVerdict(
@@ -381,6 +392,56 @@ class TestFetchOpenRecs:
         with patch("src.common.iceberg_reader.make_reader", return_value=reader):
             result = ch._fetch_open_recs()
         assert result == []
+
+
+class TestAcceptanceLint:
+    """VP step 1 / AC1: every _build_rec_fields acceptance must pass the REAL linter, no mocking."""
+
+    def test_escalate_acceptance_lint_valid(self) -> None:
+        from scripts.convergence_health.escalate import _build_rec_fields
+        from scripts.executor.acceptance_lint import lint_acceptance_command
+
+        verdict = HealthVerdict(
+            status="red",
+            red_age_hours=10.0,
+            unapplied_backlog=2,
+            stuck_approvals=[{"run_id": 1, "age_hours": 8.0, "url": "https://example.com"}],
+            severity="high",
+            record_age_hours=ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS,
+        )
+        for condition in ("persistently_red", "stale_green_backlog", "stuck_approval"):
+            fields = _build_rec_fields(verdict, condition)
+            assert lint_acceptance_command(fields["acceptance"]) == (True, None), condition
+
+
+class TestEscalatePortalValidators:
+    """VP step 2 / AC2: escalate() files (never raises) on a persistently-red high-severity
+    verdict, with the portal's REAL write-time validators applied to the built fields."""
+
+    def test_persistent_red_files_rec(self) -> None:
+        from scripts.ops_portal.risk_scoring import _derive_computed_fields
+        from scripts.ops_portal.write_validators import _load_write_time_validators
+
+        captured: dict[str, Any] = {}
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            captured["fields"] = fields
+            return "rec-1234"
+
+        verdict = HealthVerdict(
+            status="red",
+            red_age_hours=10.0,
+            unapplied_backlog=0,
+            stuck_approvals=[],
+            severity="high",
+        )
+        result = escalate(verdict, portal_caller=_caller, open_recs=[])
+        assert result == {"action": "file", "rec_id": "rec-1234"}
+        # Mirrors file_rec()'s own pre-validation step: it derives risk/automatable/
+        # created_timestamp in-place before running the write-time validator loop.
+        _derive_computed_fields(captured["fields"])
+        for col, validator in _load_write_time_validators("ops_recommendations"):
+            validator(captured["fields"].get(col), col)
 
 
 class TestEscalateLiveFetchAndPortal:

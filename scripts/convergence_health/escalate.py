@@ -32,6 +32,22 @@ _RESOLUTION_STUCK_APPROVAL = "Gated-apply approval cleared (approved or cancelle
 _RESOLUTION_STALE_GREEN_BACKLOG = "Unapplied terraform/personal/ backlog drained; staleness episode resolved."
 _RESOLUTION_PERSISTENTLY_RED = "Convergence record returned to green; staleness episode resolved."
 
+# Per-condition lint-valid acceptance probes (Decision 103 [NOTE]: these are live AWS/gh probes
+# because no repo-local command can express "the convergence record returned to green"). Each
+# is a static shell command -- credentials-bearing but syntactically real, never prose.
+_ACCEPTANCE_STUCK_APPROVAL = (
+    "gh api 'repos/benjamin-blake/agent-platform/actions/workflows/terraform-apply-sandbox.yml/runs"
+    "?status=waiting' --jq '.total_count' | grep -qx 0"
+)
+_ACCEPTANCE_STALE_GREEN_BACKLOG = (
+    "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform "
+    '| grep -q "$(git rev-parse origin/main)"'
+)
+_ACCEPTANCE_PERSISTENTLY_RED = (
+    "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform "
+    '| grep -q \'"status": "green"\''
+)
+
 
 def find_open_convergence_stale_rec(
     open_recs: list[dict[str, Any]],
@@ -120,6 +136,10 @@ def _build_rec_fields(verdict: HealthVerdict, condition: str) -> dict[str, Any]:
         "stuck_approval": _TITLE_STUCK_APPROVAL,
         "stale_green_backlog": _TITLE_STALE_GREEN_BACKLOG,
     }.get(condition, _TITLE_PERSISTENTLY_RED)
+    acceptance = {
+        "stuck_approval": _ACCEPTANCE_STUCK_APPROVAL,
+        "stale_green_backlog": _ACCEPTANCE_STALE_GREEN_BACKLOG,
+    }.get(condition, _ACCEPTANCE_PERSISTENTLY_RED)
     return {
         "title": title,
         "file": ".github/workflows/convergence-health.yml",
@@ -130,11 +150,7 @@ def _build_rec_fields(verdict: HealthVerdict, condition: str) -> dict[str, Any]:
         "risk": "medium",
         "verification_tier": "V2",
         "context": _build_context(verdict, condition),
-        "acceptance": (
-            "the triggering condition clears (approvals resolved, backlog drained, or the "
-            "convergence record returns to green) and this rec is closed via the standard "
-            "portal path (update_rec --status closed, or a Resolves: trailer when a fix PR lands)."
-        ),
+        "acceptance": acceptance,
     }
 
 

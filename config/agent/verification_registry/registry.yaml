@@ -4805,3 +4805,82 @@ entries:
       - -c
       - import tempfile,pathlib;from scripts.lambda_manifest import load,stage_bundle;f=lambda s:(lambda d:(stage_bundle(load(pathlib.Path('src/lambdas')/s/'manifest.yaml'),d,skip_pip=True),(d/'src'/'common'/'outbox_retirement.py').exists())[1])(pathlib.Path(tempfile.mkdtemp()));r={s:f(s)
         for s in ('data-pipeline','ops-compaction')};print(r);assert all(r.values()),r
+  - check_id: sensor-acceptance-lint-clean
+    primitive_slot: command_exit_zero
+    guard_target: scripts/convergence_health/escalate.py
+    guard_symbol: null
+    plan_slug: escalation-acceptance-lint
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - >-
+          bin/venv-python -m pytest
+          tests/convergence_health/test_escalate.py::TestAcceptanceLint::test_escalate_acceptance_lint_valid
+          tests/test_ci_rca_probe_health.py::TestAcceptanceLint::test_probe_health_acceptance_lint_valid
+          tests/test_ci_rca_gauges.py::TestAcceptanceLint::test_dedup_acceptance_lint_valid -q
+  - check_id: escalate-files-on-persistent-red
+    primitive_slot: test_selector
+    guard_target: scripts/convergence_health/escalate.py
+    guard_symbol: escalate
+    plan_slug: escalation-acceptance-lint
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/convergence_health/test_escalate.py::TestEscalatePortalValidators::test_persistent_red_files_rec
+  - check_id: acceptance-literal-lint-guard
+    primitive_slot: test_selector
+    guard_target: scripts/checks/ops_governance/validate_acceptance_literals.py
+    guard_symbol: validate_acceptance_literals
+    plan_slug: escalation-acceptance-lint
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ops_governance/test_validate_acceptance_literals.py
+  - check_id: gauge-escalation-reraises-non-transient
+    primitive_slot: command_exit_zero
+    guard_target: scripts/preflight/ci_rca_gauges.py
+    guard_symbol: null
+    plan_slug: escalation-acceptance-lint
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - >-
+          bin/venv-python -m pytest
+          tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_probe_health_escalation_transient_swallowed
+          tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_probe_health_escalation_non_transient_reraises
+          tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_dedup_escalation_transient_swallowed
+          tests/test_ci_rca_gauges.py::TestEscalationExceptionNarrowing::test_dedup_escalation_non_transient_reraises
+          tests/ops_data_portal/test_reader_transient.py::TestTransientSetParity::test_writer_set_equals_classifier_authority -q
+  - check_id: gauge-assert-clear-exit-codes
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/probe_health.py
+    guard_symbol: null
+    plan_slug: escalation-acceptance-lint
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - >-
+          bin/venv-python -m pytest
+          tests/test_ci_rca_probe_health.py::TestAssertClearCli::test_assert_clear_exit_codes
+          tests/test_ci_rca_gauges.py::TestAssertDedupClearCli::test_assert_dedup_clear_exit_codes -q
+  - check_id: sensor-no-decision-70-miscite
+    primitive_slot: command_exit_zero
+    guard_target: scripts/convergence_health/escalate.py
+    guard_symbol: null
+    plan_slug: escalation-acceptance-lint
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - "! grep -rn 'Decision 70\\|103/70' scripts/convergence_health/ scripts/ci_rca/probe_health.py scripts/preflight/ci_rca_gauges.py"

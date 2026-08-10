@@ -19,11 +19,14 @@ from scripts.ci_rca.probe_health import (
     _build_rec_fields,
     _parse_ts_utc,
     _row_ts,
+    assert_clear_exit_code,
     compute_abstention_rate,
     escalate,
     escalation_action,
     find_open_probe_health_rec,
+    main,
 )
+from scripts.executor.acceptance_lint import lint_acceptance_command
 
 NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -435,3 +438,49 @@ class TestAbstentionGaugeWidened:
         assert "abstained" not in fields["context"].lower()
         assert "scripts/ci_rca/evidence.py" not in fields["context"]
         assert fields["file"] != "scripts/ci_rca/evidence.py"
+
+
+class TestAcceptanceLint:
+    """VP step 1 / AC1: the builder's acceptance must pass the REAL linter, no mocking."""
+
+    def test_probe_health_acceptance_lint_valid(self) -> None:
+        fields = _build_rec_fields(5, 10, 0.5, 14)
+        assert lint_acceptance_command(fields["acceptance"]) == (True, None)
+
+
+class TestAssertClearCli:
+    """VP step 6 / AC5: --assert-clear inverts correctly, reading only injected rows."""
+
+    def test_assert_clear_exit_codes(self) -> None:
+        clear_rows = [_rec("ci_rca", 1, rca_confidence="high") for _ in range(ABSTENTION_MIN_SAMPLE)]
+        over_rows = [_rec("ci_rca", 1, rca_confidence="undetermined") for _ in range(ABSTENTION_MIN_SAMPLE)]
+        assert assert_clear_exit_code(clear_rows, now=NOW) == 0
+        assert assert_clear_exit_code(over_rows, now=NOW) != 0
+
+
+class TestMain:
+    def test_no_flag_prints_help_and_returns_2(self, capsys) -> None:
+        assert main([]) == 2
+        assert "usage:" in capsys.readouterr().out
+
+    def test_assert_clear_no_cache_file_returns_0(self, tmp_path) -> None:
+        missing = tmp_path / "does-not-exist.jsonl"
+        with patch("scripts.executor.jsonl_store.RECS_JSONL", missing):
+            assert main(["--assert-clear"]) == 0
+
+    def test_assert_clear_reads_cache_file(self, tmp_path) -> None:
+        cache_file = tmp_path / "recs.jsonl"
+        now = datetime.now(timezone.utc)
+        rows = []
+        for _ in range(ABSTENTION_MIN_SAMPLE):
+            rows.append(
+                {
+                    "source": "ci_rca",
+                    "status": "open",
+                    "created_timestamp": now.isoformat(),
+                    "context_v2_json": json.dumps({"rca_confidence": "undetermined"}),
+                }
+            )
+        cache_file.write_text("\n".join(json.dumps(r) for r in rows) + "\n\n", encoding="utf-8")
+        with patch("scripts.executor.jsonl_store.RECS_JSONL", cache_file):
+            assert main(["--assert-clear"]) != 0
