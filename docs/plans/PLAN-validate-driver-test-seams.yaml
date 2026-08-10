@@ -75,6 +75,8 @@ acceptance_criteria:
   - No test file under tests/ contains a blanket loop patching check names on the validate namespace.
   - tests/validate/test_tiers.py stays at or below 499 SLOC and tests/test_checks_registry.py is untouched; config/sloc_budgets.yaml gains no new entry and no raised entry.
   - Both live graduated rows whose patterns reference the retired fixture are updated in the same PR, and validate_verification_registry passes.
+  - Every graduated registry row referencing an in-scope path still resolves after the migration -- enumerated and checked, not assumed, because validate_verification_registry differentials only newly-added rows and would leave an invalidated existing row silently green.
+  - Graduated node_ids inside migrated test classes are preserved verbatim (no class or method rename orphans a row).
   - The full presubmit tier passes with the same check roster and the same outcome as before the change.
 verification_plan:
   - step: 1
@@ -142,6 +144,17 @@ verification_plan:
     graduation_waiver_reason: >-
       A one-time migration assertion about rows this PR itself rewrites; the standing
       validate_verification_registry check already guards row resolvability durably.
+  - step: 9
+    phase: pre-deploy
+    action: EVERY graduated row referencing an in-scope path still resolves (not just the two known ones).
+    command: 'bin/venv-python -c "import yaml,pathlib,sys,re; rows=yaml.safe_load(pathlib.Path(\"config/agent/verification_registry/registry.yaml\").read_text()); rows=rows if isinstance(rows,list) else rows.get(\"checks\",rows.get(\"registry\",[])); scope=[\"tests/validate/test_tiers.py\",\"tests/validate/test_budget.py\",\"tests/validate/test_manifest_isolation.py\",\"tests/checks/roadmap/test_check_graduation_guard.py\",\"tests/conftest.py\"]; touched=[r for r in rows if isinstance(r,dict) and any(p in yaml.safe_dump(r) for p in scope)]; print(\"rows referencing in-scope paths:\",[r.get(\"check_id\") for r in touched]); missing=[r.get(\"check_id\") for r in touched if r.get(\"check_spec\",{}).get(\"path\") and not pathlib.Path(r[\"check_spec\"][\"path\"]).exists()]; assert not missing, missing; print(\"all referenced paths exist\")"'
+    expected: Enumerates every row touching an in-scope file (guard_target, check_spec.path, or node_id) and confirms each still resolves.
+    fix_if: >-
+      A row whose pattern or node_id no longer matches is silently orphaned -- validate_verification_registry
+      differentials only NEWLY-ADDED rows, so an invalidated existing row stays green while guarding nothing.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "in-scope-graduated-rows-still-resolve"
   - step: 7
     phase: pre-deploy
     action: The whole migrated test surface passes with no collection-time error.
@@ -149,15 +162,23 @@ verification_plan:
     expected: All green; no ImportError during collection.
     fix_if: A collection error means a re-pointed import names a symbol its defining module does not export.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      A test_selector over this exact file set is kernel-expressible, but the set is this migration's
+      transient blast radius, not a durable concern boundary; the per-file mirror tests already guard
+      each of these modules permanently under the Decision 131 mirror rule.
   - step: 8
     phase: pre-deploy
-    action: Full presubmit passes with an unchanged check roster.
-    command: 'bin/venv-python -m scripts.validate'
-    expected: Exit 0; the summary lists the same checks as before the change.
-    fix_if: Any regression blocks the migration.
+    action: Full presubmit passes with an unchanged check roster, diffed against a captured baseline.
+    command: 'bin/venv-python -c "import subprocess,sys,pathlib; base=pathlib.Path(\"logs/.roster-baseline.txt\"); r=subprocess.run([sys.executable,\"-m\",\"scripts.validate\"],capture_output=True,text=True,encoding=\"utf-8\",errors=\"replace\"); now=sorted(l for l in r.stdout.splitlines() if l.startswith(\"=== \")); assert base.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; before=sorted(base.read_text().splitlines()); missing=[x for x in before if x not in now]; print(\"exit\",r.returncode,\"| roster lines before/after:\",len(before),len(now)); assert not missing, missing; sys.exit(r.returncode)"'
+    expected: Exit 0 and every check heading present before the change is still present after -- a concrete diff, not an eyeballed claim.
+    fix_if: A missing heading means the migration silently dropped a check from a tier.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating the full presubmit into the verification registry that the presubmit itself
+      validates is circular, and Decision 163 already makes full-tier execution a structurally
+      enforced universal obligation.
 test_obligations:
   - source: tests/fixtures/pre_sequence_stub.py
     behavior: >-
@@ -218,13 +239,34 @@ constraints:
     facade binds names eagerly, patching the defining module leaves validate.py's globals() holding
     the original object and the real check runs.
   - Do not touch tests/test_checks_registry.py (643 SLOC = exactly its dec-159 budget); its reachability tests are PR2's to retire.
+  - >-
+    At-ceiling files this plan touches or must not push over: tests/validate/test_tiers.py (499/500,
+    unregistered) and tests/test_plan_document.py (495/500, unregistered -- only a one-line import
+    re-point, so it must stay net-neutral).
+  - >-
+    Residual hub consumers deliberately left for PR2 (they use `import scripts.validate` /
+    `importlib.import_module("scripts.validate")`, not the `from ... import` form this PR retires):
+    tests/checks/roadmap/test_validate_tier_floor.py:6,
+    tests/checks/contracts/test_validate_data_model_standard.py:185,
+    tests/test_checks_registry_test_obligations.py:15,
+    tests/checks/decisions/test_conformance_registration.py:30, and tests/test_checks_registry.py.
+    This PR's acceptance criteria deliberately do NOT claim to have eliminated them.
+  - >-
+    Graduated node_ids inside migrated classes must be preserved verbatim -- a renamed class or
+    method silently orphans its registry row, which validate_verification_registry does not catch
+    (it differentials only newly-added rows).
 context:
   - >-
     "Decision-scout verdict + CITE list: FLAGS_FOUND (scoped against the combined plan this was
     split from). CITE: dec-104, dec-128, dec-131, dec-159, dec-165, dec-73. Decision 104 documents
     the patch(\"validate.<name>\") interception contract that this PR narrows but does not retire;
     the retirement is PR2's, carrying the amends clause. Decisions 159/165 forbid growing
-    tests/test_checks_registry.py or tests/validate/test_tiers.py without a marked raise."
+    tests/test_checks_registry.py or tests/validate/test_tiers.py without a marked raise.
+    ADDED POST-SCOUT (the scout missed both, and both bind this plan): dec-132 -- verification
+    graduation is an enforced pre-merge obligation, so every `graduate` disposition obliges a
+    new-in-diff verification_registry row, which is why VP step 1 must allowlist that path;
+    dec-148 -- hermetic VP steps are re-executed by validate_vp_replay on the implementing PR, so a
+    hermetic step that contradicts another gate wedges the PR deterministically."
   - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
   - >-
     PR1 of a two-PR split. Round 1 reviewed the combined plan (~80 scope files) and returned REVISE
@@ -270,7 +312,7 @@ pre_implementation_checklist:
   - only the plan-cited decision sections (104, 128, 131, 159, 165, 73)
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
-  - Baseline captured -- record test_tiers.py SLOC and the full-tier check roster before editing
+  - "Baseline captured: bin/venv-python -m scripts.validate 2>&1 | grep '^=== ' > logs/.roster-baseline.txt (VP step 8 diffs against it), plus test_tiers.py SLOC"
 execution_steps:
   - >-
     Capture the baseline: the full-tier check roster and tests/validate/test_tiers.py SLOC, so the
