@@ -5,7 +5,7 @@ handoff_policy:
 slug: "pr-conflict-signal-exit-status"
 intent: >-
   Restore the merge-conflict wake guarantee that pr-conflict-signal.yml exists to provide, by
-  removing the inherited-errexit abort that silently truncates the PR sweep, and install a
+  handling gh exit status explicitly so no single failure can truncate the PR sweep, and install a
   zero-population ratchet so the silent-green variant of this defect class cannot return.
 plan_type: IMPLEMENTATION
 verification_tier: V2
@@ -19,9 +19,9 @@ scope:
   - file: scripts/ci/pr_conflict_signal.sh
     action: Create
     purpose: >-
-      Extracted body of the conflict-poll step. Clears the inherited errexit FIRST (set +e), then
-      handles exit status explicitly on every gh call; a per-PR failure logs, marks, counts and
-      continues so the sweep always completes. Extraction target for the workflow leg is
+      Extracted body of the conflict-poll step. Handles exit status explicitly on every gh call; a
+      per-PR failure logs, marks, counts and continues so the sweep always completes. Retains
+      set +e as defence-in-depth against re-inlining. Extraction target for the workflow leg is
       scripts/ci/ per config/composite_action_body_baseline.yaml's header (Decision 162 R3).
   - file: .github/workflows/pr-conflict-signal.yml
     action: Modify
@@ -35,20 +35,20 @@ scope:
     purpose: >-
       Teach the guard to resolve the delegate script and run its five semantic assertions against
       the script contents. Verified empirically: without this change extraction produces exactly 5
-      guard failures. Also assert the delegate exists, that checkout precedes the delegation step,
-      and that the script clears inherited errexit.
+      guard failures. Add assertions for delegate existence, checkout-precedes-delegation, errexit
+      clearing, and that every gh call site handles its exit status.
   - file: tests/test_pr_conflict_signal_wiring.py
     action: Create
     purpose: >-
-      Drives the REAL extracted script under the literal GitHub workflow-step argv, and drives the
-      real workflow YAML's own run body under the argv that YAML implies, with a gh shim on PATH.
-      Mirrors tests/test_subagent_review_wiring.py (rec-2924 precedent).
+      Drives the REAL extracted script under two argvs -- the production one (child bash, no
+      errexit) and a deliberately hostile superset (bash -e) -- with a gh shim on PATH. Mirrors
+      tests/test_subagent_review_wiring.py (rec-2924 precedent).
   - file: tests/checks/ci_guards/test_validate_pr_conflict_signal.py
     action: Modify
     purpose: >-
       Update the mocked pass-path fixture to the post-extraction delegation shape and add
-      fail-path cases for the new assertions (missing delegate, checkout ordering, uncleared
-      errexit). The existing pass-against-real-workflow-file case must keep passing.
+      fail-path cases for each new assertion. The existing pass-against-real-workflow-file case
+      must keep passing.
   - file: config/composite_action_body_baseline.yaml
     action: Modify
     purpose: >-
@@ -57,14 +57,16 @@ scope:
   - file: scripts/checks/ci_guards/validate_masked_errexit_steps.py
     action: Create
     purpose: >-
-      New guard closing the silent-green class repo-wide: a step with continue-on-error true whose
-      body runs under inherited errexit and contains an unguarded command substitution. Measured
-      population after this fix is ZERO, so it installs with no grandfather roster and no Decision.
+      New guard closing the silent-green class over INLINE workflow bodies: a step with
+      continue-on-error true whose inline body inherits errexit and holds an unguarded command
+      substitution. Measured population after this fix is ZERO, so it installs with no grandfather
+      roster and no Decision.
   - file: tests/checks/ci_guards/test_validate_masked_errexit_steps.py
     action: Create
     purpose: >-
-      Prove the guard fires on a synthetic violator (non-vacuity) and stays clean on the real tree,
-      plus the negative cases it must NOT flag (guarded assignment, set +e present, loud step).
+      Prove the guard fires on a synthetic violator (non-vacuity), stays clean on the real tree,
+      and does NOT fire on the real near-misses that already exist (|| true, || echo "", && break
+      || sleep 3) -- the discrimination that earns the zero.
   - file: scripts/checks/registry.py
     action: Modify
     purpose: >-
@@ -75,22 +77,30 @@ scope:
     purpose: >-
       Single-line re-export of the new check, matching the existing line-77 form. MUST be exactly
       one line -- this file measures 497 effective lines against a 500 limit.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Home for the rows the seven graduate-disposition VP steps must add
+      (validate_graduation_completeness's implement-PR leg requires a NEW-in-diff row per
+      graduated step, and validate_verification_registry then proves each row FAILS on
+      origin/main). Without this row the implement PR cannot satisfy both that gate and the
+      only-files-in-scope constraint.
 bundled_recommendations:
   - rec-2735
 infrastructure_dependencies: []
 acceptance_criteria:
   - >-
-    A gh failure while polling one PR no longer aborts the sweep: every remaining PR is still
+    A gh failure while polling one PR no longer truncates the sweep: every remaining PR is still
     polled, and a conflicted one still receives its wake comment.
   - >-
-    The extracted script clears the inherited errexit before its first command substitution, and
-    every gh call's exit status is handled explicitly.
+    Every gh call site captures and branches on its exit status, so a failed call can never be
+    mistaken for a successful one returning an empty string.
   - >-
     The 5-attempt poll loop retries a FAILED CALL as well as an UNKNOWN value; today, under
-    inherited -e, only the UNKNOWN branch is even reachable.
+    inherited errexit, only the UNKNOWN branch is even reachable.
   - >-
-    The wiring test drives the real script under the literal workflow argv, and proves the harness
-    actually delivers errexit before any behavioural case depends on it.
+    The script is exercised under BOTH the production invocation (child bash, no inherited
+    errexit) and a hostile superset (bash -e), and behaves identically under each.
   - >-
     A comments-read that fails after retries posts the wake ANYWAY (bias inverted -- a duplicate
     wake is cheap, a missed wake strands a session) and emits a greppable marker.
@@ -101,10 +111,12 @@ acceptance_criteria:
     UNKNOWN-after-poll-bound still never produces a false wake, and the head-SHA marker still
     suppresses a repost -- both pre-existing invariants survive the rewrite.
   - >-
-    validate_pr_conflict_signal resolves the delegate and passes against the real workflow file.
+    validate_pr_conflict_signal resolves the delegate, asserts every gh call site handles its exit
+    status, and passes against the real workflow file.
   - >-
     validate_masked_errexit_steps is registered in both presubmit tiers and reports zero violations
-    across .github/workflows/ and .github/actions/ after the fix.
+    across the INLINE run bodies in .github/workflows/, with its scanned file set asserted rather
+    than assumed.
   - >-
     The r3_workflows ceiling for this body is lowered to its measured post-extraction count, with
     no raise-approved marker on the entry.
@@ -113,14 +125,16 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Run the full wiring suite: harness-delivers-errexit proof, sweep continuation, retry-on-failed-call,
-      UNKNOWN-no-false-wake, head-SHA idempotency, comments-read-failure posts anyway, marker emission.
+      Run the full wiring suite under both argvs: production (child bash) and hostile superset
+      (bash -e) -- sweep continuation, retry-on-failed-call, UNKNOWN-no-false-wake, head-SHA
+      idempotency, comments-read-failure posts anyway, marker emission, non-zero exit on failure.
     command: bin/venv-python -m pytest tests/test_pr_conflict_signal_wiring.py -q
-    expected: All cases pass, including the case asserting the harness itself delivers errexit.
+    expected: >-
+      All cases pass under BOTH argvs, and the argv-fidelity case proves each harness delivers the
+      errexit state it claims (off for the child-bash case, on for the hostile case).
     fix_if: >-
-      A failure here means the script still aborts under inherited -e, or the harness is not
-      reproducing the real argv. If EVERY case passes on the UNFIXED script, the harness is wrong
-      (a child bash does not inherit its parent's options) -- fix the harness first.
+      A behavioural difference between the two argvs means some path still depends on errexit
+      state rather than on explicit exit-status handling -- fix the path, do not relax the argv.
     hermetic: false
     graduation: graduate
     graduation_check_id: pr-conflict-signal-wiring-suite
@@ -129,42 +143,48 @@ verification_plan:
     action: >-
       Isolate the rec-2735 regression: a gh failure on the FIRST PR must still leave the SECOND PR
       polled and woken. This is the wake guarantee.
-    command: bin/venv-python -m pytest tests/test_pr_conflict_signal_wiring.py -q -k "sweep_continues or continuation"
+    command: bin/venv-python -m pytest "tests/test_pr_conflict_signal_wiring.py::TestSweepContinuation::test_gh_failure_on_first_pr_still_wakes_second" -q
     expected: >-
-      Passes, and the assertion is on the SECOND PR receiving its comment -- not merely on an exit
+      Passes, asserting the gh shim recorded a comment for the SECOND PR -- not merely an exit
       code, which the old body also produced.
     fix_if: >-
       If this passes against the pre-fix body, the test is not exercising the defect: confirm the
-      shim makes gh exit non-zero for PR one and that the body runs under bash -e.
+      shim makes gh exit non-zero for PR one and that the pre-fix body runs under bash -e.
     hermetic: false
     graduation: graduate
     graduation_check_id: pr-conflict-sweep-continues-past-gh-failure
   - step: 3
     phase: pre-deploy
     action: >-
-      Execute the REAL workflow YAML's run body under the argv that YAML implies (absent shell key
-      -> bash -e), proving the workflow-side wiring, not a hand-copied approximation.
-    command: bin/venv-python -m pytest tests/test_pr_conflict_signal_wiring.py -q -k "real_workflow"
+      Production-fidelity wiring: parse the REAL workflow YAML, run its actual run body under the
+      argv that YAML implies (absent shell key -> bash -e), and assert the delegate is reached and
+      the sweep completes -- proving path resolution and the child-bash invocation, not a substring.
+    command: bin/venv-python -m pytest "tests/test_pr_conflict_signal_wiring.py::TestRealWorkflowBodyWiring::test_real_workflow_body_reaches_delegate_and_completes_sweep" -q
     expected: >-
-      The body parsed from .github/workflows/pr-conflict-signal.yml resolves and runs the delegate
-      from the repo root and completes the sweep under errexit.
+      The body parsed from .github/workflows/pr-conflict-signal.yml resolves the delegate from the
+      repo root and the gh shim records a comment for the conflicted PR.
     fix_if: >-
-      Path resolution failure means the delegation assumes a working directory checkout does not
-      provide; a shell-key mismatch means the argv derivation is wrong.
+      A path-resolution failure means the delegation assumes a working directory checkout does not
+      provide. This node id is pinned deliberately: a test that merely asserts "pr_conflict_signal.sh"
+      appears in the run body satisfies a -k filter but proves nothing -- it must EXECUTE the body.
     hermetic: false
     graduation: graduate
-    graduation_check_id: pr-conflict-signal-real-workflow-body-wiring
+    graduation_check_id: pr-conflict-signal-real-workflow-body-executes-delegate
   - step: 4
     phase: pre-deploy
-    action: Run the updated structural guard's own test suite (pass path plus each new fail path).
-    command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_pr_conflict_signal.py -q
-    expected: All cases pass, including the pre-existing pass-against-real-workflow-file case.
+    action: >-
+      Run the guard's NEW fail-path cases -- unresolvable delegate, checkout not preceding the
+      delegation, errexit not cleared, and a gh call site with no exit-status handling.
+    command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_pr_conflict_signal.py -q -k "delegate or checkout_order or errexit or exit_status"
+    expected: >-
+      Each new fail-path case appends its distinct failure. These nodes do not exist on
+      origin/main, so this is the differential evidence for the guard change.
     fix_if: >-
-      Five "missing ..." failures mean the guard is still reading the inline run text instead of
-      resolving the delegate script.
+      A case that passes when it should fail means the guard's new assertion is not wired; pytest
+      exits 5 on no-match, so a silent rename fails loudly rather than passing vacuously.
     hermetic: false
     graduation: graduate
-    graduation_check_id: pr-conflict-signal-guard-suite
+    graduation_check_id: pr-conflict-signal-guard-new-failpaths
   - step: 5
     phase: pre-deploy
     action: Run the updated guard against the real workflow tree.
@@ -172,37 +192,44 @@ verification_plan:
     expected: Prints clean; no failures appended.
     fix_if: The named failures identify which semantic assertion lost its referent after extraction.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: pr-conflict-signal-guard-clean-on-real-workflow
+    graduation: waive
+    graduation_waiver_reason: >-
+      Verified tautological as a differential: this exact command already prints clean and exits 0
+      on the pre-change tree, because the guard passes against today's inline workflow too. It
+      would therefore be refused by validate_verification_registry's revert-and-fail admission
+      check. Retained as a VP step because it is the only end-to-end assertion that the guard and
+      the rewritten workflow agree; its differential content is graduated at step 4 instead.
   - step: 6
     phase: pre-deploy
     action: >-
       Prove the new masked-errexit guard is not vacuous -- it must FIRE on a synthetic violator and
-      stay silent on each legitimate negative (guarded assignment, set +e present, loud step).
+      stay silent on each real near-miss already in the tree (|| true, || echo "", && break || sleep 3).
     command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_masked_errexit_steps.py -q
     expected: >-
       Fires on the synthetic violator; does not fire on any negative case. A guard that only ever
       passes proves nothing.
     fix_if: >-
-      No fire on the synthetic violator means the detection regex never matches -- assert against a
-      fixture byte-identical in shape to the pre-fix pr-conflict-signal body.
+      No fire on the synthetic violator means the detection never matches -- assert against a
+      fixture byte-identical in shape to the pre-fix pr-conflict-signal body. Firing on a negative
+      means the rule is too broad and would need a roster, which defeats the zero-population premise.
     hermetic: false
     graduation: graduate
     graduation_check_id: masked-errexit-guard-fires-on-synthetic-violator
   - step: 7
     phase: pre-deploy
     action: >-
-      Run the new guard across the real tree. Population must be zero -- this is the claim that lets
-      it install with no grandfather roster.
-    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps as c; f=[]; c(f); assert f==[], f; print('zero violations')"
-    expected: Prints zero violations.
+      Run the new guard across the real tree AND assert the file set it actually scanned, so a
+      silently workflows-narrower-than-claimed implementation cannot report a passing zero.
+    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps, scanned_workflow_files as s; f=[]; validate_masked_errexit_steps(f); assert f==[], f; n=[str(p) for p in s()]; assert any('pr-conflict-signal.yml' in x for x in n) and any('ci.yml' in x for x in n) and len(n)>=15, n; print('zero violations over', len(n), 'workflow files')"
+    expected: Prints zero violations over a file count of 15 or more.
     fix_if: >-
-      A non-empty result means either the fix is incomplete, or the rule is broader than the
+      A non-empty failure list means either the fix is incomplete, or the rule is broader than the
       measured silent subset (19 LOUD instances exist and are deliberately out of scope) -- narrow
-      the rule to continue-on-error steps, do not baseline the difference.
+      the rule, do not baseline the difference. An assertion failure on the file set means the scan
+      silently covered less than claimed.
     hermetic: true
     graduation: graduate
-    graduation_check_id: masked-errexit-steps-zero-violations
+    graduation_check_id: masked-errexit-zero-violations-over-asserted-file-set
   - step: 8
     phase: pre-deploy
     action: Confirm the new check is registered in BOTH presubmit tiers (Decision 104).
@@ -215,22 +242,28 @@ verification_plan:
   - step: 9
     phase: pre-deploy
     action: >-
-      Confirm the R3 ratchet is clean and the lowered ceiling matches the measured post-extraction
+      Confirm the R3 ratchet is clean and the declared ceiling matches the measured post-extraction
       body, with no raise-approved marker on the decreased entry.
     command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as c; f=[]; c(f); assert f==[], f; from scripts.checks.ci_guards._workflow_shell_bodies import scan_workflow_bodies; import yaml,pathlib; k='.github/workflows/pr-conflict-signal.yml::detect-conflicts::poll-open-claude-prs-and-wake-conflicted-ones'; live=scan_workflow_bodies()[k]; dec=yaml.safe_load(pathlib.Path('config/composite_action_body_baseline.yaml').read_text())['r3_workflows'][k]; assert dec==live, (dec,live); print('ratchet clean, ceiling', dec)"
     expected: >-
-      Ratchet clean and the declared ceiling equals the live measured count (was 36 pre-extraction).
+      Ratchet clean and the declared ceiling equals the live measured count (both are 36
+      pre-extraction; both should be the new small count after).
     fix_if: >-
       A KeyError means the step name changed and the baseline key moved -- restore the step name or
       rekey the entry. A mismatch means the ceiling was not lowered to the measured value.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: pr-conflict-signal-r3-ceiling-matches-live
+    graduation: waive
+    graduation_waiver_reason: >-
+      Verified tautological as a differential: declared 36 equals live 36 on the pre-change tree,
+      so the dec == live invariant holds identically before and after and would be refused by the
+      revert-and-fail admission check. It is a genuine standing drift guard rather than evidence of
+      this change, and the r3 ceiling is already enforced repo-wide by
+      validate_composite_action_shell_bodies on every run.
   - step: 10
     phase: pre-deploy
     action: >-
-      Confirm scripts/validate.py stayed within its 500-effective-line limit after the re-export
-      (it measured 497 before this change).
+      Confirm scripts/validate.py stayed within its 500-line limit after the re-export (it measured
+      497 before this change).
     command: bin/venv-python -c "from scripts.checks.structural.size_limits import effective_lines; import pathlib; n=effective_lines(pathlib.Path('scripts/validate.py').read_text()); assert n<=500, n; print('validate.py effective lines:', n)"
     expected: Prints a count of 500 or less (expected 498).
     fix_if: >-
@@ -239,10 +272,12 @@ verification_plan:
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Duplicates the standing repo-wide validate_sloc_limits check, which already guards every
-      Python file each presubmit run; graduating a second per-file assertion for the same property
-      would add a redundant registry slot. Retained as a VP step only because this specific file has
-      3 lines of headroom and the change adds a line to it, making it the one plausible breach.
+      The governing gate for .py files is validate_sloc_limits over config/sloc_budgets.yaml, which
+      already runs repo-wide every presubmit; graduating a second per-file assertion for the same
+      property would add a redundant registry slot. effective_lines is borrowed here purely as the
+      counting utility (the Decision 166 structural engine excludes .py from its own class table, so
+      it governs nothing here). Retained as a VP step only because this file has 3 lines of headroom
+      and this change adds a line to it, making it the one plausible breach.
   - step: 11
     phase: pre-deploy
     action: Full-tier validation before any commit or PR (handoff_policy gate).
@@ -252,7 +287,12 @@ verification_plan:
       Fix forward; never disable a check to pass. A ci-rca rec on failure is reviewed in a /plan
       session, not patched inline (Decision 55/72).
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Aggregate orchestration gate, not a single registry node: it runs the entire check registry
+      plus ruff, mypy, pytest and the terraform gate. Graduating it would nest the whole suite
+      inside one registry row and recurse (the registry is itself executed by this command), which
+      is the recursion the hermetic-authoring rule forbids for validate.py invocations.
   - step: 12
     phase: post-deploy
     action: >-
@@ -268,35 +308,37 @@ verification_plan:
 test_obligations:
   - source: scripts/ci/pr_conflict_signal.sh
     behavior: >-
-      A gh failure on any single PR must never abort the sweep; remaining PRs are still polled and
-      conflicted ones still woken.
+      A gh failure on any single PR must never truncate the sweep; remaining PRs are still polled
+      and conflicted ones still woken, identically under both argvs.
     verification_step: 2
-    test_selector: tests/test_pr_conflict_signal_wiring.py
+    test_selector: tests/test_pr_conflict_signal_wiring.py::TestSweepContinuation::test_gh_failure_on_first_pr_still_wakes_second
     red_green_expectation: >-
-      Red against the pre-fix inline body (the abort truncates the sweep, so PR two never gets its
-      comment); green after extraction and explicit exit-status handling.
+      Red against the pre-fix inline body (under bash -e the abort truncates the sweep; in a child
+      bash the empty mergeable falls through to "no wake needed") -- so PR two never gets its
+      comment either way; green once every gh call's exit status is handled explicitly.
   - source: .github/workflows/pr-conflict-signal.yml
     behavior: >-
-      The step remains a thin delegation whose body still resolves and runs the script under the
-      errexit-inheriting argv its own YAML implies, with checkout preceding it.
+      The step remains a thin delegation whose own run body still reaches and executes the script
+      from the repo root, with checkout preceding it.
     verification_step: 3
-    test_selector: tests/test_pr_conflict_signal_wiring.py
+    test_selector: tests/test_pr_conflict_signal_wiring.py::TestRealWorkflowBodyWiring::test_real_workflow_body_reaches_delegate_and_completes_sweep
     red_green_expectation: >-
       Red if the delegation path is wrong or checkout is absent (the script is not on disk); green
       with checkout@v7 ahead of a repo-root-relative delegation.
   - source: scripts/checks/ci_guards/validate_pr_conflict_signal.py
     behavior: >-
-      The five semantic assertions follow the delegate into the script rather than reading the
-      now-one-line inline run text.
+      The semantic assertions follow the delegate into the script, and the guard additionally
+      rejects a script whose gh call sites do not handle exit status.
     verification_step: 4
     test_selector: tests/checks/ci_guards/test_validate_pr_conflict_signal.py
     red_green_expectation: >-
       Red before the guard update (extraction yields exactly 5 "missing ..." failures, confirmed by
-      simulation at plan time); green once the delegate is resolved.
+      simulation at plan time, and the new fail-path nodes do not exist); green once the delegate is
+      resolved and the new assertions are wired.
   - source: scripts/checks/ci_guards/validate_masked_errexit_steps.py
     behavior: >-
-      Fires on a continue-on-error step whose body inherits errexit and holds an unguarded command
-      substitution; stays silent on guarded assignments, bodies clearing errexit, and loud steps.
+      Fires on a continue-on-error step whose INLINE body inherits errexit and holds an unguarded
+      command substitution; stays silent on the real near-misses already in the tree.
     verification_step: 6
     test_selector: tests/checks/ci_guards/test_validate_masked_errexit_steps.py
     red_green_expectation: >-
@@ -313,11 +355,15 @@ test_obligations:
       raise-approved marker.
     verification_step: 9
     command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as c; f=[]; c(f); assert f==[], f; from scripts.checks.ci_guards._workflow_shell_bodies import scan_workflow_bodies; import yaml,pathlib; k='.github/workflows/pr-conflict-signal.yml::detect-conflicts::poll-open-claude-prs-and-wake-conflicted-ones'; live=scan_workflow_bodies()[k]; dec=yaml.safe_load(pathlib.Path('config/composite_action_body_baseline.yaml').read_text())['r3_workflows'][k]; assert dec==live, (dec,live); print('ratchet clean, ceiling', dec)"
-    red_green_expectation: Red while the entry still declares the pre-extraction ceiling of 36; green once lowered to the measured count.
+    waiver_reason: >-
+      Standing drift invariant rather than evidence of this change: declared equals live both before
+      and after, so it cannot be driven red-then-green. The ceiling itself is enforced repo-wide by
+      validate_composite_action_shell_bodies on every presubmit run, and the extraction that lowers
+      it is proven behaviourally by steps 2 and 3.
   - source: scripts/validate.py
     behavior: >-
       The re-export stays a single line, so the facade keeps exposing the new check without pushing
-      the file past its 500-effective-line limit.
+      the file past its 500-line limit.
     verification_step: 10
     command: bin/venv-python -c "from scripts.checks.structural.size_limits import effective_lines; import pathlib; n=effective_lines(pathlib.Path('scripts/validate.py').read_text()); assert n<=500, n; print('validate.py effective lines:', n)"
     waiver_reason: >-
@@ -326,22 +372,42 @@ test_obligations:
       (the check must appear in both registry sequences, which requires this module to import
       cleanly); the only genuine risk this file carries is the 3-line SLOC headroom, which is what
       the linked step asserts.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Each graduated VP step has a corresponding registry row that genuinely fails when reverted to
+      origin/main.
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      The registry's own correctness is asserted by two standing gates rather than by a bespoke test:
+      validate_graduation_completeness requires a NEW-in-diff row per graduate-disposition step, and
+      validate_verification_registry reverts each added row against a real origin/main worktree and
+      refuses any that does not fail there. Both run inside the linked full-validate step, so a
+      dedicated test would duplicate a stronger existing check.
 constraints:
   - >-
     continue-on-error true on the poll step is load-bearing and must survive: this advisory wake job
     must never red a build. The guard asserts it today; keep that assertion.
   - >-
     Do NOT implement rec-2735's own acceptance command literally. It asks for a $? check placed
-    AFTER the mergeable assignment, which is unreachable code under inherited -e -- implementing it
-    literally would ship a fresh instance of the defect class being fixed. The rec's own corrected
-    context says so. Record the acceptance as superseded in the closing resolution.
+    AFTER the mergeable assignment, which is unreachable code under the inherited errexit of the
+    CURRENT inline body -- implementing it literally would ship a fresh instance of the defect class
+    being fixed. Record the acceptance as superseded in the closing resolution.
   - >-
-    Clear errexit FIRST (set +e), before the first command substitution. A guard placed after the
-    assignment never executes.
+    ERREXIT, PRECISELY (verified empirically at plan time -- do not restate the looser version).
+    Shell options are not exported to child processes (SHELLOPTS is unexported), so: the CURRENT
+    inline body runs as "bash -e {0}" and DOES inherit errexit, which is why a bare command
+    substitution aborts the step today; but AFTER extraction the delegate is a child bash and does
+    NOT inherit errexit. The failure mode therefore inverts rather than disappearing -- an unhandled
+    gh failure stops aborting and instead yields an EMPTY string that falls through to
+    "mergeable=, no wake needed". Explicit exit-status handling is what fixes BOTH shapes; set +e is
+    retained only as defence-in-depth against a future re-inlining.
   - >-
-    The wiring test must spawn the script under the literal errexit-inheriting argv. A convenience
-    "bash script.sh" harness drops the -e that is the entire root cause and passes vacuously
-    (rec-2924's stated rationale; Decision 162 R2).
+    Because of the above, the wiring test must cover BOTH argvs: the production invocation (child
+    bash, errexit off) and "bash -e <script>" as a deliberately hostile superset. Neither is
+    redundant and neither may be dropped -- the hostile case is what would catch a regression if the
+    body were ever re-inlined, and the production case is what proves today's real behaviour. Do not
+    describe the child-bash case as vacuous; it is production.
   - >-
     The r3_workflows edit is a DECREASE and must NOT carry a # raise-approved marker. Decision 165
     made marker validation retroactive and authorization-based; an unauthorized marker would fail
@@ -356,9 +422,14 @@ constraints:
     Keep the workflow step's NAME unchanged. The r3_workflows key is a slug of that name, so a
     rename silently orphans the baseline entry and registers a new unbaselined body.
   - >-
-    Scope the new guard to the SILENT subset (continue-on-error steps) only. The 19 loud instances
-    are deliberately out of scope; widening the rule would require a grandfather roster and a
-    Decision, which is exactly what scoping to zero population avoids.
+    Scope the new guard to INLINE bodies under .github/workflows/ only. Delegated scripts are a
+    different mechanism (no inherited errexit) and are covered by the follow-on R2 extension, not by
+    this rule; .github/actions/ carries zero step-level continue-on-error declarations today, so a
+    composite leg would have an empty universe. State this boundary in the guard's docstring rather
+    than leaving it implicit.
+  - >-
+    Do not widen the guard to the 19 loud instances. Widening requires a grandfather roster and a
+    numbered Decision, which is exactly what scoping to a zero population avoids.
   - No rescue agents or workaround loops (Decision 55).
   - Only files listed in Scope may be modified.
 context:
@@ -368,13 +439,23 @@ context:
     Decision 130, Decision 131, Decision 83, Decision 76, Decision 73, Decision 153, Decision 132,
     Decision 163, Decision 100, Decision 75, Decision 154, Decision 149.
   - >-
-    "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE then PROCEED after 2 round(s)"
   - >-
     Root cause, verified on disk: the poll step declares no shell key, so GitHub runs it as
     "bash -e {0}". The body's own "set -uo pipefail" does NOT clear the inherited -e (set only
     touches named options) and there is no set +e. Every gh call is a bare command substitution, so
     a gh failure ABORTS the step -- and continue-on-error true then reports a GREEN job with the
     remainder of the sweep silently unswept.
+  - >-
+    CORRECTION applied in critique round 2, verified empirically (bash -e parent.sh where parent
+    runs "bash child.sh": the child continues past both a bare false and a failed command
+    substitution, rc=0). A child bash does NOT inherit errexit. Round 1 of this plan wrongly framed
+    the post-extraction delegate as still running under inherited errexit, and wrongly called the
+    child-bash invocation a vacuous harness. Both are corrected in constraints 3 and 4. Note this
+    also means the ORIGINAL (pre-2026-07-31) rec-2735 analysis was not simply wrong: it described
+    the empty-string fall-through, which is exactly the post-extraction shape, while the correction
+    described the inline shape. Both are real, in different worlds; explicit exit-status handling is
+    the fix common to both, which is why the remedy is unchanged.
   - >-
     Scout flag 1 (Decision 155, WARN) accepted and acted on: the originally proposed "fail-closed"
     comments-read was fail-OPEN with respect to the wake guarantee. Bias inverted -- an unreadable
@@ -387,31 +468,43 @@ context:
     _starved_marker idiom already used in .github/actions/subagent-plan-review/review.sh). Filing a
     rec from this workflow was considered and deferred -- it has no OIDC or portal dependencies today.
   - >-
-    Scout flag 3 (Decision 48, NOTE) accepted, resolved MORE strongly than the scout suggested: rather
-    than a one-off live workflow_dispatch, VP step 3 parses the real workflow YAML, derives the argv
-    its own shell key implies, and executes its actual run body. That is hermetic, repeatable and
-    CI-enforced forever, and covers the shell-key and path-resolution risks the scout named; checkout
-    ordering is covered structurally by the guard. A live dispatch remains available post-merge as an
-    optional confidence check (execution_steps) via mcp__github__actions_run_trigger -- the gh CLI is
-    not available in CC-web.
+    Scout flag 3 (Decision 48, NOTE) accepted: VP step 3 parses the real workflow YAML, derives the
+    argv its own shell key implies, and executes its actual run body against a gh shim, asserting the
+    delegate is reached and the sweep completes. Its node id is pinned because a -k filter alone
+    cannot distinguish executing the body from asserting a substring in it -- the precedent's
+    TestActionAdapter is the substring shape, and is the likely attractor. A live dispatch remains
+    available post-merge as an optional confidence check (execution_steps) via
+    mcp__github__actions_run_trigger -- the gh CLI is not available in CC-web.
   - >-
-    Measured population of the defect class at plan time: 44 CI shell bodies declare set -u / set -o
-    pipefail without ever clearing errexit; 20 of those hold at least one bare X=$(...) assignment.
-    Of those 20, exactly ONE is masked by continue-on-error into a green job -- this workflow. The
-    other 19 fail loudly (they red the step or job) and are out of scope.
+    Measured population of the defect class at plan time, independently reproduced by the critique
+    gate: 44 CI shell bodies declare set -u / set -o pipefail without ever clearing errexit; 20 of
+    those hold at least one bare X=$(...) assignment. Of those 20, exactly ONE is masked by
+    continue-on-error into a green job -- this workflow. The other 19 fail loudly (they red the step
+    or job) and are out of scope.
   - >-
-    That measurement is why the new guard costs nothing to install: scoped to the silent subset, its
-    population is zero the moment this fix lands, so it needs no grandfather roster and no numbered
-    Decision. A ratchet can only be installed roster-free at the instant its population empties, and
-    this PR is that instant. Follow-on recs to file post-merge, both deliberately NOT bundled here:
-    (a) extend Decision 162 R2 (literal-argv test coverage) to the workflow leg, whose composite-only
-    scoping rationale weakens once a workflow body actually lives in scripts/ci/; (b) ratchet the 19
-    loud instances, which does need a roster and a Decision.
+    The zero is earned, not contrived: 11 continue-on-error steps carry inline run bodies, and the
+    critique gate read every sibling (reconcile.yml and terraform-apply-sandbox.yml best-effort wake
+    comments, ci.yml signal-green, ci-rca.yml's four fetch steps) confirming each passes for a
+    substantive reason -- || true, || echo "", && break || sleep 3 -- not by accident of phrasing.
+    Those near-misses are the guard's required negative test cases (VP6).
   - >-
-    Precedent being reused: rec-2924 (closed) fixed the identical inherited-errexit defect in
+    KNOWN COVERAGE GAP, recorded deliberately rather than papered over: the new guard scans inline
+    bodies, and Decision 162 R3's own remedy (extract to scripts/ci/) moves risky code OUT of that
+    surface. This PR demonstrates it -- post-fix, pr_conflict_signal.sh holds every command
+    substitution and the guard sees a one-line delegation. That gap is closed by follow-on rec (a)
+    below, which requires delegates to carry a literal-argv wiring test; the two are complementary
+    halves and (a) should be filed immediately after merge, not deferred indefinitely.
+  - >-
+    Follow-on recs to file post-merge, deliberately NOT bundled: (a) extend Decision 162 R2
+    (literal-argv test coverage) to the workflow leg, whose composite-only scoping rationale weakens
+    once a workflow body actually lives in scripts/ci/ -- this is the companion that closes the gap
+    above; (b) ratchet the 19 loud instances, which does need a roster and a Decision.
+  - >-
+    Precedent being reused: rec-2924 (closed) fixed the same defect in
     .github/actions/subagent-plan-review/ by extracting the body to review.sh and adding
-    tests/test_subagent_review_wiring.py driving it under the literal composite argv. rec-2735 asks
-    for "one shared idiom"; this is it, applied to the workflow leg.
+    tests/test_subagent_review_wiring.py. Note when reading review.sh that its header comment
+    describes the errexit hazard of the pre-extraction INLINE body; post-extraction it too runs in a
+    child bash, so its set +e is likewise defence-in-depth. Do not propagate the looser reading.
   - >-
     Verified by simulation at plan time, not assumed: running validate_pr_conflict_signal against a
     post-extraction workflow shape produces exactly 5 failures (claude/* head filter, mergeable poll,
@@ -430,12 +523,27 @@ context:
     Branch protection requires exactly pr-validate and terraform-validate (Decision 83), so this
     advisory job can never wedge the merge gate regardless of its exit status.
   - >-
+    Seven VP steps carry a graduate disposition (1, 2, 3, 4, 6, 7, 8), each requiring a NEW-in-diff
+    row in config/agent/verification_registry/registry.yaml that provably fails when reverted to
+    origin/main. Steps 5, 9, 10 and 11 were reclassified to waive after the critique gate verified
+    they pass identically on the pre-change tree; graduating a tautology is refused by
+    validate_verification_registry's revert-and-fail admission check.
+  - >-
     Preflight at plan time: main 0 behind / 0 ahead, so the Main Divergence Assessment found no
-    overlap and no rebase decision was required. ci_rca_unresolved_recs was empty, so the /plan hard
-    block did not apply and the Related-Work check is unconstrained.
+    overlap and no rebase decision was required; re-verified clean at critique time.
+    ci_rca_unresolved_recs was empty, so the /plan hard block did not apply and the Related-Work
+    check is unconstrained.
   - >-
     Tier Item Freshness Gate skipped by rule: rec-2735 is source=code-review, an ad_hoc_rec
     soft-warn exception category naming no tier_item.
+  - >-
+    Considered and rejected for this plan (recorded so it is not silently re-litigated): implementing
+    the sweep in Python under scripts/ci/ instead of bash, which would make the errexit class
+    structurally impossible. Decision 162 R3's remedy text prescribes a location, not a language, so
+    nothing forbids it. Rejected here because rec-2735 explicitly asks for the shared idiom with
+    rec-2924's review.sh, and because the guard half of this plan is justified by a workflow-body
+    census that a language change does not alter. Worth revisiting as its own plan if a third
+    instance of this class appears.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -444,50 +552,57 @@ pre_implementation_checklist:
   - Acceptance criteria understood and verifiable
   - >-
     Read .github/actions/subagent-plan-review/review.sh and tests/test_subagent_review_wiring.py
-    FIRST -- they are the precedent this plan reuses, including the set +e placement, the fail-closed
-    pre-write of the output channel, the _starved_marker step-summary idiom, and the literal-argv
-    harness shape.
+    FIRST -- they are the precedent this plan reuses, including the fail-closed pre-write of the
+    output channel, the _starved_marker step-summary idiom, and the harness shape. Read constraint 3
+    before believing review.sh's header comment about inherited errexit.
   - >-
-    Confirm the exact argv GitHub uses for a workflow run step (bash -e {0}) is what the harness
-    spawns -- it differs from the composite argv (bash --noprofile --norc -e -o pipefail {0}) used by
-    the precedent test.
+    Confirm empirically, before writing the harness, that a child bash does not inherit errexit
+    (bash -e parent.sh where parent runs bash child.sh). The two argvs the wiring test must cover
+    depend on this fact.
 execution_steps:
   - >-
     Create scripts/ci/pr_conflict_signal.sh -- move the existing body verbatim, then apply the fix:
-    set -uo pipefail followed immediately by set +e with a comment naming the inherited-errexit
-    hazard; a shared bounded-retry helper used by the mergeable poll, the comments read and the
-    comment post; explicit exit-status capture on every gh call; a per-PR failure path that marks,
-    counts and continues; a $GITHUB_STEP_SUMMARY marker helper; and a final non-zero exit when the
-    failure count is greater than zero. Preserve the UNKNOWN-never-false-wakes and head-SHA
-    idempotency invariants exactly.
+    a shared bounded-retry helper used by the mergeable poll, the comments read and the comment
+    post; explicit exit-status capture and branching on every gh call; a per-PR failure path that
+    marks, counts and continues; a $GITHUB_STEP_SUMMARY marker helper; a final non-zero exit when
+    the failure count is greater than zero; and set +e near the top as documented defence-in-depth
+    against re-inlining (not as the load-bearing fix -- see constraint 3). Preserve the
+    UNKNOWN-never-false-wakes and head-SHA idempotency invariants exactly.
   - >-
     Modify .github/workflows/pr-conflict-signal.yml -- add actions/checkout@v7 as the first step,
     reduce the poll step body to the single delegation line, keep the step name and
     continue-on-error true unchanged, and update the header comment to point at the script.
   - >-
-    Create tests/test_pr_conflict_signal_wiring.py -- a gh shim on PATH driven by env vars; a case
-    proving the harness itself delivers errexit; then sweep continuation past a gh failure,
-    retry-on-failed-call, UNKNOWN-no-false-wake, head-SHA idempotency, comments-read-failure still
-    posting, marker emission, and the non-zero exit on a counted failure. Include the real-workflow
-    case that parses the YAML and runs its actual body under the argv that YAML implies.
+    Create tests/test_pr_conflict_signal_wiring.py -- a gh shim on PATH driven by env vars; an
+    argv-fidelity case proving each harness delivers the errexit state it claims; then sweep
+    continuation past a gh failure, retry-on-failed-call, UNKNOWN-no-false-wake, head-SHA
+    idempotency, comments-read-failure still posting, marker emission, and the non-zero exit on a
+    counted failure -- each parameterised over BOTH argvs. Add TestRealWorkflowBodyWiring, which
+    parses the YAML and EXECUTES its actual run body (not a substring assertion), using the exact
+    node ids named in VP steps 2 and 3.
   - >-
     Modify scripts/checks/ci_guards/validate_pr_conflict_signal.py -- resolve the delegate script
     from the step body and run the five semantic assertions against its contents; add assertions for
-    delegate existence, checkout-precedes-delegation, and errexit clearing. Keep the check name and
-    both registry registrations untouched (Decision 104).
+    delegate existence, checkout-precedes-delegation, errexit clearing, and every gh call site
+    handling its exit status. Keep the check name and both registry registrations untouched
+    (Decision 104).
   - >-
     Modify tests/checks/ci_guards/test_validate_pr_conflict_signal.py -- update the mocked pass-path
-    fixture to the delegation shape and add fail-path cases for each new assertion.
+    fixture to the delegation shape and add a fail-path case per new assertion, named so the VP4
+    -k filter selects them.
   - >-
     Create scripts/checks/ci_guards/validate_masked_errexit_steps.py -- filesystem-only walk of
-    .github/workflows/*.yml and .github/actions/**/action.yml; flag any step with
-    continue-on-error true whose effective shell inherits errexit and whose body holds an unguarded
-    command substitution without clearing errexit. Reuse the shell-governance helpers in
-    scripts/checks/ci_guards/_workflow_shell_bodies.py rather than re-deriving them.
+    .github/workflows/*.yml and *.yaml; flag any step with continue-on-error true whose INLINE body
+    inherits errexit and holds an unguarded command substitution. Expose scanned_workflow_files()
+    so VP7 can assert the scan surface. Reuse _workflow_shell_bodies.py's shell-governance helpers
+    (_is_governed_shell, _default_shell) for shell resolution ONLY -- that module is workflows-only
+    by its own docstring, which matches this guard's deliberate scope; do not attempt to reuse it as
+    a composite-action walker. Record the delegated-script and composite-action boundary in the
+    module docstring, citing follow-on rec (a) as the mechanism that covers delegates.
   - >-
     Create tests/checks/ci_guards/test_validate_masked_errexit_steps.py -- the firing case on a
-    synthetic violator shaped like the pre-fix body, plus negatives for a guarded assignment, a body
-    clearing errexit, and a loud (no continue-on-error) step.
+    synthetic violator shaped like the pre-fix body, plus negatives drawn from the REAL near-misses
+    in the tree (|| true, || echo "", && break || sleep 3) and a loud step with no continue-on-error.
   - >-
     Modify scripts/checks/registry.py -- add the new check to both pre_sequence() and full_sequence(),
     adjacent to validate_pr_conflict_signal at lines 162 and 204.
@@ -497,6 +612,12 @@ execution_steps:
     Modify config/composite_action_body_baseline.yaml -- lower the r3_workflows ceiling for this body
     from 36 to the measured post-extraction count, with no raise-approved marker.
   - >-
+    Modify config/agent/verification_registry/registry.yaml -- add one row per graduate-disposition
+    VP step (steps 1, 2, 3, 4, 6, 7, 8), using each step's graduation_check_id verbatim as the row
+    identity and pinning the exact node id for test_selector rows. Confirm each added row genuinely
+    fails when reverted against origin/main -- validate_verification_registry proves this with a real
+    worktree revert and refuses tautological entries.
+  - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55).
   - >-
@@ -504,8 +625,9 @@ execution_steps:
     original acceptance command is superseded (it specified an unreachable post-assignment $? check,
     and the line it greps for now lives in the extracted script).
   - >-
-    Post-merge, file the two follow-on recs named in Context (extend R2 to the workflow leg; ratchet
-    the 19 loud instances) via file_rec, after calling get_rec_write_guidance().
+    Post-merge, file the two follow-on recs named in Context via file_rec, after calling
+    get_rec_write_guidance(). Rec (a) -- extend R2 to the workflow leg -- closes this plan's known
+    coverage gap and should be filed first.
   - >-
     Optional post-merge confidence check: dispatch pr-conflict-signal.yml on main via
     mcp__github__actions_run_trigger and confirm the run log shows the sweep completing across every
