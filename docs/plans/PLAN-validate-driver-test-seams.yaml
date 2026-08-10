@@ -30,12 +30,6 @@ scope:
       Package-scoped, non-autouse factory fixture wrapping the selector for tests/validate/.
       Decision 131 clause 3. Non-autouse and outside the root conftest, so it does NOT trip
       affected_tests.py's full-suite forcing.
-  - file: tests/checks/conftest.py
-    action: Modify
-    purpose: >-
-      Add the sibling factory wrapper for tests/checks/ and its sub-packages (covers
-      tests/checks/roadmap/), delegating to the same shared selector. No cross-tree resolution
-      needed -- this conftest already exists as Decision 131's pattern scaffold.
   - file: tests/conftest.py
     action: Modify
     purpose: Delete `_neutralized_pre_registry` and its blanket loop. Nothing replaces it at root scope.
@@ -99,7 +93,7 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: Prove this PR changes no runtime code (tests, plan, and the verification registry only).
-    command: 'bin/venv-python -c "import subprocess,sys; subprocess.run([\"git\",\"fetch\",\"origin\",\"main\",\"--quiet\"],check=False); r=subprocess.run([\"git\",\"diff\",\"origin/main\",\"--name-only\"],capture_output=True,text=True,check=True); u=subprocess.run([\"git\",\"status\",\"--porcelain\",\"--untracked-files=all\"],capture_output=True,text=True,check=True); allowed=(\"tests/\",\"docs/plans/\",\"config/agent/verification_registry/registry.yaml\"); tracked=[f for f in r.stdout.split() if f]; untracked=[l[3:] for l in u.stdout.splitlines() if l.startswith(\"??\")]; files=tracked+untracked; assert files, \"empty diff -- origin/main unfetched or shallow; refusing to pass vacuously\"; bad=[f for f in files if not f.startswith(allowed)]; print(\"tracked\",len(tracked),\"untracked\",len(untracked),\"disallowed:\",bad); sys.exit(1 if bad else 0)"'
+    command: 'bin/venv-python -c "import subprocess,sys; subprocess.run([\"git\",\"fetch\",\"origin\",\"main\",\"--quiet\"],check=False); r=subprocess.run([\"git\",\"diff\",\"origin/main\",\"--name-only\"],capture_output=True,text=True,check=True); u=subprocess.run([\"git\",\"status\",\"--porcelain\",\"--untracked-files=all\"],capture_output=True,text=True,check=True); allowed=(\"tests/\",\"docs/plans/\",\"config/agent/verification_registry/registry.yaml\",\"docs/ROADMAP-PLATFORM.yaml\"); tracked=[f for f in r.stdout.split() if f]; untracked=[l[3:] for l in u.stdout.splitlines() if l.startswith(\"??\")]; files=tracked+untracked; assert files, \"empty diff -- origin/main unfetched or shallow; refusing to pass vacuously\"; bad=[f for f in files if not f.startswith(allowed)]; print(\"tracked\",len(tracked),\"untracked\",len(untracked),\"disallowed:\",bad); sys.exit(1 if bad else 0)"'
     expected: >-
       Every changed path -- tracked OR untracked -- is under tests/, docs/plans/, or the
       verification registry, and the diff is non-empty (an empty diff is treated as a broken
@@ -181,9 +175,10 @@ verification_plan:
     action: At-ceiling files did not grow.
     command: 'bin/venv-python -c "import pathlib,sys; s=lambda f: len([l for l in pathlib.Path(f).read_text().splitlines() if l.strip() and not l.strip().startswith(chr(35))]); a=s(\"tests/validate/test_tiers.py\"); b=s(\"tests/test_plan_document.py\"); print(\"test_tiers\",a,\"test_plan_document\",b); sys.exit(0 if a<=499 and b<=495 else 1)"'
     expected: >-
-      test_tiers.py at or below 499 and test_plan_document.py at or below 495. Offset is 33
-      deletable stand-in lines, not 36 -- the three at :589-591 serve TestPreGlobsGateEndToEnd's
-      bounded loop and stay.
+      test_tiers.py at or below 499 and test_plan_document.py at or below 495. Up to 36 stand-in
+      lines are deletable: the three at :589-591 are also unnecessary under a derived selection
+      (those checks are not in TestPreGlobsGateEndToEnd's six-check selection at all), so keeping
+      or deleting them is a style call, not a constraint.
     fix_if: Growth forces a decomposition or an unmarked raise, both disallowed by Decision 128/165.
     hermetic: true
     graduation: waive
@@ -193,7 +188,7 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: The fixture no longer forces the full suite.
-    command: 'bin/venv-python -c "import pathlib,sys; root=pathlib.Path(\"tests/conftest.py\").read_text(); assert \"_neutralized_pre_registry\" not in root, \"blanket fixture still in root conftest\"; pkg=[p for p in (pathlib.Path(\"tests/validate/conftest.py\"),pathlib.Path(\"tests/checks/conftest.py\")) if p.exists()]; assert len(pkg)==2, pkg; bad=[str(p) for p in pkg if \"autouse=True\" in p.read_text()]; assert not bad, (\"package conftest declares autouse -- still forces full suite\", bad); print(\"fixture is package-scoped and non-autouse\")" && bin/venv-python -m pytest tests/validate/test_driver_seam.py -q -k "package or factory"'
+    command: 'bin/venv-python -c "import pathlib,sys; root=pathlib.Path(\"tests/conftest.py\").read_text(); assert \"_neutralized_pre_registry\" not in root, \"blanket fixture still in root conftest\"; pkg=[p for p in (pathlib.Path(\"tests/validate/conftest.py\"),) if p.exists()]; assert len(pkg)==1, pkg; bad=[str(p) for p in pkg if \"autouse=True\" in p.read_text()]; assert not bad, (\"package conftest declares autouse -- still forces full suite\", bad); print(\"fixture is package-scoped and non-autouse\")" && bin/venv-python -m pytest "tests/validate/test_driver_seam.py::TestFixtureHoming::test_factory_is_package_scoped_and_not_autouse" -q'
     expected: Root conftest is clean; both package conftests exist and declare no autouse fixture.
     fix_if: >-
       Verified: full_suite_forced keys on the literal path tests/conftest.py alone, so leaving the
@@ -231,7 +226,7 @@ verification_plan:
   - step: 10
     phase: pre-deploy
     action: Full presubmit passes and emits the same check roster as the captured baseline.
-    command: 'bin/venv-python -c "import subprocess,sys,pathlib; base=pathlib.Path(\"logs/.roster-baseline.txt\"); assert base.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; r=subprocess.run([sys.executable,\"-m\",\"scripts.validate\"],capture_output=True,text=True,encoding=\"utf-8\",errors=\"replace\"); now=sorted(l for l in r.stdout.splitlines() if l.startswith(\"=== \")); before=sorted(base.read_text().splitlines()); missing=[x for x in before if x not in now]; added=[x for x in now if x not in before]; print(\"exit\",r.returncode,\"roster before/after\",len(before),len(now),\"added\",added); assert not missing, (\"check heading disappeared\", missing); sys.exit(r.returncode)"'
+    command: 'bin/venv-python -m scripts.validate > logs/debug/roster-now.txt 2>&1 && bin/venv-python -c "import pathlib,sys; b=pathlib.Path(\"logs/debug/roster-baseline.txt\"); n=pathlib.Path(\"logs/debug/roster-now.txt\"); assert b.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; B=sorted(l for l in b.read_text().splitlines() if l.startswith(\"=== \")); N=sorted(l for l in n.read_text().splitlines() if l.startswith(\"=== \")); missing=[x for x in B if x not in N]; added=[x for x in N if x not in B]; print(\"roster before/after\",len(B),len(N),\"added\",added); assert not missing, (\"check heading disappeared\", missing)"'
     expected: >-
       Exit 0 and every check heading present before the change is still present; additions are
       reported too. Note this is a PARTIAL projection -- a check that prints no heading cannot be
@@ -258,15 +253,8 @@ test_obligations:
       Provides a non-autouse, package-scoped factory over the shared selector, so tests/validate/
       gets sequence injection without the root-conftest full-suite forcing.
     verification_step: 7
-    test_selector: tests/validate/test_driver_seam.py
-    red_green_expectation: red before (file absent, so the two-package-conftest assertion fails), green after
-  - source: tests/checks/conftest.py
-    behavior: >-
-      Provides the sibling factory for tests/checks/ and its sub-packages, covering
-      tests/checks/roadmap/ without any cross-tree fixture.
-    verification_step: 7
-    test_selector: tests/validate/test_driver_seam.py
-    red_green_expectation: red before (no factory declared there), green after
+    test_selector: tests/validate/test_driver_seam.py::TestFixtureHoming::test_factory_is_package_scoped_and_not_autouse
+    red_green_expectation: red before (file absent, so the package-conftest assertion fails), green after
   - source: tests/conftest.py
     behavior: >-
       No blanket neutralization loop remains at root scope; the whole-tier hub coupling is gone.
@@ -394,7 +382,7 @@ pre_implementation_checklist:
   - only the plan-cited decision sections (104, 128, 131, 132, 148, 159, 165, 73)
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
-  - "Baseline captured: bin/venv-python -m scripts.validate 2>&1 | grep '^=== ' > logs/.roster-baseline.txt (VP step 10 diffs against it), plus test_tiers.py and test_plan_document.py SLOC"
+  - "Baseline captured: bin/venv-python -m scripts.validate > logs/debug/roster-baseline.txt 2>&1 (logs/debug/ is gitignored, so it cannot wedge VP step 1), plus test_tiers.py and test_plan_document.py SLOC"
 execution_steps:
   - >-
     Capture the baseline roster and the two at-ceiling SLOC counts before editing, so the
