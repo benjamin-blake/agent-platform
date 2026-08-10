@@ -246,13 +246,15 @@ verification_plan:
     fix_if: >-
       A missing clause means the skill was repointed without the safety rule, which would let an
       implementation demote superseded_pointer and reproduce the exact aggressive-filter defect this plan
-      exists to prevent. Note this is a presence check, not a semantic one -- invariant I5 carries the same
-      assertion continuously, and neither can prove the LLM honours the clause at dispatch time.
+      exists to prevent. Note these are presence/absence checks, not semantic ones -- invariant I5 carries
+      all three continuously (including the absence half, so the prose branch cannot be reintroduced later),
+      and neither can prove the LLM honours the clause at dispatch time.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Duplicates invariant I5 of validate_decision_currency, which asserts the same clauses against the
-      skill file on every run of both tiers.
+      Duplicates invariant I5 of validate_decision_currency, which asserts the same three conditions --
+      both presence clauses AND the absence of the status-prose fallback -- against the skill file on every
+      run of both tiers.
   - step: 7
     phase: pre-deploy
     action: >-
@@ -326,11 +328,16 @@ verification_plan:
       standing assertion.
   - step: 11
     phase: pre-deploy
-    action: Run the authoritative fast-tier presubmit, which now includes the new currency check.
-    command: bin/venv-python -m scripts.validate --pre
+    action: >-
+      Run the authoritative fast-tier presubmit (which now includes the new currency check), then the FULL
+      tier. Both are required: this plan declares handoff_policy.full_validation_required_before_commit, and
+      validate_handoff_full_tier rejects any segment containing --pre, so a --pre-only plan fails that gate
+      on its own PR. The chained form satisfies the matcher's second segment.
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     expected: >-
-      Exit 0, with validate_decision_currency, validate_decisions_index_freshness, validate_prose_limits,
-      validate_sloc_limits and validate_verification_registry all passing.
+      Both invocations exit 0, with validate_decision_currency, validate_decisions_index_freshness,
+      validate_prose_limits, validate_sloc_limits, validate_structural_size_limits,
+      validate_handoff_full_tier and validate_verification_registry all passing.
     fix_if: >-
       A KeyError on validate_decision_currency means the scripts/validate.py facade re-export line is
       missing. A validate_sloc_limits failure names the file: scripts/validate.py is at 498 of 500 SLOC, so
@@ -385,7 +392,8 @@ test_obligations:
       not derive superseded_compacted; I2 currency present on an archive row or missing from a live row; I3
       an emitted value outside the contract vocabulary; I4 a live entry carrying a Reversed or Deferred
       status marker not listed in the empty-at-install grandfather hook; I5 the decision-scout skill missing
-      either consumer-contract clause.
+      either consumer-contract clause OR carrying the status-prose fallback ("whose status is active")
+      again -- I5 is presence-AND-absence, so reintroducing the prose branch fails the build.
     verification_step: 9
     test_selector: tests/checks/decisions/test_validate_decision_currency.py
     red_green_expectation: >-
@@ -405,12 +413,12 @@ test_obligations:
   - source: scripts/checks/registry.py
     behavior: validate_decision_currency is sequenced into both tiers, glob-gated on the surfaces it reads, and reachable by name.
     verification_step: 11
-    command: bin/venv-python -m scripts.validate --pre
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     red_green_expectation: Red before (the check does not run, so its invariants are unenforced), green after with the check named in the output.
   - source: scripts/validate.py
     behavior: The facade re-export makes validate_decision_currency a module-level global so registry dispatch via globals()[name] resolves it.
     verification_step: 11
-    command: bin/venv-python -m scripts.validate --pre
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     red_green_expectation: >-
       Red before (dispatch KeyErrors on the check name once sequenced), green after. This is the exact
       failure mode scripts/CLAUDE.md warns about for a registered check with no re-export line.
@@ -454,7 +462,7 @@ test_obligations:
       guard_symbol, plan_slug decision-corpus-currency, graduated_at, graduated_by, check_spec) and pass the
       differential admission gate.
     verification_step: 11
-    command: bin/venv-python -m scripts.validate --pre
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     waiver_reason: >-
       The registry is an append-only record of graduated checks, not behaviour: its correctness is
       adjudicated by validate_verification_registry's own differential admission gate, which runs in --pre
@@ -593,7 +601,9 @@ context:
     the 6,000-line ceiling precisely because "every graduating /implement plan appends to it, including this
     one", and the never-a-second-raise pre-commitment governs what happens when the ceiling FIRES. Using it
     to waive six steps was graduation-avoidance. config/agent/verification_registry/registry.yaml is now in
-    Scope (4,739 lines, 1,261 free, ~9 lines per row) and step 1 -- the corpus derivation, which had NO
+    Scope (measured at that time as 4,561 EFFECTIVE lines of the 6,000 ceiling -- an earlier draft of this
+    note wrongly subtracted the 4,739 RAW count from an effective-line limit; see the round-4 note for the
+    current post-rebase figures) and step 1 -- the corpus derivation, which had NO
     standing guard and whose waiver reason was simply false -- is graduated.
   - >-
     Round-2 finding, actioned: requiring the generator to RAISE on vocabulary divergence would turn
@@ -753,7 +763,10 @@ execution_steps:
     forbids); I2 currency present on exactly the live
     rows; I3 every emitted value is in the contract vocabulary; I4 no live entry carries a Reversed or
     Deferred status marker outside the grandfather hook; I5 the decision-scout skill contains both
-    consumer-contract clauses.
+    consumer-contract clauses AND that the status-prose fallback is ABSENT (the literal
+    "whose status is active" must not appear). The absence half is the headline safety property -- without
+    it nothing standing prevents the prose branch being reintroduced -- so I5 is presence-AND-absence, not
+    presence-only.
     PIN THE INPUT MODEL (do not invent one): the check signature is
     validate_decision_currency(failed: list[str], root: Path | None = None) with root defaulting to
     _common.ROOT, mirroring the seam validate_decision_entry_conformance already uses. It reads currency
