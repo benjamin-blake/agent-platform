@@ -116,9 +116,16 @@ class TestLoadPromptCompliance:
 
         root_str = str(_shared._common.ROOT)
         # Strip ALL occurrences in one step (sys.path can carry duplicates -- e.g. under
-        # pytest-xdist workers) and let monkeypatch restore the original list verbatim
-        # afterward, rather than manually removing/re-inserting a single entry.
+        # pytest-xdist workers) so the injected/removed branch is exercised.
         monkeypatch.setattr(sys, "path", [p for p in sys.path if p != root_str])
+        # Snapshot immediately before the call and diff after, rather than asserting
+        # absolute absence of root_str: under a full-suite pytest-xdist run, unrelated
+        # test-package collection can leave AMBIENT duplicate root entries in this
+        # worker's sys.path over its lifetime, which an absolute "not in" assertion
+        # would misreport as a leak from THIS function. A before/after snapshot proves
+        # the function's own contract (transient inject-then-restore, net zero change)
+        # without depending on what else shares the worker process's sys.path.
+        before = list(sys.path)
         mod = _shared._load_prompt_compliance()
         assert mod is not None
-        assert root_str not in sys.path  # removed again on the way out
+        assert list(sys.path) == before

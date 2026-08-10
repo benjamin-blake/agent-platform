@@ -15,13 +15,18 @@ class TestSysPathInjection:
         from scripts.checks import _common
 
         root_str = str(_common.ROOT)
-        had_root = root_str in sys.path
-        if had_root:
-            monkeypatch.setattr(sys, "path", [p for p in sys.path if p != root_str])
+        # Strip ALL occurrences so the injected/removed branch is exercised regardless of
+        # ambient pytest-xdist worker-lifetime duplicates (see test__shared.py's
+        # TestLoadPromptCompliance for the same rationale).
+        monkeypatch.setattr(sys, "path", [p for p in sys.path if p != root_str])
+        before = list(sys.path)
         install_fake_git(FakeGit(merge_base_rc=1))
         failed: list[str] = []
         validate_contract_drift(failed, contracts_dir=tmp_path)
-        assert root_str not in sys.path
+        # Before/after snapshot diff, not absolute absence: proves the gate's own
+        # inject-then-restore contract without depending on what else shares this
+        # worker process's sys.path over its lifetime.
+        assert list(sys.path) == before
 
 
 class TestPassTwoMalformedYaml:
