@@ -1,0 +1,414 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "escalation-acceptance-lint"
+intent: >-
+  Restore the autonomous sensor-escalation safety net by making every programmatic rec-filer emit a
+  lint-valid acceptance command, and close the defect class repo-wide so a sixth filer cannot
+  silently reintroduce it.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-escalation-acceptance-lint.yaml
+phase: >-
+  Ops-plane reliability (rec-2772, architectural-review). Adjacent to the CD.35/T2.35 convergence
+  staleness sensor, T2.38/T2.43 code-drift sensors, and the ci-rca gauge lane; owned by no tier_item
+  (ad_hoc_rec exception category, so the Tier Item Freshness Gate does not fire).
+scope:
+  - file: scripts/convergence_health/escalate.py
+    action: Modify
+    purpose: >-
+      Replace the prose acceptance in _build_rec_fields with a per-condition lint-valid probe
+      command; relocate the closure narrative into _build_context and drop the Decision 70 mis-cite.
+  - file: scripts/convergence_health/code_drift.py
+    action: Modify
+    purpose: >-
+      Same replacement in _build_ducklake_drift_rec_fields and _build_prod_drift_rec_fields, probing
+      the deploy-record source_git_sha instead of prose.
+  - file: scripts/ci_rca/probe_health.py
+    action: Modify
+    purpose: >-
+      Replace the prose acceptance with the credential-free --assert-clear command, and add that
+      exit-code CLI mode reading only the local rec cache.
+  - file: scripts/preflight/ci_rca_gauges.py
+    action: Modify
+    purpose: >-
+      Same for the dedup-effectiveness builder (--assert-dedup-clear), plus narrow the two blanket
+      except-Exception swallows to deterministically-classified transient reader outages.
+  - file: scripts/checks/ops_governance/validate_acceptance_literals.py
+    action: Create
+    purpose: >-
+      Repo-wide AST guard: lint every static acceptance string literal at any programmatic rec-filing
+      site, closing the defect class rather than the five known instances.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: Register the new check in both the pre and full tier sequences.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: Add the facade re-export line so the registered check is dispatchable.
+  - file: tests/convergence_health/test_escalate.py
+    action: Modify
+    purpose: Colocated regression tests for escalate.py (Decision 131/159 mirror home).
+  - file: tests/convergence_health/test_code_drift.py
+    action: Modify
+    purpose: Colocated regression tests for code_drift.py (Decision 131/159 mirror home).
+  - file: tests/test_ci_rca_probe_health.py
+    action: Modify
+    purpose: Colocated regression tests for probe_health.py (Decision 131/159 mirror home).
+  - file: tests/test_ci_rca_gauges.py
+    action: Modify
+    purpose: >-
+      Tests for the dedup builder, the --assert-dedup-clear CLI, and the narrowed exception handling.
+  - file: tests/checks/ops_governance/test_validate_acceptance_literals.py
+    action: Create
+    purpose: Colocated tests for the new guard (planted-violation red case + clean-tree green case).
+bundled_recommendations:
+  - rec-2772
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    All five sensor rec-fields builders emit an acceptance string that passes the real
+    lint_acceptance_command() with no mocking of the validator.
+  - >-
+    escalate() completes without raising on a persistently-red high-severity verdict when the
+    portal's real write-time validators run against the built fields.
+  - >-
+    A registered validate.py check fails any static acceptance string literal at a programmatic
+    rec-filing site that does not pass the lint, and runs in both the --pre and full tiers.
+  - >-
+    _escalate_ci_rca_probe_health and _escalate_dedup_effectiveness swallow only exceptions
+    classified transient by scripts.ops_portal.reader_transient.is_reader_unavailable; every other
+    exception propagates to the caller.
+  - >-
+    scripts.ci_rca.probe_health --assert-clear and scripts.preflight.ci_rca_gauges
+    --assert-dedup-clear exit 0 when their condition is clear and non-zero while it holds, reading
+    only the local recommendations cache (no AWS credentials required).
+  - >-
+    A live preflight run files a real ci_rca_probe_health rec that is retrievable from the warehouse
+    after a sync pull.
+  - >-
+    No acceptance or context string in the four sensor modules cites Decision 70 as closure-proof
+    authority.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Assert every sensor rec-fields builder produces an acceptance that passes the real linter.
+    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py tests/convergence_health/test_code_drift.py tests/test_ci_rca_probe_health.py tests/test_ci_rca_gauges.py -q -k acceptance_lint
+    expected: >-
+      All selected tests pass; each asserts lint_acceptance_command(fields["acceptance"]) == (True, None)
+      against the real validator (bash -n), not a mock.
+    fix_if: >-
+      A builder still emits prose or shell-unsafe text; the failure message prints the offending
+      command and the bash syntax error.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: sensor-acceptance-lint-clean
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert escalate() files rather than raises on a persistently-red high-severity verdict, with
+      the portal's real write-time validators applied to the built fields.
+    command: bin/venv-python -m pytest tests/convergence_health/test_escalate.py -q -k persistent_red_files_rec
+    expected: >-
+      escalate() returns {"action": "file", "rec_id": ...} through an injected portal_caller; the
+      built fields pass _load_write_time_validators("ops_recommendations") without raising.
+    fix_if: >-
+      ValueError propagates from the validator loop, meaning the acceptance is still lint-invalid or
+      another write-time validator now rejects the fields.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: escalate-files-on-persistent-red
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert the new repo-wide guard is red on a planted prose acceptance and green on the fixed tree.
+    command: bin/venv-python -m pytest tests/checks/ops_governance/test_validate_acceptance_literals.py -q
+    expected: >-
+      The planted-violation fixture appends to failed[] naming file and line; the clean-tree case
+      appends nothing.
+    fix_if: >-
+      The AST walk misses dict-literal acceptance values, implicit string concatenation, or f-string
+      literal segments, so a planted violation goes undetected.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: acceptance-literal-lint-guard
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the guard is actually reachable through validate.py dispatch (registry entry plus
+      facade re-export), not merely registered.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q && bin/venv-python -m scripts.validate --pre
+    expected: >-
+      The registry reachability tests pass, then the --pre run reaches and prints the new check's
+      section header and exits 0; no KeyError on the check name.
+    fix_if: >-
+      KeyError on the check name means the scripts/validate.py re-export line is missing; absence of
+      the section header means the registry tier sequence entry is missing.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step invokes scripts/validate.py itself, which is the harness the graduated checks run
+      inside; registering it as a standing check would make validate.py recurse into itself.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the narrowed exception handling: a classified transient reader outage is still swallowed
+      to a warning, and any other exception propagates.
+    command: bin/venv-python -m pytest tests/test_ci_rca_gauges.py -q -k transient_or_reraise
+    expected: >-
+      A raised reader-unavailable exception returns None with the warning printed; a raised
+      ValueError propagates out of _escalate_ci_rca_probe_health and _escalate_dedup_effectiveness.
+    fix_if: >-
+      A blanket except Exception remains, so the ValueError is still swallowed and the regression that
+      hid this bug for its entire life is not actually closed.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: gauge-escalation-reraises-non-transient
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Assert both new exit-code CLIs invert correctly and need no AWS credentials.
+    command: bin/venv-python -m pytest tests/test_ci_rca_probe_health.py tests/test_ci_rca_gauges.py -q -k assert_clear
+    expected: >-
+      Each CLI returns 0 for a below-threshold fixture and non-zero for an over-threshold fixture,
+      reading only the local cache rows passed in.
+    fix_if: >-
+      A CLI returns 0 unconditionally, reaches for a live reader, or requires a profile -- any of
+      which makes it useless as the rec's relevance oracle (Decision 103).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: gauge-assert-clear-exit-codes
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Discharge the full-tier handoff obligation before any commit or PR (Decision 163).
+    command: bin/venv-python -m scripts.validate
+    expected: Completed full run exits 0 with no failed checks.
+    fix_if: >-
+      Any check fails; forward-fix on the branch and rerun the full tier from the start rather than
+      reverting.
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Live end-to-end proof through the real portal: the fixed probe_health filer lands a rec in the
+      warehouse. The abstention gauge is currently 0.70 against a 0.30 threshold, so the escalation
+      fires on this run without any state being manufactured.
+    command: bin/venv-python -m scripts.session.preflight > /dev/null && bin/venv-python -m scripts.sync.ops pull > /dev/null && grep -q "CI-RCA sustained low-confidence/undetermined RCA rate" logs/.recommendations-log.jsonl
+    expected: >-
+      Preflight escalates, the portal allocates a rec-NNNN, the sync pull brings it back, and the
+      title greps clean out of the rebuilt cache.
+    fix_if: >-
+      The rec is absent -- inspect preflight stderr for a "[WARN] preflight: ci_rca_probe_health"
+      line, which now indicates a non-lint write-time rejection since the lint path is fixed.
+test_obligations:
+  - source: scripts/convergence_health/escalate.py
+    behavior: >-
+      Every escalation condition's built acceptance stays a lint-valid shell command, and escalate()
+      files rather than raises on a persistently-red high-severity verdict.
+    verification_step: 2
+    test_selector: tests/convergence_health/test_escalate.py::test_persistent_red_files_rec
+    red_green_expectation: >-
+      Red before (ValueError from the acceptance lint), green after.
+  - source: scripts/convergence_health/code_drift.py
+    behavior: >-
+      Both drift builders emit a lint-valid acceptance probing the deploy-record source_git_sha.
+    verification_step: 1
+    test_selector: tests/convergence_health/test_code_drift.py::test_drift_acceptance_lint_valid
+    red_green_expectation: >-
+      Red before (bash syntax error on the prose parentheses), green after.
+  - source: scripts/ci_rca/probe_health.py
+    behavior: >-
+      The builder emits a lint-valid acceptance, and --assert-clear exits non-zero only while the
+      abstention rate is over threshold.
+    verification_step: 6
+    test_selector: tests/test_ci_rca_probe_health.py::test_assert_clear_exit_codes
+    red_green_expectation: >-
+      Red before (no CLI mode exists; acceptance fails the lint), green after.
+  - source: scripts/preflight/ci_rca_gauges.py
+    behavior: >-
+      The dedup builder emits a lint-valid acceptance, --assert-dedup-clear inverts correctly, and
+      only classified transient reader outages are swallowed.
+    verification_step: 5
+    test_selector: tests/test_ci_rca_gauges.py::test_transient_or_reraise
+    red_green_expectation: >-
+      Red before (blanket except Exception swallows the ValueError), green after.
+  - source: scripts/checks/ops_governance/validate_acceptance_literals.py
+    behavior: >-
+      Any static acceptance string literal at a programmatic rec-filing site that fails the lint is
+      reported with file and line.
+    verification_step: 3
+    test_selector: tests/checks/ops_governance/test_validate_acceptance_literals.py
+    red_green_expectation: >-
+      Red before (the module does not exist), green after.
+  - source: scripts/checks/registry.py
+    behavior: The new check is present in both the pre and full tier sequences and resolves.
+    verification_step: 4
+    test_selector: tests/test_checks_registry.py
+    red_green_expectation: >-
+      Red before (unknown check name), green after.
+  - source: scripts/validate.py
+    behavior: The new check name is a module-level global so globals()[name] dispatch resolves it.
+    verification_step: 4
+    test_selector: tests/test_checks_registry.py
+    red_green_expectation: >-
+      Red before (KeyError on the check name during dispatch), green after.
+constraints:
+  - Only files listed in Scope may be modified.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Mock the transport, never the validator. Injected portal_caller / open_recs / s3_client / git_runner
+    seams are permitted; lint_acceptance_command must never be mocked, patched, or reimplemented in a
+    test -- every acceptance assertion runs the real bash -n path.
+  - >-
+    Do not carry the "Decision 70" closure-proof citation into the relocated context narrative;
+    Decision 103's 2026-07-03 amendment records that citation as a mis-cite.
+  - >-
+    Preserve the convergence-health alarm-only invariants: no terraform apply, no dispatch of
+    terraform-apply-sandbox, never write the convergence record. The live VP step must not manufacture
+    a red convergence state.
+  - >-
+    The two new CLI modes read only logs/.recommendations-log.jsonl (or injected rows). They must not
+    construct a DuckLake reader -- an acceptance command that needs a profile is useless as the
+    relevance oracle off-profile (Decision 103).
+  - >-
+    scripts/preflight/ci_rca_gauges.py is 444 SLOC against the unregistered 500 default. If the CLI
+    plus the narrowing pushes it past 500, decompose into a facade package (Decision 128) -- never
+    raise the budget, never run --update-sloc-budgets to reseed it.
+  - >-
+    No hardcoded exact-count assertions against growing collections in the new tests
+    (validate_test_count_coupling, Decision 104).
+  - No new standing prose-architecture docs under docs/ (Decision 86).
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND, 120 of 120 triaged.
+    CITE: Decision 66, Decision 65, Decision 62, Decision 132, Decision 163, Decision 131 (with
+    Decision 159 cl.2). RELATED: Decision 70, Decision 55, Decision 84, Decision 100/75, Decision 142,
+    Decision 128/130, Decision 135. Flags: Decision 103 [NOTE], Decision 162 [WARN], Decision 155
+    [WARN], Decision 48 [NOTE]."
+  - >-
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    rec-2772 names only escalate.py. Recon found the identical defect at five builder sites, and that
+    none of them has ever filed a rec: zero rows across all 1,759 recs of any status for sources
+    tf_convergence_stale, ducklake_code_drift, prod_code_drift, ci_rca_probe_health, and for the
+    dedup-effectiveness title. Sites 1-3 fail loudly (ValueError under set -euo pipefail fails the
+    convergence-health run and skips the two downstream drift sensor steps); sites 4-5 fail silently
+    behind a [WARN]. Verified live during planning: this session's preflight has
+    ci_rca_abstention_gauge.rate = 0.70 against a 0.30 threshold, and stderr shows
+    "[WARN] preflight: ci_rca_probe_health.escalate() failed: ERROR: Bash syntax validation failed"
+    with ci_rca_probe_health_escalation null in the report.
+  - >-
+    The whole defect is offline-reproducible: file_rec runs lint_acceptance_command at
+    scripts/ops_data_portal.py line 187 and does not touch the network until line 203. That is why
+    the tier stays V2 and why mocking the validator would weaken the evidence rather than strengthen
+    it -- the real linter is free, deterministic and credential-free to run.
+  - >-
+    Decision 162 [WARN] disposition -- ACCEPTED, not deferred. The repo-wide AST guard
+    (validate_acceptance_literals) is in scope as the primary class-level guard; the per-site
+    colocated tests are its behavioural complement. An enumerated five-builder test alone would leave
+    a sixth filer free to reintroduce the defect silently.
+  - >-
+    Decision 155 [WARN] disposition -- ACCEPTED, not deferred. The blanket except Exception in
+    scripts/preflight/ci_rca_gauges.py is what hid sites 4 and 5 for their entire life; it narrows to
+    is_reader_unavailable classification with everything else re-raised.
+  - >-
+    Decision 48 [NOTE] disposition -- ACCEPTED. VP step 8 is a genuine live end-to-end invocation
+    through the real portal. Honest limit on its reach: only sites 4-5 can be proven live, because
+    sites 1-3 require a red convergence record and manufacturing one would breach the sensor's
+    alarm-only invariants. Sites 1-3 rest on no-mock offline proof plus the class-level guard.
+  - >-
+    Decision 103 [NOTE] disposition -- ACCEPTED WITH A RECORDED DEGRADATION. The sites 1-3 acceptance
+    commands are live AWS/gh probes because no repo-local command can express "the convergence record
+    returned to green". Consequence: scripts/rec_relevance.py cannot reach a deterministic satisfied
+    verdict for those three rec families off-profile, and degrades to unknown. Sites 4-5 avoid this
+    entirely via the credential-free --assert-clear CLIs.
+  - >-
+    Decision 66 gap -- EXPLICITLY DEFERRED. Tier A (get_rec_write_guidance) is structurally
+    unreachable for programmatic filers, which compose no LLM-judged text; this plan closes the Tier B
+    write-time gap only. The AST guard is the compensating control. File a follow-on rec for the
+    Tier-A-for-non-agent-callers hole rather than widening this plan.
+  - >-
+    Decision 62 residual -- EXPLICITLY DEFERRED. Five sensors filed zero recs and nothing noticed,
+    which is exactly the silent-cron failure mode Decision 62 named and pointed at Decision 74's
+    persistent-unavailability alarm. A never-fired-sensor alarm is out of scope here; rec-2854 already
+    tracks the adjacent convergence-health monitor-lane visibility gap.
+  - >-
+    Test homes are fixed by the Decision 131/159 mirror map, verified this session via
+    map_source_to_test: escalate.py -> tests/convergence_health/test_escalate.py, code_drift.py ->
+    tests/convergence_health/test_code_drift.py, probe_health.py -> tests/test_ci_rca_probe_health.py,
+    the new check -> tests/checks/ops_governance/test_validate_acceptance_literals.py, and
+    scripts/preflight/ci_rca_gauges.py -> None (a genuine mapping gap; tests/test_ci_rca_gauges.py is
+    its de-facto home and is used here). None of the four sensor files appear in
+    config/coverage_baseline.yaml. A new tests/-root file would discharge none of these mappings,
+    which is why no separate tests/test_sensor_acceptance_lint.py is created.
+  - >-
+    Registry wiring is a three-part edit per scripts/CLAUDE.md: the module under
+    scripts/checks/ops_governance/ with an @register decorator, the name inserted into the ordered
+    tier sequences in scripts/checks/registry.py (pre_sequence with a scripts/**/*.py pre_glob plus
+    full_sequence), AND a re-export line in scripts/validate.py -- without the third, dispatch
+    KeyErrors. scripts/checks/ops_governance/validate_rec_write_paths.py is the closest structural
+    template.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok, no overlapping
+    files), so no Main Divergence Assessment deferral applies. Tier Item Freshness Gate skipped: this
+    is the ad_hoc_rec soft-warn exception category and names no tier_item. Complexity heuristic
+    (>5 files) would suggest STRATEGIC, but STRATEGIC is suspended per AGENTS.md, so this is authored
+    as a single larger IMPLEMENTATION plan.
+  - >-
+    Slug is escalation-acceptance-lint rather than the task's convergence-escalation-acceptance,
+    because the confirmed scope spans the ci_rca gauge lane as well as the convergence sensors.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/convergence_health/escalate.py -- replace the single prose acceptance in
+    _build_rec_fields with a per-condition lint-valid command selected by the same condition key used
+    for the title: persistently_red probes the convergence record for green; stale_green_backlog
+    probes the record's commit_sha against origin/main's tip; stuck_approval probes for zero waiting
+    terraform-apply-sandbox runs. Keep the closure narrative in _build_context and drop the Decision
+    70 citation.
+  - >-
+    scripts/convergence_health/code_drift.py -- replace the prose acceptance in both
+    _build_ducklake_drift_rec_fields and _build_prod_drift_rec_fields with a deploy-record probe
+    (s3://agent-platform-data-lake/deploy-records/<channel>/<function>.json, field source_git_sha)
+    chained over the stale functions the rec names.
+  - >-
+    scripts/ci_rca/probe_health.py -- replace the prose acceptance with the --assert-clear command
+    string, and add the corresponding exit-code CLI mode that recomputes the abstention rate from the
+    local cache and returns 0 only when it is below threshold.
+  - >-
+    scripts/preflight/ci_rca_gauges.py -- same treatment for the dedup-effectiveness builder
+    (--assert-dedup-clear), then narrow both _escalate_ci_rca_probe_health and
+    _escalate_dedup_effectiveness to swallow only is_reader_unavailable-classified exceptions and
+    re-raise the rest. Re-check the file's SLOC after the edit and decompose if it crosses 500.
+  - >-
+    scripts/checks/ops_governance/validate_acceptance_literals.py -- new AST check: walk every .py
+    under scripts/ (and personal_scripts/ when present), find dict-literal "acceptance" keys whose
+    value is statically resolvable (Constant, implicitly concatenated Constants, or a JoinedStr whose
+    FormattedValue segments are substituted with a placeholder token), run lint_acceptance_command on
+    the resolved text, and report file:line for each failure. Skip values that cannot be statically
+    resolved rather than guessing.
+  - >-
+    scripts/checks/registry.py and scripts/validate.py -- insert the check into pre_sequence (with a
+    scripts/**/*.py pre_glob) and full_sequence, and add the facade re-export line.
+  - >-
+    Add the colocated tests in the four mirror homes plus the new check's test file, per the mirror
+    map recorded in Context. Every acceptance assertion calls the real lint_acceptance_command.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Every change is additive or a string replacement in pure-Python modules with no schema, table, or
+  infrastructure component; reverting the commit restores the prior behaviour exactly. The one
+  side effect that survives a revert is the real rec filed by VP step 8, which is a genuine alarm for
+  a real 0.70 abstention rate and is left open by design for the sensor to auto-close when the rate
+  recovers.
