@@ -94,10 +94,13 @@ scope:
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      Add one row per graduating VP step (steps 1, 2, 4, 5, 6, 9 carry graduation: graduate with a
-      graduation_check_id). validate_graduation_completeness's implement-PR leg requires a
-      new-in-diff registry row for each, so this file must be in Scope or constraint 1 would forbid
-      the very bookkeeping the dispositions oblige.
+      Add one row per graduating VP step (steps 1, 2, 4, 6, 9 carry graduation: graduate with a
+      graduation_check_id -- step 5 is deliberately waived, see its graduation_waiver_reason).
+      validate_graduation_completeness's implement-PR leg requires a new-in-diff registry row for
+      each, so this file must be in Scope or constraint 1 would forbid the very bookkeeping the
+      dispositions oblige. Every added row must pass VF-06 differential admission (fail on
+      origin/main, pass on HEAD) -- all five were checked against origin/main and are genuinely
+      differential.
   - file: .github/workflows/deploy-prod-lambdas.yml
     action: Modify
     purpose: >-
@@ -273,8 +276,17 @@ verification_plan:
       carries a legitimate dec-159 marker on tests/test_checks_registry.py that a downward ratchet may
       drop -- that is permitted and must not false-fail this step.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: ops-writer-sloc-within-budget
+    graduation: waive
+    graduation_waiver_reason: >-
+      Not graduatable: the assertion is that ops_writer.py sits at or under an UNCHANGED 571 budget,
+      which is already true on origin/main (measured: 569 SLOC there, and the sloc_budgets.yaml diff
+      is empty in an origin/main worktree, so the raise-marker conjunct holds too). VF-06's
+      differential admission gate requires a candidate check to FAIL on origin/main and pass on HEAD;
+      an at-or-under-budget invariant on an unchanged ceiling passes identically on both trees, so
+      validate_verification_registry would reject any row for it as tautological. No honest check_spec
+      exists. The ceiling is already enforced independently by validate_sloc_limits, and the
+      no-unauthorized-raise half by validate_sloc_budget_raises (Decision 128/165), so graduating
+      would add zero coverage.
   - step: 6
     phase: pre-deploy
     action: >-
@@ -344,8 +356,10 @@ verification_plan:
   - step: 9
     phase: pre-deploy
     action: >-
-      PRE-MERGE proof that both Lambda zips actually stage the new sole home, and that ops_writer.py
-      can import it from inside the staged tree. This is the plan's highest-consequence check: the
+      PRE-MERGE proof that both Lambda zips actually stage the new sole home. (Staging only -- the
+      command asserts presence in the staged tree, NOT that an import resolves there; src/__init__.py
+      and src/common/__init__.py both stage, so the import follows, but this step does not prove it.)
+      This is the plan's highest-consequence check: the
       guard adds a module-scope import to a file bundled into two active artifacts, so an unstaged or
       unimportable leaf would ImportError at Lambda cold start -- worse than the bug being fixed.
       Deliberately pre-deploy (not post-deploy) so the failure is caught before merge.
@@ -497,6 +511,18 @@ test_obligations:
     test_selector: tests/convergence_health/test_code_drift.py
     red_green_expectation: >-
       Red before (entry absent), green after.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      The rows added for the five graduating VP steps (1, 2, 4, 6, 9) load against the registry schema
+      and each passes VF-06 differential admission -- failing on origin/main, passing on HEAD.
+    verification_step: 8
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A YAML data surface, not importable code -- there is no pytest node id that guards a registry
+      row. Its correctness is enforced by validate_verification_registry (schema load plus the VF-06
+      differential admission gate, which materializes each candidate check in an origin/main worktree
+      and rejects any that does not fail there), which runs inside the full-tier validate invocation
+      this obligation links to. Same shape as the deploy-prod-lambdas.yml obligation below.
   - source: .github/workflows/deploy-prod-lambdas.yml
     behavior: >-
       on.push.paths includes src/common/outbox_retirement.py so an edit to the sole home triggers the
@@ -741,7 +767,15 @@ execution_steps:
     (verified: exits 5 today); (c) assert on the put_object mock's call args (never called for that
     table) AND that the outbox file survives -- asserting only the latter would pass a guard that
     stages but fails to unlink. Do not quote the `in DUCKLAKE_MIGRATED_TABLES or ...` predicate
-    verbatim in any test docstring (it would inflate verification step 2's count). Update
+    verbatim in any test docstring (it would inflate verification step 2's count). Two further
+    requirements in that module: (i) patch scripts.ops_writer._OUTBOX_BASE to a tmp_path, as every
+    existing test there does -- staging a fixture under the REAL logs/.ops-outbox/ops_decisions/ would
+    trip both the conftest outbox-hermeticity collection guard and validate_outbox_staleness, which
+    hard-fails rather than warns; (ii) update the module docstring, which currently states the module
+    "intentionally never spells out the two forbidden table names" -- the new tests must name
+    ops_decisions/ops_priority_queue, so that sentence becomes false and must be rewritten to say the
+    module now names them deliberately, as the only two tables for which the guard is a behaviour
+    change. Update
     tests/sync/ops/test_sync_cli.py, tests/checks/ops_governance/test_validate_outbox_staleness.py and
     tests/convergence_health/test_code_drift.py as needed; tests/sync/ops/test_drain.py and
     tests/test_outbox_hermeticity_guard.py are pre-authorized but expected to need no change.
@@ -749,8 +783,13 @@ execution_steps:
     File two recommendations via `bin/venv-python -m scripts.ops_data_portal` (call
     get_rec_write_guidance() first): (a) the systemic src/common/** PROD_SOURCE_PATHSPECS gap; (b) a
     rec against T2.26 to own the deferred TABLE_NAMES removal + legacy staging write-path retirement.
-    BOTH must name `src/common/outbox_retirement.py` verbatim in their context field -- verification
-    step 11 asserts on that exact token, chosen because it matches zero open recs today.
+    File each with the METADATA verification step 11 asserts on -- both anchors were measured to match
+    zero open recs today, so they are genuine delta proofs: rec (a) MUST be filed with
+    `--file scripts/convergence_health/code_drift.py`; rec (b) MUST be filed with
+    `--dependencies rec-2929` (it genuinely is a follow-on of rec-2929). Both flags exist on the
+    portal CLI. Do NOT instead shape either rec's context prose to contain a magic token -- an earlier
+    draft of step 11 required that and it was removed as grep-shaping, so context text is now
+    irrelevant to the assertion.
   - >-
     Handle rec-2895, the open duplicate of rec-2929 (same defect, same file, filed while implementing
     the outbox-test-hermeticity plan). It is resolved by this work, so it is bundled and belongs in
