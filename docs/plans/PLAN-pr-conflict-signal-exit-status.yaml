@@ -72,7 +72,19 @@ scope:
       New guard closing the silent-green class over INLINE workflow bodies: a step with
       continue-on-error true whose inline body inherits errexit and holds an unguarded command
       substitution. Measured population after this fix is ZERO, so it installs with no grandfather
-      roster and no Decision.
+      roster. Whether it also needs a numbered Decision is a SEPARATE question, answered explicitly
+      in Context against decision-entry.yaml's significance routing rule -- population size is
+      evidence about the roster only, and the two must not be fused.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Map the new check into function_to_category (Decision 60 Priority-0 attribution
+      precondition). validate_ci_rca_taxonomy fails on ANY registered check missing from that map,
+      and it runs in BOTH sequences (registry.py:143 pre, :259 full) -- so omitting this reds the
+      FAST tier, the authoritative pre-merge gate under Decision 73. Reproduced at plan time:
+      "registered check 'validate_masked_errexit_steps' absent from function_to_category". Without
+      this row the implement agent is wedged between a red gate and the only-files-in-scope
+      constraint.
   - file: tests/checks/ci_guards/test_validate_masked_errexit_steps.py
     action: Create
     purpose: >-
@@ -267,7 +279,7 @@ verification_plan:
     action: >-
       Confirm the R3 ratchet is clean and the declared ceiling matches the measured post-extraction
       body, with no raise-approved marker on the decreased entry.
-    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as c; f=[]; c(f); assert f==[], f; from scripts.checks.ci_guards._workflow_shell_bodies import scan_workflow_bodies; import yaml,pathlib; k='.github/workflows/pr-conflict-signal.yml::detect-conflicts::poll-open-claude-prs-and-wake-conflicted-ones'; live=scan_workflow_bodies()[k]; dec=yaml.safe_load(pathlib.Path('config/composite_action_body_baseline.yaml').read_text())['r3_workflows'][k]; assert dec==live, (dec,live); print('ratchet clean, ceiling', dec)"
+    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as c; f=[]; c(f); assert f==[], f; from scripts.checks.ci_guards._workflow_shell_bodies import scan_workflow_bodies; import yaml,pathlib; k='.github/workflows/pr-conflict-signal.yml::detect-conflicts::poll-open-claude-prs-and-wake-conflicted-ones'; live=scan_workflow_bodies()[k]; raw=pathlib.Path('config/composite_action_body_baseline.yaml').read_text(); dec=yaml.safe_load(raw)['r3_workflows'][k]; assert dec==live, (dec,live); line=[l for l in raw.splitlines() if k in l][0]; assert '# raise-approved' not in line, line; print('ratchet clean, unmarked ceiling', dec)"
     expected: >-
       Ratchet clean and the declared ceiling equals the live measured count (both are 36
       pre-extraction; both should be the new small count after).
@@ -377,7 +389,24 @@ test_obligations:
       Proven by the pre-fix/post-fix CATEGORIES fixture pair, which isolates THIS shape: red on the
       byte-literal pre-fix block (the guard must fire), green on the byte-literal post-fix block.
       Deliberately linked to VP6 rather than VP7 -- on VP7 the origin/main differential would resolve
-      to an ImportError on the absent module, which proves nothing about this assignment.
+      to an ImportError on the absent module, which proves nothing about this assignment. NOTE the
+      split of duties, since verification_step takes a single id: VP6 proves the DETECTOR
+      discriminates the two shapes, and VP7 is the on-disk complement proving the live
+      .github/workflows/ci-rca.yml actually carries the post-fix shape. Both are required; neither
+      alone discharges this obligation.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      Every registered check resolves to a category, so registering the new check does not red the
+      fast tier on the Decision 60 attribution precondition.
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      The completeness invariant is enforced repo-wide by validate_ci_rca_taxonomy on every
+      presubmit run, in BOTH tiers, over the live registry -- a bespoke test would assert the same
+      property against a fixture instead of the real registry, which is strictly weaker. The
+      differential is real rather than nominal: the mapping is only reachable once registry.py
+      registers the check, and omitting the row reproducibly fails with "registered check
+      'validate_masked_errexit_steps' absent from function_to_category" (reproduced at plan time).
   - source: scripts/checks/registry.py
     behavior: The new check runs in both the fast and full presubmit tiers.
     verification_step: 8
@@ -388,7 +417,7 @@ test_obligations:
       The r3_workflows ceiling for this body equals the live measured count and carries no
       raise-approved marker.
     verification_step: 9
-    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as c; f=[]; c(f); assert f==[], f; from scripts.checks.ci_guards._workflow_shell_bodies import scan_workflow_bodies; import yaml,pathlib; k='.github/workflows/pr-conflict-signal.yml::detect-conflicts::poll-open-claude-prs-and-wake-conflicted-ones'; live=scan_workflow_bodies()[k]; dec=yaml.safe_load(pathlib.Path('config/composite_action_body_baseline.yaml').read_text())['r3_workflows'][k]; assert dec==live, (dec,live); print('ratchet clean, ceiling', dec)"
+    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_shell_bodies import validate_composite_action_shell_bodies as c; f=[]; c(f); assert f==[], f; from scripts.checks.ci_guards._workflow_shell_bodies import scan_workflow_bodies; import yaml,pathlib; k='.github/workflows/pr-conflict-signal.yml::detect-conflicts::poll-open-claude-prs-and-wake-conflicted-ones'; live=scan_workflow_bodies()[k]; raw=pathlib.Path('config/composite_action_body_baseline.yaml').read_text(); dec=yaml.safe_load(raw)['r3_workflows'][k]; assert dec==live, (dec,live); line=[l for l in raw.splitlines() if k in l][0]; assert '# raise-approved' not in line, line; print('ratchet clean, unmarked ceiling', dec)"
     waiver_reason: >-
       Standing drift invariant rather than evidence of this change: declared equals live both before
       and after, so it cannot be driven red-then-green. The ceiling itself is enforced repo-wide by
@@ -573,6 +602,33 @@ context:
     below, which requires delegates to carry a literal-argv wiring test; the two are complementary
     halves and (a) should be filed immediately after merge, not deferred indefinitely.
   - >-
+    WHY NO NUMBERED DECISION -- the three significance questions from
+    docs/contracts/decision-entry.yaml applied explicitly, because that routing rule is a declared
+    standing_commitment and an earlier draft of this plan fused it with the roster argument (a
+    non-sequitur: a zero population is evidence about the ROSTER, and says nothing about the
+    Decision bar). (1) Durable architectural commitment? The commitment was already made in
+    Decision 162, whose own framing names the class verbatim -- "CI-embedded shell whose control
+    flow can silently not run". A masked-errexit abort IS that class; this guard enforces an
+    already-ratified commitment rather than making a new one. (2) Reversal-relevant consequences?
+    Thin: reversal is deleting two registry registrations, one taxonomy row and one re-export, with
+    no data migration and no external contract. (3) Does another routing row own it? Yes --
+    Decision 162 owns the class and Decision 166's Related section already anticipates further
+    surfaces as post-landing implementation work. Question 3 therefore routes this to implementing
+    an existing Decision, not to a new numbered one.
+  - >-
+    CONSIDERED AND REJECTED for the above: folding the rule into
+    validate_composite_action_shell_bodies as an "R4 leg" instead of minting a second registered
+    check name. It is mechanically attractive -- it would dissolve the ci_rca_taxonomy row, the two
+    registry registrations and the validate.py re-export (and with it the 497/500 headroom risk)
+    outright. Rejected because PR #855's precedent for needing no Decision turned on "one rule
+    gaining scope, not a second rule: no second registered check name exists", and masked-errexit is
+    a genuinely different PREDICATE from R3's size ratchet, not the same rule on a wider surface.
+    Bundling it under an existing check name in order to clear that discriminator would be gaming
+    it -- the same species of error as narrowing the rule until the population reads zero. The
+    separate check name is the honest shape; the Decision bar is cleared on question 3 above, not by
+    the packaging. Secondary, non-load-bearing: that guard's mirror test sits at 490/500 effective
+    lines, which is why the workflow leg was given its own module in the first place.
+  - >-
     TOUCH-IT-FIX-IT, deliberately not applied to ci-rca.yml's evidence body (44 eff). The baseline
     header's norm says a behavioural edit to a baselined body should extract it or raise with a
     marker. Mechanically nothing fires here -- R3 is a live <= declared ratchet and the edit is
@@ -715,6 +771,12 @@ execution_steps:
     adjacent to validate_pr_conflict_signal at lines 162 and 204.
   - >-
     Modify scripts/validate.py -- add the single-line re-export next to the existing line-77 import.
+  - >-
+    Modify config/ci_rca_taxonomy.yaml -- add `validate_masked_errexit_steps: environment` to
+    function_to_category. `environment` is the established value for every workflow/composite
+    ci_guard sibling (validate_ci_workflow_guards, validate_composite_action_shell_bodies,
+    validate_pr_conflict_signal). Do this in the SAME commit as the registry.py registration: the
+    two are atomically coupled, because a registered-but-unmapped check reds the fast tier.
   - >-
     Modify config/composite_action_body_baseline.yaml -- lower the r3_workflows ceiling for this body
     from 36 to the measured post-extraction count, with no raise-approved marker.
