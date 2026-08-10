@@ -4884,3 +4884,81 @@ entries:
         - bash
         - -c
         - "! grep -rn 'Decision 70\\|103/70' scripts/convergence_health/ scripts/ci_rca/probe_health.py scripts/preflight/ci_rca_gauges.py"
+  - check_id: pr-conflict-signal-wiring-suite
+    primitive_slot: test_selector
+    guard_target: scripts/ci/pr_conflict_signal.sh
+    guard_symbol: null
+    plan_slug: pr-conflict-signal-exit-status
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_pr_conflict_signal_wiring.py
+  - check_id: pr-conflict-sweep-continues-past-gh-failure
+    primitive_slot: test_selector
+    guard_target: scripts/ci/pr_conflict_signal.sh
+    guard_symbol: _gh_bounded_retry
+    plan_slug: pr-conflict-signal-exit-status
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_pr_conflict_signal_wiring.py::TestSweepContinuation::test_gh_failure_on_first_pr_still_wakes_second
+  - check_id: pr-conflict-signal-real-workflow-body-executes-delegate
+    primitive_slot: test_selector
+    guard_target: .github/workflows/pr-conflict-signal.yml
+    guard_symbol: null
+    plan_slug: pr-conflict-signal-exit-status
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_pr_conflict_signal_wiring.py::TestRealWorkflowBodyWiring::test_real_workflow_body_reaches_delegate_and_completes_sweep
+  - check_id: pr-conflict-signal-guard-new-failpaths
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/ci_guards/validate_pr_conflict_signal.py
+    guard_symbol: null
+    plan_slug: pr-conflict-signal-exit-status
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -m
+      - pytest
+      - tests/checks/ci_guards/test_validate_pr_conflict_signal.py
+      - -q
+      - -k
+      - delegate or checkout_order or errexit or exit_status
+  - check_id: masked-errexit-guard-fires-on-synthetic-violator
+    primitive_slot: test_selector
+    guard_target: scripts/checks/ci_guards/validate_masked_errexit_steps.py
+    guard_symbol: _unguarded_assignments
+    plan_slug: pr-conflict-signal-exit-status
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ci_guards/test_validate_masked_errexit_steps.py
+  - check_id: masked-errexit-zero-violations-over-asserted-file-set
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/ci_guards/validate_masked_errexit_steps.py
+    guard_symbol: scanned_workflow_files
+    plan_slug: pr-conflict-signal-exit-status
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        import pathlib; from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps, scanned_workflow_files as s; f=[]; validate_masked_errexit_steps(f); assert f==[], f; got={pathlib.Path(p).name for p in s()}; want={p.name for p in pathlib.Path('.github/workflows').glob('*.y*ml')}; assert got==want, sorted(want^got); print('zero violations over', len(got), 'workflow files')
+  - check_id: masked-errexit-check-registered-both-tiers
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: null
+    plan_slug: pr-conflict-signal-exit-status
+    graduated_at: '2026-08-10'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |-
+        from scripts.checks import registry; p={s.name for s in registry.pre_sequence()}; f={s.name for s in registry.full_sequence()}; assert 'validate_masked_errexit_steps' in p and 'validate_masked_errexit_steps' in f; print('registered in both tiers')

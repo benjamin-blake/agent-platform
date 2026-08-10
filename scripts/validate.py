@@ -73,6 +73,7 @@ from scripts.checks.ci_guards.validate_composite_action_manifests import validat
 from scripts.checks.ci_guards.validate_composite_action_shell_bodies import (  # noqa: F401,E402
     validate_composite_action_shell_bodies,
 )
+from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_ops_portal_patch_targets import validate_ops_portal_patch_targets  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_pr_conflict_signal import validate_pr_conflict_signal  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_workflow_agent_safety import validate_workflow_agent_safety  # noqa: F401,E402
