@@ -218,16 +218,21 @@ verification_plan:
   - step: 6
     phase: pre-deploy
     action: >-
-      Prove the new masked-errexit guard is not vacuous -- it must FIRE on a synthetic violator and
-      stay silent on each real near-miss already in the tree (|| true, || echo "", && break || sleep 3).
+      Prove the new masked-errexit guard discriminates on the HARD shape, not just the easy one:
+      it must FIRE on a byte-literal copy of the PRE-fix ci-rca CATEGORIES block, stay silent on a
+      byte-literal copy of the POST-fix block, fire on the simple single-line violator, and stay
+      silent on every real near-miss in the tree (|| true, || echo "", && break || sleep 3).
     command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_masked_errexit_steps.py -q
     expected: >-
-      Fires on the synthetic violator; does not fire on any negative case. A guard that only ever
-      passes proves nothing.
+      The pre-fix/post-fix CATEGORIES fixture PAIR discriminates -- fires on the first, silent on
+      the second -- and no negative case fires. That pair is what earns the zero; a guard that only
+      handles the single-line violator proves nothing about the shape this plan actually fixes.
     fix_if: >-
-      No fire on the synthetic violator means the detection never matches -- assert against a
-      fixture byte-identical in shape to the pre-fix pr-conflict-signal body. Firing on a negative
-      means the rule is too broad and would need a roster, which defeats the zero-population premise.
+      Firing on BOTH members of the pair means a per-line detector (the guard sits three lines below
+      the assignment). Firing on NEITHER means a paren-joining detector that saw the inner
+      `|| echo "unknown"`. Both are the broken readings named in the positional-guard constraint --
+      fix the rule, never the fixture. Firing on a negative means the rule is too broad and would
+      need a roster, which defeats the zero-population premise.
     hermetic: false
     graduation: graduate
     graduation_check_id: masked-errexit-guard-fires-on-synthetic-violator
@@ -366,11 +371,13 @@ test_obligations:
     behavior: >-
       The evidence step's CATEGORIES assignment is guarded, so a sort/paste failure can no longer
       abort the step before its GITHUB_OUTPUT writes and hand downstream steps empty bundle values.
-    verification_step: 7
-    command: bin/venv-python -c "import pathlib; from scripts.checks.ci_guards.validate_masked_errexit_steps import validate_masked_errexit_steps, scanned_workflow_files as s; f=[]; validate_masked_errexit_steps(f); assert f==[], f; got={pathlib.Path(p).name for p in s()}; want={p.name for p in pathlib.Path('.github/workflows').glob('*.y*ml')}; assert got==want, sorted(want^got); print('zero violations over', len(got), 'workflow files')"
+    verification_step: 6
+    test_selector: tests/checks/ci_guards/test_validate_masked_errexit_steps.py
     red_green_expectation: >-
-      Red before the guard edit -- the new guard flags this body by name, which is precisely how the
-      round-2 critique found it; green once the assignment is guarded.
+      Proven by the pre-fix/post-fix CATEGORIES fixture pair, which isolates THIS shape: red on the
+      byte-literal pre-fix block (the guard must fire), green on the byte-literal post-fix block.
+      Deliberately linked to VP6 rather than VP7 -- on VP7 the origin/main differential would resolve
+      to an ImportError on the absent module, which proves nothing about this assignment.
   - source: scripts/checks/registry.py
     behavior: The new check runs in both the fast and full presubmit tiers.
     verification_step: 8
@@ -463,6 +470,23 @@ constraints:
     the round-1 census actually exhibited: a per-line regex reports ci-rca.yml's ARTIFACT_ID as
     unguarded, and a declares-set filter misses 10 of the 11 candidate bodies entirely.
   - >-
+    POSITIONAL GUARD RULE (load-bearing -- the whole plan turns on it). A `||` counts as guarding an
+    assignment ONLY when it terminates the command substitution's TOP-LEVEL command list: either
+    immediately after the closing paren, or as the last top-level element inside it. A `||` nested
+    inside a loop body, an inner pipeline element, or any other nested construct does NOT guard the
+    assignment. Note the ci-rca CATEGORIES block is a multi-line $(...) with NO backslash
+    continuations, so the join-continuations requirement above does not reach it -- these are two
+    independent rules, not one.
+  - >-
+    Both naive readings of the above are BROKEN, verified empirically at plan time against the real
+    pre-fix and post-fix ci-rca blocks -- do not ship either. A per-line detector fires on the
+    CATEGORIES assignment BOTH before and after the fix (the guard lands three lines below the
+    assignment line), so VP7 could never go green. A paren-balanced joiner that merely tests for any
+    `||` inside the substitution fires NEITHER before nor after (it sees the inner `|| echo
+    "unknown"` within the for-loop), which would silently make the ci-rca scope row a no-op and the
+    earned zero an artifact of a blind detector. Only the positional rule fires pre-fix and clears
+    post-fix while still passing BUNDLE_SHA=$(... | cut -d= -f2 || echo "").
+  - >-
     Do NOT resolve the ci-rca.yml instance by narrowing the rule to exclude it. The only feature
     distinguishing it from pr-conflict-signal is that it declares no `set` line, which makes it more
     exposed rather than less; excluding it would be classification-gaming to make the population
@@ -476,7 +500,11 @@ context:
     Decision 130, Decision 131, Decision 83, Decision 76, Decision 73, Decision 153, Decision 132,
     Decision 163, Decision 100, Decision 75, Decision 154, Decision 149.
   - >-
-    "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE then PROCEED after 2 round(s)"
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s)" -- recorded as the
+    ACTUAL state at the time of writing, never a predicted verdict. Rounds 1-3 each returned REVISE
+    (round 1: errexit framing and verification-registry scope; round 2: the census predicate error
+    that hid a second live instance; round 3: the under-determined detector rule). This line is
+    updated to the granted verdict only once a round actually returns PROCEED.
   - >-
     Root cause, verified on disk: the poll step declares no shell key, so GitHub runs it as
     "bash -e {0}". The body's own "set -uo pipefail" does NOT clear the inherited -e (set only
@@ -545,7 +573,19 @@ context:
     below, which requires delegates to carry a literal-argv wiring test; the two are complementary
     halves and (a) should be filed immediately after merge, not deferred indefinitely.
   - >-
-    Follow-on recs to file post-merge, deliberately NOT bundled: (a) extend Decision 162 R2
+    TOUCH-IT-FIX-IT, deliberately not applied to ci-rca.yml's evidence body (44 eff). The baseline
+    header's norm says a behavioural edit to a baselined body should extract it or raise with a
+    marker. Mechanically nothing fires here -- R3 is a live <= declared ratchet and the edit is
+    line-neutral, so 44 == 44 -- but the norm is addressed rather than ignored: extracting a 44-line
+    evidence body belonging to another subsystem, inside a wake-signal bugfix, is exactly what
+    Decision 162's own "Sequencing, deliberate" stanza warns against (bundling the highest-blast-radius
+    refactor into incident remediation is how remediation changes cause the next incident). The
+    one-line guard is the minimum edit that removes the defect. Follow-on rec (c) below scopes the
+    extraction separately, mirroring the inline precedent already carried by the r3
+    write-convergence-record entry.
+  - >-
+    Follow-on recs to file post-merge, deliberately NOT bundled: (c) extract ci-rca.yml's evidence
+    body to scripts/ci/ per the touch-it-fix-it norm recorded above; (a) extend Decision 162 R2
     (literal-argv test coverage) to the workflow leg, whose composite-only scoping rationale weakens
     once a workflow body actually lives in scripts/ci/ -- this is the companion that closes the gap
     above; (b) ratchet the 19 loud instances, which does need a roster and a Decision.
@@ -655,12 +695,16 @@ execution_steps:
     composite-action boundary in the module docstring, citing follow-on rec (a) as the mechanism
     that covers delegates.
   - >-
-    Create tests/checks/ci_guards/test_validate_masked_errexit_steps.py -- the firing case on a
-    synthetic violator shaped like the pre-fix body, plus negatives drawn from the REAL near-misses
-    in the tree and a loud step with no continue-on-error. Copy each negative fixture BYTE-FOR-BYTE
-    from the live workflow, including ci-rca.yml's ARTIFACT_ID guard on its backslash-continuation
-    line; do NOT paraphrase them into single-line equivalents, because a per-line detector passes the
-    paraphrase and then fires on the real tree.
+    Create tests/checks/ci_guards/test_validate_masked_errexit_steps.py -- FIRST write the
+    discrimination pair that pins the positional rule: a byte-literal copy of the PRE-fix ci-rca
+    CATEGORIES block (ci-rca.yml lines 300-305) asserted to FIRE, and a byte-literal copy of the
+    POST-fix block asserted NOT to fire. Then the simple single-line violator, then negatives drawn
+    from the REAL near-misses in the tree and a loud step with no continue-on-error. Copy every
+    fixture BYTE-FOR-BYTE from the live workflow, including ci-rca.yml's ARTIFACT_ID guard on its
+    backslash-continuation line; do NOT paraphrase any of them into single-line equivalents, because
+    a per-line detector passes the paraphrase and then fires on the real tree. Also add the
+    cheap wiring test: monkeypatch scanned_workflow_files() to a single-file list and assert the
+    validate leg honours it, closing the gap between the reported and iterated file sets.
   - >-
     Modify .github/workflows/ci-rca.yml -- append `|| CATEGORIES=""` to the closing line of the
     CATEGORIES assignment (line 304), matching the fail-closed CATEGORIES="" pre-write on line 300.
@@ -677,7 +721,10 @@ execution_steps:
   - >-
     Modify config/agent/verification_registry/registry.yaml -- add one row per graduate-disposition
     VP step (steps 1, 2, 3, 4, 6, 7, 8), using each step's graduation_check_id verbatim as the row
-    identity and pinning the exact node id for test_selector rows. Confirm each added row genuinely
+    identity. Slot selection is not uniform: steps 2 and 3 pin a single node id and use
+    test_selector; steps 1 and 6 run a whole file and may use test_selector on that path; step 4 must
+    use command_exit_zero with the full pytest argv, because its evidence is a four-way -k filter and
+    TestSelectorCheck accepts only a single node_id; steps 7 and 8 are command_exit_zero one-liners. Confirm each added row genuinely
     fails when reverted against origin/main -- validate_verification_registry proves this with a real
     worktree revert and refuses tautological entries.
   - >-
