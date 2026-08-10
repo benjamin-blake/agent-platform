@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 from scripts.checks import _common, registry
-from scripts.sync.ops import DUCKLAKE_MIGRATED_TABLES
-
-
-def _is_retired_dir(dirname: str) -> bool:
-    return dirname in DUCKLAKE_MIGRATED_TABLES or dirname.endswith("_pending")
+from src.common.outbox_retirement import is_retired_dir
 
 
 @registry.register("validate_outbox_staleness", owner="platform")
@@ -26,7 +22,7 @@ def validate_outbox_staleness(failed: list[str]) -> None:
     for table_dir in outbox_dir.iterdir():
         if not table_dir.is_dir():
             continue
-        retired = _is_retired_dir(table_dir.name)
+        retired = is_retired_dir(table_dir.name)
         for f in table_dir.glob("*.jsonl"):
             if retired:
                 retired_hits.append(str(f))

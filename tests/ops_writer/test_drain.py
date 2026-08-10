@@ -5,11 +5,15 @@ drain(). Decision 84 I-4 CONSTRAINT: no test here may assert that a DuckLake-mig
 (the two tables the DuckLake closed boundary owns per docs/contracts/storage-substrate.yaml,
 scripts.ops_writer._OPS_TABLE_NAMES minus ops_session_log) is drained or put_object'd -- that
 would encode as blessed the exact resurrection behaviour the warehouse invariant forbids. Every
-statement is reached using ONLY ops_session_log (the _OPS_TABLE_NAMES / dt= partition branch)
-and a telemetry_* table (the else / trade_date= partition branch), both of which legitimately
-drain via OpsWriter. The missing production never-drain guard is rec-2929's job, not this
-module's. (This module intentionally never spells out the two forbidden table names, so the
-plan's own stale-reference/never-drain grep guard does not flag this very explanation.)
+early-return/happy-path statement is reached using ONLY ops_session_log (the _OPS_TABLE_NAMES /
+dt= partition branch) and a telemetry_* table (the else / trade_date= partition branch), both of
+which legitimately drain via OpsWriter.
+
+PLAN-opswriter-never-drain-guard (rec-2929): the module now DOES name the two forbidden tables
+deliberately, in TestOpsWriterDrainSkipsRetiredTables -- ops_decisions and ops_priority_queue are
+the only two TABLE_NAMES members the never-drain guard changes behaviour for (no *_pending
+member, and neither ops_recommendations nor ops_execution_plans belong to TABLE_NAMES), so a
+fixture staged under any other name would pass identically with and without the guard.
 """
 
 from __future__ import annotations
@@ -232,3 +236,116 @@ class TestOpsWriterDrainExceptionHandling:
         assert bad_file.exists()
         assert result["ops_session_log"] == 0
         mock_client.put_object.assert_not_called()
+
+
+class TestOpsWriterDrainSkipsRetiredTables:
+    """The never-drain guard (Decision 84 I-4, rec-2929): drain() must never put_object() for,
+    and must never unlink, a file staged under a retired outbox dir. ops_decisions and
+    ops_priority_queue are the only two TABLE_NAMES members this guard changes behaviour for --
+    ops_recommendations and ops_execution_plans are not TABLE_NAMES members, and there is no
+    *_pending member, so a fixture staged under any of those would pass identically before and
+    after the guard and would prove nothing.
+    """
+
+    def test_drain_skips_retired_ops_decisions_outbox(self, tmp_path):
+        """A staged ops_decisions entry is neither put_object()'d nor unlinked."""
+        writer = _make_writer()
+        outbox_base = tmp_path / ".ops-outbox"
+        table_dir = outbox_base / "ops_decisions"
+        table_dir.mkdir(parents=True)
+        outbox_file = table_dir / "entry.jsonl"
+        outbox_file.write_text(json.dumps({"decision_id": "dec-999"}) + "\n", encoding="utf-8")
+
+        mock_client = MagicMock()
+
+        with (
+            patch("scripts.ops_writer._OUTBOX_BASE", outbox_base),
+            patch.object(writer, "_get_client", return_value=mock_client),
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+        ):
+            result = writer.drain()
+
+        mock_client.put_object.assert_not_called()
+        assert outbox_file.exists(), "a retired-dir outbox file must never be unlinked"
+        assert result["ops_decisions"] == 0
+
+    def test_drain_skips_retired_ops_priority_queue_outbox(self, tmp_path):
+        """A staged ops_priority_queue entry is neither put_object()'d nor unlinked."""
+        writer = _make_writer()
+        outbox_base = tmp_path / ".ops-outbox"
+        table_dir = outbox_base / "ops_priority_queue"
+        table_dir.mkdir(parents=True)
+        outbox_file = table_dir / "entry.jsonl"
+        outbox_file.write_text(json.dumps({"rec_id": "rec-999"}) + "\n", encoding="utf-8")
+
+        mock_client = MagicMock()
+
+        with (
+            patch("scripts.ops_writer._OUTBOX_BASE", outbox_base),
+            patch.object(writer, "_get_client", return_value=mock_client),
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+        ):
+            result = writer.drain()
+
+        mock_client.put_object.assert_not_called()
+        assert outbox_file.exists(), "a retired-dir outbox file must never be unlinked"
+        assert result["ops_priority_queue"] == 0
+
+    def test_drain_skips_retired_but_still_drains_legitimate_tables(self, tmp_path):
+        """A retired dir alongside a legitimate one: only the legitimate one drains."""
+        writer = _make_writer()
+        outbox_base = tmp_path / ".ops-outbox"
+
+        retired_dir = outbox_base / "ops_decisions"
+        retired_dir.mkdir(parents=True)
+        retired_file = retired_dir / "entry.jsonl"
+        retired_file.write_text(json.dumps({"decision_id": "dec-998"}) + "\n", encoding="utf-8")
+
+        session_dir = outbox_base / "ops_session_log"
+        session_dir.mkdir(parents=True)
+        session_file = session_dir / "entry.jsonl"
+        session_file.write_text(json.dumps({"session_id": "sess-legit"}) + "\n", encoding="utf-8")
+
+        telemetry_dir = outbox_base / "telemetry_sessions"
+        telemetry_dir.mkdir(parents=True)
+        telemetry_file = telemetry_dir / "entry.jsonl"
+        telemetry_file.write_text(json.dumps({"session_id": "sess-tele"}) + "\n", encoding="utf-8")
+
+        mock_client = MagicMock()
+
+        with (
+            patch("scripts.ops_writer._OUTBOX_BASE", outbox_base),
+            patch.object(writer, "_get_client", return_value=mock_client),
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+        ):
+            result = writer.drain()
+
+        drained_tables = {call.kwargs["Key"].split("/")[1] for call in mock_client.put_object.call_args_list}
+        assert drained_tables == {"ops_session_log", "telemetry_sessions"}
+        assert retired_file.exists(), "the retired-dir file must survive"
+        assert not session_file.exists()
+        assert not telemetry_file.exists()
+        assert result["ops_decisions"] == 0
+        assert result["ops_session_log"] == 1
+        assert result["telemetry_sessions"] == 1
+
+    def test_drain_results_stay_full_width_for_retired_tables(self, tmp_path):
+        """drain()'s returned dict still reports 0 for retired tables rather than omitting them."""
+        from scripts.ops_writer import TABLE_NAMES
+
+        writer = _make_writer()
+        outbox_base = tmp_path / ".ops-outbox"
+        outbox_base.mkdir()
+
+        mock_client = MagicMock()
+
+        with (
+            patch("scripts.ops_writer._OUTBOX_BASE", outbox_base),
+            patch.object(writer, "_get_client", return_value=mock_client),
+            patch.object(writer, "_bucket", return_value="my-bucket"),
+        ):
+            result = writer.drain()
+
+        assert set(result) == set(TABLE_NAMES), "retired tables must still appear in the results shape"
+        assert result["ops_decisions"] == 0
+        assert result["ops_priority_queue"] == 0

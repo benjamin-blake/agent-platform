@@ -170,7 +170,7 @@ def detect_ducklake_code_drift(
             update_rec(existing["id"], updates, profile=profile)
         return {"action": "close", "rec_id": existing["id"]}
 
-    return {"action": "skipped", "rec_id": None}
+    return {"action": "skipped", "rec_id": None}  # pragma: no cover -- unreachable, escalation_action() is exhaustive
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +198,7 @@ PROD_SOURCE_PATHSPECS: tuple[str, ...] = (
     "scripts/s3_log_store.py",
     "scripts/telemetry_schemas.py",
     "scripts/tool_runtime.py",
+    "src/common/outbox_retirement.py",
     "config/lambda/data-pipeline",
     "config/lambda/ops-compaction",
 )
@@ -339,4 +340,4 @@ def detect_prod_code_drift(
             update_rec(existing["id"], updates, profile=profile)
         return {"action": "close", "rec_id": existing["id"]}
 
-    return {"action": "skipped", "rec_id": None}
+    return {"action": "skipped", "rec_id": None}  # pragma: no cover -- unreachable, escalation_action() is exhaustive
