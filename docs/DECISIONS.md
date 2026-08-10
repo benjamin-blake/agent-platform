@@ -2,6 +2,40 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 168: Contracts gain a fourth class -- Class D mechanism contracts, gated on a declared evaluator that demonstrably reads the contract (amends Decision 118) (Decided)
+
+```yaml
+number: 168
+status: Decided
+decided_date: "2026-08-10"
+amends: [118]
+significance:
+  value: numbered_decision
+  justification: A durable architectural commitment adding a fourth contract class with an enforced, machine-checked obligation and reversal-relevant consequences for how docs/contracts/ governs mechanism content.
+```
+
+**Status:** Decided
+**Date:** 2026-08-10
+**Warehouse ID:** dec-168 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** audits/contract-first-governance-33c8667.yaml's migration step 3 (MECHANISM half) found docs/contracts/ was not a first-class destination for mechanism content: nothing gave a mechanism-shaped contract (marker-grammar.yaml, file-router.yaml, decision-entry.yaml, and 18 siblings) a real class in the CD.25 taxonomy, so 21 gate-visible files carried no declared shape and no enforced obligation -- CFG-03's finding, "a rule with no evaluator is not a rule," had no substrate to close against.
+
+**Decision:**
+1. **Class D joins A/B/C.** `scripts/contracts_schema.py` widens `ContractClass` to include `D` and `ContractStatus` to include `active` (grandfather-only: in force and consumed but never ritually ratified). A Class D contract requires both `subject` and `evaluator`; any `status: ratified` contract (any class) requires `ratified_via`. `scripts/contracts.py::load_contract_meta` validates only the `contract:` envelope, never constructing `ContractDocument` -- how a heterogeneous D body escapes the shared `extra="forbid"` model without relaxing it for A/B/C.
+2. **The evaluator obligation is resolution by evidence of reading, not by mention.** `docs/contracts/contract-population.yaml` (this Decision's own self-hosting Class D contract, evaluator `{check: validate_contract_drift}`) defines the rule: a `{check: name}` evaluator resolves only if `name` is a sequenced, registered check whose module -- or a one-hop `scripts/` import -- contains the contract's basename as an executable-context string literal. This is not a new bar; it makes explicit the assertion CD.25's design already rested on.
+3. **Grandfather-only forms, closed at birth and on kind-change.** `status: active` and `evaluator.none_grandfathered` may never be declared by a new file, and an evaluator may never regress from a resolving kind to `none_grandfathered` -- but `absent -> none_grandfathered` on a baseline-present file is permitted, since that is exactly the population sweep's own shape.
+4. **Subject uniqueness and a downward-only ratchet.** Every Class D `subject` must be unique against the union of declared subjects and ritual contract ids; a file-router route's topic must equal its Class D file's subject. `contract-population.yaml`'s `ratchet.grandfathered_max` pins the gate-visible non-ritual population at 21 (verified independently four times), raised only through the ratified `# raise-approved: dec-NNN` mechanism already governing `config/sloc_budgets.yaml`.
+
+**Reversal conditions:** (a) the evaluator-resolution rule proves unable to express a genuine evaluator (e.g. a non-Python agent surface the `agent_surface` kind cannot cover) -- extend the union, never bypass the resolution bar; (b) the population sweep (this Decision's own completing act, not performed here) finds the ratchet pin measured wrong -- correct the count, never round up; (c) Class D proves to be an escape hatch from Class A/B's per-field obligations despite the smuggling detectors -- tighten the shape rule.
+
+**Rationale:** Class D stays cheaper to author than A/B by design (mechanism bodies are heterogeneous and cannot carry Class A's per-field obligations); what this Decision removes is the FREE choice -- a D contract now requires a guard that demonstrably reads it. This is EXPLICITLY NOT migration-step-3 completion: the 21 existing free-form files are not seeded here (forward-only), and this Decision does not fire Decision 167 clause 3. Subject uniqueness is a precision-optimal, recall-poor detector by honest design: it prevents FUTURE duplicate-subject claims and detects NONE of CFG-05's existing named instances, since there is no population to check uniqueness against until the sweep lands.
+
+**Significance:** clears the Decision 150 significance bar -- a durable architectural commitment (a fourth contract class, an enforced evaluator-resolution mechanism, and a machine-checked ratchet) with reversal-relevant consequences; not a CD state-flip, operational fact, or field-semantics change (the full shape grammar, evaluator-kind union, and change-detection rules live in `docs/contracts/contract-population.yaml` per Decision 86/127 routing, not restated here).
+
+**Related:** Decision 118 (the CD.25 ritual this Decision extends with a fourth class), Decision 86 / Decision 127 (field-semantics-in-contract routing this Decision's own field-semantics home follows), Decision 165 (the shared raise-marker mechanism the ratchet binds to as a sixth consumer), Decision 128 (decompose-by-default -- the `_population.py` split), Decision 104 (the check-registry pattern the evaluator-resolution rule reads). Roadmap refs: audits/contract-first-governance-33c8667.yaml findings CFG-03/CFG-04/CFG-05/CFG-09 (partially addressed; population sweep remains open), tier_item T2.56 (not_started; this Decision closes none of its criteria), rec-3054 (the standing consumer of this Decision's filed drain recommendation).
+
+---
+
 ## Decision 167: Decision-entry flow governance -- typed metadata envelope, required Significance routing claim, and a WARN-tier per-entry authoring size norm (amends Decision 150 and Decision 160) (Decided)
 
 ```yaml
@@ -2882,6 +2916,10 @@ Decision 79 / CD.16 (the satisfied Class B deploy-gating precondition), Decision
 Decision 91 (the writer/reader/maintenance closed-boundary split the Class B contracts re-grounded
 onto), Decision 84 (the portal ETL vehicle); T1.12 (the Class B contract wave whose completion this
 ratification unblocks).
+
+> **Amended by Decision 168 (2026-08-10):** extends the CD.25 ritual with a fourth contract class
+> (Class D, mechanism contracts) gated on a declared, demonstrably-reading evaluator. This ritual's
+> Class A/B/C scope is unchanged; see Decision 168 for the extension.
 
 ## Decision 117: Executor self-modification boundary -- capabilities.yaml is the code-level SSOT (Supersedes Decision 44) (Decided)
 

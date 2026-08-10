@@ -1,30 +1,62 @@
 # complexity-waiver: decision-43
-"""Contract drift gate (CD.25): reject ritual contract YAMLs in docs/contracts/ that violate CD.25."""
+"""Contract drift gate (CD.25 + T2.56 Class D population gate): reject ritual (Class A/B/C) and
+mechanism (Class D) contract YAMLs in docs/contracts/ that violate CD.25 or the Class D
+population contract (docs/contracts/contract-population.yaml, this gate's own evaluator target
+-- self-hosting).
+
+Pass 1 (structural, per-file): unparseable/malformed YAML is caught as a defect (never silently
+swallowed the way load_all_contracts is allowed to). Each depth-1 *.yaml/*.yml file classifies as
+ritual (Class A/B/C), Class D, or unshaped -- see scripts/checks/contracts/_population.py for the
+shared classification/evaluator-resolution/subject-uniqueness/census primitives this module
+orchestrates. `contract-population.yaml`'s own basename appears below (`_CONTRACT_POPULATION`) so
+this module's `{check: validate_contract_drift}` evaluator declaration genuinely resolves.
+
+Pass 2 (diff-aware, scoped to files changed vs the git merge-base): amendment-log + status
+transition for ritual contracts (unchanged categories 6/7), plus the Class D rules -- amendment
+log, evaluator-kind-change, and conformance-loss -- resolving each file's base content via the
+three-way union (path, `-M` rename map, `contract.id`).
+"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from scripts.checks import _common, registry
+from scripts.checks.contracts import _population, _shared
+
+if TYPE_CHECKING:
+    from scripts.contracts_schema import ContractDocument, ContractMeta
+
+# Genuinely used below (target_dir / _CONTRACT_POPULATION) to locate this gate's own self-hosting
+# contract -- also the literal that makes this module's {check: validate_contract_drift}
+# evaluator declaration resolve (executable-context basename match, not a docstring mention).
+_CONTRACT_POPULATION = "contract-population.yaml"
+
+_DOCS_CONTRACTS_PREFIX = "docs/contracts/"
 
 
 @registry.register("validate_contract_drift", owner="platform")
-def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None) -> None:
-    """Gate on contract drift: reject ritual contract YAMLs in docs/contracts/ that violate CD.25.
+def validate_contract_drift(
+    failed: list[str],
+    contracts_dir: Path | None = None,
+    router_path: Path | None = None,
+) -> None:
+    """Gate on contract drift: reject ritual (A/B/C) and Class D contract YAMLs that violate
+    CD.25 or the Class D population contract.
 
-    Pass 1 (structural) iterates docs/contracts/*.yaml per file so unparseable YAML is caught as
-    a defect (not silently swallowed as load_all_contracts does).  Pass 2 (diff-aware) runs only
-    for contracts changed vs the git merge-base and checks amendment-log + status-transition rules.
-
-    contracts_dir: override for test isolation (defaults to ROOT/docs/contracts).
+    contracts_dir / router_path: overrides for test isolation (default to ROOT/docs/contracts
+    and ROOT/docs/contracts/file-router.yaml respectively).
     """
-    print("\n=== Contract drift gate (CD.25) ===")
+    print("\n=== Contract drift gate (CD.25 + T2.56 population gate) ===")
 
     target_dir = contracts_dir if contracts_dir is not None else _common.ROOT / "docs" / "contracts"
     if not target_dir.is_dir():
-        print("  No docs/contracts/ directory -- gate skipped.")
+        failed.append(f"Contract drift (fail-closed): {target_dir} does not exist -- docs/contracts/ is required.")
         return
+
+    router = router_path if router_path is not None else _common.ROOT / "docs" / "contracts" / "file-router.yaml"
 
     root_str = str(_common.ROOT)
     injected = root_str not in sys.path
@@ -32,13 +64,12 @@ def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None
         sys.path.insert(0, root_str)
 
     error_count_before = len(failed)
-    yaml_paths: list[Path] = []
-    ritual_contracts: list[tuple[Path, object]] = []
+    census = _population.Census()
 
     try:
         import yaml as _yaml
 
-        from scripts.contracts import ContractValidationError, load_contract, resolve_refs
+        from scripts.contracts import ContractValidationError, load_contract, load_contract_meta, resolve_refs
         from scripts.contracts_enforcement import (
             _load_contract_from_text,
             check_amendment_for_diff,
@@ -47,69 +78,216 @@ def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None
             check_status_transition,
         )
 
-        yaml_paths = sorted(target_dir.glob("*.yaml"))
+        # ---- baseline resolution (once per run; every reader below is a fresh git call, no
+        # module-level memoization -- see _shared.py for why) ----
+        baseline_reachable = _common.origin_main_reachable(_common.ROOT)
+        merge_base: str | None = None
+        baseline_paths: set[str] = set()
+        rename_map: dict[str, str] = {}
+        id_index: dict[str, str] = {}
 
-        # Pass 1: structural validation of all present ritual contracts.
+        if baseline_reachable:
+            mb_result = _common.run(
+                ["git", "merge-base", "origin/main", "HEAD"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=_common.ROOT,
+            )
+            if mb_result.returncode == 0:
+                merge_base = mb_result.stdout.strip()
+
+        if merge_base:
+            bp = _shared.merge_base_path_set(_common.ROOT, merge_base)
+            if bp is not None:
+                baseline_paths = bp
+            rm = _shared.rename_map(_common.ROOT, merge_base)
+            if rm is not None:
+                rename_map = rm
+            depth1_yaml_baseline = {
+                p
+                for p in baseline_paths
+                if p.startswith(_DOCS_CONTRACTS_PREFIX)
+                and "/" not in p[len(_DOCS_CONTRACTS_PREFIX) :]
+                and Path(p).suffix in (".yaml", ".yml")
+            }
+            envelopes = _shared.baseline_class_d_envelopes(_common.ROOT, merge_base, depth1_yaml_baseline)
+            if envelopes is not None:
+                id_index = envelopes
+        else:
+            print(
+                "  advisory-SKIP: origin/main unreachable -- extension/depth conformance and Pass 2 "
+                "(diff-aware) checks skipped; shape, evaluator resolution, subject uniqueness, and "
+                "the census still run."
+            )
+
+        baseline_available = baseline_reachable and merge_base is not None
+
+        def _base_reader(rel_path: str) -> str | None:
+            # Every call site below is gated behind `baseline_available`, which is True only
+            # when merge_base is not None -- no defensive None-guard needed here (AGENTS.md:
+            # don't handle scenarios that can't happen).
+            result = _common.run(
+                ["git", "show", f"{merge_base}:{rel_path}"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=_common.ROOT,
+            )
+            if result.returncode != 0:
+                return None
+            return result.stdout
+
+        # ---- extension/depth conformance over the WHOLE tree (not just *.yaml/*.yml) ----
+        if baseline_available:
+            baseline_rel = {p[len(_DOCS_CONTRACTS_PREFIX) :] for p in baseline_paths if p.startswith(_DOCS_CONTRACTS_PREFIX)}
+            for f in _population.scan_tree(target_dir):
+                rel = f.relative_to(target_dir).as_posix()
+                if _population.is_governed_extension_depth(rel):
+                    continue
+                if rel in baseline_rel:
+                    continue
+                failed.append(
+                    f"Contract drift (extension): {rel} is not a depth-1 .yaml/.yml file and is not "
+                    "present at the merge-base baseline."
+                )
+
+        # ---- Pass 1: structural validation of every depth-1 *.yaml/*.yml ----
+        yaml_paths: list[Path] = sorted({*target_dir.glob("*.yaml"), *target_dir.glob("*.yml")})
+        ritual_contracts: list[tuple[Path, ContractDocument]] = []
+        class_d_metas: dict[str, ContractMeta] = {}  # resolved+admitted D files, by name
+        self_hosting_seen = False
+
         for p in yaml_paths:
-            # yaml.safe_load per file -- an unparseable file is a category-1 defect.
-            # load_all_contracts swallows (OSError, yaml.YAMLError) and silently skips such files;
-            # the per-file path surfaces them as gate failures.
+            name = p.name
+            rel_path = f"{_DOCS_CONTRACTS_PREFIX}{name}"
+            if name == _CONTRACT_POPULATION:
+                # Genuine runtime use of _CONTRACT_POPULATION (not merely an assignment): this
+                # gate's own evaluator declaration, {check: validate_contract_drift}, only
+                # resolves because THIS comparison executes -- an unreferenced literal
+                # assignment would be exactly the "mention, not reading" loophole this rule
+                # exists to close.
+                self_hosting_seen = True
+            # Every file examined counts toward `scanned` exactly once, unconditionally --
+            # every branch below increments EXACTLY ONE of ritual/declared/grandfathered/skipped
+            # before its next `continue`, so the bucket identity holds by construction rather
+            # than by each branch remembering to keep it in sync.
+            census.scanned += 1
             try:
                 raw_text = p.read_text(encoding="utf-8")
                 data = _yaml.safe_load(raw_text)
-            except (OSError, _yaml.YAMLError) as exc:
-                failed.append(f"Contract drift (cat-1): {p.name}: {exc}")
+            except (OSError, UnicodeDecodeError, _yaml.YAMLError) as exc:
+                failed.append(f"Contract drift (cat-1): {name}: {exc}")
+                census.skipped += 1
                 continue
 
             if not isinstance(data, dict):
-                failed.append(f"Contract drift (cat-1): {p.name}: not a YAML mapping")
+                failed.append(f"Contract drift (cat-1): {name}: not a YAML mapping")
+                census.skipped += 1
                 continue
 
-            # Skip parseable non-ritual docs (e.g. read-engine.yaml, which has `version:` at top level
-            # but no `contract:` block with a `class:` field).
-            contract_block = data.get("contract")
-            if not (isinstance(contract_block, dict) and "class" in contract_block):
+            shape = _population.classify_file(data)
+            is_new = baseline_available and rel_path not in baseline_paths
+
+            if shape == "unshaped":
+                if is_new:
+                    failed.append(
+                        f"Contract drift (shape): {name}: no ritual (A/B/C) contract block and no valid "
+                        "Class D shape (declare `contract.class` as A, B, C, or D)."
+                    )
+                    census.skipped += 1
+                else:
+                    census.grandfathered += 1
                 continue
 
-            # load_contract: schema validation (catches cat-1 malformed + cat-8 bad change_class enum)
+            if shape == "ritual":
+                census.ritual += 1
+                # -- Class A/B/C Pass 1, unchanged from the pre-migration gate --
+                try:
+                    doc = load_contract(p)
+                except ContractValidationError as exc:
+                    failed.append(f"Contract drift (structural): {name}: {exc}")
+                    continue
+                try:
+                    resolve_refs(doc, target_dir)
+                except ContractValidationError as exc:
+                    failed.append(f"Contract drift (ref): {name}: {exc}")
+                    continue
+                for err in check_required_inline_fields(doc):
+                    failed.append(f"Contract drift: {name}: {err}")
+                for err in check_re_ratification_trigger(doc):
+                    failed.append(f"Contract drift: {name}: {err}")
+                ritual_contracts.append((p, doc))
+                continue
+
+            # shape == "class_d"
+            smuggled = _population.detect_smuggled_shape(data)
+            if smuggled:
+                failed.append(f"Contract drift (smuggling): {name}: {smuggled}")
+                census.skipped += 1
+                continue
+
             try:
-                doc = load_contract(p)
+                meta = load_contract_meta(p)
             except ContractValidationError as exc:
-                failed.append(f"Contract drift (structural): {p.name}: {exc}")
+                failed.append(f"Contract drift (schema): {name}: {exc}")
+                census.skipped += 1
                 continue
+            # Guaranteed by ContractMeta's Class D validator (contracts_schema.py) -- a Class D
+            # envelope cannot pass schema validation without a non-None evaluator.
+            assert meta.evaluator is not None
 
-            # resolve_refs: catches cat-3 ($ref target absent), cat-4 (chain>1), cat-5 (dup inline+ref)
-            try:
-                resolve_refs(doc, target_dir)
-            except ContractValidationError as exc:
-                failed.append(f"Contract drift (ref): {p.name}: {exc}")
-                continue
+            if is_new:
+                if meta.status.value == "active":
+                    failed.append(
+                        f"Contract drift (grandfather): {name}: a NEW Class D file may not declare "
+                        "status: active (grandfather-only)."
+                    )
+                    census.skipped += 1
+                    continue
+                if meta.evaluator.none_grandfathered is not None:
+                    failed.append(
+                        f"Contract drift (grandfather): {name}: a NEW Class D file may not declare "
+                        "evaluator.none_grandfathered (grandfather-only)."
+                    )
+                    census.skipped += 1
+                    continue
 
-            # check_required_inline_fields: cat-2 (inline Class-A field missing required descriptive keys)
-            for err in check_required_inline_fields(doc):
-                failed.append(f"Contract drift: {p.name}: {err}")
+            if meta.evaluator.none_grandfathered is None:
+                resolves, detail = _population.resolve_evaluator(name, meta.evaluator, root=_common.ROOT)
+                if not resolves:
+                    failed.append(f"Contract drift (evaluator): {name}: evaluator does not resolve -- {detail}")
+                    census.skipped += 1
+                    continue
 
-            # check_re_ratification_trigger: provisional_v0 re_ratification_trigger well-formedness
-            for err in check_re_ratification_trigger(doc):
-                failed.append(f"Contract drift: {p.name}: {err}")
+            grandfather_kind = meta.status.value == "active" or meta.evaluator.none_grandfathered is not None
+            if grandfather_kind:
+                census.grandfathered += 1
+            else:
+                census.declared += 1
+            if meta.evaluator.none_grandfathered is not None:
+                census.evaluator_none_grandfathered += 1
+            if meta.status.value == "active":
+                census.status_active += 1
 
-            ritual_contracts.append((p, doc))
+            class_d_metas[name] = meta
 
-        # Pass 2: diff-aware checks (cat-6 amendment log, cat-7 status transition).
-        # Scoped to contracts changed vs the git merge-base.  Fails open if the merge-base
-        # cannot be resolved (offline / new repo) so Pass 1 still gates unconditionally.
-        base_result = _common.run(
-            ["git", "merge-base", "origin/main", "HEAD"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=_common.ROOT,
-        )
-        if base_result.returncode != 0:
-            print("  WARNING: merge-base unavailable; Pass 2 (diff checks) skipped -- Pass 1 still ran.")
-        else:
-            merge_base = base_result.stdout.strip()
+        # ---- subject uniqueness + topic-equals-subject ----
+        class_d_subjects = {name: meta.subject for name, meta in class_d_metas.items() if meta.subject}
+        ritual_ids = {p.name: doc.contract.id for p, doc in ritual_contracts}
+        for err in _population.check_subject_uniqueness(class_d_subjects, ritual_ids):
+            failed.append(f"Contract drift (subject): {err}")
+
+        routes = _load_router_routes(router, _yaml)
+        for name, subject in sorted(class_d_subjects.items()):
+            topic_err = _population.check_topic_equals_subject(f"{_DOCS_CONTRACTS_PREFIX}{name}", subject, routes)
+            if topic_err:
+                failed.append(f"Contract drift (subject): {topic_err}")
+
+        # ---- Pass 2: diff-aware checks ----
+        if baseline_available:
             diff_result = _common.run(
                 ["git", "diff", "--name-only", f"{merge_base}..HEAD", "--", "docs/contracts/"],
                 capture_output=True,
@@ -124,35 +302,125 @@ def validate_contract_drift(failed: list[str], contracts_dir: Path | None = None
             for name, (p, head_doc) in ritual_by_name.items():
                 if name not in changed_names:
                     continue
-                rel = Path("docs") / "contracts" / name
-                show_result = _common.run(
-                    ["git", "show", f"{merge_base}:{rel}"],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    cwd=_common.ROOT,
-                )
-                if show_result.returncode != 0:
+                base_text = _base_reader(f"{_DOCS_CONTRACTS_PREFIX}{name}")
+                if base_text is None:
                     continue
                 try:
-                    base_doc = _load_contract_from_text(show_result.stdout)
+                    base_doc = _load_contract_from_text(base_text)
                 except ContractValidationError:
                     continue
                 for err in check_amendment_for_diff(base_doc, head_doc):
-                    failed.append(f"Contract drift: {p.name}: {err}")
+                    failed.append(f"Contract drift: {name}: {err}")
                 for err in check_status_transition(base_doc, head_doc):
-                    failed.append(f"Contract drift: {p.name}: {err}")
+                    failed.append(f"Contract drift: {name}: {err}")
+
+            for p in yaml_paths:
+                name = p.name
+                if name not in changed_names:
+                    continue
+                rel_path = f"{_DOCS_CONTRACTS_PREFIX}{name}"
+                try:
+                    head_data = _yaml.safe_load(p.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, _yaml.YAMLError):
+                    continue
+                if not isinstance(head_data, dict):
+                    continue
+                head_shape = _population.classify_file(head_data)
+
+                base_text = _population.resolve_base_content(
+                    rel_path,
+                    head_data,
+                    baseline_paths=baseline_paths,
+                    rename_map=rename_map,
+                    id_index=id_index,
+                    base_reader=_base_reader,
+                )
+                if base_text is None:
+                    continue  # genuinely new -- nothing to diff against
+
+                try:
+                    base_data = _yaml.safe_load(base_text)
+                except _yaml.YAMLError:
+                    continue
+                if not isinstance(base_data, dict):
+                    continue
+                base_shape = _population.classify_file(base_data)
+
+                loss = _population.check_conformance_loss(base_shape, head_shape)
+                if loss:
+                    failed.append(f"Contract drift (conformance-loss): {name}: {loss}")
+
+                if head_shape == "class_d" and base_shape == "class_d":
+                    amend_err = _population.check_amendment_log_for_class_d(base_data, head_data)
+                    if amend_err:
+                        failed.append(f"Contract drift (amendment): {name}: {amend_err}")
+
+                base_meta = _class_d_meta_from_text(base_text) if base_shape == "class_d" else None
+                head_meta = class_d_metas.get(name) if head_shape == "class_d" else None
+                kind_change = _population.check_evaluator_kind_change(base_meta, head_meta)
+                if kind_change:
+                    failed.append(f"Contract drift (kind-change): {name}: {kind_change}")
+        else:
+            print("  advisory-SKIP: Pass 2 (diff-aware) checks skipped -- origin/main unreachable.")
+
+        # ---- ratchet (contract-population.yaml's own grandfathered_max pin) ----
+        pin_value, pin_errors = _population.validate_ratchet_pin(target_dir)
+        for err in pin_errors:
+            failed.append(f"Contract drift (ratchet): {err}")
+        if pin_value is not None and baseline_available:
+            for err in _population.check_ratchet_direction(target_dir, pin_value, base_reader=_base_reader):
+                failed.append(f"Contract drift (ratchet): {err}")
+
+        # ---- census (every run) ----
+        print(f"  Census: {census.render()}")
+        if not census.bucket_identity_holds():
+            failed.append(f"Contract drift (census): bucket identity failed -- {census.render()}")
+        if self_hosting_seen:
+            print(f"  Self-hosting: {_CONTRACT_POPULATION} was scanned by this run.")
 
         new_failures = len(failed) - error_count_before
         if new_failures == 0:
-            print(f"  PASS: {len(yaml_paths)} file(s) scanned, {len(ritual_contracts)} ritual contract(s) -- no drift.")
+            print(f"  PASS: {len(yaml_paths)} file(s) scanned, {census.ritual + census.declared} governed contract(s).")
         else:
-            print(
-                f"  FAIL: {len(yaml_paths)} file(s) scanned, {len(ritual_contracts)} ritual contract(s) -- "
-                f"{new_failures} violation(s)."
-            )
+            print(f"  FAIL: {len(yaml_paths)} file(s) scanned -- {new_failures} violation(s).")
 
     finally:
         if injected and root_str in sys.path:
             sys.path.remove(root_str)
+
+
+def _load_router_routes(router_path: Path, yaml_module) -> list[dict]:
+    """Best-effort read of file-router.yaml's `routes` list -- [] on any failure. Not
+    authoritative (validate_placement owns strict router validation); this gate only consults it
+    for the topic-equals-subject cross-check."""
+    try:
+        data = yaml_module.safe_load(router_path.read_text(encoding="utf-8"))
+    except (OSError, yaml_module.YAMLError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    routes = data.get("routes")
+    return routes if isinstance(routes, list) else []
+
+
+def _class_d_meta_from_text(text: str) -> ContractMeta | None:
+    """Best-effort ContractMeta from raw base-content text -- None (never raises) on any parse
+    or schema failure, since Pass 2 must not crash on a malformed base."""
+    import yaml as _yaml
+    from pydantic import ValidationError
+
+    from scripts.contracts_schema import ContractMeta
+
+    try:
+        data = _yaml.safe_load(text)
+    except _yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    contract = data.get("contract")
+    if not isinstance(contract, dict):
+        return None
+    try:
+        return ContractMeta.model_validate(contract)
+    except ValidationError:
+        return None

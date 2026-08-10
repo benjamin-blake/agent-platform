@@ -21,21 +21,30 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ContractClass(str, Enum):
-    """The three ritual contract classes (INTENT Part 2A)."""
+    """The four ritual/mechanism contract classes (INTENT Part 2A; Class D per T2.56/CD.25
+    migration step 3, contracts-first-class-migration)."""
 
     A = "A"
     B = "B"
     C = "C"
+    D = "D"
 
 
 class ContractStatus(str, Enum):
-    """Contract lifecycle status enum (INTENT Part 4 Invariant 6)."""
+    """Contract lifecycle status enum (INTENT Part 4 Invariant 6).
+
+    `active` (contracts-first-class-migration) is GRANDFATHER-ONLY: in force and consumed but
+    never ritually ratified. No transition rule in scripts/contracts.py produces it -- it is
+    load-bearing on pre-existing Class D files only, letting the population sweep seed them
+    honestly rather than asserting a ratification that never happened.
+    """
 
     draft = "draft"
     ratified = "ratified"
     provisional_v0 = "provisional_v0"
     deprecated = "deprecated"
     superseded = "superseded"
+    active = "active"
 
 
 class ChangeClass(str, Enum):
@@ -125,8 +134,40 @@ class ContractGovernance(BaseModel):
     human_initiated_value: str | None = None
 
 
+class EvaluatorSpec(BaseModel):
+    """A Class D contract's typed evaluator union (contracts-first-class-migration).
+
+    Exactly one of the three kinds: `check` (a registered scripts/checks/* name resolved by
+    executable-context evidence of reading the contract), `agent_surface` (a non-Python
+    agent-consumed surface, e.g. a skill or slash command, that names the contract), or
+    `none_grandfathered` (a free-text reason -- the grandfather-only form; a NEW file may never
+    declare it, see scripts/checks/contracts/_population.py). This model carries no
+    baseline-dependent rule -- a pydantic validator cannot see the git baseline, so the
+    new-vs-grandfathered distinction is enforced entirely in the gate, not here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    check: str | None = None
+    agent_surface: str | None = None
+    none_grandfathered: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_kind(self) -> EvaluatorSpec:
+        kinds = [k for k in ("check", "agent_surface", "none_grandfathered") if getattr(self, k) is not None]
+        if len(kinds) != 1:
+            raise ValueError(f"evaluator must declare exactly one of: check, agent_surface, none_grandfathered (got {kinds})")
+        return self
+
+
 class ContractMeta(BaseModel):
-    """The top-level `contract:` mapping (INTENT Parts 3C-3E)."""
+    """The top-level `contract:` mapping (INTENT Parts 3C-3E).
+
+    `subject` and `evaluator` (contracts-first-class-migration) are optional at the type level
+    but REQUIRED together whenever class is D (see the validator below) -- a mechanism contract
+    with no declared evaluator is not a rule (CFG-03). Neither field carries a baseline-dependent
+    rule: the model cannot see git history, only the current document.
+    """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -142,6 +183,16 @@ class ContractMeta(BaseModel):
     amendment_policy: dict[str, Any] | None = None
     write_payload_projection: dict[str, Any] | None = None
     provisional_v0: dict[str, Any] | None = None
+    subject: str | None = None
+    evaluator: EvaluatorSpec | None = None
+
+    @model_validator(mode="after")
+    def _validate_class_d_and_ratified(self) -> ContractMeta:
+        if self.class_ is ContractClass.D and (self.subject is None or self.evaluator is None):
+            raise ValueError("Class D contract requires both `subject` and `evaluator`")
+        if self.status is ContractStatus.ratified and not self.ratified_via:
+            raise ValueError("status: ratified requires `ratified_via`")
+        return self
 
 
 class ContractDocument(BaseModel):
@@ -178,6 +229,17 @@ class ContractDocument(BaseModel):
                 raise ValueError("Class B contract must define a non-empty `verbs` mapping")
             if self.fields is not None:
                 raise ValueError("Class B contract must not define `fields`")
+        elif cls is ContractClass.D:
+            # Class D (mechanism contracts) bodies are heterogeneous by design and can never
+            # satisfy this model's extra="forbid" (T2.56/CD.25 migration step 3). They must be
+            # loaded via scripts.contracts.load_contract_meta (envelope-only, never
+            # ContractDocument) -- raise loudly here rather than falling through to the Class C
+            # branch below, which would silently accept an arbitrary D body as concept-shaped.
+            raise ValueError(
+                "Class D contract must be loaded via scripts.contracts.load_contract_meta, "
+                "never load_contract/ContractDocument (a D body is heterogeneous and does not "
+                "fit the shared extra='forbid' ritual document model)"
+            )
         else:  # ContractClass.C -- concept-shaped (not verb-shaped). MAY own the canonical
             # cross-system field definitions that Class A contracts reference via $ref
             # (Invariant 5: a shared field is defined once, in the Class C contract).

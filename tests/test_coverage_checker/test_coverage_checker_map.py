@@ -331,3 +331,19 @@ class TestMirrorRule:
         result = map_source_to_test(source)
 
         assert result == ROOT / "tests" / "common" / "iceberg_reader"
+
+
+class TestContractDriftConcernSplitRegistration:
+    """scripts/checks/contracts/validate_contract_drift.py (T2.56 / contracts-first-class-
+    migration) is registered directly in _CONCERN_SPLIT_TEST_PACKAGES -- independent of any
+    _RETIRING_GRANDFATHER_HOMES membership (its grandfathered home, tests/test_validate.py, is
+    itself already retired), exercising map_source_to_test's item-3 direct-membership branch."""
+
+    def test_maps_validate_contract_drift_to_concern_split_package_directory(self) -> None:
+        source = ROOT / "scripts" / "checks" / "contracts" / "validate_contract_drift.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "checks" / "contracts" / "validate_contract_drift"
+
+    def test_contract_drift_pre_decomposition_single_file_module_is_gone(self) -> None:
+        assert not (ROOT / "tests" / "checks" / "contracts" / "test_validate_contract_drift.py").exists()

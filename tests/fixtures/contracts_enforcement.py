@@ -25,8 +25,14 @@ def _make_class_a_doc(
     description: str | None = "A contract",
     fields: dict | None = None,
     amendment_log: list[AmendmentLogEntry] | None = None,
+    ratified_via: str | None = None,
 ) -> ContractDocument:
-    """Build a minimal Class A ContractDocument for testing."""
+    """Build a minimal Class A ContractDocument for testing.
+
+    ratified_via defaults to a placeholder whenever status is ratified (contracts-first-class-
+    migration: ContractMeta now requires ratified_via for any ratified status) -- callers testing
+    the missing-ratified_via case pass ratified_via=None explicitly alongside status=ratified.
+    """
     if fields is None:
         fields = {
             "f1": FieldSpec(
@@ -38,6 +44,8 @@ def _make_class_a_doc(
                 dq_intent={"not_null": {"enforced": True}},
             )
         }
+    if status is ContractStatus.ratified and ratified_via is None:
+        ratified_via = "test-decision"
     return ContractDocument(
         contract=ContractMeta(
             id=contract_id,
@@ -45,6 +53,7 @@ def _make_class_a_doc(
             contract_version=1,
             status=status,
             description=description,
+            ratified_via=ratified_via,
         ),
         fields=fields,
         amendment_log=amendment_log,
