@@ -1,0 +1,809 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "contracts-first-class-migration"
+intent: >-
+  Make docs/contracts/ a first-class destination for MECHANISM content by giving mechanism
+  contracts a real class in the CD.25 taxonomy (Class D), whose defining obligation is a declared
+  evaluator that DEMONSTRABLY READS the contract. That obligation is not a new bar -- it makes
+  explicit an assertion the design already rested on implicitly (the audit's CFG-03 finding, "a
+  rule with no evaluator is not a rule", and this plan's own claim that a Class D body's shape
+  authority is its evaluator). Installs the obligation forward-only on NEW contract files, makes
+  subject-uniqueness well-posed, extends amendment-log and transition enforcement to the new class,
+  and pins the grandfathered population as a visible downward-only ratchet bound to the ratified
+  marker-authorization mechanism.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-contracts-first-class-migration.yaml
+phase: >-
+  Migration step 3 (MECHANISM HALF ONLY) of audits/contract-first-governance-33c8667.yaml.
+  Per-finding disposition, stated so a future session does not read these as closed -- CFG-04:
+  substrate installed for depth-1 *.yaml and *.yml; its acceptance's second clause (seed the
+  existing free-form files) is UNMET. CFG-05: mechanism installed; second clause UNMET, and the
+  detector catches NONE of the audit's existing named instances. CFG-09: LEAST addressed and the
+  only high-severity one -- amendment-log and transition checking reach Class D only, so an edit to
+  marker-grammar.yaml, decision-entry.yaml or file-router.yaml still requires no log after this
+  lands, and router coverage moves 8/39 -> 9/40. The completing act for all three is the population
+  sweep. Steps 1 (PR #863) and 2 (Decision 167, PR #871) are merged. T2.56 is not_started with both
+  criteria open; this plan closes none and declares no closes_criteria. EXPLICITLY NOT step-3
+  completion, and it does NOT fire Decision 167 clause 3.
+scope:
+  - file: scripts/contracts_schema.py
+    action: Modify
+    purpose: >-
+      PURELY ADDITIVE. Add `D` to ContractClass; add `active` to ContractStatus (in force and
+      consumed but never ritually ratified, so the sweep can seed grandfathered files honestly
+      rather than asserting they are ratified); add optional typed `subject` and `evaluator` to
+      ContractMeta with a validator requiring BOTH for D and requiring `ratified_via` whenever
+      status is `ratified`; give _validate_class_shape an explicit D branch that RAISES rather than
+      falling through to the Class C else-branch at line 181. CRITICAL -- NO new-vs-baseline rule
+      here. A pydantic validator cannot see the baseline, so an unconditional rejection of the
+      grandfather-only forms would make them unloadable for the sweep this plan names as its own
+      completing act.
+  - file: scripts/contracts.py
+    action: Modify
+    purpose: >-
+      Add `load_contract_meta(path) -> ContractMeta`, ENVELOPE-ONLY, validating just
+      `data["contract"]` and never constructing ContractDocument -- how Class D escapes
+      `extra="forbid"` (contracts_schema.py:155) without relaxing the shared model. The rejected
+      alternative (nesting D bodies under `spec:`) would push consumers one level down; the
+      verified instance is validate_placement's top-level `routes:` read (validate_placement.py:19,38).
+      Add `active->ratified`, `active->deprecated`, `active->superseded` to _ALLOWED_TRANSITIONS and
+      deliberately NO inbound edge to `active`. load_all_contracts continues to return only A/B/C,
+      explicitly skipping D -- load-bearing against a SILENT regression, since context_docs.py:270
+      is a bare `except Exception: pass` that would swallow the error and kill the provisional scan.
+  - file: scripts/checks/contracts/_population.py
+    action: Create
+    purpose: >-
+      UNCONDITIONAL decomposition, not a contingency. The gate is 119 effective SLOC and this plan
+      adds thirteen feature groups; Decision 128 makes decomposition the default response, and
+      deciding it here avoids the choice being made under implementation pressure. Owns the
+      declared-shape validation, evaluator resolution, Class-A/B shape detection, extension/depth
+      conformance, subject-uniqueness and the census; the gate retains orchestration and Pass 1/2
+      sequencing. Mirror-convention test home is tests/checks/contracts/test__population.py.
+  - file: scripts/checks/contracts/_shared.py
+    action: Modify
+    purpose: >-
+      Add the MERGE-BASE path-set baseline reader (one `git ls-tree`), keyed on the SAME ref Pass 2
+      resolves -- using origin/main's tip would make a file deleted by another PR read as "new" in
+      an untouched PR; the `-M` rename map; and one `git cat-file --batch` of baseline Class D
+      envelopes for id-based base resolution. Each takes an explicit injection seam mirroring
+      _baseline.BaselineReaderFn: module-level memoization keyed on ROOT would be populated by the
+      first fixture and ignore later monkeypatched runs, making the suite order-dependent and
+      silently vacuous. Reachability delegates to _common.origin_main_reachable. Deliberately NOT a
+      generalisation of scripts/checks/decisions/_baseline.py -- that is a decision-NUMBER reader in
+      the decisions domain, this is a PATH reader in the contracts domain, and Decision 104 forbids
+      a cross-domain helper. Record that reasoning in the docstring.
+  - file: scripts/checks/contracts/validate_contract_drift.py
+    action: Modify
+    purpose: >-
+      Orchestration plus Pass 2. (a) BRANCH ORDER -- Class D routes to load_contract_meta BEFORE
+      load_contract / resolve_refs / check_required_inline_fields, or a D file satisfies the
+      existing test at lines 70-72, falls through to load_contract and dies on extra=forbid.
+      (b) Narrow the skip branch: neither shape and new-vs-baseline -> FAIL; else grandfathered.
+      (c) Grandfather-only prohibitions enforced HERE, where new-vs-baseline is decidable: a new
+      file may not declare `status: active` nor `evaluator.none_grandfathered`. (d) PASS 2 for
+      Class D -- validate_status_transition on the ContractMeta pair; amendment-log on any canonical
+      dump delta with `amendment_log` excluded; an EVALUATOR-KIND-CHANGE rule (below); and a
+      CONFORMANCE-LOSS rule: base carried a valid shape, head does not -> FAIL, which closes the
+      delete-the-contract-block fallback by identity instead of relying on the pin's exact value.
+      (e) BASE RESOLUTION as a UNION -- path, then the `-M` rename map, then `contract.id` across
+      baseline envelopes; NEW only if all three miss. Path alone is defeated by a rename;
+      `-M` alone is defeated by a rename that rewrites past its ~50% similarity default; id alone is
+      defeated by editing the id, which is one line and cheaper than either. (f) PIN -- strict
+      `isinstance(int) and not isinstance(bool)`, non-negative; an INCREASE is gated through the
+      RATIFIED mechanism (below), never a private marker; and a base in which the pin FILE DOES NOT
+      EXIST skips the direction comparison, because that is exactly this plan's own landing PR.
+      (g) CENSUS every run (see acceptance). (h) FAIL-CLOSED -- a missing docs/contracts directory
+      FAILS (today it returns early and passes, silently evaporating every check at once);
+      UnicodeDecodeError joins the except tuple (it subclasses ValueError, not OSError, so today it
+      escapes as a traceback). (i) UNREACHABLE origin/main -> advisory-SKIP of the baseline-dependent
+      legs with a printed reason, matching the _baseline.py precedent, while uniqueness, shape and
+      evaluator resolution still run. NOT a FAIL: the shallow-checkout job is main-validate
+      (ci.yml:85-96), so failing on unreachability would redden main on every post-merge run.
+  - file: docs/contracts/contract-population.yaml
+    action: Create
+    purpose: >-
+      The mechanism's semantics and the first Class D contract -- self-hosting, so the file defining
+      the obligation satisfies it. `contract.status: ratified` with `ratified_via` naming this plan
+      and its Decision (it cannot declare `active`, which is grandfather-only, and the new validator
+      requires ratified_via for a ratified status). Its evaluator is
+      `{check: validate_contract_drift}`, which genuinely reads it (the pin), so the file
+      demonstrates the bar rather than asserting it. Carries the shape grammar, the evaluator-kind
+      union and its AST resolution rule, the grandfather-only prohibitions, the subject namespace and
+      topic-equals-subject rule, the change-detection / kind-change / conformance-loss rules, the
+      census fields, and `ratchet.grandfathered_max`. Records that the pin has ZERO slack by design
+      and must not be rounded up, and that the evaluator_none_grandfathered and status_active
+      counters open at exactly ZERO (verified: no `subject:` key exists in docs/contracts today and
+      `active` is not yet an enum member) and are reported but NOT pinned, because the sweep must be
+      able to raise them once -- the kind-change rule is what guards them in the interim. Stay under
+      the Decision 166 contracts-class limits (500 effective lines, 2,000 max line chars).
+  - file: docs/contracts/marker-grammar.yaml
+    action: Modify
+    purpose: >-
+      Register the ratchet as a governed surface of the EXISTING ratified `raise-approved` token
+      (tokens.raise-approved.used_by gains validate_contract_drift). The round-3 draft minted a
+      private `# ratchet-raise-approved:` marker with no `dec-NNN`, which is an EXISTENCE-only
+      marker -- exactly the class Decision 165 point 1 narrowed away from when it consolidated five
+      guards onto _marker_guard.py, and an undeclared fourth token against this file's three. It was
+      also self-refuting: a plan whose thesis is "a rule with no evaluator is not a rule" cannot
+      install a marker whose only evaluator is its own presence. The gate constructs a RegistrySpec
+      (rel_path contract-population.yaml, token raise-approved, gated_direction up, flat extractor on
+      ratchet.grandfathered_max) and calls _marker_guard.authorization_failure; NO edit to
+      _marker_guard.py itself is required.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Two edits. (1) One route row for contract-population.yaml -- non-empty `topic` and a non-empty
+      `targets` list per validate_placement's shape rules, with a topic that collides neither with
+      the 82 existing topics (validate_placement's duplicate-topic gate) nor with any ritual contract
+      id (this plan's own subject-uniqueness rule), since the topic BECOMES that file's subject under
+      the topic-equals-subject rule. (2) Narrow the `prose_allowlist` glob
+      `docs/contracts/**/*.md` to the two grandfathered members by name. Left as-is, the discovery
+      index that Decision 66/86 make authoritative for "where does this file go" would keep
+      advertising a permission the population gate revokes -- two live guards giving contradictory
+      verdicts on the same new file, which is the drift-by-design anti-pattern this plan exists to
+      reduce.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Register scripts/checks/contracts/validate_contract_drift.py in _CONCERN_SPLIT_TEST_PACKAGES
+      (line 212). Two reviewers independently executed map_source_to_test and confirmed it then
+      resolves to tests/checks/contracts/validate_contract_drift. Required because the existing test
+      module is 457 effective SLOC against the 500 hard limit and is unregistered in
+      config/sloc_budgets.yaml; Decision 128 makes decomposition the default, never a raise.
+  - file: tests/checks/contracts/test_validate_contract_drift.py
+    action: Delete
+    purpose: >-
+      Decomposed into the package below. Inventory is TEN test classes plus the _FakeGit helper --
+      TestCategory1..8, TestReRatificationTriggerWellFormedness, TestCleanAndNoRitual. The count
+      matters because check_test_file_exists accepts any single test_*.py in the package, so a
+      silently dropped class would pass every gate. A full-tree scan confirms no live check, CI
+      workflow or registry node_id references this module.
+  - file: tests/checks/contracts/validate_contract_drift/
+    action: Create
+    purpose: >-
+      Concern-split package with __init__.py, plus a package-level `conftest.py` that is the home for
+      _FakeGit, _install_fake_git, _write and _valid_class_a. The round-3 draft said "no new
+      conftest", which foreclosed the only sanctioned home -- validate_no_cross_test_imports fails
+      any tests/** import whose final dotted component starts with `test_`, and its own docstring
+      names conftest fixtures and tests/fixtures/ as the alternatives. _FakeGit MUST be extended to
+      answer `git ls-tree`, `git diff -M --name-status` and `git cat-file --batch`: it currently
+      returns rc=0 with empty stdout for any unrecognised command, which would yield an EMPTY
+      baseline and make every tmp_path file read as new. Each split module must preserve the existing
+      load-validate.py-by-path pattern so registry.all_checks() is populated for the evaluator
+      resolution fixtures. Every fixture passes an explicit baseline_reader rather than relying on
+      module state.
+  - file: tests/checks/contracts/test__population.py
+    action: Create
+    purpose: Mirror-convention test home for the new _population.py module.
+  - file: tests/test_coverage_checker/
+    action: Modify
+    purpose: >-
+      Mapping test asserting the gate resolves to an existing test DIRECTORY after registration and
+      that the pre-decomposition single-file module is gone (the closure obligation for the Delete row).
+  - file: tests/test_contracts.py
+    action: Modify
+    purpose: >-
+      load_contract_meta coverage (a D envelope validates with arbitrary body keys; missing subject
+      or evaluator raises; `ratified` without `ratified_via` raises; a grandfathered file carrying
+      `active` or `none_grandfathered` LOADS, which is the guard against reintroducing the
+      sweep-blocking contradiction) and the new transition edges. Transition edges are ALSO exercised
+      through the gate, because asserting a frozenset literal would pass red/green while exercising
+      no reachable behaviour.
+  - file: tests/test_contracts_schema.py
+    action: Modify
+    purpose: Coverage for the two enum widenings and the ContractMeta validator's new rules.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Exactly THREE graduated rows, each with the full shape -- check_id, primitive_slot,
+      guard_target, guard_symbol, `plan_slug: contracts-first-class-migration` (the implement-PR leg
+      matches on check_id AND plan_slug), graduated_at, graduated_by, and check_spec.node_id naming a
+      specific test FUNCTION (the test_selector slot does _require("node_id"); a `pytest -k` class
+      filter is not a node id). Three, not nine: each added row triggers a REAL git-worktree
+      differential inside the 300s fast tier.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerated via `bin/venv-python -m scripts.decisions_index --write`.
+      validate_decisions_index_freshness is ungated in --pre (registry.py:116) and fails on drift.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      EXACTLY ONE new numbered entry, PLUS the ONE guard-mandated supersession annotation its
+      envelope requires. The envelope declares `amends: [118]` only -- the round-3 draft also
+      declared `[167]`, but no clause of Decision 167 is amended: this plan states it does NOT fire
+      167 clause 3, which is a clarification, not an amendment, and the over-declared edge bought a
+      second mandated annotation with no substance behind it. validate_supersession_annotations
+      harvests envelope edges (lines 86-90) and _is_annotated is satisfied by the bare substring
+      "Decision 168" inside Decision 118's block; decision-entry.yaml:117-120 prescribes exactly this
+      append-only accretion, so it conflicts with no immutability rule. The entry carries the three
+      bold markers (Status / Date / Decision) plus an envelope with `number`,
+      `significance.value: numbered_decision` and a non-empty `significance.justification`, under the
+      6,144-byte WARN norm. It records the RULING only, citing contract-population.yaml for every
+      shape, and states three honesty clauses: that the evaluator obligation makes an already-implicit
+      assertion explicit rather than adding a bar; that this is NOT step-3 completion and the sweep is
+      the completing act; and that subject-uniqueness PREVENTS future duplicate-subject claims while
+      DETECTING none of CFG-05's existing named instances.
+  - file: audits/contract-first-governance-33c8667.yaml
+    action: Modify
+    purpose: >-
+      Append ONE dated amendment LINE to the meta.contract_notes BLOCK SCALAR (a `|-` scalar, not a
+      mapping -- a YAML key there is a parse error), mirroring the `amendment_2026-08-07:` text-line
+      precedent at line 27. Records the ratchet's WHY and points at contract-population.yaml for the
+      HOW. States that findings, severities and Q1-Q9 verdicts are unchanged. audits/*.yaml is
+      `governed: false` in the workflow_outputs class, so no size gate applies.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - A NEW depth-1 docs/contracts .yaml or .yml file carrying neither a ritual block nor a valid
+    Class D shape FAILS, naming the file and the missing shape; the same file present at the
+    merge-base baseline passes and counts as grandfathered.
+  - A NEW tracked file under docs/contracts that is not a depth-1 .yaml/.yml FAILS unless
+    baseline-present; the two existing .md members remain grandfathered, and the file-router
+    prose_allowlist is narrowed to those two by name so no guard advertises what another revokes.
+    The conformance-admitted set must be EXACTLY the globbed set (state the case-sensitivity
+    invariant; `glob("*.yaml")` is case-sensitive).
+  - "A Class D `evaluator` must RESOLVE by evidence of READING, not by mention. For
+    `{check: <name>}`: the name must be a member of pre_sequence() or full_sequence() (registration
+    alone is insufficient -- register() populates _REGISTRY at import independent of sequencing),
+    AND the check's module, or a one-hop scripts/ module it imports, must contain the contract's
+    BASENAME as a string literal in EXECUTABLE context. Docstrings and `#` comments are excluded via
+    AST. Match is exact equality on the literal, not substring, so `file-router.yaml` does not match
+    `my-file-router.yaml`. Basename rather than joined path, because the genuine idiom is segmented:
+    validate_placement.py:19 builds `_common.ROOT / \"docs\" / \"contracts\" / \"file-router.yaml\"`,
+    which a joined-path match would wrongly reject."
+  - "The rule's two verified poles must both hold: validate_placement/file-router PASSES (executable
+    literal at line 19), and _marker_guard/marker-grammar FAILS (its only occurrences are the module
+    docstring at line 8 and a `#` comment at line 35). The round-3 draft's textual-reference rule
+    ADMITTED the _marker_guard pair while its acceptance criterion claimed it rejected them -- the
+    fixture must assert both poles, not just the negative."
+  - "The grandfather-only forms are closed at birth (gate, new-vs-baseline) and in transition, where
+    the transition rule is a KIND CHANGE only: FAIL iff the base document carried a resolving
+    evaluator ({check} or {agent_surface}) and the head carries {none_grandfathered}. `absent ->
+    none_grandfathered` on a baseline-present file is PERMITTED, because that is exactly the 21-file
+    sweep -- the round-3 wording would have failed all 21 and blocked this plan's own completing act."
+  - Loading a grandfathered file that legitimately carries `active` or `none_grandfathered` SUCCEEDS
+    at the schema layer, so the sweep is not blocked by this plan's own substrate.
+  - "Class-A AND Class-B smuggling are both detected. Retain the literal `fields:` / `verbs:`
+    rejection AND add the shape rule over a descriptor set covering BOTH classes -- Class A's
+    type / nullable / description / semantics / populated_by / dq_intent and Class B's
+    payload_schema_ref / response_codes / typed_errors. The round-3 draft replaced names with a
+    Class-A-only shape rule and thereby OPENED the Class B seam it had previously closed."
+  - Two files declaring the same subject FAIL over the union of declared subjects and ritual contract
+    ids, deduped per file; and a Class D file with a file-router route row whose subject differs from
+    that row's topic FAILS.
+  - A Class D file whose parsed content changed with no new amendment_log entry FAILS; a comment-only
+    or formatting-only edit passes; base resolution is the union of path, the `-M` rename map and
+    `contract.id`, so neither renaming, rewriting past the similarity threshold, nor editing the id
+    sheds the obligation; and a file whose base carried a valid shape but whose head does not FAILS
+    on conformance loss.
+  - "The pin is strictly typed (int, not bool, non-negative); a base in which the pin file does not
+    exist SKIPS the direction comparison, because that is this plan's own landing PR; and an INCREASE
+    is authorised only through the ratified mechanism -- a `# raise-approved: dec-NNN <reason>` marker
+    routed through _marker_guard.authorization_failure, registered in marker-grammar.yaml, never a
+    private existence-only token. The value is the gate-visible non-ritual population, 21, with ZERO
+    slack, verified four times independently as 37 .yaml = 16 ritual + 21 non-ritual plus 2 .md."
+  - "The census prints scanned / ritual / declared / grandfathered / evaluator_none_grandfathered /
+    status_active / skipped every run. Its discriminating assertions are `scanned > 0`, `ritual > 0`
+    and `skipped == 0` against the real tree; the bucket identity
+    `scanned == ritual + declared + grandfathered + skipped` is retained only as a forgot-a-bucket
+    guard with INDEPENDENTLY computed counters, and is explicitly NOT claimed to answer the
+    vacuous-pass concern -- over a mutually exclusive partition it cannot fail. Counts are derived
+    from the scan, never hardcoded."
+  - A missing docs/contracts directory FAILS rather than passing; a non-UTF-8 file fails as a
+    category-1 defect rather than raising an uncaught traceback.
+  - With origin/main unreachable the baseline-dependent legs advisory-SKIP with a printed reason while
+    uniqueness, shape and evaluator resolution still run and the census still prints. This must NOT
+    fail, because the shallow-checkout job is main-validate.
+  - docs/contracts/contract-population.yaml passes the gate it defines, as a `ratified` Class D
+    contract with `ratified_via` set and an evaluator that genuinely reads it.
+  - The existing live population passes unchanged and preflight's provisional scan is unaffected.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      RED FIXTURE -- a NEW file with neither shape must fail, asserting the SPECIFIC error string.
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k DeclaredShapeObligation"
+    expected: "Pass. The message names the file and the missing shape; the baseline-present twin passes."
+    fix_if: "No failure for a new keyless file -- the skip-branch narrowing did not take effect."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "contracts-new-file-declared-shape-required"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      EVALUATOR RESOLUTION -- both verified poles, plus the sequencing and indirection cases.
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k EvaluatorResolution"
+    expected: "validate_placement/file-router PASSES (executable literal); _marker_guard/marker-grammar FAILS (docstring + comment only); an unsequenced-but-registered check FAILS; a one-hop imported module carrying the literal PASSES; an unknown name FAILS."
+    fix_if: "A docstring mention satisfies the rule -- the obligation is back to asserting delegation rather than verifying it."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "contracts-evaluator-must-read-its-contract"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Grandfather-only forms in both directions, including the PERMITTED sweep transition.
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k GrandfatherOnly"
+    expected: "New-file active and new-file none_grandfathered fail with their own messages; a kind change from a resolving evaluator to none_grandfathered fails; `absent -> none_grandfathered` on a baseline-present file PASSES."
+    fix_if: "Either direction is open, or the sweep transition fails and the completing act is blocked."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "contracts-grandfather-only-forms-both-directions"
+  - step: 4
+    phase: pre-deploy
+    action: "Class-A AND Class-B smuggling detection, by name and by shape."
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k Smuggling"
+    expected: "A D file with literal `fields:` fails; with literal `verbs:` fails; with field-shaped `columns:` fails; with verb-shaped `operations:` carrying payload_schema_ref/response_codes fails; a genuine heterogeneous mechanism body passes."
+    fix_if: "The Class B seam is open -- the shape rule covers only Class A descriptor keys."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible, but each graduated row costs a real git-worktree differential inside the
+      300s fast tier (validate_verification_registry, registry.py:169). Three rows is this plan's
+      priced budget; this check shares step 1's guard target and re-runs on every suite execution, so
+      graduating it buys a second differential rather than new coverage.
+  - step: 5
+    phase: pre-deploy
+    action: "Extension, depth and case conformance, including the pre-authorised .md path."
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k ExtensionDepth"
+    expected: "A new .yml is governed; a new .md and a nested .yaml fail; the two baseline .md members pass as grandfathered; the conformance-admitted set equals the globbed set under case variation."
+    fix_if: "A one-character extension change escapes the obligation, or a .YAML file is conformant-but-unscanned."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same fast-tier differential budget. This check's subject is a glob whose correctness is also
+      asserted against the real tree in step 9, so a graduated synthetic row would duplicate rather
+      than extend the guard.
+  - step: 6
+    phase: pre-deploy
+    action: "Subject uniqueness, per-file self-collision, and topic-equals-subject."
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k SubjectUniqueness"
+    expected: "Two files sharing a subject fail; a subject colliding with a ritual id fails; a ritual contract declaring its OWN id passes; a Class D file whose subject differs from its router topic fails."
+    fix_if: "Collisions pass, self-collision false-positives, or the third naming axis goes unreconciled."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same fast-tier differential budget, and deliberately the lowest-value candidate: the detector is
+      precision-optimal and recall-poor by design, so a standing synthetic guard asserts a property
+      the live population cannot currently exercise.
+  - step: 7
+    phase: pre-deploy
+    action: "Pass 2 -- amendment log, the three-way base resolution union, and conformance loss."
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k PassTwo"
+    expected: "Content change without an entry fails; comment-only passes; a rename, a rename-plus-rewrite past the -M threshold, and an edited contract.id each still resolve a base and still fail; base-had-shape/head-lacks-shape fails on conformance loss."
+    fix_if: "Any of the three evasions sheds the amendment obligation, or whitespace is treated as an amendment."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same fast-tier differential budget, and the rename and id fixtures depend on a synthesized git
+      history a standing registry row would have to reconstruct on every run -- expensive for a guard
+      whose subject is already suite-covered.
+  - step: 8
+    phase: pre-deploy
+    action: "The ratchet -- typing, direction, the ratified marker path, and the base-absent bootstrap."
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k Ratchet"
+    expected: "An unmarked increase fails; an increase carrying `# raise-approved: dec-NNN` whose Decision body names the governed key passes via _marker_guard.authorization_failure; a marker citing an unrelated Decision fails; a decrease passes; missing key, string, bool and negative each fail; a base without the pin FILE skips the direction comparison; the pin is read from the INJECTED contracts_dir."
+    fix_if: "The marker is existence-only, the landing PR wedges on base-absent, or the pin is read from the real tree so fixtures never trip it."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same fast-tier differential budget. The authorization half delegates to _marker_guard, which is
+      already a registered, separately-guarded mechanism, so graduating here would duplicate a guard
+      Decision 165 already owns.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      REGRESSION and CENSUS against the real population with the baseline legs ENABLED -- not the
+      merge_base_rc=1 shortcut the existing real-population test uses, which would leave the census
+      and ratchet unexercised against real git.
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k 'RealPopulation or SelfHosting'"
+    expected: "Zero failures against docs/contracts; scanned > 0, ritual > 0 and skipped == 0 with counts derived from the scan; contract-population.yaml passes the gate it defines."
+    fix_if: "An existing contract regressed, a bucket is mis-assigned, or the self-hosting file cannot satisfy its own obligation."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Deliberately NOT graduated despite being kernel-expressible: it passes both before and after the
+      change (a regression assertion, tautological as an admission test), so graduating it would
+      launder a non-admitted check into the registry. Bundling it with the genuine census assertions
+      under one id -- as an earlier draft did -- would have admitted it on their strength.
+  - step: 10
+    phase: pre-deploy
+    action: "Fail-closed hardening and the loud advisory-skip."
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k FailClosed"
+    expected: "Missing docs/contracts FAILS; a non-UTF-8 file is a cat-1 defect not a traceback; origin/main unreachable advisory-SKIPs the baseline legs with a printed reason while uniqueness, shape and evaluator resolution still run and the census still prints."
+    fix_if: "Any path silently disables the gate, or the unreachable case FAILS and would redden main-validate."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same fast-tier differential budget. The missing-directory and decode cases are single-branch
+      guards covered by the suite; the skip case depends on process-level git reachability a registry
+      differential would have to fake.
+  - step: 11
+    phase: pre-deploy
+    action: "The decomposed _population module's own unit coverage."
+    command: "bin/venv-python -m pytest tests/checks/contracts/test__population.py -q"
+    expected: "Declared-shape validation, evaluator resolution, shape detection, extension/depth conformance, uniqueness and census counting each covered directly at the module boundary."
+    fix_if: "The decomposition moved code without moving its coverage."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same fast-tier differential budget; this module's behaviour is already the subject of the three
+      graduated rows through the gate that orchestrates it, so a fourth row would re-assert it one
+      layer down.
+  - step: 12
+    phase: pre-deploy
+    action: "Schema and loader units -- envelope, ratified_via, transitions, and the sweep-unblocked negative."
+    command: "bin/venv-python -m pytest tests/test_contracts.py tests/test_contracts_schema.py -q"
+    expected: "A D envelope validates with arbitrary body keys; missing subject or evaluator raises; `ratified` without `ratified_via` raises; a grandfathered file carrying active or none_grandfathered LOADS; active->ratified allowed, and no inbound edge to active exists."
+    fix_if: "extra=forbid still rejects heterogeneous bodies, or a grandfather-only prohibition leaked into the schema layer and blocks the sweep."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same fast-tier differential budget. These are pure schema-shape assertions whose guard target is
+      already covered by steps 1-3's registered rows through the same modules.
+  - step: 13
+    phase: pre-deploy
+    action: "Decision entry, its annotation, and the regenerated index satisfy the decisions guards."
+    command: "bin/venv-python -m pytest tests/checks/decisions -q"
+    expected: "Conformance, supersession-annotation, index-freshness and size checks pass with the entry, the Decision 118 annotation and the regenerated index present."
+    fix_if: "The envelope is malformed, Decision 118 lacks its annotation, or the index was not regenerated."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating this would pin a standing registry check to THIS entry's transient content (entry
+      168, its victim, an index snapshot that regenerates on every future entry), reddening on
+      unrelated future decisions. The durable guards are already registered in both tiers.
+  - step: 14
+    phase: pre-deploy
+    action: "The concern-split registration resolved -- assert, do not assume the path."
+    command: "bin/venv-python -m pytest tests/test_coverage_checker -q -k contract_drift"
+    expected: "map_source_to_test resolves the gate to an existing DIRECTORY containing the split modules, and the pre-decomposition single-file module is gone."
+    fix_if: "It still resolves to a .py path, or the package was created under the wrong name."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible and genuinely admitted, but it guards a ONE-TIME migration: once the package
+      exists the assertion can never fail again, so a standing registry row would be a permanent
+      tautology. Waived on that ground rather than not-applicable, since the kernel could express it.
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      COVERAGE -- the five changed source files each default to 100% per-file line coverage, since
+      none has a config/coverage_baseline.yaml entry. This obligation was unpriced until round 3.
+    command: "bin/venv-python -m scripts.validate --check test_coverage"
+    expected: "Pass at 100% for scripts/contracts_schema.py, scripts/contracts.py, scripts/checks/contracts/_shared.py, scripts/checks/contracts/_population.py and scripts/checks/contracts/validate_contract_drift.py -- including the fail-open baseline path and the advisory-skip branch."
+    fix_if: "A branch is uncovered. Add the test, never a baseline entry -- lowering coverage would itself require a `# baseline-lowered: dec-NNN` marker."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but validate_test_coverage is already a registered
+      full-tier check; graduating a wrapper around it into the registry the presubmit reads is
+      circular duplication, not new coverage.
+  - step: 16
+    phase: pre-deploy
+    action: "SLOC -- confirm the decomposition cleared the limit for the test package, the gate and _population."
+    command: "bin/venv-python -m scripts.validate --check sloc_limits"
+    expected: "Pass. No split test module, the gate, or _population.py approaches 500 effective SLOC, and no budget raise was registered."
+    fix_if: "A module is oversized -- decompose further; Decision 128 forbids a raise as the response."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but sloc_limits is already registered in both
+      presubmit tiers; graduating a wrapper around it is circular duplication.
+  - step: 17
+    phase: pre-deploy
+    action: "Plan-document obligations -- the check that failed this plan's own artefact in round 3."
+    command: "bin/venv-python -m scripts.validate --check plan_documents"
+    expected: "Pass. Every behavior-changing scope entry carries a linked test obligation or a per-source waiver."
+    fix_if: "A scope entry lacks an obligation -- add the row; .md and tests/ are exempt, .yaml and .json are not."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but validate_plan_documents is already registered with
+      pre_globs covering docs/plans/**; graduating a wrapper is circular duplication.
+  - step: 18
+    phase: pre-deploy
+    action: "Fast-tier presubmit, including the budget assertion this plan's graduated rows load."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 within the 300s budget, with the census line present and the three added registry differentials accounted for."
+    fix_if: "Any check regresses, or the three worktree differentials plus the added git reads breach the budget -- reduce graduated rows rather than raising the budget."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but graduating the presubmit gate into the registry it
+      itself reads is circular. Recorded as a waiver rather than not-applicable because the kernel
+      COULD express it -- the bar is circularity, not inexpressibility.
+  - step: 19
+    phase: pre-deploy
+    action: "FULL-TIER presubmit, required by this plan's own handoff_policy."
+    command: "bin/venv-python -m scripts.validate"
+    expected: "Exit 0 across the full sequence, including tree-scoped checks the fast tier skips."
+    fix_if: "A full-tier-only check fails -- most likely coverage, supersession annotations or index freshness."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same circularity as step 18, at the full tier. The kernel could express it as command_exit_zero;
+      graduating the authoritative presubmit into its own registry cannot add coverage.
+test_obligations:
+  - source: scripts/checks/contracts/validate_contract_drift.py
+    behavior: >-
+      Branch order routes D before load_contract; new files must carry an admissible shape; the
+      grandfather-only forms are closed at birth and on kind change; Pass 2 resolves base by the
+      three-way union and fails on conformance loss; the pin is typed, direction-guarded via the
+      ratified marker, and bootstrap-safe.
+    verification_step: 1
+    test_selector: tests/checks/contracts/validate_contract_drift
+    red_green_expectation: >-
+      Red before, green after, per scripts/verification_checks.py is_admitted. Every POSITIVE fixture
+      asserts its own error string so none can be satisfied by an incidental pre-existing failure --
+      this matters most for the `active` and Class D cases, which today fail the unmodified gate for
+      the unrelated reason that neither is yet an enum member. NEGATIVE fixtures assert the ABSENCE of
+      failure and are therefore tautological as admission tests; the full list is: self-collision
+      passes, comment-only passes, pin decrease passes, the baseline-present twin passes, the two
+      baseline .md members pass, and the permitted `absent -> none_grandfathered` sweep transition.
+      They are retained as regression guards. The round-2 blanket claim that no fixture could be
+      incidentally satisfied is withdrawn as false, and this enumeration is the complete correction.
+  - source: scripts/checks/contracts/_population.py
+    behavior: >-
+      Declared-shape validation, evaluator resolution by executable-context AST scan, Class-A/B shape
+      detection, extension/depth/case conformance, subject uniqueness and census counting.
+    verification_step: 11
+    test_selector: tests/checks/contracts/test__population.py
+    red_green_expectation: >-
+      Red before, green after. The module does not exist before this plan, so every assertion has no
+      code path; the evaluator-resolution poles in particular fail red because the current tree has no
+      resolution rule at all.
+  - source: scripts/contracts_schema.py
+    behavior: >-
+      ContractClass admits D; ContractStatus admits active; ContractMeta requires subject and
+      evaluator for D and ratified_via for a ratified status; _validate_class_shape raises for D; and
+      NO baseline-dependent rule lives here.
+    verification_step: 12
+    test_selector: tests/test_contracts_schema.py
+    red_green_expectation: >-
+      Red before, green after. Without the enum and validator additions a Class D ContractMeta raises
+      on the unknown class value. The negative assertion -- that a grandfathered file carrying active
+      LOADS -- is the standing guard against reintroducing the sweep-blocking contradiction.
+  - source: scripts/contracts.py
+    behavior: >-
+      load_contract_meta validates a D envelope without constructing ContractDocument; the three
+      active edges exist with no inbound edge to active; load_all_contracts still skips D.
+    verification_step: 12
+    test_selector: tests/test_contracts.py
+    red_green_expectation: >-
+      Red before, green after. Without load_contract_meta the Class D fixture raises
+      ContractValidationError on its top-level body keys. Transition edges are additionally exercised
+      through the gate at step 3, because asserting a frozenset literal would pass red/green while
+      exercising no reachable behaviour.
+  - source: scripts/checks/contracts/_shared.py
+    behavior: >-
+      The merge-base path-set baseline, the -M rename map and the id-keyed envelope reader each accept
+      an explicit injection seam, delegate reachability to _common.origin_main_reachable, and return a
+      sentinel distinguishable from an empty baseline.
+    verification_step: 10
+    test_selector: tests/checks/contracts/validate_contract_drift
+    red_green_expectation: >-
+      Red before, green after. Without the readers the gate cannot classify new-vs-baseline, so every
+      new-file fixture fails. The injection seam is itself load-bearing: module-level memoization would
+      be populated by the first fixture and ignore later monkeypatched runs.
+  - source: scripts/test_coverage_checker.py
+    behavior: The gate resolves to a concern-split test package rather than a single module.
+    verification_step: 14
+    test_selector: tests/test_coverage_checker
+    red_green_expectation: >-
+      Red before, green after. Without the registration map_source_to_test returns the .py path and the
+      directory assertion fails.
+  - source: docs/contracts/contract-population.yaml
+    behavior: >-
+      The self-hosting Class D contract is valid under the gate it defines and supplies the pin the
+      gate reads.
+    verification_step: 9
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k 'RealPopulation or SelfHosting'"
+    waiver_reason: >-
+      A declarative contract file with no behaviour of its own; its correctness IS the gate's
+      self-hosting assertion in the linked step, which loads it, validates its shape and reads its pin.
+      A separate unit test would re-assert the same property one layer down.
+  - source: docs/contracts/marker-grammar.yaml
+    behavior: The ratchet is registered as a governed surface of the ratified raise-approved token.
+    verification_step: 8
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k Ratchet"
+    waiver_reason: >-
+      A token registry consumed by _marker_guard, which Decision 165 already guards; the linked step
+      exercises the authorization path end to end, and the registry entry itself is declarative with no
+      independent behaviour to assert.
+  - source: docs/contracts/file-router.yaml
+    behavior: >-
+      The route row resolves and its topic is the new contract's subject; the prose_allowlist no longer
+      advertises a permission the population gate revokes.
+    verification_step: 6
+    command: "bin/venv-python -m pytest tests/checks/contracts/validate_contract_drift -q -k SubjectUniqueness"
+    waiver_reason: >-
+      A discovery index whose link validity and topic uniqueness are already enforced by
+      validate_placement in both presubmit tiers; the topic-equals-subject property is what the linked
+      step asserts, and the allowlist narrowing is covered by step 5's extension conformance.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: Three graduated rows carry the full shape and a node_id naming a specific test function.
+    verification_step: 18
+    command: "bin/venv-python -m scripts.validate --pre"
+    waiver_reason: >-
+      A registry whose row shape and differential admission are enforced by validate_verification_registry
+      inside the linked step; that check materializes each added row and runs it against a git worktree,
+      which is a stronger assertion than any unit test this plan could add.
+  - source: docs/decisions-index.json
+    behavior: The committed index matches the corpus after the new entry lands.
+    verification_step: 13
+    command: "bin/venv-python -m pytest tests/checks/decisions -q"
+    waiver_reason: >-
+      A generated projection, never hand-edited; validate_decisions_index_freshness in the linked step is
+      its authoritative drift check, and a unit test asserting a regenerated artefact matches its
+      generator would be tautological.
+  - source: audits/contract-first-governance-33c8667.yaml
+    behavior: The amendment line records the ratchet's rationale and points at the owning contract.
+    verification_step: 19
+    command: "bin/venv-python -m scripts.validate"
+    waiver_reason: >-
+      A run-record artefact, governed false in the workflow_outputs structural class, with no consumer
+      that parses the amended field; the linked full-tier step confirms the file still parses. Asserting
+      prose content in a test would pin an immutable evidence document to a string literal.
+constraints:
+  - "EXACTLY ONE new numbered Decision entry, with `amends: [118]` only. The single permitted
+    additional docs/DECISIONS.md edit is the guard-mandated supersession annotation on Decision 118.
+    The `[167]` edge is dropped: no clause of Decision 167 is amended, and declaring it bought a
+    second mandated annotation with no substance."
+  - "NO baseline-dependent rule may live in scripts/contracts_schema.py. A pydantic validator cannot
+    see the baseline; an unconditional rejection there would make the grandfather-only forms
+    unloadable and block the population sweep this plan names as its completing act."
+  - "The evaluator obligation is RESOLUTION BY EVIDENCE OF READING, not naming and not mention. A
+    docstring or comment occurrence must NOT satisfy it -- the round-3 draft's textual rule admitted
+    _marker_guard, the very pair its acceptance criterion claimed it rejected. This is not a new bar;
+    it makes explicit the assertion the design already rested on (CFG-03), and the Decision entry must
+    frame it that way."
+  - "The grandfather-only forms are closed at birth AND on evaluator KIND CHANGE, never on arrival
+    from absent -- `absent -> none_grandfathered` is the sweep and must pass."
+  - "Retain the literal `fields:`/`verbs:` rejection alongside the shape rule. Replacing names with a
+    Class-A-only shape rule opened the Class B seam; both mechanisms are kept."
+  - "The ratchet's raise gate binds to the RATIFIED mechanism -- `# raise-approved: dec-NNN` through
+    _marker_guard.authorization_failure, registered in marker-grammar.yaml. A private existence-only
+    token contradicts Decision 165 point 1 and is self-refuting in this plan of all plans."
+  - "FORWARD-ONLY. The 21 gate-visible free-form files are NOT seeded here. No existing contract file's
+    content changes except file-router.yaml (one route row plus the allowlist narrowing) and
+    marker-grammar.yaml (one used_by entry)."
+  - "The pin has ZERO slack by design and must not be rounded up; the conformance-loss rule, not the
+    pin's exact value, is the primary defence against the delete-the-contract-block fallback."
+  - Graduated registry rows are capped at THREE; each costs a real git-worktree differential inside the
+    300s fast tier.
+  - "pytest-invoking VP steps stay `hermetic: false` (planning skill, Decision 148). With zero hermetic
+    steps validate_vp_replay replays nothing and its 120s aggregate cap never loads."
+  - "All five changed source files default to 100% per-file coverage; none has a coverage_baseline
+    entry. Close gaps with tests, never a baseline entry -- lowering would itself require a
+    `# baseline-lowered:` marker citing an authorising Decision."
+  - This plan does NOT flip Decision 167 clause 3 to hard-fail and does NOT constitute
+    migration-step-3 completion.
+  - "CFG-11's EXISTING .md pair stays grandfathered; the FORWARD-facing hole it implies does not."
+  - Counts asserted in tests must be DERIVED, never hardcoded literals.
+  - "Decompose, never raise -- the _population.py split is unconditional, not a contingency."
+  - No rescue agents or workaround loops (Decision 55).
+  - Tests are synthetic-fixture only via the contracts_dir seam plus explicit baseline injection, with
+    the real live-population regression running with baseline legs ENABLED. No network, no credentials.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (120 of 120 triaged).
+    CITE: Decision 118, Decision 86, Decision 127, Decision 167, Decision 150, Decision 104,
+    Decision 165, Decision 166, Decision 134, Decision 153, Decision 131, Decision 105."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s), then operator-directed
+    close with all findings applied and no fourth round"
+  - "Review protocol: THREE parallel zero-context reviewers per round (plan-critique+architect,
+    adversarial gate-defeat, blast-radius/convention). Rounds 1, 2 and 3 each returned 3/3 REVISE.
+    This revision applies every round-3 finding; the operator directed no fourth round on the ground
+    that the remaining defects are specification-level and are better validated against running code
+    than in further paper review."
+  - "Round-3 findings applied, each independently verified against the tree: the evaluator predicate
+    was satisfied by a docstring mention and therefore ADMITTED _marker_guard (the pair the acceptance
+    criterion claimed it rejected) -- replaced with an executable-context AST scan matching the
+    basename as an exact literal, chosen over a joined-path match because the genuine idiom is
+    segmented (validate_placement.py:19); the evaluator-transition rule was ambiguous and its literal
+    reading failed all 21 sweep files -- restated as a kind change only; the Class-A-only shape rule
+    OPENED the Class B seam a name-based rule had closed -- both mechanisms retained; the ratchet
+    marker was existence-only and conflicted with Decision 165 point 1 -- rebound to the ratified
+    raise-approved token via _marker_guard; the pin's base-absent state is this plan's own landing PR
+    -- direction comparison now skips it; base resolution widened to union(path, -M, contract.id)
+    because each alone is defeated by a cheaper edit; the census identity is true by construction over
+    a partition -- demoted to a forgot-a-bucket guard with scanned/ritual/skipped carrying the
+    discriminating load; validate_plan_documents failed this plan's own artefact -- five per-source
+    waivers added; 100% per-file coverage on five sources was unpriced -- now a VP step and a
+    constraint; _FakeGit had no legal home under the no-new-conftest line -- a package conftest.py is
+    the sanctioned home; the _population.py split made unconditional; `amends: [167]` dropped as
+    unjustified, taking one mandated annotation with it."
+  - "Two of round 3's defects were regressions introduced by round 2's own fixes (the Class B seam and
+    the private marker). That pattern -- specifying mechanism in prose, then discovering on execution
+    that the rule is subtly wrong -- is why the operator closed paper review here: the remaining
+    predicates are cheaper to validate by writing and running them than by another review round."
+  - "Class D remains cheaper to author than A/B by design: mechanism bodies are heterogeneous and
+    cannot carry Class A's per-field obligations. What the evaluator rule removes is the FREE choice --
+    a D contract now requires a guard that demonstrably reads it. The residual gap is stated honestly:
+    class selection for genuinely-A-or-B content is caught by the shape and name detectors, not by an
+    author-intent check, and the Decision entry must say so rather than claiming cost-equalisation."
+  - "Subject is a precision-optimal, recall-poor detector: it prevents FUTURE duplicate-subject claims
+    and detects NONE of CFG-05's existing named instances. The topic-equals-subject rule prevents this
+    plan from adding a third un-reconciled naming axis over one population."
+  - "Fable advice-consults (three rounds) informed this design. Adopted: the one-taxonomy reading;
+    envelope-only validation over a nested spec: key; the typed evaluator union; the canonical-dump
+    change rule; the red-fixture-plus-census two-halves proof. Adapted: the grandfather form became a
+    pinned ratchet rather than a seeded roster. Rejected: translating `status: active` to `ratified`,
+    and keeping a countable `{none:}` form available to new files."
+  - "Human rulings: (1) one unified taxonomy, since a self-selected lighter tier is a gradient not a
+    classification; (2) extend ContractStatus rather than translate; (3) the ratchet's why persisted to
+    the audit file as a dated amendment line pointing at the contract for the how; (4) `active`
+    grandfathering-only; (5) annotate the amends victims rather than dropping edges or waiving the
+    guard -- applied to the one edge that survives justification; (6) the grandfathered evaluator key is
+    named `none_grandfathered` so it states WHY; (7) the evaluator must read its contract, framed as
+    making an implicit assertion explicit rather than adding a bar."
+  - "rec-2915 (open, High) -- registered checks must report examined-input counts. This plan implements
+    that shape for THIS gate only and does not close the repo-wide rec; not bundled."
+  - "Follow-on work filed and NOT in scope: rec-3053, rec-3054, rec-3055, rec-3056."
+  - "A Critical recommendation obliging machine enforcers for contracts declaring the grandfathered
+    evaluator form is filed at implement time; rec-3054 is its standing consumer."
+  - "Numbering race: max header is 167; re-check at implement time. Headroom verified: 120/132 live
+    headers, 691,421/780,000 combined bytes."
+  - "Fast-tier budget (_FAST_TIER_BUDGET_SECONDS = 300): the gate gains one memoized git ls-tree, one
+    git diff -M, and one git cat-file --batch of baseline Class D envelopes, plus a git show per changed
+    Class D file; three graduated rows add three worktree differentials on the implementing PR only.
+    Step 18 is the budget check and its fix_if directs reducing rows rather than raising the budget."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Re-checked the current max '## Decision NNN:' header before authoring the entry
+  - Confirmed map_source_to_test's resolved package path before creating the test package
+  - Confirmed the gate-visible non-ritual count before writing the pin
+execution_steps:
+  - "scripts/contracts_schema.py -- add ContractClass.D and ContractStatus.active; add optional typed
+    subject/evaluator; validator requires both for D and ratified_via when status is ratified;
+    _validate_class_shape raises for D. Add NO baseline-dependent rule here."
+  - "scripts/contracts.py -- add load_contract_meta; add the three active edges with no inbound edge to
+    active; make load_all_contracts skip D with a docstring note naming context_docs.py's bare except."
+  - "scripts/checks/contracts/_shared.py -- add the merge-base path-set baseline, the -M rename map and
+    the id-keyed envelope reader, each with an explicit injection seam."
+  - "scripts/checks/contracts/_population.py -- create it FIRST, before touching the gate, so the
+    decomposition is the starting shape rather than a retrofit."
+  - "scripts/checks/contracts/validate_contract_drift.py -- implement (a)-(i) in that branch order,
+    delegating to _population. Read the pin from the INJECTED contracts_dir."
+  - "docs/contracts/contract-population.yaml -- author the Class D self-hosting contract with
+    status ratified and ratified_via set; re-derive the pin before committing and record the
+    zero-slack rationale."
+  - "docs/contracts/marker-grammar.yaml -- add validate_contract_drift to tokens.raise-approved.used_by."
+  - "docs/contracts/file-router.yaml -- add the route row (topic + targets) and narrow the
+    prose_allowlist .md glob to the two grandfathered members."
+  - "scripts/test_coverage_checker.py -- register the gate in _CONCERN_SPLIT_TEST_PACKAGES, then run
+    map_source_to_test to LEARN the package path before creating it."
+  - "Decompose the 457-SLOC test module into that package with __init__.py and a package conftest.py
+    hosting _FakeGit and helpers, migrating all TEN classes and extending _FakeGit for git ls-tree,
+    git diff -M and git cat-file. Then add the new fixture modules; every positive fixture asserts its
+    own error string."
+  - "tests/checks/contracts/test__population.py, tests/test_contracts.py, tests/test_contracts_schema.py,
+    tests/test_coverage_checker/ -- add the module, loader, validator, transition and mapping coverage."
+  - "docs/DECISIONS.md -- author exactly one entry with the three bold markers and an envelope carrying
+    number, significance.value numbered_decision, a non-empty justification and amends [118], under
+    6,144 bytes; then add the one annotation naming Decision 168 inside Decision 118."
+  - "Regenerate docs/decisions-index.json via `bin/venv-python -m scripts.decisions_index --write`."
+  - "config/agent/verification_registry/registry.yaml -- add exactly THREE rows with plan_slug
+    contracts-first-class-migration and check_spec.node_id naming a specific test function."
+  - "audits/contract-first-governance-33c8667.yaml -- append one dated amendment LINE to the
+    meta.contract_notes block scalar."
+  - "git add docs/contracts/contract-population.yaml before running --pre, since validate_placement
+    resolves router targets against a git ls-files snapshot."
+  - "File the Critical drain recommendation via the ops portal, citing rec-3054 as its consumer."
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)"
+  - "Report: what was implemented, verification results"
+work_areas: []
+rollback: >-
+  Every change is additive and forward-only. Reverting restores the original skip branch and the
+  single-file test module; no existing contract file's content changed except one file-router route row,
+  the allowlist narrowing and one marker-grammar used_by entry; the new Decision entry and its
+  annotation are removed by the same revert, and docs/decisions-index.json regenerates from the reverted
+  corpus. The enum widenings are additive, so no persisted status or class value becomes invalid on
+  revert -- except contract-population.yaml itself, which the revert deletes.
