@@ -52,6 +52,15 @@ def _build_ducklake_drift_context(stale_functions: list[str], latest_sha: str) -
     )
 
 
+def _build_drift_acceptance(stale_functions: list[str], latest_sha: str, channel: str) -> str:
+    """Chain a deploy-record source_git_sha probe per stale function (lint-valid, credential-bearing)."""
+    return " && ".join(
+        f"aws s3 cp s3://agent-platform-data-lake/deploy-records/{channel}/{fn}.json - --profile agent_platform "
+        f'| grep -q "{latest_sha}"'
+        for fn in sorted(stale_functions)
+    )
+
+
 def _build_ducklake_drift_rec_fields(stale_functions: list[str], latest_sha: str) -> dict[str, Any]:
     return {
         "title": "DuckLake Lambda code drift -- deployed code stale vs latest main",
@@ -63,11 +72,7 @@ def _build_ducklake_drift_rec_fields(stale_functions: list[str], latest_sha: str
         "risk": "medium",
         "verification_tier": "V2",
         "context": _build_ducklake_drift_context(stale_functions, latest_sha),
-        "acceptance": (
-            "the governed deploy-ducklake-lambdas workflow runs successfully against the stale "
-            "function(s) and this rec is closed via the standard portal path (update_rec "
-            "--status closed, or a Resolves: trailer when a fix PR lands)."
-        ),
+        "acceptance": _build_drift_acceptance(stale_functions, latest_sha, "ducklake"),
     }
 
 
@@ -244,11 +249,7 @@ def _build_prod_drift_rec_fields(stale_functions: list[str], latest_sha: str) ->
         "risk": "medium",
         "verification_tier": "V2",
         "context": _build_prod_drift_context(stale_functions, latest_sha),
-        "acceptance": (
-            "the governed deploy-prod-lambdas workflow runs successfully against the stale "
-            "function(s) and this rec is closed via the standard portal path (update_rec "
-            "--status closed, or a Resolves: trailer when a fix PR lands)."
-        ),
+        "acceptance": _build_drift_acceptance(stale_functions, latest_sha, "prod"),
     }
 
 

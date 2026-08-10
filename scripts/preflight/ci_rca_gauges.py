@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -39,9 +40,15 @@ def _escalate_ci_rca_probe_health(
     Skips (returns None) when creds are unavailable or the warm cache did not load -- degraded
     offline sessions never attempt a portal write. This is the deterministic preflight trigger
     that substitutes for a cron until Lambda scheduled agents re-enable (AGENTS.md runbook).
+
+    Only a classified-transient reader outage (is_reader_unavailable, Decision 155) is swallowed
+    to a [WARN]; every other exception propagates out of this call (Decision 55 -- a blanket
+    except Exception is what hid this sensor's own acceptance-lint defect for its entire life).
     """
     if creds_status != "ok" or cache_rows is None or gauge is None:
         return None
+    from scripts.ops_portal.reader_transient import is_reader_unavailable  # noqa: PLC0415
+
     try:
         from scripts.ci_rca.probe_health import escalate  # noqa: PLC0415
 
@@ -53,6 +60,8 @@ def _escalate_ci_rca_probe_health(
             open_recs,
         )
     except Exception as exc:  # noqa: BLE001
+        if not is_reader_unavailable(exc):
+            raise
         print(f"[WARN] preflight: ci_rca_probe_health.escalate() failed: {exc}", file=sys.stderr)
         return None
 
@@ -339,13 +348,7 @@ def _build_dedup_effectiveness_fields(gauge: dict) -> dict[str, Any]:
         "risk": "medium",
         "verification_tier": "V2",
         "context": _build_dedup_effectiveness_context(gauge),
-        "acceptance": (
-            "The dedup-effectiveness rate (1 - duplicate_count/total_fingerprinted for OPEN "
-            f"source=ci_rca recs in the trailing {gauge['window_days']} days) returns at or above the "
-            f"{DEDUP_EFFECTIVENESS_THRESHOLD:.0%} threshold, and this rec is closed automatically by "
-            "ci_rca_gauges.escalate_dedup_effectiveness() with the recovered rate recorded as the "
-            "closure proof (Decision 103/70)."
-        ),
+        "acceptance": "bin/venv-python -m scripts.preflight.ci_rca_gauges --assert-dedup-clear",
     }
 
 
@@ -433,12 +436,68 @@ def _escalate_dedup_effectiveness(
 
     Skips (returns None) when creds are unavailable or the warm cache did not load -- degraded
     offline sessions never attempt a portal write (mirrors _escalate_ci_rca_probe_health).
+
+    Only a classified-transient reader outage (is_reader_unavailable, Decision 155) is swallowed
+    to a [WARN]; every other exception propagates (Decision 55 -- see
+    _escalate_ci_rca_probe_health's docstring for the same rationale).
     """
     if creds_status != "ok" or cache_rows is None or gauge is None:
         return None
+    from scripts.ops_portal.reader_transient import is_reader_unavailable  # noqa: PLC0415
+
     try:
         open_recs = [r for r in cache_rows if r.get("status") == "open"]
         return escalate_dedup_effectiveness(gauge, open_recs)
     except Exception as exc:  # noqa: BLE001
+        if not is_reader_unavailable(exc):
+            raise
         print(f"[WARN] preflight: ci_rca_gauges.escalate_dedup_effectiveness() failed: {exc}", file=sys.stderr)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Exit-code CLI (Decision 103 relevance oracle): credential-free, reads only the local
+# recommendations cache -- never constructs a DuckLake reader.
+# ---------------------------------------------------------------------------
+
+
+def assert_dedup_clear_exit_code(
+    cache_rows: list[dict],
+    threshold: float = DEDUP_EFFECTIVENESS_THRESHOLD,
+    min_sample: int = DEDUP_EFFECTIVENESS_MIN_SAMPLE,
+    window_days: int = _DEDUP_EFFECTIVENESS_WINDOW_DAYS,
+    now: datetime | None = None,
+) -> int:
+    """Return 0 when dedup effectiveness is at/above threshold (clear), 1 while degraded."""
+    gauge = _compute_dedup_effectiveness(cache_rows, window_days=window_days, now=now)
+    degraded = gauge is not None and gauge["total_fingerprinted"] >= min_sample and gauge["effectiveness"] < threshold
+    return 1 if degraded else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="CI-RCA gauges exit-code CLI.")
+    parser.add_argument(
+        "--assert-dedup-clear",
+        action="store_true",
+        help="Exit 0 if dedup effectiveness is at/above threshold, non-zero while degraded. "
+        "Reads only the local recommendations cache; no AWS credentials required.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.assert_dedup_clear:
+        from scripts.executor.jsonl_store import RECS_JSONL  # noqa: PLC0415
+
+        cache_rows: list[dict] = []
+        if RECS_JSONL.exists():
+            for line in RECS_JSONL.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    cache_rows.append(json.loads(line))
+        return assert_dedup_clear_exit_code(cache_rows)
+
+    parser.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
