@@ -94,7 +94,7 @@ class TestClassifyFailures:
             "function_to_category": {},
             "step_name_to_category": {"Run pytest": "code_regression"},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {"CI": "CI"},
+            "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
         }
         p = write_taxonomy(tmp_path, taxonomy_data)
         jobs = [{"steps": [{"name": "Run pytest", "conclusion": "failure"}]}]
@@ -125,7 +125,7 @@ class TestJobsJsonPreference:
             "function_to_category": {"validate_sloc_limits": "sloc_violation"},
             "step_name_to_category": {"Run pytest": "code_regression"},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {"CI": "CI"},
+            "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
         }
         p = write_taxonomy(tmp_path, taxonomy_data)
         jobs = [{"name": "test", "steps": [{"name": "Run pytest", "conclusion": "failure", "number": 1}]}]
@@ -142,7 +142,7 @@ class TestJobsJsonPreference:
             "function_to_category": {"validate_sloc_limits": "sloc_violation"},
             "step_name_to_category": {},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {"CI": "CI"},
+            "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
         }
         p = write_taxonomy(tmp_path, taxonomy_data)
         cat, check, src = classify_failure("validate_sloc_limits FAILED", jobs=None, path=p)
@@ -157,7 +157,7 @@ class TestJobsJsonPreference:
             "function_to_category": {},
             "step_name_to_category": {"pytest --collect-only": "test_collection_empty"},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {"CI": "CI"},
+            "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
         }
         p = write_taxonomy(tmp_path, taxonomy_data)
         jobs = [{"name": "j", "steps": [{"name": "pytest --collect-only", "conclusion": "failure", "number": 1}]}]

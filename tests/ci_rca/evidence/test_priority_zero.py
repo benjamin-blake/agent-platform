@@ -20,7 +20,7 @@ _ATTRIBUTION_TAXONOMY = {
         "Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)": "code_regression",
     },
     "log_pattern_to_category": [],
-    "workflow_to_tier": {"CI": "CI"},
+    "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
 }
 
 

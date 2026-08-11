@@ -91,4 +91,11 @@ ENTRIES: tuple[Entry, ...] = (
         pre=True,
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_ci_rca_adjudication",
+        module="scripts.checks.ci_guards.validate_ci_rca_adjudication",
+        attr="validate_ci_rca_adjudication",
+        pre=True,
+        full_segment="full_after_lint",
+    ),
 )

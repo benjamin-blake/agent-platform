@@ -124,6 +124,7 @@ function_to_category:
   validate_verifier_hermeticity: code_regression
   validate_verifier_same_pr_guard: code_regression
   validate_vp_replay: code_regression
+  validate_ci_rca_adjudication: schema_drift
 
 step_name_to_category:
   "Validate fast tier (ruff lint, ruff format, mypy, prompt checks)": code_regression
@@ -162,24 +163,177 @@ log_pattern_to_category:
     category: code_regression
     check_name: assertion_error
 
-workflow_to_tier:
-  CI: CI
-  Main Canary: CI
-  CodeQL: not_a_gate
-  Claude Code: not_a_gate
-  rec-autoclose: not_a_gate
-  Refresh Copilot Model Multipliers: not_a_gate
-  CI RCA: not_a_gate
-  terraform-apply-sandbox: not_a_gate
-  reconcile: not_a_gate
-  terraform-drift: not_a_gate
-  convergence-health: not_a_gate
-  deploy-ducklake-lambdas: not_a_gate
-  deploy-prod-lambdas: not_a_gate
-  tf-gated-apply-prototype: not_a_gate
-  cost-reconciliation: not_a_gate
-  ghas-probe: not_a_gate
-  terraform-provider-mirror-seed: not_a_gate
-  dedup-probe: not_a_gate
-  ci-rca-inactivity-sweep: not_a_gate
-  pr-conflict-signal: not_a_gate
+workflows:
+  CI:
+    tier: CI
+    ci_rca: watched
+    owner: platform
+    rationale: "The pr-validate/main-validate gate -- Decision 72 origin of the ci-rca mechanism."
+  Main Canary:
+    tier: CI
+    ci_rca: watched
+    owner: platform
+    rationale: >-
+      Scheduled drift canary re-running scripts.validate on main. Resolved dynamically from
+      main-canary.yml's own name field by both the guard and this contract's intent, never
+      hardcoded, so a canary rename cannot desync the two.
+  CodeQL:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      GHAS code-scanning workflow (Decision 83/101 T2.12 security gate) -- alerts surface
+      natively via GitHub's code-scanning UI/API, a separate GHAS alerting channel already
+      relied upon and continuously verified by its own green codeql.yml runs (AGENTS.md T2.12
+      security gate). Watching it here would duplicate that channel rather than close a gap.
+  Claude Code:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      User-triggered interactive workflow (an @claude mention on a comment/review/issue) -- a
+      failure is visible directly to the requesting human in the same PR/issue thread via the
+      GitHub Checks UI. It is not an autonomous background gate whose failure would otherwise go
+      unseen, so it does not need a ci-rca rec to surface it.
+  rec-autoclose:
+    tier: not_a_gate
+    ci_rca: watched
+    owner: platform
+    rationale: >-
+      ADDED (rec-2849): the 2026-07-24 ducklake-writer-errors incident's own gap. rec-autoclose
+      is an ops-plane write path (stamps fixed_by_sha, closes recs from a Resolves trailer); its
+      absence from the filter meant runs 581/585 both failed with a ducklake_writer 502 on
+      ops_decisions and filed nothing -- the outage reached a human only via an SNS email,
+      roughly four hours later. See docs/contracts/ci-rca-lifecycle.yaml closure_dependency for
+      the coupling this creates with this workflow's own closure path.
+  CI RCA:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      CI RCA is ci-rca.yml itself, self-excluded as a structural loop guard (documented at
+      ci-rca.yml:41-42): if CI RCA were watched, its own failed run would re-trigger CI RCA,
+      an infinite loop. Decision 72 is this mechanism's origin.
+  terraform-apply-sandbox:
+    tier: not_a_gate
+    ci_rca: watched
+    owner: platform
+    rationale: >-
+      CD.35/T2.20: sandbox apply failures and convergence-red refusals. Dedup anchors on the red
+      convergence record's commit_sha, not the refusing run's head_sha, so one underlying apply
+      failure and every later refusal collapse to one rec.
+  reconcile:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Excluded per Decision 154 point 6 -- rec-2919 (make reconcile.yml ci-rca-watchable) cannot
+      land without first amending that point. reconcile.yml is absent from ci-rca's watched set
+      today (see docs/contracts/ci-rca-lifecycle.yaml starved_review_observability), and the
+      Reconcile heal-button path already has its own substitute observability path for its
+      starved-subagent-review episode class (the file-reconcile-starved-rec job, rec-2664).
+  terraform-drift:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Decision 92 point 6 assigns drift to the ops-portal alarm-only path, which already files
+      --source tf_drift directly. Watching terraform-drift.yml here would double-record one
+      event and blur the Decision 61 source discriminator.
+  convergence-health:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      A STANDING environmental red would mint a fresh L5/L6 critical on every push with no brake
+      -- a rec storm plus a planning-queue wedge. Decision 62's alarm-not-gate monitor lane is
+      the correct treatment (rec-2854), not a ci-rca watch.
+  deploy-ducklake-lambdas:
+    tier: not_a_gate
+    ci_rca: watched
+    owner: platform
+    rationale: >-
+      ADDED on its own merits: a build/deploy/smoke failure in the governed code-deploy CD
+      channel is genuinely invisible today and warrants a critical. Its STANDING reconcile-gate
+      refusal (a designed, self-documenting block on a reconcile-pending predicate, Decision 88
+      -- not a defect) is excluded from filing via the designed_refusal predicate; the refusal
+      itself is routed to the Decision 62 alarm-not-gate monitor lane instead (rec-2854), the
+      same treatment convergence-health gets.
+  deploy-prod-lambdas:
+    tier: not_a_gate
+    ci_rca: watched
+    owner: platform
+    rationale: >-
+      ADDED (this plan): deploy-prod-lambdas mirrors deploy-ducklake-lambdas (T2.38) for the prod
+      class (Decision 126 point 1, the sanctioned prod deploy verb) -- a build/deploy/smoke
+      failure in the governed code-deploy CD channel was genuinely invisible today (zero
+      source=ci_rca recs were filed for any of the three audited failures that prompted this
+      plan). Unlike terraform-drift/convergence-health, it has no standing-red class: its
+      bootstrap-window path is continue-on-error and yields a GREEN no-op (deployed=false), so it
+      reds only on a genuine deploy or smoke failure -- a real defect meriting the critical lane.
+      It has exactly two jobs (deploy, smoke) with no reconcile-gate analogue, so no
+      designed_refusal declaration is owed. If it proves flappy in practice, rec-2854's
+      alarm-not-gate monitor lane is the documented fallback, and reverting this single filter
+      entry stops the filing immediately.
+  tf-gated-apply-prototype:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Intentionally INERT smoke-test/de-risk prototype (CD.35 Wave 3 / T2.22 / Decision 92) --
+      applies nothing, exists solely to prove the tf-gated-apply Environment's required-reviewer
+      protection is live. A failure here is a manual-proof exercise outcome, not a production
+      regression; it is re-run manually via workflow_dispatch when verifying the gate, not a
+      background failure needing RCA.
+  cost-reconciliation:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Decision 62/CD.28/ULF-08 alarm-not-gate monitor: the ONLY action on breach is to
+      file/update a rec via scripts.cost_reconciliation directly -- watching it here would
+      double-file the same signal through a second path.
+  ghas-probe:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Decision 83/101 ULF-01 standing alarm-not-gate monitor (same class as
+      convergence-health/cost-reconciliation): LOUD-FAIL by design
+      (scripts.checks.misc.validate_ghas_probe exits non-zero on a proven-disabled control or any
+      inability to verify), so a red scheduled run is already its own alarm. Routing it through
+      ci-rca would duplicate that Decision 62 alarm-not-gate path rather than close a new gap.
+  terraform-provider-mirror-seed:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      One-off/rare utility workflow (rec-2514/Decision 119) that seeds the S3 terraform provider
+      mirror -- not a merge gate and not on any push/PR critical path. A failure only means the
+      mirror is stale for the next `terraform init`, discoverable and re-runnable on demand via
+      workflow_dispatch, not a silent regression needing RCA.
+  dedup-probe:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Deliberately injects synthetic source=ci_rca failures to exercise the dedup mechanism;
+      watching it would couple the probe to the mechanism it probes.
+  ci-rca-inactivity-sweep:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Self-documented alarm-not-gate monitor (mirrors ghas-probe.yml; Decision 62) for
+      scripts.ci_rca.inactivity_sweep -- never gates a PR or merge, and a persistent portal/reader
+      failure already surfaces loudly as a red scheduled run per its own design invariant
+      (Decision 55 loud-fail), so a ci-rca watch would duplicate that alarm.
+  pr-conflict-signal:
+    tier: not_a_gate
+    ci_rca: excluded
+    owner: platform
+    rationale: >-
+      Advisory wake-signal workflow (Decision 76/83, PLAN-pr-conflict-wake-signal) -- never a
+      required status check, continue-on-error by design so a wake failure never reds a build. A
+      missed wake is self-healing since every subsequent push to main re-polls mergeability, so
+      watching it here would add noise without closing a real gap.
