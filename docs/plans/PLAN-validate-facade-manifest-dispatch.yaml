@@ -1,0 +1,979 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "validate-facade-manifest-dispatch"
+intent: >-
+  Delete the 189-SLOC check-facade re-export block from scripts/validate.py and rewire check
+  dispatch from globals()[name] to per-domain declarative manifests resolved lazily at call time,
+  ending the "adding a check touches the SLOC-capped aggregator" coupling that Decision 104 left
+  in place and making the merge gate's import closure independent of every check's dependencies.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-validate-facade-manifest-dispatch.yaml
+phase: >-
+  Platform hygiene / SLOC governance (Decision 128), amending Decision 104's facade mechanism and
+  discharging Decision 159's stated SLOC-raise retirement condition. PR2 of a two-PR split; PR1
+  merged as c2d0acd (#881).
+scope:
+  - file: scripts/checks/_schema.py
+    action: Create
+    purpose: >-
+      Frozen `Entry` dataclass: name, module, attr, plus tier/segment membership and pre_globs.
+      TWO SEPARATE fields module= and attr= -- never a combined "module:attr" string. Module and
+      check names genuinely differ (sloc/sloc_limits.py defines validate_sloc_limits), so the
+      pair cannot be derived from the name. Docstring carries a POINTER to
+      docs/contracts/check-manifest.yaml, never a second copy of the grammar.
+  - file: scripts/checks/ci_guards/_manifest.py
+    action: Create
+    purpose: Entry literals for the ci_guards domain's registered checks.
+  - file: scripts/checks/contracts/_manifest.py
+    action: Create
+    purpose: Entry literals for the contracts domain's registered checks.
+  - file: scripts/checks/decisions/_manifest.py
+    action: Create
+    purpose: Entry literals for the decisions domain's registered checks.
+  - file: scripts/checks/deps/_manifest.py
+    action: Create
+    purpose: Entry literals for the deps domain's registered checks (incl. validate_check_manifests).
+  - file: scripts/checks/executor/_manifest.py
+    action: Create
+    purpose: Entry literals for the executor domain's registered checks.
+  - file: scripts/checks/hygiene/_manifest.py
+    action: Create
+    purpose: Entry literals for the hygiene domain's registered checks.
+  - file: scripts/checks/iam_tf/_manifest.py
+    action: Create
+    purpose: >-
+      Entry literals for the iam_tf domain. Must include validate_terraform_try as the ONE
+      declared unsequenced entry (it is registered but invoked inside the terraform_checks
+      scaffold bundle, never dispatched by name).
+  - file: scripts/checks/lambda_pkg/_manifest.py
+    action: Create
+    purpose: Entry literals for the lambda_pkg domain's registered checks.
+  - file: scripts/checks/misc/_manifest.py
+    action: Create
+    purpose: Entry literals for the misc domain's registered checks.
+  - file: scripts/checks/ops_governance/_manifest.py
+    action: Create
+    purpose: Entry literals for the ops_governance domain's registered checks (largest domain; 7 runs today).
+  - file: scripts/checks/product/_manifest.py
+    action: Create
+    purpose: Entry literals for the product domain's registered checks.
+  - file: scripts/checks/prompts/_manifest.py
+    action: Create
+    purpose: >-
+      Entry literals for the prompts domain. Its checks are segment-pinned to the full tier's
+      prompts block (after dependency_health, before ensure_fresh_dq).
+  - file: scripts/checks/prose/_manifest.py
+    action: Create
+    purpose: Entry literals for the prose domain's registered checks.
+  - file: scripts/checks/roadmap/_manifest.py
+    action: Create
+    purpose: Entry literals for the roadmap domain's registered checks.
+  - file: scripts/checks/sloc/_manifest.py
+    action: Create
+    purpose: >-
+      Entry literals for the sloc domain. Within-domain order carries ordering dependencies OD-1
+      (cc_limits before sloc_limits) and OD-2 (sloc_limits before sloc_budget_raises).
+  - file: scripts/checks/structural/_manifest.py
+    action: Create
+    purpose: Entry literals for the structural domain's registered checks.
+  - file: scripts/checks/typing/_manifest.py
+    action: Create
+    purpose: Entry literals for the typing domain's registered checks.
+  - file: scripts/checks/verification/_manifest.py
+    action: Create
+    purpose: Entry literals for the verification domain's registered checks.
+  - file: scripts/checks/deps/validate_check_manifests.py
+    action: Create
+    purpose: >-
+      The Decision 168 evaluator for docs/contracts/check-manifest.yaml. Asserts, by AST over all
+      18 manifests, that every Entry.module/Entry.attr is a plain ast.Constant str (never an
+      f-string, computed constant, or colon form); that every Entry.module resolves to a real
+      dependency-graph node; and that _schema.py's segment-token set EQUALS the contract's
+      (derive-and-assert, so contract and dataclass cannot drift with both gates green). Homed in
+      deps/ because the rule's silent-failure consumer is scripts/dependency_graph.py. Must
+      contain the literal "check-manifest.yaml" in executable context so validate_contract_drift
+      resolves it as the declared evaluator.
+  - file: docs/contracts/check-manifest.yaml
+    action: Create
+    purpose: >-
+      Class D mechanism contract (Decision 168) owning the Entry field grammar, the bare-string-
+      literal rule, the two-field rule, and the allowed segment tokens. `evaluator: {check:
+      validate_check_manifests}`, non-empty unique `subject`, `amendment_log: []`.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Add resolve(name) -> Callable (import the Entry's module, getattr the attr at CALL time;
+      the module import may be cached, the RESOLVED CALLABLE never is). Aggregate the 18
+      manifests. Derive pre_sequence()/full_sequence() from manifest membership + the retained
+      scaffold-anchor segment skeleton. Define the eager-population contract for all_checks().
+      Rewrite the module docstring, which currently instructs the reader to add a facade line.
+  - file: scripts/checks/validation_result.py
+    action: Modify
+    purpose: >-
+      Add a callable-based dispatch form so failure->check attribution survives the move off
+      namespace-dict dispatch. dispatch_recording(name, failed, namespace) is retired with its
+      sole caller; nothing outside validate.py uses it.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Delete the check-facade block (lines 63-271, 209 raw / 189 SLOC) and repoint _dispatch_check
+      at registry.resolve(name). The _common and _scaffolding re-exports at lines 42-62 STAY --
+      they back ~60 live patch targets and are not check re-exports. 499 -> ~310 SLOC.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Add scripts/checks/registry.py AND scripts/checks/_common.py to
+      _CONCERN_SPLIT_TEST_PACKAGES, and delete the now-subjectless
+      _CHECKS_REGISTRY_MECHANISM_FILES special case (:47 and its consumer at :145). This is
+      Decision 159's named retirement act -- the clause folds the SET, not one member.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Rewrite the 14 rows asserting facade properties onto manifest resolution; repoint the 3
+      literal-path node_id rows; retire sloc-budget-marker-dec159-retarget outright; add the 6
+      new rows this plan graduates. Full row list in context.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete the `tests/test_checks_registry.py: 643  # raise-approved: dec-159` entry -- its
+      subject file no longer exists. Removals are unrestricted (Decision 165). No entry is added
+      or raised.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Add validate_check_manifests to function_to_category. Every registered check must resolve
+      to a category or validate_ci_rca_taxonomy fails (scripts/checks/ci_guards/
+      validate_ci_rca_taxonomy.py:38).
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: Register docs/contracts/check-manifest.yaml so validate_contract_drift routes it.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerate. A new live `## Decision NNN:` header drifts the committed index and
+      validate_decisions_index_freshness fails on drift.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      New numbered Decision amending 104 (three named clauses) and recording the table-shaped vs
+      logic-shaped precedent; plus `Amended by` blockquotes on 162 and 163. Their reversal
+      sentences are NOT edited in place -- amend-only convention.
+  - file: scripts/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Rewrite "Adding a validate.py check": the facade line is gone; adding a check now means a
+      module + @register + one manifest Entry, and never touches scripts/validate.py.
+  - file: tests/checks/test__schema.py
+    action: Create
+    purpose: Mirror test for _schema.py (Entry field grammar, segment-token set, frozen-ness).
+  - file: tests/checks/ci_guards/test__manifest.py
+    action: Create
+    purpose: Mirror test for the ci_guards manifest.
+  - file: tests/checks/contracts/test__manifest.py
+    action: Create
+    purpose: Mirror test for the contracts manifest.
+  - file: tests/checks/decisions/test__manifest.py
+    action: Create
+    purpose: Mirror test for the decisions manifest.
+  - file: tests/checks/deps/test__manifest.py
+    action: Create
+    purpose: Mirror test for the deps manifest.
+  - file: tests/checks/executor/test__manifest.py
+    action: Create
+    purpose: Mirror test for the executor manifest.
+  - file: tests/checks/hygiene/test__manifest.py
+    action: Create
+    purpose: Mirror test for the hygiene manifest.
+  - file: tests/checks/iam_tf/test__manifest.py
+    action: Create
+    purpose: Mirror test for the iam_tf manifest, incl. the validate_terraform_try unsequenced entry.
+  - file: tests/checks/lambda_pkg/test__manifest.py
+    action: Create
+    purpose: Mirror test for the lambda_pkg manifest.
+  - file: tests/checks/misc/test__manifest.py
+    action: Create
+    purpose: Mirror test for the misc manifest.
+  - file: tests/checks/ops_governance/test__manifest.py
+    action: Create
+    purpose: Mirror test for the ops_governance manifest.
+  - file: tests/checks/product/test__manifest.py
+    action: Create
+    purpose: Mirror test for the product manifest.
+  - file: tests/checks/prompts/test__manifest.py
+    action: Create
+    purpose: Mirror test for the prompts manifest, incl. its prompts-segment pinning.
+  - file: tests/checks/prose/test__manifest.py
+    action: Create
+    purpose: Mirror test for the prose manifest.
+  - file: tests/checks/roadmap/test__manifest.py
+    action: Create
+    purpose: Mirror test for the roadmap manifest.
+  - file: tests/checks/sloc/test__manifest.py
+    action: Create
+    purpose: Mirror test for the sloc manifest, incl. OD-1 and OD-2 within-domain order.
+  - file: tests/checks/structural/test__manifest.py
+    action: Create
+    purpose: Mirror test for the structural manifest.
+  - file: tests/checks/typing/test__manifest.py
+    action: Create
+    purpose: Mirror test for the typing manifest.
+  - file: tests/checks/verification/test__manifest.py
+    action: Create
+    purpose: Mirror test for the verification manifest.
+  - file: tests/checks/deps/test_validate_check_manifests.py
+    action: Create
+    purpose: >-
+      Mirror test for the grammar evaluator: it FAILS on an f-string module value, on a
+      "module:attr" colon form, on a module that resolves to no graph node, and on a
+      segment token present in one of _schema.py / the contract but not the other.
+  - file: tests/checks/registry/__init__.py
+    action: Create
+    purpose: Package marker (Decision 131 clause 4).
+  - file: tests/checks/registry/test_resolution.py
+    action: Create
+    purpose: >-
+      resolve() is late-bound (patching the DEFINING module intercepts) and does NOT cache the
+      callable; unknown name raises a named error; the module cache does not defeat interception.
+  - file: tests/checks/registry/test_manifest_contracts.py
+    action: Create
+    purpose: >-
+      Replaces (does not port) the retired reachability tests: manifest<->@register bijection with
+      exactly one declared unsequenced exception, no duplicate names across manifests, no
+      cross-package entry (a domain's manifest only names modules inside its own package), and the
+      all_checks() eager-population contract.
+  - file: tests/checks/registry/test_sequences.py
+    action: Create
+    purpose: >-
+      Relocated TestSequenceInvariants (membership floors, scaffold-anchor order, no-duplicate
+      rules) plus the re-derivation fidelity assertions OD-1..OD-6. Two graduated node_ids move
+      here verbatim in spirit; their registry rows are repointed in the same commit.
+  - file: tests/checks/_common/__init__.py
+    action: Create
+    purpose: Package marker (Decision 131 clause 4).
+  - file: tests/checks/_common/test_primitives.py
+    action: Create
+    purpose: Relocated TestCommonPrimitives and the mock-interception tests from the deleted monolith.
+  - file: tests/checks/_common/test_push_context_base.py
+    action: Create
+    purpose: >-
+      Relocated TestPushContextBase. The graduated row push-context-diff-base-tests is repointed
+      to this node_id in the same commit.
+  - file: tests/test_checks_registry.py
+    action: Delete
+    purpose: >-
+      Both of its subject files are now concern-split, so the monolith has no mapped source left.
+      Deleting it is the act Decision 159's retirement clause names.
+  - file: tests/validate/test_tiers.py
+    action: Modify
+    purpose: Repoint the 5 check-name hub patches (:332,364,365,397,432) at their defining modules.
+  - file: tests/validate/test_failed_check_attribution.py
+    action: Modify
+    purpose: >-
+      Repoint the 4 hub patches (:39,47,64,77) AND replace the `args[2] is vars(_validate)`
+      assertion at :35, which pins the retired namespace-dict dispatch contract.
+  - file: tests/validate/test_driver_seam.py
+    action: Modify
+    purpose: >-
+      Repoint the 2 hub patches (:84,85) and EXTEND IN_SCOPE_PATHS (:33-45) with this plan's
+      scope, so PR1's TestRegistryRows guard covers PR2's orphan surface.
+  - file: tests/checks/roadmap/test_validate_tier_floor.py
+    action: Modify
+    purpose: Repoint `import scripts.validate as _validate_module` (:6) at the defining module.
+  - file: tests/checks/decisions/test_conformance_registration.py
+    action: Modify
+    purpose: Repoint the two hub imports (:17, :30) at the defining module / registry.resolve.
+  - file: tests/checks/contracts/test_validate_data_model_standard.py
+    action: Modify
+    purpose: Repoint importlib.import_module("scripts.validate") (:185).
+  - file: tests/checks/verification/test_validate_handoff_full_tier.py
+    action: Modify
+    purpose: >-
+      Update the embedded `import scripts.validate as v` fixture command (:135), which asserts a
+      facade property that no longer holds.
+  - file: tests/test_checks_registry_test_obligations.py
+    action: Modify
+    purpose: Repoint `import scripts.validate` (:15).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/validate.py contains zero `from scripts.checks.<domain>.<module> import` statements and is at or below 320 SLOC, with no entry added to config/sloc_budgets.yaml.
+  - Importing scripts.validate imports NO check module -- the merge gate's import closure is independent of every check's dependencies, which is what makes the venv-less terraform-validate required check robust.
+  - Dispatch resolves the defining module at call time, so patching that module intercepts; the resolved callable is never cached, proven by a negative control that fails if a warm cache is introduced.
+  - Every @register'd check name has exactly one manifest Entry and vice versa, with exactly one declared unsequenced exception (validate_terraform_try); no duplicate names; no manifest names a module outside its own domain package.
+  - registry.all_checks() returns the complete roster without importing scripts.validate, and its contents equal the union of manifest-declared names -- asserted by set identity, never by a hardcoded count.
+  - Every Entry.module is a plain string constant that resolves to a real dependency-graph node, enforced by a registered check (not prose), which fails on an f-string, a colon form, and an unresolvable module.
+  - The driver->check graph edges the manifests produce equal the set of declared Entry.module values -- compared by edge IDENTITY, not cardinality.
+  - Under a ~20-file synthetic check-module diff, the affected-set selector still selects the manifest/registry tests despite CAP=35 truncation; a one-file sentinel is explicitly NOT accepted as evidence.
+  - Tier check-name MEMBERSHIP is preserved exactly for both tiers against a baseline captured before editing; scaffold anchors keep their exact frozen order; and ordering dependencies OD-1..OD-6 hold. Byte-parity of check ORDER is explicitly NOT claimed.
+  - No `patch("validate.<check_name>")` site and no `vars(_validate)` dispatch assertion remains, while the ~60 scaffolding/stdlib patch sites still resolve (asserted non-empty, so the grep cannot pass vacuously).
+  - tests/test_checks_registry.py is deleted, its dec-159 budget entry is removed, and the _CHECKS_REGISTRY_MECHANISM_FILES special case is gone -- discharging Decision 159's stated retirement condition.
+  - Every graduated registry row referencing an in-scope path either still resolves or is deliberately retired in this PR, with the choice recorded -- including the four literal-path rows enumerated in context.
+  - docs/contracts/check-manifest.yaml passes validate_contract_drift as a declared Class D contract whose evaluator demonstrably reads it.
+  - The new Decision carries the Decision 167 yaml envelope with a significance routing claim; Decisions 162 and 163 gain `Amended by` blockquotes with their existing reversal sentences byte-unchanged; docs/decisions-index.json is regenerated.
+  - The full presubmit tier passes and emits the same check roster as a baseline captured before editing.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Importing scripts.validate pulls in NO check module -- the facade is gone in substance, not just in syntax.
+    command: 'bin/venv-python -c "import subprocess,sys; code=chr(10).join([\"import sys, importlib\", \"importlib.import_module(chr(115)+chr(99)+chr(114)+chr(105)+chr(112)+chr(116)+chr(115)+chr(46)+chr(118)+chr(97)+chr(108)+chr(105)+chr(100)+chr(97)+chr(116)+chr(101))\", \"leaked=[m for m in sys.modules if m.startswith(chr(115)+chr(99)+chr(114)+chr(105)+chr(112)+chr(116)+chr(115)+chr(46)+chr(99)+chr(104)+chr(101)+chr(99)+chr(107)+chr(115)+chr(46)) and m.count(chr(46))>=3 and not m.rsplit(chr(46),1)[1].startswith(chr(95))]\", \"print(len(leaked), sorted(leaked)[:5])\", \"sys.exit(1 if leaked else 0)\"]); r=subprocess.run([sys.executable,\"-c\",code],capture_output=True,text=True); print(r.stdout.strip(), r.stderr.strip()[-300:]); sys.exit(r.returncode)"'
+    expected: >-
+      Zero leaked check modules. A fresh subprocess is required -- the parent interpreter may
+      already have imported check modules for other reasons, which would mask the property.
+      Private helpers (_manifest, _schema, _common, _scaffolding) are excluded by the leading-
+      underscore filter; those are the mechanism, not checks.
+    fix_if: >-
+      A non-zero count means some import path still eagerly binds check modules, so the venv-less
+      terraform-validate job still depends on every check's transitive imports and the facade was
+      only syntactically removed.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "validate-import-closure-excludes-check-modules"
+  - step: 2
+    phase: pre-deploy
+    action: resolve() is late-bound and never caches the callable -- with a negative control that a warm cache would fail.
+    command: 'bin/venv-python -m pytest tests/checks/registry/test_resolution.py -q'
+    expected: >-
+      Patching a check's DEFINING module intercepts dispatch; rebinding the module attribute
+      between two resolve() calls is observed by the second call; an unknown name raises a named
+      error rather than KeyError-ing deep in dispatch.
+    fix_if: >-
+      A warm callable cache makes unittest.mock.patch silently no-op, which turns every
+      mock-based test of a check into a vacuous pass inside a merge gate. Verified empirically
+      this session: late-bound getattr intercepts, a cached callable does not.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "registry-resolve-is-late-bound"
+  - step: 3
+    phase: pre-deploy
+    action: Manifest<->@register bijection, duplicate-name, cross-package, and the all_checks() eager-population contract.
+    command: 'bin/venv-python -m pytest tests/checks/registry/test_manifest_contracts.py -q'
+    expected: >-
+      Every registered name has exactly one Entry and every Entry a registration, with exactly one
+      declared unsequenced exception (validate_terraform_try, invoked inside the terraform_checks
+      bundle). No name appears in two manifests. No manifest names a module outside its own
+      package. all_checks() is complete WITHOUT importing scripts.validate, and equals the union
+      of manifest-declared names by set identity.
+    fix_if: >-
+      @register remains the identity oracle and is the only sound oracle for orphan detection; a
+      manifest entry with no registration is a check that dispatches but is invisible to
+      validate_ci_rca_taxonomy and contracts/_population.py, both of which read all_checks().
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "manifest-registry-bijection-holds"
+  - step: 4
+    phase: pre-deploy
+    action: The bare-string-literal grammar has an executable evaluator that actually discriminates.
+    command: 'bin/venv-python -m pytest tests/checks/deps/test_validate_check_manifests.py -q'
+    expected: >-
+      The check FAILS on each of: an f-string module value, a "module:attr" colon form, a module
+      resolving to no graph node, and a segment token present in _schema.py but not the contract
+      (or vice versa). Each negative case is asserted to fail; a test that only asserts the clean
+      tree passes would be vacuous.
+    fix_if: >-
+      Decision 168: a rule with no evaluator is not a rule. dependency_graph.py's _PATCH_STRING_RE
+      is anchored `^(src|scripts)(\.\w+)+$`, so an f-string or colon form silently matches nothing
+      and severs the driver->check edge with no error anywhere -- exactly Decision 135's failure
+      mode.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "manifest-entries-are-bare-string-literals"
+  - step: 5
+    phase: pre-deploy
+    action: Driver->check graph edges equal the declared Entry.module set -- edge IDENTITY, not count.
+    command: 'bin/venv-python -m pytest "tests/checks/registry/test_manifest_contracts.py::TestGraphEdges" -q'
+    expected: >-
+      For each of the 18 manifests, the set of graph successors equals the set of that manifest's
+      Entry.module values. Set equality, never a count comparison -- a cardinality check passes
+      while pointing at the wrong modules.
+    fix_if: >-
+      A missing edge means affected-test selection silently stops selecting the driver's tests
+      when a check module changes, which is invisible until a regression ships.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "manifest-driver-edges-match-entry-modules"
+  - step: 6
+    phase: pre-deploy
+    action: The driver edge survives CAP=35 truncation under a ~20-file synthetic diff (a one-file sentinel is vacuous).
+    command: 'bin/venv-python -m pytest "tests/checks/registry/test_manifest_contracts.py::TestAffectedSetSurvival" -q'
+    expected: >-
+      Feeding ~20 changed check modules to the affected-set selector still yields the manifest and
+      registry tests. Measured premise: today a check-module change selects 18 tests and ZERO
+      tests/validate/*; under the new design the driver edge is a 4-hop transitive ancestor at
+      priority rank 2, which CAP=35 (scripts/checks/deps/affected_tests.py:59) truncates first.
+    fix_if: >-
+      A one-file chain sentinel passes trivially and proves nothing about the truncation boundary,
+      which is where this actually breaks. If the edge is truncated, the fix is priority rank, not
+      raising CAP.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "affected-set-retains-driver-tests-under-synthetic-diff"
+  - step: 7
+    phase: pre-deploy
+    action: MUTATION with control arm -- an f-string module value in a real manifest must redden the grammar evaluator.
+    command: 'bin/venv-python -c "import pathlib,re,shutil,subprocess,sys,tempfile; q=chr(34); tmp=pathlib.Path(tempfile.mkdtemp())/chr(119)+chr(116); tmp=pathlib.Path(str(tmp)); subprocess.run([\"git\",\"worktree\",\"add\",\"--detach\",str(tmp)],check=True,capture_output=True); shutil.copytree(\"scripts\",tmp/\"scripts\",dirs_exist_ok=True); shutil.copytree(\"tests\",tmp/\"tests\",dirs_exist_ok=True); shutil.copytree(\"docs/contracts\",tmp/\"docs/contracts\",dirs_exist_ok=True); sel=[\"tests/checks/deps/test_validate_check_manifests.py\"]; run=lambda: subprocess.run([sys.executable,\"-m\",\"pytest\",*sel,\"-q\"],cwd=tmp,capture_output=True,text=True).returncode; ctl=run(); assert ctl==0, (\"CONTROL ARM FAILED -- harness broken, result is meaningless\", ctl); p=tmp/\"scripts/checks/sloc/_manifest.py\"; s=p.read_text(); m=re.search(r\"module=\\\"(scripts\\.[\\w.]+)\\\"\", s); assert m, \"no bare module= literal found -- manifest shape changed\"; s2=s[:m.start()]+\"module=f\\\"{__name__.rsplit(chr(46),1)[0]}.\"+m.group(1).rsplit(chr(46),1)[1]+\"\\\"\"+s[m.end():]; p.write_text(s2); mut=run(); subprocess.run([\"git\",\"worktree\",\"remove\",\"--force\",str(tmp)],capture_output=True); print(\"control\",ctl,\"mutant\",mut); sys.exit(0 if mut!=0 else 1)"'
+    expected: >-
+      Control arm exits 0 (harness sound); mutant exits non-zero. The f-string still yields a
+      correct module path at runtime, so ONLY a grammar check that inspects the AST -- not one
+      that merely resolves the value -- can detect it. That is the whole point.
+    fix_if: >-
+      Control failing means the harness is broken and the result is meaningless. Mutant passing
+      means the evaluator resolves values rather than inspecting literals, and the silent
+      edge-severing failure mode is still open.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Requires a scratch git worktree plus an in-place source mutation -- multi-command and
+      non-hermetic, so not expressible in any canonical primitive slot. It is the one-time
+      decisive proof that step 4's evaluator discriminates, while step 4 is the standing gate.
+  - step: 8
+    phase: pre-deploy
+    action: Tier membership is preserved exactly and ordering dependencies OD-1..OD-6 hold.
+    command: 'bin/venv-python -m pytest tests/checks/registry/test_sequences.py -q && bin/venv-python -c "import json,pathlib,sys; from scripts.checks import registry; b=pathlib.Path(\"logs/debug/tier-baseline.json\"); assert b.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; B=json.loads(b.read_text()); pre={s.name for s in registry.pre_sequence() if s.kind==\"check\"}; full={s.name for s in registry.full_sequence() if s.kind==\"check\"}; assert pre==set(B[\"pre\"]), (sorted(pre^set(B[\"pre\"]))); assert full==set(B[\"full\"]), (sorted(full^set(B[\"full\"]))); print(\"membership preserved\", len(pre), len(full))"'
+    expected: >-
+      Both tiers' check-name SETS are unchanged (pre 60, full 93 at baseline); scaffold anchors
+      keep their exact frozen order; OD-1 cc_limits before sloc_limits; OD-2 sloc_limits before
+      sloc_budget_raises; OD-3 the six scaffold anchors in frozen order; OD-4 the four
+      scaffold-adjacent checks stay in their segments (iam_runner_policy post-terraform,
+      requirements post-dependency, the four prompts-block checks, verification_harness post-dq);
+      OD-5 the three pre-only checks stay pre-only and validate_terraform_try stays unsequenced;
+      OD-6 budget_assertion last in pre, precommit_all_files last in full.
+    fix_if: >-
+      A membership delta means the re-derivation dropped or added a check -- unlike an order
+      change, that is never acceptable. Byte-parity of ORDER is deliberately NOT asserted:
+      full_sequence today is 45 non-contiguous domain runs over 18 domains, and domain-block
+      derivation yields 18 contiguous blocks, so order parity is unachievable by construction.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The membership/anchor/ordering properties already hold at origin/main, so the differential
+      admission gate would reject a new row as tautological (the same finding that withdrew a row
+      in PR1). The durable guards already exist and are repointed by this PR:
+      checks-registry-membership-floor-detects-removal and
+      checks-registry-scaffold-anchor-order-full. The baseline-comparison half is inherently
+      one-time -- it reads a pre-change artefact that does not exist after this PR.
+  - step: 9
+    phase: pre-deploy
+    action: No check-name hub seam survives, and the scaffolding seams that must survive still do.
+    command: 'bin/venv-python -c "import pathlib,re,sys; hub=[]; scaf=0; pat=re.compile(r\"patch\\(.validate\\.(\\w+)\"); [ (hub.append((str(p),m.group(1))) if (m.group(1).startswith(\"validate_\") or m.group(1).startswith(\"_check\")) else None) for p in pathlib.Path(\"tests\").rglob(\"*.py\") for m in pat.finditer(p.read_text(encoding=\"utf-8\"))]; scaf=sum(1 for p in pathlib.Path(\"tests\").rglob(\"*.py\") for m in pat.finditer(p.read_text(encoding=\"utf-8\")) if not (m.group(1).startswith(\"validate_\") or m.group(1).startswith(\"_check\"))); vars_hits=[str(p) for p in pathlib.Path(\"tests\").rglob(\"*.py\") if \"vars(_validate)\" in p.read_text(encoding=\"utf-8\")]; print(\"hub\",hub,\"scaffold\",scaf,\"vars\",vars_hits); assert scaf>0, \"scaffold patch sites vanished -- grep is vacuous or _common/_scaffolding re-exports were deleted too\"; sys.exit(1 if (hub or vars_hits) else 0)"'
+    expected: >-
+      Zero check-name hub patches and zero vars(_validate) assertions, with the scaffolding patch
+      count still strictly positive. The positive assertion is what stops this passing vacuously
+      if the grep or the _common/_scaffolding re-exports were broken.
+    fix_if: >-
+      A surviving hub patch silently no-ops once dispatch getattrs the defining module -- the test
+      keeps passing while intercepting nothing, which is the worst outcome available here. A zero
+      scaffold count means the wrong re-export block was deleted.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The `validate` hub namespace this grep polices is deleted by this very PR, so the property
+      becomes unfalsifiable the moment it first passes; step 1's import-closure row is the durable
+      successor guard and is graduated instead.
+  - step: 10
+    phase: pre-deploy
+    action: No graduated registry row is left orphaned -- including the four literal-path rows.
+    command: 'bin/venv-python -m pytest "tests/validate/test_driver_seam.py::TestRegistryRows" -q'
+    expected: >-
+      With IN_SCOPE_PATHS extended to this plan's scope, every row touching an in-scope file
+      either still collects or is absent by deliberate retirement. Specifically:
+      sloc-budget-marker-dec159-retarget is GONE (not rewritten -- its premise, a
+      dec-159-marked 643 entry, is deleted); push-context-diff-base-tests points at
+      tests/checks/_common/test_push_context_base.py; the two TestSequenceInvariants rows point
+      into tests/checks/registry/test_sequences.py.
+    fix_if: >-
+      validate_verification_registry differentials only NEWLY-ADDED rows, so an invalidated
+      existing row stays green while guarding nothing. This is the only gate that catches it, and
+      PR1 built it for exactly this purpose.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      PR1 already graduated in-scope-graduated-rows-still-resolve against this exact node_id; this
+      PR widens its IN_SCOPE_PATHS rather than adding a duplicate row for the same assertion.
+  - step: 11
+    phase: pre-deploy
+    action: The Class D contract and the decisions-corpus edits conform, and 162/163 are amended without body edits.
+    command: 'bin/venv-python -c "import subprocess,sys,pathlib; from scripts.checks.contracts.validate_contract_drift import validate_contract_drift; from scripts.checks.decisions.validate_decision_entry_conformance import validate_decision_entry_conformance; f=[]; validate_contract_drift(f); validate_decision_entry_conformance(f); t=pathlib.Path(\"docs/DECISIONS.md\").read_text(encoding=\"utf-8\"); s163=\"its facade line in\"; s162=\"the check’s registration in\".replace(\"’\",chr(39)); assert s163 in t, \"Decision 163 reversal sentence was edited in place -- amend-only convention violated\"; assert \"Amended by Decision\" in t, \"no Amended-by blockquote found on 162/163\"; print(\"failures:\", f); sys.exit(1 if f else 0)"'
+    expected: >-
+      Both checks return no failures; Decision 163's original reversal sentence is still present
+      byte-for-byte; and at least one `Amended by Decision` blockquote exists. The corpus is
+      amend-only (Decision 134/145 convention), so the corrected reversal path lives in the NEW
+      entry, not by rewriting the old ones.
+    fix_if: >-
+      Editing 162/163's reversal sentences in place breaks the amend-only convention this corpus
+      has followed since Decision 134; a missing envelope fails Decision 167's conformance check.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates two standing registered gates (validate_contract_drift,
+      validate_decision_entry_conformance) plus a one-time assertion about THIS diff's treatment
+      of two specific Decision entries; graduating it would permanently freeze two sentences that
+      a future Decision may legitimately supersede.
+  - step: 12
+    phase: pre-deploy
+    action: SLOC outcomes land where claimed and no budget entry is added or raised.
+    command: 'bin/venv-python -c "import pathlib,sys; s=lambda f: len([l for l in pathlib.Path(f).read_text(encoding=\"utf-8\").splitlines() if l.strip() and not l.strip().startswith(chr(35))]); v=s(\"scripts/validate.py\"); b=pathlib.Path(\"config/sloc_budgets.yaml\").read_text(encoding=\"utf-8\"); assert not pathlib.Path(\"tests/test_checks_registry.py\").exists(), \"monolith still present\"; assert \"tests/test_checks_registry.py\" not in b, \"dec-159 budget entry survives its subject file\"; assert \"scripts/validate.py\" not in b, \"validate.py was registered in the SLOC budget registry -- forbidden\"; over=[p.as_posix() for p in list(pathlib.Path(\"scripts/checks\").rglob(\"_manifest.py\"))+[pathlib.Path(\"scripts/checks/_schema.py\"),pathlib.Path(\"scripts/checks/registry.py\")] if s(p.as_posix())>500]; print(\"validate.py\",v,\"oversized new files\",over); sys.exit(0 if v<=320 and not over else 1)"'
+    expected: >-
+      validate.py at or below 320 SLOC (499 today, less the 189-SLOC facade block); the monolith
+      deleted; its dec-159 entry gone; no new file over 500. Decision 128: decompose by default,
+      never register a raise.
+    fix_if: >-
+      A new file over 500 must be split further, not registered. A surviving dec-159 entry means
+      the retirement condition was not actually discharged.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the standing validate_sloc_limits / validate_sloc_budget_raises gates; pinning
+      320 would freeze a transient number with no durable meaning once the facade is gone.
+  - step: 13
+    phase: pre-deploy
+    action: The whole migrated test surface passes with no collection-time error.
+    command: 'bin/venv-python -m pytest tests/checks/registry/ tests/checks/_common/ tests/checks/ tests/validate/ tests/test_coverage_checker/ tests/test_checks_registry_test_obligations.py -q'
+    expected: All green; no ImportError during collection anywhere in the migrated tree.
+    fix_if: >-
+      A collection error means a repointed import names a symbol its defining module does not
+      export -- the most likely single failure mode of a 102-import repoint.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A multi-path pytest invocation is not expressible as a single node_id row, and each module
+      in it is already permanently guarded by its own mirror test under Decision 131.
+  - step: 14
+    phase: pre-deploy
+    action: Full presubmit passes and emits the same check roster as the captured baseline.
+    command: 'bin/venv-python -m scripts.validate > logs/debug/roster-now.txt 2>&1 && bin/venv-python -c "import pathlib,sys; b=pathlib.Path(\"logs/debug/roster-baseline.txt\"); n=pathlib.Path(\"logs/debug/roster-now.txt\"); assert b.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; B=sorted(l for l in b.read_text(errors=\"replace\").splitlines() if l.startswith(\"=== \")); N=sorted(l for l in n.read_text(errors=\"replace\").splitlines() if l.startswith(\"=== \")); missing=[x for x in B if x not in N]; added=[x for x in N if x not in B]; print(\"roster before/after\",len(B),len(N),\"added\",added); assert not missing, (\"check heading disappeared\", missing)"'
+    expected: >-
+      Exit 0, and every check heading present before the change is still present. Exactly one
+      addition is expected (validate_check_manifests). This is a PARTIAL projection -- a check
+      printing no heading cannot be detected this way -- so it complements step 13 rather than
+      replacing it.
+    fix_if: >-
+      A missing heading means the re-derivation silently dropped a check from a tier, which step
+      8's membership assertion should also have caught; if step 8 passed and this failed, the
+      dispatch path and the sequence disagree.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating the full presubmit into the registry that the presubmit itself validates is
+      circular, and Decision 163 already makes full-tier execution a structurally enforced
+      universal obligation.
+test_obligations:
+  - source: scripts/checks/_schema.py
+    behavior: >-
+      Entry is frozen, carries module and attr as two separate fields, and its segment-token set is
+      the single source the contract is asserted against.
+    verification_step: 13
+    test_selector: tests/checks/test__schema.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/ci_guards/_manifest.py
+    behavior: Every ci_guards Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/ci_guards/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/contracts/_manifest.py
+    behavior: Every contracts Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/contracts/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/decisions/_manifest.py
+    behavior: Every decisions Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/decisions/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/deps/_manifest.py
+    behavior: Every deps Entry resolves, including the newly-added validate_check_manifests entry.
+    verification_step: 13
+    test_selector: tests/checks/deps/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/executor/_manifest.py
+    behavior: Every executor Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/executor/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/hygiene/_manifest.py
+    behavior: Every hygiene Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/hygiene/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/iam_tf/_manifest.py
+    behavior: >-
+      Every iam_tf Entry resolves, and validate_terraform_try is present as the one declared
+      unsequenced entry -- so the single orphan exception is data, not a hardcoded name in the guard.
+    verification_step: 13
+    test_selector: tests/checks/iam_tf/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/lambda_pkg/_manifest.py
+    behavior: Every lambda_pkg Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/lambda_pkg/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/misc/_manifest.py
+    behavior: Every misc Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/misc/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/ops_governance/_manifest.py
+    behavior: Every ops_governance Entry resolves; this is the largest domain and the one most fragmented across tier runs today.
+    verification_step: 13
+    test_selector: tests/checks/ops_governance/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/product/_manifest.py
+    behavior: Every product Entry resolves and retains its product_coupled ownership metadata.
+    verification_step: 13
+    test_selector: tests/checks/product/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/prompts/_manifest.py
+    behavior: Every prompts Entry resolves and is pinned to the full tier's prompts segment.
+    verification_step: 13
+    test_selector: tests/checks/prompts/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/prose/_manifest.py
+    behavior: Every prose Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/prose/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/roadmap/_manifest.py
+    behavior: Every roadmap Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/roadmap/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/sloc/_manifest.py
+    behavior: >-
+      Every sloc Entry resolves AND within-domain order carries OD-1 (cc_limits before sloc_limits)
+      and OD-2 (sloc_limits before sloc_budget_raises), which are real ordering dependencies.
+    verification_step: 13
+    test_selector: tests/checks/sloc/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/structural/_manifest.py
+    behavior: Every structural Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/structural/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/typing/_manifest.py
+    behavior: Every typing Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/typing/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/verification/_manifest.py
+    behavior: Every verification Entry names a bare-literal module/attr pair resolving to the same-named registered check inside this package.
+    verification_step: 13
+    test_selector: tests/checks/verification/test__manifest.py
+    red_green_expectation: red before (module absent), green after
+  - source: scripts/checks/deps/validate_check_manifests.py
+    behavior: >-
+      Fails on an f-string module value, a colon form, an unresolvable module, and a segment-token
+      mismatch between _schema.py and the contract -- each negative case asserted, not just the
+      clean-tree pass.
+    verification_step: 4
+    test_selector: tests/checks/deps/test_validate_check_manifests.py
+    red_green_expectation: red before (module absent), green after; discrimination independently proven by step 7's mutation with control arm
+  - source: docs/contracts/check-manifest.yaml
+    behavior: >-
+      Declares class D, a unique non-empty subject, and a resolving evaluator that demonstrably
+      reads the contract basename.
+    verification_step: 4
+    test_selector: tests/checks/deps/test_validate_check_manifests.py
+    red_green_expectation: red before (contract absent, so the evaluator-resolution assertion cannot pass), green after
+  - source: scripts/checks/registry.py
+    behavior: >-
+      resolve() is late-bound and never caches the callable; all_checks() is complete without
+      importing scripts.validate; the sequences derive from manifests without membership drift.
+    verification_step: 2
+    test_selector: tests/checks/registry/test_resolution.py
+    red_green_expectation: red before (resolve absent), green after
+  - source: scripts/checks/validation_result.py
+    behavior: Failure->check attribution survives the move from namespace-dict dispatch to callable dispatch.
+    verification_step: 13
+    test_selector: tests/validate/test_failed_check_attribution.py
+    red_green_expectation: >-
+      red before (the migrated tests call the new callable form, which does not exist at
+      origin/main), green after
+  - source: scripts/validate.py
+    behavior: >-
+      Importing it pulls in no check module, and dispatch resolves the defining module at call
+      time so a patch on that module intercepts.
+    verification_step: 2
+    test_selector: tests/checks/registry/test_resolution.py
+    red_green_expectation: red before (every check module is eagerly imported by the facade), green after
+  - source: scripts/test_coverage_checker.py
+    behavior: >-
+      registry.py and _common.py both route to their concern-split test packages, and no
+      special-case table routes them to a deleted monolith.
+    verification_step: 13
+    test_selector: tests/test_coverage_checker/
+    red_green_expectation: red before (both map to tests/test_checks_registry.py), green after
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      No row referencing an in-scope path is orphaned; retirements are deliberate and the four
+      literal-path rows are each repointed or retired.
+    verification_step: 10
+    test_selector: tests/validate/test_driver_seam.py::TestRegistryRows
+    red_green_expectation: >-
+      red before (sloc-budget-marker-dec159-retarget still greps a budget entry this PR deletes,
+      and three node_ids still name the deleted monolith), green after
+  - source: config/sloc_budgets.yaml
+    behavior: The dec-159 raise entry is removed with its subject file, and no entry is added or raised.
+    verification_step: 13
+    test_selector: tests/checks/sloc/test_validate_sloc_budget_raises.py
+    red_green_expectation: >-
+      green after; the removal itself is asserted directly by step 12, and Decision 165 makes
+      removals unrestricted at the gate
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: Every registered check resolves to a failure category, including the newly-added validate_check_manifests.
+    verification_step: 13
+    test_selector: tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
+    red_green_expectation: >-
+      red before (validate_check_manifests is registered but uncategorised, which the taxonomy
+      coverage assertion rejects), green after
+  - source: docs/contracts/file-router.yaml
+    behavior: check-manifest.yaml is routed, so validate_contract_drift evaluates it rather than skipping it.
+    verification_step: 13
+    test_selector: tests/checks/contracts/validate_contract_drift/
+    red_green_expectation: red before (unrouted new contract), green after
+  - source: docs/decisions-index.json
+    behavior: The committed index matches the corpus after a new numbered Decision lands.
+    verification_step: 13
+    test_selector: tests/checks/decisions/test_validate_decisions_index_freshness.py
+    red_green_expectation: red before (index drifts the moment the new header is added), green after
+constraints:
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    TWO-FIELD ENTRIES, NEVER A COMBINED STRING. dependency_graph.py:30's _PATCH_STRING_RE is
+    anchored `^(src|scripts)(\.\w+)+$`. A bare module path matches; "module:attr" does NOT. A
+    combined form silently severs every driver->check graph edge with no error anywhere.
+  - >-
+    MANIFESTS MUST BE PYTHON with BARE STRING LITERALS. The graph's scanner is an AST pass over
+    ast.Constant nodes, so YAML/JSON manifests are invisible to it and an f-string or computed
+    constant matches nothing. Equally: do NOT derive the path at the check's own site --
+    @register(module=__name__) yields only a self-edge and drops the driver edge entirely.
+  - >-
+    resolve() MAY cache the imported module; it must NEVER cache the resolved callable. Verified
+    empirically this session: late-bound getattr intercepts a patch on the defining module, a
+    warm callable cache does not. A warm cache turns every mock-based check test into a vacuous
+    pass inside a merge gate.
+  - >-
+    @registry.register (98 sites) is RETAINED as the identity/ownership oracle and is the only
+    sound oracle for orphan detection. Laziness is required ONLY on the dispatch path; roster
+    queries (all_checks) get an explicit eager-population contract, because
+    validate_ci_rca_taxonomy.py:38 and contracts/_population.py:244 both need a complete roster.
+  - >-
+    BYTE-PARITY ON TIER ORDER IS UNACHIEVABLE and must not be claimed. full_sequence today is 93
+    checks over 18 domains in 45 non-contiguous runs (ops_governance alone in 7); domain-block
+    derivation yields 18 contiguous blocks. MEMBERSHIP parity IS required and is asserted; order
+    is re-derived once, with OD-1..OD-6 pinned as explicit assertions.
+  - >-
+    Do NOT create a golden/generated sequence file. Without a "GENERATED -- DO NOT EDIT" banner it
+    classifies as residual at 500 and grows ~2.6 lines/check -- a worse slope than the facade it
+    replaces. Order is derived from manifests plus the retained scaffold-anchor skeleton.
+  - >-
+    The full tier is NOT one check block. Six scaffold anchors partition it into six check
+    segments, with checks pinned BETWEEN scaffolds (validate_iam_runner_policy after
+    terraform_checks; validate_requirements after dependency_health; the four prompts-block
+    checks; validate_verification_harness after ensure_fresh_dq). Entry carries an explicit
+    segment; registry.py retains the skeleton. Derivation may only reorder WITHIN a segment.
+  - >-
+    scripts/validate.py's _common/_scaffolding re-exports (lines 42-62) STAY. They back ~60 live
+    patch targets (shutil, subprocess, time, _file_budget_*, run_*, validation_result). Only the
+    CHECK facade block (lines 63-271) is deleted. Step 9's positive scaffold-count assertion is
+    what catches deleting the wrong block.
+  - >-
+    REPLACE, don't port, the reachability tests. TestFacadeCompleteness asserts a contract this PR
+    abolishes; porting it forward would re-pin the mechanism being removed.
+  - >-
+    Decisions 162 and 163 are amended with an `Amended by Decision N` blockquote; their existing
+    reversal sentences are NOT edited in place. The corpus is amend-only (Decision 134/145
+    convention, as Decision 165's own amendments demonstrate). The corrected reversal path lives
+    in the new entry's body.
+  - >-
+    Decision 150/167 routing: the Entry field grammar is FIELD SEMANTICS and belongs in
+    docs/contracts/check-manifest.yaml, not in the Decision body. The Decision carries rationale
+    and precedent only, plus the Decision 167 yaml envelope with a significance routing claim.
+  - >-
+    ONE SSOT for the grammar. _schema.py's docstring carries a pointer to the contract, never a
+    second copy; validate_check_manifests derive-and-asserts that the two segment-token sets are
+    EQUAL rather than restating either.
+  - >-
+    Every future edit to docs/contracts/check-manifest.yaml requires a new amendment_log[] entry
+    (contract-population.yaml change_detection.amendment_log) -- a comment/format-only edit does
+    not, but any canonical-dump change does. Stated here so the first grammar tweak does not fail
+    mysteriously.
+  - >-
+    Graduated node_ids must be preserved verbatim or deliberately repointed in the SAME commit --
+    a rename silently orphans a row, and validate_verification_registry differentials only
+    newly-added rows.
+  - Do NOT author a diff-allowlist VP step. This PR legitimately changes runtime code; PR1's allowlist step has no analogue here and a hermetic allowlist step would wedge the PR under validate_vp_replay.
+context:
+  - >-
+    "Decision-scout verdict + CITE list: FLAGS_FOUND (121 of 121 decisions triaged). CITE: dec-104
+    (amended), dec-128, dec-131, dec-132, dec-135, dec-148, dec-150, dec-153, dec-159, dec-160,
+    dec-165, dec-166, dec-167, dec-168, dec-80, dec-48. RELATED: dec-124 (the precedent for
+    cache-the-module-never-the-callable), dec-161, dec-162/163 (blockquote-amended), dec-127,
+    dec-86, dec-149, dec-130/102/43."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Scout flag resolutions, all ACCEPTED: (1) dec-104 negates THREE clauses, not one -- the facade
+    re-export clause, the globals()[name] dispatch clause, AND the Equivalence-oracle clause
+    ("match it byte-for-byte"), which the order re-derivation retires; the amending Decision names
+    all three and states what replaces the byte-parity oracle. (2) dec-162/163 get Amended-by
+    blockquotes, NOT in-place body edits -- this CORRECTS the original brief, which said
+    "restated". (3) docs/decisions-index.json added to scope. (4) dec-168: the bare-literal rule
+    gets a registered-check evaluator, not prose.
+  - >-
+    Correction to the brief: the facade block measures 209 raw lines / 189 SLOC (lines 63-271), not
+    207 SLOC. And docs/dependency-graph.json DOES NOT EXIST, so validate_dependency_graph_freshness
+    is a no-op and there is no export to regenerate -- it is deliberately absent from scope.
+  - >-
+    Fable advice-consult (this session), both recommendations ADOPTED. Q2 -- the Entry grammar goes
+    in a Class D contract, not collocated in _schema.py, because the rule has NO single enforcement
+    counterpart to collocate into: it is enforced by validate_check_manifests but CONSUMED by
+    dependency_graph.py:30 across 18 files, so a _schema.py docstring would sit in a file that
+    neither enforces nor reads it. Verified: contract-population.yaml:157's grandfathered_max: 21
+    bounds the GRANDFATHERED bucket only, so a newly declared Class D file does not consume the
+    ratchet. Q3 -- fold BOTH registry.py and _common.py; Decision 159's clause names the SET
+    (_CHECKS_REGISTRY_MECHANISM_FILES), and no enforcement keys on the literal path
+    tests/test_checks_registry.py (the "must live in this exact file" constraint is
+    test_coverage_checker.py:145's mapping, which moves with the frozenset edit).
+  - >-
+    Four literal-path graduated rows Fable found and this session verified, all beyond the 14
+    facade rows: sloc-budget-marker-dec159-retarget (registry.yaml:3724-3737) greps
+    config/sloc_budgets.yaml for BOTH the dec-159 marker text AND the literal
+    "tests/test_checks_registry.py: 643" -- deleting that entry orphans it, so it is RETIRED;
+    push-context-diff-base-tests (:2567) and the two TestSequenceInvariants rows (:815, :824) are
+    REPOINTED. 18 rows total are touched.
+  - >-
+    The 14 facade-asserting rows: fast-tier-budget-breach-dominant-phase,
+    convergence-health-sloc-raise-gate-registered, graduation-completeness-check-registered-both-tiers,
+    select-roadmap-guard-tests-retired, reconcile-pending-gate-registered-both-tiers,
+    fallback-reevaluation-check-registered, handoff-full-tier-registered-both-tiers,
+    structural-engine-green-and-scoped, structural-raise-guard-green-on-tree,
+    structural-checks-registered-both-tiers-unscoped, structural-modules-under-own-limit,
+    structural-census-within-fast-tier-budget, validate-attributes-label-to-check-net-zero,
+    ci-rca-every-registered-check-categorised. Most assert hasattr(scripts.validate, '<check>');
+    each is rewritten onto registry.resolve(). structural-modules-under-own-limit's
+    validate.py<=500 / not-in-budgets / line-length assertions stay valid and get easier.
+  - >-
+    New graduated rows this plan adds -- specify all fields so the same-PR verifier guard and the
+    differential admission gate both resolve: (1) validate-import-closure-excludes-check-modules,
+    primitive_slot command_exit_zero, guard_target scripts/validate.py; (2)
+    registry-resolve-is-late-bound, primitive_slot test_selector, guard_target
+    scripts/checks/registry.py, guard_symbol resolve; (3) manifest-registry-bijection-holds,
+    primitive_slot test_selector, guard_target scripts/checks/_schema.py; (4)
+    manifest-entries-are-bare-string-literals, primitive_slot test_selector, guard_target
+    scripts/checks/deps/validate_check_manifests.py; (5) manifest-driver-edges-match-entry-modules,
+    primitive_slot test_selector, guard_target scripts/dependency_graph.py; (6)
+    affected-set-retains-driver-tests-under-synthetic-diff, primitive_slot test_selector,
+    guard_target scripts/checks/deps/affected_tests.py. Each is legitimately RED at origin/main
+    (its target module or property does not exist there), so the differential gate admits them on
+    merit rather than on absence. VP step 8 is deliberately WAIVED, not graduated, because its
+    properties already hold at main and the gate would reject the row as tautological -- the same
+    finding that withdrew a row in PR1.
+  - >-
+    Measured on main at c2d0acd, do not re-derive: validate.py 499 SLOC / 102 facade imports;
+    registry.py 255 SLOC / 154 _c() entries; 97 registered checks, pre 60, full 93, union 96, ONE
+    registered-but-unsequenced (validate_terraform_try); 3 pre-only checks
+    (validate_prose_budget_raises, validate_sloc_budget_raises, validate_vp_replay);
+    tests/test_checks_registry.py 643 SLOC = exactly its budget, split ~1-438 registry/facade vs
+    ~439-777 _common concerns; CAP=35 at affected_tests.py:59; 12 hub seams (11 patches + the
+    vars(_validate) assertion at test_failed_check_attribution.py:35).
+  - >-
+    All 18 tests/checks/<domain>/ directories already exist WITH __init__.py, so only the two new
+    packages (tests/checks/registry/, tests/checks/_common/) need one added -- Decision 131 clause 4.
+  - >-
+    docs/plans/*.yaml is exempt from structural size budgets (config/structural_size_budgets.yaml,
+    workflow_outputs slug, governed: false), so this plan's length is not a gate concern.
+  - >-
+    Do NOT write `assert len(ENTRIES) == N` anywhere. The manifests are exactly the growth-prone
+    curated collection validate_test_count_coupling defends; assert set identity instead. Consider
+    adding the manifest loader to its _CURATED_TOKENS so the guard covers the new shape.
+  - >-
+    PR1 (c2d0acd, #881) built machinery this PR REUSES rather than rebuilds:
+    tests/fixtures/pre_sequence_stub.py::select_steps already supports sequence="full";
+    tests/validate/conftest.py holds the package-scoped non-autouse factory; and
+    test_driver_seam.py's IN_SCOPE_PATHS + TestRegistryRows is the orphan guard this PR extends.
+    PR1 graduated three rows that must keep resolving:
+    pre-sequence-stub-derives-from-live-registry, pre-sequence-fixture-is-package-scoped,
+    in-scope-graduated-rows-still-resolve.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness.status ok, no
+    overlapping files), so no Main Divergence deferral applies.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections (48, 80, 104, 124, 128, 131, 132, 135, 148, 150, 153, 159, 160, 161, 162, 163, 165, 166, 167, 168)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "Baseline captured BEFORE editing (logs/debug/ is gitignored, so it cannot wedge a diff check): bin/venv-python -m scripts.validate > logs/debug/roster-baseline.txt 2>&1, and the tier membership baseline logs/debug/tier-baseline.json written as {\"pre\": [...], \"full\": [...]} from the current registry sequences"
+  - "Read docs/contracts/contract-population.yaml's shape_grammar and change_detection sections before authoring check-manifest.yaml -- a malformed Class D file fails validate_contract_drift fail-closed"
+execution_steps:
+  - >-
+    Capture the roster baseline and the tier membership baseline before editing anything, so the
+    behaviour-preservation claims are checkable rather than asserted.
+  - >-
+    Create scripts/checks/_schema.py with the frozen Entry dataclass (name, module, attr, tier
+    membership, segment, pre_globs) and a docstring POINTING at the contract. Author
+    docs/contracts/check-manifest.yaml as a declared Class D contract and register it in
+    docs/contracts/file-router.yaml.
+  - >-
+    Create the 18 scripts/checks/<domain>/_manifest.py files, transcribing every registered check
+    with BARE string literals for module and attr. Preserve within-domain order where it carries
+    an ordering dependency (sloc: cc_limits, sloc_limits, sloc_budget_raises). Mark
+    validate_terraform_try as the one declared unsequenced entry.
+  - >-
+    Create scripts/checks/deps/validate_check_manifests.py as the contract's evaluator (AST
+    literal check, graph-node resolution, segment-token set equality with _schema.py), register it
+    with @register, add its Entry to the deps manifest, and add it to config/ci_rca_taxonomy.yaml's
+    function_to_category.
+  - >-
+    Extend scripts/checks/registry.py: aggregate the 18 manifests, add resolve(name) (cache the
+    module, never the callable), define the all_checks() eager-population contract, and derive
+    pre_sequence()/full_sequence() from manifest membership plus the retained six-anchor segment
+    skeleton. Rewrite the module docstring, which currently instructs the reader to add a facade line.
+  - >-
+    Add the callable-based dispatch form to scripts/checks/validation_result.py, repoint
+    scripts/validate.py's _dispatch_check at registry.resolve(name), and DELETE the check-facade
+    block (lines 63-271). Leave the _common/_scaffolding re-exports at lines 42-62 intact.
+  - >-
+    Create the 18 tests/checks/<domain>/test__manifest.py mirror tests, tests/checks/test__schema.py,
+    and tests/checks/deps/test_validate_check_manifests.py (each negative case asserted to FAIL,
+    not just the clean tree to pass).
+  - >-
+    Create tests/checks/registry/ (__init__.py, test_resolution.py, test_manifest_contracts.py,
+    test_sequences.py) with contract tests REPLACING the retired reachability tests, and
+    tests/checks/_common/ (__init__.py, test_primitives.py, test_push_context_base.py) holding the
+    relocated _common concerns. Delete tests/test_checks_registry.py.
+  - >-
+    Add scripts/checks/registry.py AND scripts/checks/_common.py to _CONCERN_SPLIT_TEST_PACKAGES in
+    scripts/test_coverage_checker.py and delete the now-subjectless _CHECKS_REGISTRY_MECHANISM_FILES
+    table (:47) and its consumer (:145). Remove the dec-159 entry from config/sloc_budgets.yaml.
+  - >-
+    Migrate the 12 hub seams: 5 patches in test_tiers.py, 4 patches plus the vars(_validate)
+    assertion in test_failed_check_attribution.py, 2 patches in test_driver_seam.py -- each onto
+    its defining module. Repoint the 5 remaining hub-import consumers. Extend
+    test_driver_seam.py's IN_SCOPE_PATHS with this plan's scope.
+  - >-
+    Update config/agent/verification_registry/registry.yaml: rewrite the 14 facade rows onto
+    manifest resolution, repoint push-context-diff-base-tests and the two TestSequenceInvariants
+    rows, RETIRE sloc-budget-marker-dec159-retarget, and add the 6 new rows with the fields
+    enumerated in context.
+  - >-
+    Author the new Decision (Decision 167 yaml envelope + significance claim; amends 104 naming all
+    three negated clauses and stating the replacement equivalence contract; records the
+    table-shaped vs logic-shaped precedent with its three-condition applicability test and the
+    explicit note that scripts/checks/_scaffolding.py does NOT qualify and gets a cohesion split
+    instead). Add Amended-by blockquotes to 162 and 163 WITHOUT editing their bodies. Re-check the
+    max Decision number at execution time -- a concurrent PR may have claimed it. Regenerate
+    docs/decisions-index.json. Rewrite scripts/CLAUDE.md's "Adding a validate.py check" section.
+  - >-
+    Run the plan-artefact gates locally before pushing: validate_plan_documents,
+    validate_handoff_full_tier, validate_graduation_completeness.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results, and the baseline comparison'
+work_areas: []
+rollback: >-
+  Revert the single squash commit. The change is self-contained: dispatch, manifests, tests, the
+  registry rows, and the Decision entries all move together, and no artefact outside the repo is
+  written. The one asymmetry worth naming is that reverting restores the facade AND the
+  pre-derivation tier order together -- they are coupled by construction, which is why they ship in
+  one commit rather than two.
