@@ -1945,7 +1945,7 @@ entries:
         raw = p.read_text(encoding='utf-8')
         d = yaml.safe_load(raw)
         assert 'contract' not in d and 'class' not in d
-        for k in ('rec-autoclose', 'deploy-ducklake-lambdas', 'terraform-drift', 'convergence-health', 'dedup-probe', 'reconcile-gate', 'stamp_fixed_by_sha'):
+        for k in ('rec-autoclose', 'deploy-ducklake-lambdas', 'reconcile-gate', 'stamp_fixed_by_sha', 'config/ci_rca_taxonomy.yaml', 'validate_ci_rca_adjudication'):
             raw.index(k)
   - check_id: terraform-init-retry-window-and-gateway-timeout
     primitive_slot: command_exit_zero
@@ -4255,7 +4255,7 @@ entries:
       command:
         - bash
         - -c
-        - 'bin/venv-python -c "import tempfile, pathlib, yaml; from scripts.ci_rca.taxonomy import classify_failure; taxonomy = {''schema_version'': 1, ''taxonomy_version'': 1, ''function_to_category'': {''validate_sloc_limits'': ''sloc_violation''}, ''log_pattern_to_category'': [], ''workflow_to_tier'': {}}; p = pathlib.Path(tempfile.mkdtemp()) / ''taxonomy.yaml''; p.write_text(yaml.dump(taxonomy)); cat, check, src = classify_failure(''validate_sloc_limits FAILED'', path=p, complete=False, has_junit_cause_group=True); assert cat == ''sloc_violation'', (cat, check, src); assert src == ''function_to_category'', (cat, check, src); print(''ok'')"'
+        - 'bin/venv-python -c "import tempfile, pathlib, yaml; from scripts.ci_rca.taxonomy import classify_failure; taxonomy = {''schema_version'': 1, ''taxonomy_version'': 1, ''function_to_category'': {''validate_sloc_limits'': ''sloc_violation''}, ''log_pattern_to_category'': [], ''workflows'': {}}; p = pathlib.Path(tempfile.mkdtemp()) / ''taxonomy.yaml''; p.write_text(yaml.dump(taxonomy)); cat, check, src = classify_failure(''validate_sloc_limits FAILED'', path=p, complete=False, has_junit_cause_group=True); assert cat == ''sloc_violation'', (cat, check, src); assert src == ''function_to_category'', (cat, check, src); print(''ok'')"'
   - check_id: ci-rca-refusal-degenerate-fingerprint
     primitive_slot: command_exit_zero
     guard_target: scripts/ci_rca/fingerprint.py
@@ -5038,3 +5038,129 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/checks/registry/test_manifest_contracts.py::TestAffectedSetSurvival
+  - check_id: ci-rca-workflows-map-bidirectional
+    primitive_slot: command_exit_zero
+    guard_target: config/ci_rca_taxonomy.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from scripts.ci_rca.taxonomy import enumerate_workflow_names, load_taxonomy; t=load_taxonomy(); assert 'workflow_to_tier' not in t, 'retired key survives'; w=t['workflows']; a=set(enumerate_workflow_names()); assert set(w)==a, (sorted(set(w)-a), sorted(a-set(w))); print('bidirectional coverage OK', len(a))
+  - check_id: ci-rca-workflows-entry-shape
+    primitive_slot: command_exit_zero
+    guard_target: config/ci_rca_taxonomy.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from scripts.ci_rca.taxonomy import load_taxonomy; w=load_taxonomy()['workflows']; bad=[k for k,v in w.items() if not isinstance(v,dict) or v.get('ci_rca') not in ('watched','excluded') or v.get('owner')!='platform' or not str(v.get('rationale','')).strip() or not str(v.get('tier','')).strip()]; assert not bad, bad; print('entry shape OK', len(w))
+  - check_id: ci-rca-filter-equals-watched
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/ci-rca.yml
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml; from scripts.ci_rca.taxonomy import load_taxonomy; d=yaml.safe_load(open('.github/workflows/ci-rca.yml')); f=set(d.get(True, d.get('on',{}))['workflow_run']['workflows']); w={k for k,v in load_taxonomy()['workflows'].items() if v['ci_rca']=='watched'}; assert f==w, (sorted(f-w), sorted(w-f)); assert 'deploy-prod-lambdas' in f; print('filter==watched OK', sorted(f))
+  - check_id: ci-rca-watched-additive-only
+    primitive_slot: command_exit_zero
+    guard_target: config/ci_rca_taxonomy.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from scripts.ci_rca.taxonomy import load_taxonomy; w=load_taxonomy() ['workflows']; prior=['CI','Main Canary','terraform-apply-sandbox','rec-autoclose', 'deploy-ducklake-lambdas']; bad=[p for p in prior if w[p]['ci_rca']!='watched']; assert not bad, bad; print('additive-only OK')
+  - check_id: ci-rca-adjudication-check-registered
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/ci_guards/_manifest.py
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from scripts.checks import registry; n='validate_ci_rca_adjudication'; assert n in registry.all_checks(), 'not registered'; assert callable(registry.resolve(n)); assert n in [s.name for s in registry.pre_sequence() if s.kind=='check'], 'absent from --pre'; assert n in [s.name for s in registry.full_sequence() if s.kind=='check'], 'absent from full'; print('registered OK')
+  - check_id: ci-rca-adjudication-guard-not-vacuous
+    primitive_slot: test_selector
+    guard_target: scripts/checks/ci_guards/validate_ci_rca_adjudication.py
+    guard_symbol: validate_ci_rca_adjudication
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ci_guards/test_validate_ci_rca_adjudication.py
+  - check_id: ci-rca-lifecycle-points-at-taxonomy
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/ci-rca-lifecycle.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml; d=yaml.safe_load(open('docs/contracts/ci-rca-lifecycle.yaml')); s=d.get('watched_workflow_set',{}); assert 'watched' not in s and 'excluded' not in s, 'second registry survives'; raw=open('docs/contracts/ci-rca-lifecycle.yaml').read(); assert 'config/ci_rca_taxonomy.yaml' in raw and 'validate_ci_rca_adjudication' in raw; assert 'watched_workflow_set above' not in raw, 'starved_review_observability still back-references the deleted maps'; print('contract points at SoT + evaluator')
+  - check_id: ci-rca-rationale-migration-preserved
+    primitive_slot: command_exit_zero
+    guard_target: config/ci_rca_taxonomy.yaml
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from scripts.ci_rca.taxonomy import load_taxonomy; w=load_taxonomy() ['workflows']; probes={'terraform-drift':'Decision 92','convergence-health': 'Decision 62','dedup-probe':'probes','rec-autoclose':'2026-07-24','reconcile':'Decision 154'}; bad=[k for k,p in probes.items() if p.lower() not in str(w[k]['rationale']).lower()]; assert not bad, bad; print('rationale migration OK')
+  - check_id: ci-rca-workflow-to-tier-retired
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/taxonomy.py
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        ! git grep -nE '(^|[^_[:alnum:]])workflow_to_tier([^_[:alnum:]]|$)' -- 'scripts/**' 'tests/**' 'config/ci_rca_taxonomy.yaml' 'docs/contracts/**' '.github/**'
+  - check_id: ci-rca-yml-names-taxonomy-not-retired-set
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/ci-rca.yml
+    guard_symbol: null
+    plan_slug: ci-rca-adjudication-guard
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        ! grep -q "watched_workflow_set" .github/workflows/ci-rca.yml && grep -q "config/ci_rca_taxonomy.yaml" .github/workflows/ci-rca.yml

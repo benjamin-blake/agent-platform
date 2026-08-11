@@ -7,11 +7,11 @@ from scripts.checks import registry
 
 @registry.register("validate_ci_rca_taxonomy", owner="platform")
 def validate_ci_rca_taxonomy(failed: list[str]) -> None:
-    """Fail if any .github/workflows/*.yml workflow name is absent from workflow_to_tier map.
+    """Fail if any .github/workflows/*.yml workflow name is absent from the workflows map.
 
     Pure file-glob + YAML parse (sub-100ms); --pre eligible (Decision 60).
     """
-    print("\n=== CI-RCA taxonomy coverage (workflow_to_tier map) ===")
+    print("\n=== CI-RCA taxonomy coverage (workflows map) ===")
     from scripts.ci_rca.taxonomy import enumerate_workflow_names, load_taxonomy  # noqa: PLC0415
 
     try:
@@ -20,19 +20,19 @@ def validate_ci_rca_taxonomy(failed: list[str]) -> None:
         failed.append(f"CI-RCA taxonomy coverage: {exc}")
         return
 
-    tier_map: dict[str, str] = taxonomy.get("workflow_to_tier") or {}
+    workflows_map: dict[str, dict] = taxonomy.get("workflows") or {}
     actual_names = enumerate_workflow_names()
-    missing = [n for n in actual_names if n not in tier_map]
+    missing = [n for n in actual_names if n not in workflows_map]
     if missing:
         for n in missing:
-            failed.append(f"CI-RCA taxonomy: workflow {n!r} absent from workflow_to_tier in config/ci_rca_taxonomy.yaml")
+            failed.append(f"CI-RCA taxonomy: workflow {n!r} absent from workflows in config/ci_rca_taxonomy.yaml")
         return
-    print(f"All {len(actual_names)} workflow name(s) present in workflow_to_tier.")
+    print(f"All {len(actual_names)} workflow name(s) present in workflows.")
 
     # Check 1b: every REGISTERED check resolves to a category in function_to_category -- a
     # PRECONDITION of the Priority-0 attribution path (scripts.ci_rca.taxonomy.classify_failure/
     # classify_failures resolve an attributed check's failure_category through
-    # func_map[check_name]), not standalone hygiene. Same shape as the workflow_to_tier coverage
+    # func_map[check_name]), not standalone hygiene. Same shape as the workflows coverage
     # assertion above.
     func_map: dict[str, str] = taxonomy.get("function_to_category") or {}
     registered_checks = sorted(registry.all_checks())

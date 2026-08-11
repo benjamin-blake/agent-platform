@@ -80,7 +80,7 @@ class TestFingerprint:
                 "validate_iam_runner_policy": "iam_policy_gap",
             },
             "log_pattern_to_category": [],
-            "workflow_to_tier": {"CI": "CI"},
+            "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
         }
         taxonomy_path = tmp_path / "multi.yaml"
         taxonomy_path.write_text(yaml.dump(multi_taxonomy))

@@ -19,7 +19,10 @@ MINIMAL_TAXONOMY = {
     "taxonomy_version": 1,
     "function_to_category": {"validate_sloc_limits": "sloc_violation"},
     "log_pattern_to_category": [{"pattern": "ImportError", "category": "dependency_gap", "check_name": "import_error"}],
-    "workflow_to_tier": {"CI": "CI", "Deploy": "not_a_gate"},
+    "workflows": {
+        "CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"},
+        "Deploy": {"tier": "not_a_gate", "ci_rca": "excluded", "owner": "platform", "rationale": "test fixture"},
+    },
 }
 
 MULTI_TAXONOMY = dict(MINIMAL_TAXONOMY)

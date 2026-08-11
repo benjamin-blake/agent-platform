@@ -36,7 +36,7 @@ def load_taxonomy(path: Path | None = None) -> dict:
         raise ValueError(f"Malformed taxonomy YAML at {p}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Taxonomy at {p} must be a mapping, got {type(data).__name__}")
-    required = {"function_to_category", "log_pattern_to_category", "workflow_to_tier"}
+    required = {"function_to_category", "log_pattern_to_category", "workflows"}
     missing = required - data.keys()
     if missing:
         raise ValueError(f"Taxonomy missing required keys: {sorted(missing)}")
@@ -316,11 +316,12 @@ def classify_failures(
 def resolve_workflow_tier(workflow_name: str, path: Path | None = None) -> str:
     """Map a workflow name to its tier string. Returns 'unknown' for misses and 'not_a_gate' sentinels."""
     taxonomy = _cached_taxonomy(path)
-    tier_map: dict[str, str] = taxonomy.get("workflow_to_tier") or {}
-    tier = tier_map.get(workflow_name)
-    if tier is None:
-        logger.warning("workflow_to_tier miss: %r not in taxonomy", workflow_name)
+    workflows_map: dict[str, dict] = taxonomy.get("workflows") or {}
+    entry = workflows_map.get(workflow_name)
+    if entry is None:
+        logger.warning("workflows miss: %r not in taxonomy", workflow_name)
         return "unknown"
+    tier = entry["tier"]
     if tier == "not_a_gate":
         return "unknown"
     return tier

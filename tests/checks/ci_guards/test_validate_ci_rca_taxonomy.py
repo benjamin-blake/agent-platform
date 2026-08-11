@@ -25,7 +25,7 @@ class TestValidateCiRcaTaxonomy:
             "taxonomy_version": 1,
             "function_to_category": {},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {"CI": "CI"},
+            "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
         }
         tax_path = tmp_path / "taxonomy.yaml"
         tax_path.write_text(yaml.dump(incomplete_taxonomy))
@@ -44,7 +44,7 @@ class TestValidateCiRcaTaxonomy:
 
             failed: list[str] = []
             validate_ci_rca_taxonomy(failed)
-            assert any("absent from workflow_to_tier" in f for f in failed), (
+            assert any("absent from workflows" in f for f in failed), (
                 f"Expected taxonomy failure for missing workflows, got: {failed}"
             )
         finally:
@@ -89,7 +89,7 @@ class TestValidateCiRcaTaxonomy:
             "function_to_category": {"validate_sloc_limits": "sloc_violation"},
             "step_name_to_category": {},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {},
+            "workflows": {},
         }
         monkeypatch.setattr(subject.registry, "all_checks", lambda: {"validate_sloc_limits": object()})
         monkeypatch.setattr("scripts.ci_rca.taxonomy.enumerate_workflow_names", lambda: [])
@@ -107,7 +107,7 @@ class TestValidateCiRcaTaxonomy:
             "function_to_category": {"validate_sloc_limits": "sloc_violation"},
             "step_name_to_category": {},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {},
+            "workflows": {},
         }
         monkeypatch.setattr(subject.registry, "all_checks", lambda: {"validate_sloc_limits": object()})
         monkeypatch.setattr("scripts.ci_rca.taxonomy.enumerate_workflow_names", lambda: [])
@@ -126,7 +126,7 @@ class TestValidateCiRcaTaxonomy:
             "function_to_category": {"validate_sloc_limits": "sloc_violation"},
             "step_name_to_category": {},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {},
+            "workflows": {},
         }
         monkeypatch.setattr(subject.registry, "all_checks", lambda: {"validate_sloc_limits": object()})
         monkeypatch.setattr("scripts.ci_rca.taxonomy.enumerate_workflow_names", lambda: [])
@@ -145,7 +145,7 @@ class TestValidateCiRcaTaxonomy:
             "function_to_category": {"validate_sloc_limits": "sloc_violation"},
             "step_name_to_category": {},
             "log_pattern_to_category": [],
-            "workflow_to_tier": {},
+            "workflows": {},
         }
         monkeypatch.setattr(subject.registry, "all_checks", lambda: {"validate_sloc_limits": object()})
         monkeypatch.setattr("scripts.ci_rca.taxonomy.enumerate_workflow_names", lambda: [])

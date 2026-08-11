@@ -15,7 +15,7 @@ MINI_TAXONOMY = {
     "taxonomy_version": 1,
     "function_to_category": {"validate_sloc_limits": "sloc_violation"},
     "log_pattern_to_category": [],
-    "workflow_to_tier": {"CI": "CI"},
+    "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
 }
 
 MULTI_TAXONOMY = {
@@ -26,7 +26,7 @@ MULTI_TAXONOMY = {
         "validate_iam_runner_policy": "iam_policy_gap",
     },
     "log_pattern_to_category": [],
-    "workflow_to_tier": {"CI": "CI"},
+    "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
 }
 
 MULTI_FUNC_TAXONOMY = {
@@ -37,5 +37,5 @@ MULTI_FUNC_TAXONOMY = {
         "validate_iam_runner_policy": "iam_gap",
     },
     "log_pattern_to_category": [],
-    "workflow_to_tier": {"CI": "CI"},
+    "workflows": {"CI": {"tier": "CI", "ci_rca": "watched", "owner": "platform", "rationale": "test fixture"}},
 }

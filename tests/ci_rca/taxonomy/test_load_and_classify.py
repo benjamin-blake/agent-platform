@@ -112,6 +112,16 @@ class TestResolveWorkflowTier:
         p = write_taxonomy(tmp_path, MINIMAL_TAXONOMY)
         assert resolve_workflow_tier("NotInMap", p) == "unknown"
 
+    def test_return_contract_unchanged_against_real_taxonomy(self):
+        """Migration-seam guard (PLAN-ci-rca-adjudication-guard): resolve_workflow_tier's str
+        return contract ('unknown' for a miss/not_a_gate) must be identical for every real
+        workflow name after the flat-to-nested `workflows:` map migration -- proving the nesting
+        did not alter downstream evidence-bundle behaviour."""
+        got = {n: resolve_workflow_tier(n) for n in enumerate_workflow_names()}
+        assert got["CI"] == "CI"
+        assert got["Main Canary"] == "CI"
+        assert all(v == "unknown" for k, v in got.items() if k not in ("CI", "Main Canary")), got
+
 
 class TestEnumerateWorkflowNames:
     def test_extracts_names(self, tmp_path):
