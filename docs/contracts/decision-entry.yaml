@@ -469,6 +469,56 @@ compaction:
         ops_decisions; the prior full-body version is retained as history (the warehouse is the
         provenance archive -- git history retains it too)."
 
+currency:
+  # Decision-corpus currency projection (PLAN-decision-corpus-currency, rec-3055/rec-3056). A
+  # derived, per-live-entry classification of how directly an entry's content still governs,
+  # projected onto docs/decisions-index.json by scripts.decisions_index and enforced by the
+  # registered check scripts/checks/decisions/validate_decision_currency.py. Archive rows never
+  # carry this key -- projection-only on live rows (rec-3012 tracks eventual archive
+  # skeletonization; this plan does not thicken archive rows ahead of it).
+  values: [current, amended, superseded_pointer, superseded_compacted]
+  derivation:
+    # Precedence order (first match wins). scripts.decisions_md.derive_currency is the single
+    # implementation -- this restates it for the contract reader, never a second regex.
+    superseded_compacted: >-
+      The entry is a Decision 149 compacted stub (compaction.stub_grammar above;
+      scripts.decisions_md.is_compacted_stub) -- its body was wholly replaced with a
+      '**Status:** Superseded' marker and a live '**Superseded by: Decision N**' pointer.
+    superseded_pointer: >-
+      The entry carries a victim-side '**Superseded by: Decision N**' pointer, OR its number is
+      the target of an inbound supersedes edge (another entry's title or envelope declares it
+      supersedes this one) -- without being a compacted stub. Example: Decision 80, superseded
+      only by Decision 104's inbound title edge, body untouched.
+    amended: >-
+      The entry's number is the target of an inbound amends edge (another entry's title or
+      envelope declares it amends this one), OR its bold '**Status:**' marker begins with
+      'Amended' (the residual historical status-prose band, e.g. Decision 67).
+    current: "None of the above."
+  consumer_contract: >-
+    ONLY 'superseded_compacted' may remove an entry from a consumer's active set (e.g.
+    decision-scout demoting CITE/CONTRADICT to RELATED). 'superseded_pointer' and 'amended'
+    annotate and NEVER filter, and NEVER reduce severity -- a supersession pointer or an amends
+    edge cannot by itself distinguish full from partial supersession/amendment (see
+    scripts.checks.decisions.validate_supersession_annotations._EDGE_RE, which matches
+    "supersedes"/"amends"/"partially supersedes" identically), so treating either as a filter
+    signal would silently demote a still-governing entry.
+  reversal_conditions: >-
+    Reconsider this token set if a live entry is ever authored with a Reversed or Deferred bold
+    Status marker (today's live census is zero such entries; invariant I4 fails the build the
+    day one appears, via an explicit, empty-at-install grandfather hook that lives as a
+    module-level constant in scripts/checks/decisions/validate_decision_currency.py -- never a
+    contract key, per Decision 165 clause 4's "growing the hook later is a reviewed code edit,
+    never a config edit"). Reconsider consumer_contract's non-filtering rule for
+    superseded_pointer/amended if a future authoring change makes full-vs-partial
+    supersession/amendment mechanically distinguishable at the edge level.
+  accepted_cost: >-
+    reversal_conditions above is documentation only, monitored by no preflight surface --
+    scripts/preflight/decision_conditions.py watches only a fenced ```yaml reversal-conditions
+    stanza inside a numbered DECISIONS.md entry, and this content is routed here rather than to
+    a numbered Decision by Decision 150's field_semantics significance row (Decision 167 clause
+    2 rejects minting a number for it). No claim is made that this block reproduces what a
+    Decision's monitored stanza would have provided.
+
 size_governance:
   # Decision 134 / Decision-114 parity ceilings (enforced by
   # scripts/checks/decisions/validate_decisions_size.py, both --pre and full tiers). Documented

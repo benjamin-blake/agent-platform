@@ -38,6 +38,15 @@ in docs/DECISIONS.md, via scripts.decisions_md.decision_header_numbers(paths=[do
 -- never a second parse of by_number's cross-file dict, which is last-occurrence-wins across the
 two files (overlap is zero today, so this is latent, not live behaviour).
 
+`currency` derivation (PLAN-decision-corpus-currency, rec-3055/rec-3056): a `currency` key is
+projected onto every live:true row (never a live:false row) via
+scripts.decisions_md.derive_currency, fed the corpus-wide inbound-supersedes and inbound-amends
+sets built ONCE per build_index() call from this generator's own supersedes_map / per-row amends
+projections -- never recomputed per row. This generator never validates the derived value against
+docs/contracts/decision-entry.yaml's vocabulary; that is scripts.checks.decisions.
+validate_decision_currency's job (invariant I3), so check_index_freshness keeps failing cleanly on
+drift instead of this module surfacing an uncaught traceback on an unexpected value.
+
 `triage_excerpt` derivation: a <=320-char excerpt for the decision-scout bounded-retrieval SPIRIT
 lane (Decision 152 gate (ii) widened to admit a Decision-clause quote), fallback order Intent ->
 Problem -> Context (the parser's Rationale/Key details/Context extraction) -> Decision (the
@@ -72,7 +81,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.decisions_md import decision_header_numbers, parse_decisions_md
+from scripts.decisions_md import decision_header_numbers, derive_currency, parse_decisions_md
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _EXPORT_PATH = _REPO_ROOT / "docs" / "decisions-index.json"
@@ -170,25 +179,43 @@ def build_index() -> dict[str, Any]:
                 # row n's own title says "Supersedes Decision target" -> n supersedes target.
                 supersedes_map[n].add(target)
 
+    amends_map: dict[int, list[int]] = {
+        n: sorted(t for t in row.get("amends", []) if t in by_number) for n, row in by_number.items()
+    }
+
+    # Corpus-wide inbound edge sets for derive_currency, built ONCE here from the maps above --
+    # never recomputed per row (PLAN-decision-corpus-currency). inbound_supersedes is every
+    # number that is a VICTIM of someone else's outbound supersedes (the union of
+    # supersedes_map's own values, which already folds in both the superseded_by inverse and
+    # title_supersedes); inbound_amends is every number targeted by someone else's amends list.
+    inbound_supersedes: set[int] = set()
+    for supersedes_targets in supersedes_map.values():
+        inbound_supersedes.update(supersedes_targets)
+    inbound_amends: set[int] = set()
+    for amends_targets in amends_map.values():
+        inbound_amends.update(amends_targets)
+
     decisions = []
     for n in sorted(by_number):
         excerpt, excerpt_source, excerpt_truncated = _build_triage_excerpt(by_number[n])
-        decisions.append(
-            {
-                "number": n,
-                "title": by_number[n]["title"],
-                "status": by_number[n]["status"],
-                "decided_date": by_number[n].get("decided_date", ""),
-                "supersedes": sorted(supersedes_map[n]),
-                "superseded_by": superseded_by_map[n],
-                "amends": sorted(t for t in by_number[n].get("amends", []) if t in by_number),
-                "live": n in live_numbers,
-                "triage_excerpt": excerpt,
-                "triage_excerpt_source": excerpt_source,
-                "triage_excerpt_truncated": excerpt_truncated,
-                "category_tags": _derive_category_tags(by_number[n]["title"], excerpt),
-            }
-        )
+        is_live = n in live_numbers
+        entry: dict[str, Any] = {
+            "number": n,
+            "title": by_number[n]["title"],
+            "status": by_number[n]["status"],
+            "decided_date": by_number[n].get("decided_date", ""),
+            "supersedes": sorted(supersedes_map[n]),
+            "superseded_by": superseded_by_map[n],
+            "amends": amends_map[n],
+            "live": is_live,
+            "triage_excerpt": excerpt,
+            "triage_excerpt_source": excerpt_source,
+            "triage_excerpt_truncated": excerpt_truncated,
+            "category_tags": _derive_category_tags(by_number[n]["title"], excerpt),
+        }
+        if is_live:
+            entry["currency"] = derive_currency(by_number[n], inbound_supersedes, inbound_amends)
+        decisions.append(entry)
 
     return {
         "decisions": decisions,

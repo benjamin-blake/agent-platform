@@ -5164,3 +5164,27 @@ entries:
       - -c
       - |
         ! grep -q "watched_workflow_set" .github/workflows/ci-rca.yml && grep -q "config/ci_rca_taxonomy.yaml" .github/workflows/ci-rca.yml
+  - check_id: decisions-index-currency-derivation
+    primitive_slot: command_exit_zero
+    guard_target: scripts/decisions_md.py
+    guard_symbol: derive_currency
+    plan_slug: decision-corpus-currency
+    graduated_at: '2026-08-11'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - import yaml, pathlib; from scripts.decisions_index import build_index; from scripts.decisions_md import parse_decisions_md, status_is_superseded; ds=build_index()['decisions']; d={e['number']:e for e in ds}; exp={44:'superseded_compacted',58:'superseded_compacted',37:'superseded_pointer',80:'superseded_pointer',43:'amended',67:'amended',168:'current'}; bad={n:(d[n].get('currency'),v) for n,v in exp.items() if d[n].get('currency')!=v}; assert not bad, bad; vocab=set(yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())['currency']['values']); live=[e for e in ds if e['live']]; assert all(e.get('currency') in vocab for e in live), [e['number'] for e in live if e.get('currency') not in vocab]; rows={r['decision_id']:r['raw_block'] for r in parse_decisions_md()}; marked={n for n,b in rows.items() if status_is_superseded(b)}; compacted={e['number'] for e in live if e['currency']=='superseded_compacted'}; assert compacted==(marked & {e['number'] for e in live}), (sorted(compacted), sorted(marked)); print('derivation OK; compacted set ==', sorted(compacted))
+  - check_id: compaction-stub-predicate-single-source
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/decisions/validate_decision_entry_conformance.py
+    guard_symbol: _is_compacted_stub
+    plan_slug: decision-corpus-currency
+    graduated_at: '2026-08-11'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - import scripts.decisions_md as m, scripts.checks.decisions.validate_decision_entry_conformance as c, pathlib; assert c._is_compacted_stub is m.is_compacted_stub, 'checks module does not reach the shared predicate object'; assert pathlib.Path('scripts/checks/decisions/validate_decision_entry_conformance.py').read_text().count('def _is_compacted_stub')==0; print('single-parser rule OK (identity-checked)')

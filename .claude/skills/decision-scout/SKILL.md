@@ -23,7 +23,7 @@ The index-plus-targeted-reads mechanism is the INTERIM arrangement, not the T1.5
 
 ### Phase 1: Load Inputs (MANDATORY)
 
-1. **Triage source.** Read `docs/decisions-index.json` -- committed, generated solely from `docs/DECISIONS.md` and `docs/DECISIONS_ARCHIVE.md` by `scripts.decisions_index`; used instead of the gitignored `ops_decisions` cache because CI PR roles lack reader access there and this gate stays credential-free and hermetic (Decision 105's R1-R3 guard relies on the same file-header hermeticity). Derive **M** = count of `live: true` entries -- the live-file header count, excluding the archive and distinct from the max decision number (numbering gaps). Each live entry's `title`, `triage_excerpt` (<=320 chars, Intent/Problem/Context/Decision fallback order; `triage_excerpt_source` names which; a small terse-historical band carries none), and `category_tags` (deterministic artifact/process tags, e.g. `lambda`/`terraform`/`iam`/`secrets`/`deploy`/`egress`) is the Phase 2 signal -- never a whole-file load here.
+1. **Triage source.** Read `docs/decisions-index.json` -- committed, generated solely from `docs/DECISIONS.md` and `docs/DECISIONS_ARCHIVE.md` by `scripts.decisions_index`; used instead of the gitignored `ops_decisions` cache because CI PR roles lack reader access there and this gate stays credential-free and hermetic (Decision 105's R1-R3 guard relies on the same file-header hermeticity). Derive **M** = count of `live: true` entries -- the live-file header count, excluding the archive and distinct from the max decision number (numbering gaps). Each live entry's `title`, `triage_excerpt` (<=320 chars, Intent/Problem/Context/Decision fallback order; `triage_excerpt_source` names which; a small terse-historical band carries none), `currency`, and `category_tags` (deterministic artifact/process tags, e.g. `lambda`/`terraform`/`iam`/`secrets`/`deploy`/`egress`) is the Phase 2 signal -- never a whole-file load here.
 
 2. Read the caller's input brief, which is mandated to include:
    - **Intent** (1-2 sentences from `/plan` Step 3 clarification)
@@ -62,7 +62,7 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
    replication; custom schema-copy instead of RDS snapshot). Fires even if previously recorded as a
    "human decision" -- that does not exempt it. Decision 100 extends Decision 75 to ALL managed services.
 
-7. **Status filter.** Only flag CONTRADICT or CITE for decisions whose status is active (not reversed/superseded/deferred). If reversed/superseded, demote to RELATED with a one-line note: "Decision N (REVERSED by Decision M) — flagged for awareness only."
+7. **Currency filter.** Branch on the typed `currency`, never status prose. `superseded_compacted` is the ONLY value that demotes to RELATED, noted "superseded by Decision M, awareness only". `superseded_pointer` is NEVER filtered and NEVER severity-reduced: triage exactly as `current`, annotated "read against Decision M". `amended` is treated as `current` for now. No `currency` key = archived, out of scope.
 
 8. **Spirit-alignment overlay (SPIRIT bucket).** SEPARATELY from the literal CONTRADICT triage (steps
    3-5), flag an approach that violates the *spirit* of an active decision without contradicting any
@@ -142,5 +142,4 @@ If any checkbox is false, fix before returning. The caller (planning agent) cann
 - **Defensive over-citation.** Bloats the downstream summary and trains the human to skim past flags. Be ruthless: CITE only when omission would meaningfully harm the plan.
 - **Hedged contradictions.** "This *might* contradict Decision N." -> either it does or it doesn't. If undetermined, mark NOTE and explain what's uncertain. Hedge in the explanation, not the classification.
 - **Editing files.** Read-only. Never modify `docs/DECISIONS.md` or any other file, even to "fix a typo". File a recommendation if something is genuinely wrong.
-- **Citing reversed decisions as governing.** A REVERSED decision is historical context only. Demote to RELATED with the reversal note; never CITE or CONTRADICT against it.
 - **SPIRIT over-citation.** The highest-noise lane -- an unquotable "this feels misaligned" is not a flag. Three well-grounded flags beat ten hedged ones.
