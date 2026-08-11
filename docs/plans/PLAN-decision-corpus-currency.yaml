@@ -125,10 +125,11 @@ acceptance_criteria:
     because VP step 1 is graduated and a pinned count would red-line every unrelated PR adding a Decision.
   - >-
     validate_decision_currency is registered via a single Entry in scripts/checks/decisions/_manifest.py
-    (pre=True with pre_globs, full_segment="full_after_lint"), resolves through
-    scripts.checks.registry.resolve, passes validate_check_manifests' grammar, and each of its five
-    invariants has a synthetic fixture proving it FAILS when violated. scripts/validate.py is NOT touched
-    (Decision 169).
+    (pre=True with pre_globs, full_segment="full_after_lint"), carries the
+    @registry.register("validate_decision_currency", owner="platform") decorator, RESOLVES IN
+    config/ci_rca_taxonomy.yaml's function_to_category map (as schema_drift), passes
+    validate_check_manifests' grammar, and each of its five invariants has a synthetic fixture proving it
+    FAILS when violated. scripts/validate.py is NOT touched (Decision 169).
   - >-
     Invariant I1 asserts the DISCRIMINATING direction -- every LIVE entry whose status marker resolves to
     'Superseded' derives 'superseded_compacted' -- so a malformed compaction that a human reads as superseded
@@ -294,7 +295,9 @@ verification_plan:
     graduation: waive
     graduation_waiver_reason: >-
       validate_decisions_index_freshness is already a registered, UNGATED --pre check performing exactly this
-      drift comparison (scripts/checks/registry.py:116).
+      drift comparison -- post-Decision-169 its registration is the Entry in
+      scripts/checks/decisions/_manifest.py (pre=True, no pre_globs), not the retired hand-listed sequence
+      in scripts/checks/registry.py.
   - step: 9
     phase: pre-deploy
     action: Run the full test suite for every touched module, including the new unit coverage.
@@ -347,10 +350,14 @@ verification_plan:
       validate_structural_size_limits, validate_handoff_full_tier and validate_verification_registry all
       passing.
     fix_if: >-
-      An unresolved-name failure on validate_decision_currency means the Entry is missing from
-      scripts/checks/decisions/_manifest.py, or its module/attr are not bare string literals (which
-      validate_check_manifests rejects). The scripts/validate.py headroom risk earlier drafts carried is
-      GONE: Decision 169 retired its re-export facade (498 -> 315 SLOC) and this plan no longer touches it.
+      Three distinct failure modes, each with its own string. "CI-RCA taxonomy: registered check
+      'validate_decision_currency' absent from function_to_category ... (Priority-0 attribution
+      precondition)" means the config/ci_rca_taxonomy.yaml row is missing -- that check is UNGATED in --pre,
+      so it fires on every run; fix it there, NOT in _manifest.py. "manifested-but-unregistered" means the
+      @registry.register decorator is absent from the check module. An unresolved-name or manifest-grammar
+      failure means the Entry is missing from scripts/checks/decisions/_manifest.py, or its module/attr are
+      not bare string literals (which validate_check_manifests rejects). The scripts/validate.py headroom risk earlier drafts carried is
+      GONE: Decision 169 retired its re-export facade (499 -> 315 SLOC) and this plan no longer touches it.
       tests/test_decisions_index.py is at 457. If tests/test_decisions_index.py crosses 500 (457 today, real headroom), do NOT
       create a tests/decisions_index/ package: scripts/decisions_index.py is absent from
       _CONCERN_SPLIT_TEST_PACKAGES and _RETIRING_GRANDFATHER_HOMES is empty, so it mirrors to the FLAT file
@@ -676,10 +683,19 @@ context:
     config/agent/verification_registry/registry.yaml carries a 2,315-character longest-line pin, which the
     argv-list form of step 1's ~1,113-character command stays under.
   - >-
-    Mechanical coupling worth knowing at implement time: validate_vp_replay re-runs hermetic pre-deploy
-    steps and requires every backtick literal in a step's `expected` to appear in that step's output. VP
-    steps 2 and 4 carry backticked text in `expected` and are safe only because they are hermetic: false.
-    Do not flip either to hermetic without stripping those backticks first.
+    Hermetic dispositions, with the reason stated correctly (an earlier draft got this wrong). VP steps 2,
+    4 and 9 are hermetic: false because they INVOKE PYTEST -- the planning skill's Hermetic-authoring rule
+    carves those out explicitly ("Steps needing pytest/deploys stay hermetic: false, excluded with a printed
+    reason"), a carve-out that survives Decision 148's restoration of hermetic: true as the default for
+    ordinary pre-deploy feature verification. The skill rule is the whole basis: a timeout argument was
+    considered and MEASURED AS NOT SUPPORTING IT -- the existing tests/decisions_md/ plus
+    tests/test_decisions_index.py suite runs in about 5.2s against validate_vp_replay's
+    PER_STEP_TIMEOUT_SECONDS = 30 and MAX_AGGREGATE_SECONDS = 120, so cost is not today's reason and should
+    not be cited as one. validate_vp_replay prints these steps as EXCLUDED with an explicit not-hermetic
+    reason rather than skipping them silently. A round-5 reviewer proposed flipping them to hermetic: true on Decision 148 grounds; that
+    reading drops the skill's pytest carve-out and was declined. Separately: those steps' `expected` fields
+    carry backtick literals, which the replay contract would require to appear in output -- so if a future
+    session ever does flip them, strip the backticks in the same edit.
   - >-
     Known limitation, not mitigated: invariant I5 and VP step 6 are string-presence checks on the skill text.
     They prove the safety clause is PRESENT; neither can prove the LLM honours it at dispatch time. The gate's
@@ -706,7 +722,7 @@ context:
     scripts/validate.py's re-export facade). That materially changed this plan's registration surface:
     scripts/validate.py and scripts/checks/registry.py are OUT of scope entirely, replaced by one Entry
     literal in scripts/checks/decisions/_manifest.py, and the one-line-headroom risk on validate.py is gone
-    (498 -> 315 SLOC). Corpus figures moved with the new entry: 149 entries / 122 live, index baseline
+    (499 -> 315 SLOC). Corpus figures moved with the new entry: 149 entries / 122 live, index baseline
     113,174 B, +3,586 B with currency to 116,760 B (14,240 B headroom), live distribution 92/26/2/2, live
     headers 122 of 132, verification registry 4,862 effective. The DERIVATION is unchanged -- all seven
     spot-checks still hold and Decision 169 itself derives 'current'. Note the vindication of round 3's
