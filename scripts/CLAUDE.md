@@ -37,7 +37,6 @@ amends Decision 104) -- `scripts/validate.py` is never touched. Add the module u
 `pre_globs=`) for `--pre` membership and `full_segment=` (`_schema.SEGMENT_TOKENS`) for full-tier
 membership; omit both if invoked directly elsewhere (e.g. `validate_terraform_try`).
 
-Dispatch is `scripts.checks.registry.resolve(name)(failed)`: a late-bound `getattr` on the Entry's
-module at call time, so `unittest.mock.patch("<defining module>.<name>", ...)` still intercepts.
+Dispatch and the full registration-surface list: see `scripts/checks/registry.py`.
 `validate_check_manifests.py` enforces the grammar; mirror tests live at
 `tests/checks/<domain>/test__manifest.py`.

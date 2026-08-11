@@ -27,6 +27,8 @@ Reject a plan that invents a third validation tier, treats mapped coverage or re
 
 5. **For IMPLEMENTATION plans:** Read the files listed in the plan's `scope` list (the `## Scope` table in legacy .md plans) to verify the plan's accuracy. For STRATEGIC plans, this is not required — work areas are high-level and do not require file-level verification.
 
+5b. For IMPLEMENTATION plans, run `bin/venv-python -m scripts.roadmap.plan_obligations --plan <plan path>` and fold its report into the scope check above -- it names missing companion registrations mechanically, freeing this gate to judge adequacy, not arithmetic.
+
 ### Phase 2: Strategic Analysis
 
 6. **Check for decision conflicts:** Does the plan contradict or re-decide anything already resolved in `docs/DECISIONS.md`? Cite specific decision numbers and the conflicting plan section.
@@ -143,6 +145,8 @@ Ask the following five questions against the plan's chosen approach. For each, w
 **Tier Fitness (12m):** Compliant / REVISE -- [scope file] requires [tier] but plan declares [lower tier]
 
 **Graduation Dispositions (12o):** Complete and honest / REVISE -- [step number(s) and sub-check failed]
+
+**Finding-Origin Attribution:** mechanical (scripts.roadmap.plan_obligations) / critic judgement -- tag each registration-closure finding
 
 **Recommendation:** PROCEED / REVISE [with specific suggestions if REVISE]
 ```

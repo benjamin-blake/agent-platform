@@ -79,6 +79,14 @@ ENTRIES: tuple[Entry, ...] = (
         full_segment="full_after_lint",
     ),
     Entry(
+        name="validate_plan_scope_closure",
+        module="scripts.checks.roadmap.validate_plan_scope_closure",
+        attr="validate_plan_scope_closure",
+        pre=True,
+        pre_globs=("docs/plans/**",),
+        full_segment="full_after_lint",
+    ),
+    Entry(
         name="_check_graduation_guard",
         module="scripts.checks.roadmap.check_graduation_guard",
         attr="_check_graduation_guard",
