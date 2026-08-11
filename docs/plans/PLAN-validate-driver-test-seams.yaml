@@ -36,9 +36,11 @@ scope:
   - file: tests/validate/test_driver_seam.py
     action: Create
     purpose: >-
-      Guard the selector and the seam: raises on a check name absent from the live sequence, raises
-      on an unknown scaffold, returns tier order rather than requested order, and patching
-      registry.pre_sequence still intercepts dispatch bidirectionally.
+      Guard the selector and the seam. TestSelectorFidelity: raises on a check name absent from the
+      live sequence, raises on an unknown scaffold, returns tier order rather than requested order,
+      and patching registry.pre_sequence intercepts dispatch bidirectionally. TestFixtureHoming:
+      the factory is package-scoped and non-autouse. TestRegistryRows: no in-scope graduated row
+      references the retired fixture, and every in-scope node_id still collects under pytest.
   - file: tests/validate/test_tiers.py
     action: Modify
     purpose: >-
@@ -201,7 +203,7 @@ verification_plan:
   - step: 8
     phase: pre-deploy
     action: Every graduated row referencing an in-scope path still resolves, or is deliberately retired.
-    command: 'bin/venv-python -c "import yaml,pathlib,sys,subprocess; raw=yaml.safe_load(pathlib.Path(\"config/agent/verification_registry/registry.yaml\").read_text()); rows=raw if isinstance(raw,list) else next((v for v in raw.values() if isinstance(v,list)),[]); scope=[\"tests/validate/test_tiers.py\",\"tests/validate/test_budget.py\",\"tests/validate/test_manifest_isolation.py\",\"tests/checks/roadmap/test_check_graduation_guard.py\",\"tests/conftest.py\"]; touched=[r for r in rows if isinstance(r,dict) and any(p in yaml.safe_dump(r) for p in scope)]; print(\"rows referencing in-scope paths:\",[r.get(\"check_id\") for r in touched]); stale=[r.get(\"check_id\") for r in touched if \"_neutralized_pre_registry\" in yaml.safe_dump(r)]; assert not stale, (\"row still references the retired fixture\", stale); gone=[r.get(\"check_id\") for r in touched if r.get(\"check_spec\",{}).get(\"path\") and not pathlib.Path(r[\"check_spec\"][\"path\"]).exists()]; assert not gone, (\"check_spec.path no longer exists\", gone); nid=[r for r in touched if r.get(\"check_spec\",{}).get(\"node_id\")]; broken=[r.get(\"check_id\") for r in nid if subprocess.run([sys.executable,\"-m\",\"pytest\",r[\"check_spec\"][\"node_id\"],\"--collect-only\",\"-q\"],capture_output=True).returncode!=0]; assert not broken, (\"node_id no longer collects -- row silently orphaned\", broken); print(\"all in-scope rows resolve:\",len(touched),\"checked,\",len(nid),\"node_ids collected\")"'
+    command: 'bin/venv-python -m pytest "tests/validate/test_driver_seam.py::TestRegistryRows" -q'
     expected: >-
       Enumerates every row touching an in-scope file, confirms none references the retired fixture,
       AND confirms every node_id still collects under pytest. graduation-guard-pre-registry-neutralized
@@ -263,6 +265,16 @@ test_obligations:
     red_green_expectation: >-
       green after; discrimination is proven separately by the step-4 reorder mutation and its
       control arm, rather than by the mere absence of a symbol
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      The row pinning the retired fixture is gone, no in-scope row references it, and every
+      in-scope node_id still collects -- so a graduated guard cannot survive in name while its
+      target has been renamed or deleted.
+    verification_step: 8
+    test_selector: tests/validate/test_driver_seam.py::TestRegistryRows
+    red_green_expectation: >-
+      red before (graduation-guard-pre-registry-neutralized still pins the
+      _neutralized_pre_registry literal, so the stale assertion fires), green after
 constraints:
   - No rescue agents or workaround loops (Decision 55).
   - >-
