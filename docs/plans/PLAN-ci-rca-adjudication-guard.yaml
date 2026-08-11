@@ -41,7 +41,10 @@ scope:
       `entry["tier"]` from the nested mapping. Its SIGNATURE AND RETURN CONTRACT ARE UNCHANGED
       (still `str`, still 'unknown' for a miss and for not_a_gate) -- this deliberately contains
       the blast radius so scripts/ci_rca/evidence/_bundle_core.py:104 and every other downstream
-      consumer of the returned string need no edit.
+      consumer of the returned string need no edit. THREE occurrences change, not two: line 39's
+      required-keys set, line 319's tier_map read, and line 322's
+      `logger.warning("workflow_to_tier miss: ...")` message string, which VP step 11's sweep also
+      catches.
   - file: scripts/checks/ci_guards/validate_ci_rca_taxonomy.py
     action: Modify
     purpose: >-
@@ -96,10 +99,10 @@ scope:
     action: Modify
     purpose: >-
       Three obligations land here, all in the implement PR. (i) Add one NEW row per `graduate` VP
-      step (8 rows: steps 1, 2, 3, 4, 6, 9, 10, 11) with check_id equal to that step's
+      step (10 rows: steps 1, 2, 3, 4, 6, 7, 9, 10, 11, 14) with check_id equal to that step's
       graduation_check_id -- validate_graduation_completeness's implement-PR leg requires a
-      new-in-diff row per graduated step, and the 8 slugs are collision-free against the existing
-      check_ids. (ii) Repoint the graduated row `ci-rca-lifecycle-records-watched-set`, whose
+      new-in-diff row per graduated step, and the 10 slugs are verified collision-free against the
+      383 existing check_ids. (ii) Repoint the graduated row `ci-rca-lifecycle-records-watched-set`, whose
       command does `raw.index('terraform-drift')` / `raw.index('dedup-probe')` against strings that
       exist ONLY inside the watched:/excluded: maps this plan deletes -- update its check_spec to
       probe the new pointer text, or retire the row. (iii) Repoint the graduated row
@@ -307,8 +310,7 @@ verification_plan:
       Prove the new check actually FAILS on each violation class rather than passing vacuously --
       the red-before-green evidence for the guard itself.
     command: >-
-      bin/venv-python -m pytest tests/checks/ci_guards/test_validate_ci_rca_adjudication.py -p
-      no:randomly
+      bin/venv-python -m pytest tests/checks/ci_guards/test_validate_ci_rca_adjudication.py
     expected: >-
       All tests pass, including the negative cases: unregistered workflow, stale map entry,
       filter/watched mismatch in each direction, missing owner, missing rationale, invalid ci_rca
@@ -330,7 +332,6 @@ verification_plan:
       tests/ci_rca/taxonomy/test_load_and_classify.py
       tests/ci_rca/taxonomy/test_classify_failures_plural.py
       tests/ci_rca/evidence/test_fingerprint.py tests/ci_rca/evidence/test_priority_zero.py
-      -p no:randomly
     expected: All five suites pass against the nested `workflows:` shape.
     fix_if: >-
       A fixture or inline literal still declares the flat `workflow_to_tier` shape, so load_taxonomy
@@ -353,7 +354,8 @@ verification_plan:
       s=d.get('watched_workflow_set',{}); assert 'watched' not in s and 'excluded' not in s,
       'second registry survives'; raw=open('docs/contracts/ci-rca-lifecycle.yaml').read();
       assert 'config/ci_rca_taxonomy.yaml' in raw and 'validate_ci_rca_adjudication' in raw;
-      print('contract points at SoT + evaluator')"
+      assert 'watched_workflow_set above' not in raw, 'starved_review_observability still
+      back-references the deleted maps'; print('contract points at SoT + evaluator')"
     expected: "Prints contract points at SoT + evaluator; exits 0."
     fix_if: >-
       The watched:/excluded: maps survive (two registries again), or the contract does not name the
@@ -434,9 +436,12 @@ verification_plan:
       bin/venv-python -c "import yaml;
       rows={r['check_id']: str(r.get('check_spec')) for r in
       yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries']};
-      legacy=['ci-rca-lifecycle-records-watched-set','ci-rca-refusal-gate-and-junit-precedence'];
-      bad=[c for c in legacy if c in rows and 'workflow_to_tier' in rows[c]]; assert not bad, bad;
-      print('legacy registry rows repointed', [c for c in legacy if c in rows])"
+      refusal=rows.get('ci-rca-refusal-gate-and-junit-precedence','');
+      lifecycle=rows.get('ci-rca-lifecycle-records-watched-set','');
+      assert 'workflow_to_tier' not in refusal, 'refusal-gate row still probes the retired key';
+      assert not [s for s in ('terraform-drift','convergence-health','dedup-probe') if s in
+      lifecycle], 'lifecycle row still probes strings that lived only in the deleted excluded: map';
+      print('legacy registry rows repointed or retired')"
     expected: >-
       Prints legacy registry rows repointed with whichever of the two ids remain (a row may be
       retired outright rather than repointed, which also satisfies this step); exits 0.
@@ -470,6 +475,26 @@ verification_plan:
     hermetic: true
     graduation: graduate
     graduation_check_id: "ci-rca-yml-names-taxonomy-not-retired-set"
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      Pre-handoff full-tier run. This plan declares
+      handoff_policy.full_validation_required_before_commit, and Decision 163 makes that a
+      structurally-enforced obligation rather than a declaration: validate_handoff_full_tier
+      (registered pre=True with pre_globs docs/plans/**) fails any plan whose verification_plan
+      declares the policy without a step invoking `-m scripts.validate` WITHOUT --pre. Reproduced
+      live during plan critique -- without this step the plan PR reds on itself.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Full tier completes with exit 0 before any commit or PR, per the declared handoff policy. A
+      timeout is `blocked` per handoff_policy.timeout_disposition -- resume later and rerun the full
+      tier from the start; never commit on a partial run.
+    fix_if: >-
+      Any full-tier-only check regresses (validate_test_coverage, validate_verification_registry's
+      added-entry differentials, validate_ci_rca_trigger). Fix forward (Decision 55); never weaken a
+      check to pass.
+    hermetic: false
+    graduation: not-applicable
 test_obligations:
   - source: scripts/checks/ci_guards/validate_ci_rca_adjudication.py
     behavior: >-
@@ -530,7 +555,8 @@ test_obligations:
       s=d.get('watched_workflow_set',{}); assert 'watched' not in s and 'excluded' not in s,
       'second registry survives'; raw=open('docs/contracts/ci-rca-lifecycle.yaml').read();
       assert 'config/ci_rca_taxonomy.yaml' in raw and 'validate_ci_rca_adjudication' in raw;
-      print('contract points at SoT + evaluator')"
+      assert 'watched_workflow_set above' not in raw, 'starved_review_observability still
+      back-references the deleted maps'; print('contract points at SoT + evaluator')"
     red_green_expectation: >-
       red before (the watched:/excluded: maps are present and no evaluator is named), green after
       the retirement.
@@ -559,9 +585,12 @@ test_obligations:
       bin/venv-python -c "import yaml;
       rows={r['check_id']: str(r.get('check_spec')) for r in
       yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries']};
-      legacy=['ci-rca-lifecycle-records-watched-set','ci-rca-refusal-gate-and-junit-precedence'];
-      bad=[c for c in legacy if c in rows and 'workflow_to_tier' in rows[c]]; assert not bad, bad;
-      print('legacy registry rows repointed', [c for c in legacy if c in rows])"
+      refusal=rows.get('ci-rca-refusal-gate-and-junit-precedence','');
+      lifecycle=rows.get('ci-rca-lifecycle-records-watched-set','');
+      assert 'workflow_to_tier' not in refusal, 'refusal-gate row still probes the retired key';
+      assert not [s for s in ('terraform-drift','convergence-health','dedup-probe') if s in
+      lifecycle], 'lifecycle row still probes strings that lived only in the deleted excluded: map';
+      print('legacy registry rows repointed or retired')"
     red_green_expectation: >-
       red before (ci-rca-refusal-gate-and-junit-precedence's check_spec builds
       {'workflow_to_tier': {}}), green after it is repointed or retired.
@@ -681,8 +710,9 @@ pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
   - >-
-    Only the plan-cited decision sections read (163, 168, 169, 104, 73, 72, 142, 154, 126, 165, 132)
-    -- not the full DECISIONS.md
+    Only the plan-cited decision sections read -- the CITE list (163, 168, 169, 104, 73, 72, 142,
+    154, 126, 165, 132) PLUS the in-plan-resolved flags this plan relies on substantively (128, 86,
+    62, 60, 55). Not the full DECISIONS.md.
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
   - >-
