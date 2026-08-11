@@ -136,7 +136,7 @@ scope:
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      Rewrite the 13 rows asserting facade properties onto manifest resolution; repoint the 3
+      Rewrite the 11 rows whose specs reach the hub onto manifest resolution; repoint the 3
       literal-path node_id rows; retire sloc-budget-marker-dec159-retarget outright; add the 6
       new rows this plan graduates. Full row list in context.
   - file: config/sloc_budgets.yaml
@@ -401,7 +401,7 @@ acceptance_criteria:
     monolith, in ANY form -- `_validate.<name>`, `_validate_module.<name>`,
     `patch("validate.<name>")`, `from scripts.validate import <name>`, or an embedded command
     in the verification registry. The census is resolved against the deleted import set,
-    never against a `validate_`/`_check` name prefix. The ~54 scaffolding/stdlib patch sites
+    never against a `validate_`/`_check` name prefix. The ~90 scaffolding/stdlib patch sites
     still resolve, asserted non-empty so the sweep cannot pass vacuously.
   - tests/test_checks_registry.py is deleted, its dec-159 budget entry is removed, and the _CHECKS_REGISTRY_MECHANISM_FILES special case is gone -- discharging Decision 159's stated retirement condition.
   - Every graduated registry row referencing an in-scope path either still resolves or is deliberately retired in this PR, with the choice recorded -- including the four literal-path rows enumerated in context.
@@ -584,7 +584,7 @@ verification_plan:
     phase: pre-deploy
     action: NO facade-exported name is still consumed anywhere -- census by NAME, covering the attribute-read form.
     command: >-
-      bin/venv-python -c 'import pathlib,re,sys; from scripts.checks import registry; helpers={"_load_boundary_patterns","_load_coverage_checker","_load_prompt_compliance","_extract_enforced_map","_check_drift_for_table","_dotted_name_from_attr","_verifier_is_non_hermetic","_extract_verifier_covers","_is_inside_try","check_claude_md_pointer_invariant","_check_claude_p_raw_invocations","_load_sloc_budgets","_update_sloc_budgets"}; consts={"_BRANCH_TYPES","_CC_LIMIT","_EXECUTOR_BOUNDARY_PATTERNS","_KNOWN_CLI_TOOLS","_OPTIONAL_CLI_TOOLS","_SLOC_EXCLUDE_DIRS","_SLOC_LIMIT","_UNIT_TEST_HERMETICITY_FLAGS","_WAIVER_PATTERN","iter_gated_py_files"}; gone=set(registry.all_checks())|helpers|consts; assert len(gone)>115, ("forbidden-name set collapsed -- all_checks() returned an unpopulated roster, so this sweep would silently check only the 23 non-check names", len(gone)); alias=lambda tx: {"validate","_validate","_validate_module","scripts.validate"}|set(re.findall(r"import\s+scripts\.validate\s+as\s+(\w+)", tx))|set(re.findall(r"from\s+scripts\s+import\s+validate\s+as\s+(\w+)", tx)); mk=lambda tx: re.compile("(?:" + "|".join(sorted((re.escape(a) for a in alias(tx)), key=len, reverse=True)) + r")\.(\w+)|from\s+scripts\.validate\s+import\s+(\w+)"); files=[q for r in ("tests","config/agent/verification_registry") for q in pathlib.Path(r).rglob("*") if q.is_file() and q.suffix in (".py",".yaml",".yml")]; texts={q.as_posix(): q.read_text(encoding="utf-8") for q in files}; hits=[(fn, tx[:m.start()].count(chr(10))+1, m.group(1) or m.group(2)) for fn,tx in texts.items() for m in mk(tx).finditer(tx)]; import ast as _a; _src=pathlib.Path("scripts/validate.py").read_text(encoding="utf-8"); keep={al.asname or al.name for n in _a.parse(_src).body if isinstance(n,_a.ImportFrom) and n.module in ("scripts.checks._common","scripts.checks._scaffolding") for al in n.names}|{"shutil","subprocess","time","validation_result","_common","registry"}; assert len(keep)>20, ("retained re-export set collapsed -- the WRONG block was deleted", sorted(keep)); bad=[h for h in hits if h[2] in gone]; scaf=len([h for h in hits if h[2] in keep]); print("surviving facade consumers:", bad); print("scaffolding sites still resolving:", scaf); assert scaf>0, "scaffold site count is zero -- the regex is broken or the RETAINED _common/_scaffolding re-exports were deleted too"; assert not bad, bad; fpat=re.compile("patch\\(\\s*f[" + chr(34) + chr(39) + "](?:scripts\\.)?validate\\.\\{"); fbad=[(fn, tx[:m.start()].count(chr(10))+1) for fn,tx in texts.items() for m in fpat.finditer(tx)]; print("interpolated hub patches:", fbad); assert not fbad, fbad; import yaml as _y; _rows=_y.safe_load(pathlib.Path("config/agent/verification_registry/registry.yaml").read_text(encoding="utf-8")); _rows=_rows.get("checks") or list(_rows.values())[0]; _allow={"structural-modules-under-own-limit"}; _hub=[r["check_id"] for r in _rows if r["check_id"] not in _allow and re.search(r"scripts\.validate|scripts/validate\.py", _y.safe_dump(r))]; print("registry rows still reaching the hub:", _hub); assert not _hub, _hub'
+      bin/venv-python -c 'import pathlib,re,sys; from scripts.checks import registry; helpers={"_load_boundary_patterns","_load_coverage_checker","_load_prompt_compliance","_extract_enforced_map","_check_drift_for_table","_dotted_name_from_attr","_verifier_is_non_hermetic","_extract_verifier_covers","_is_inside_try","check_claude_md_pointer_invariant","_check_claude_p_raw_invocations","_load_sloc_budgets","_update_sloc_budgets"}; consts={"_BRANCH_TYPES","_CC_LIMIT","_EXECUTOR_BOUNDARY_PATTERNS","_KNOWN_CLI_TOOLS","_OPTIONAL_CLI_TOOLS","_SLOC_EXCLUDE_DIRS","_SLOC_LIMIT","_UNIT_TEST_HERMETICITY_FLAGS","_WAIVER_PATTERN","iter_gated_py_files"}; gone=set(registry.all_checks())|helpers|consts; assert len(gone)>115, ("forbidden-name set collapsed -- all_checks() returned an unpopulated roster, so this sweep would silently check only the 23 non-check names", len(gone)); alias=lambda tx: {"validate","_validate","_validate_module","scripts.validate"}|set(re.findall(r"import\s+scripts\.validate\s+as\s+(\w+)", tx))|set(re.findall(r"from\s+scripts\s+import\s+validate\s+as\s+(\w+)", tx)); mk=lambda tx: re.compile("(?:" + "|".join(sorted((re.escape(a) for a in alias(tx)), key=len, reverse=True)) + r")\.(\w+)|from\s+scripts\.validate\s+import\s+(\w+)"); files=[q for r in ("tests","config/agent/verification_registry") for q in pathlib.Path(r).rglob("*") if q.is_file() and q.suffix in (".py",".yaml",".yml")]; texts={q.as_posix(): q.read_text(encoding="utf-8") for q in files}; hits=[(fn, tx[:m.start()].count(chr(10))+1, m.group(1) or m.group(2)) for fn,tx in texts.items() for m in mk(tx).finditer(tx)]; import ast as _a; _src=pathlib.Path("scripts/validate.py").read_text(encoding="utf-8"); keep={al.asname or al.name for n in _a.parse(_src).body if isinstance(n,_a.ImportFrom) and n.module in ("scripts.checks._common","scripts.checks._scaffolding") for al in n.names}|{"shutil","subprocess","time","validation_result","_common","registry"}; assert len(keep)>20, ("retained re-export set collapsed -- the WRONG block was deleted", sorted(keep)); bad=[h for h in hits if h[2] in gone]; scaf=len([h for h in hits if h[2] in keep]); print("surviving facade consumers:", bad); print("scaffolding sites still resolving:", scaf); assert scaf>0, "scaffold site count is zero -- the regex is broken or the RETAINED _common/_scaffolding re-exports were deleted too"; assert not bad, bad; fpat=re.compile("patch\\(\\s*f[" + chr(34) + chr(39) + "](?:scripts\\.)?validate\\.\\{"); fbad=[(fn, tx[:m.start()].count(chr(10))+1) for fn,tx in texts.items() for m in fpat.finditer(tx)]; print("interpolated hub patches:", fbad); assert not fbad, fbad; import yaml as _y; _rows=_y.safe_load(pathlib.Path("config/agent/verification_registry/registry.yaml").read_text(encoding="utf-8")); _rows=_rows.get("checks") or list(_rows.values())[0]; _allow={"structural-modules-under-own-limit","fast-tier-budget-breach-dominant-phase","select-roadmap-guard-tests-retired","validate-import-closure-excludes-check-modules"}; _hub=[r["check_id"] for r in _rows if r["check_id"] not in _allow and re.search(r"scripts\.validate|scripts/validate\.py", _y.safe_dump(r))]; print("registry rows still reaching the hub:", _hub); assert not _hub, _hub'
     expected: >-
       Zero surviving consumers of any of the 120 deleted names, with the scaffolding site count
       strictly positive. The scaffolding counter is DERIVED from the live file -- it AST-extracts
@@ -600,7 +600,7 @@ verification_plan:
       graduation-completeness-check-registered-both-tiers, handoff-full-tier-registered-both-tiers,
       structural-engine-green-and-scoped, structural-raise-guard-green-on-tree,
       structural-checks-registered-both-tiers-unscoped, structural-census-within-fast-tier-budget,
-      ci-rca-every-registered-check-categorised -- all inside the 13-row rewrite list, so the
+      ci-rca-every-registered-check-categorised -- all inside the 11-row rewrite list, so the
       implementer is directed to fix them but nothing would otherwise VERIFY it. (b) Several bind an
       alias (import scripts.validate as v, then v.validate_structural_size_limits), so the matcher
       resolves aliases per file rather than hardcoding a prefix list.
@@ -1020,7 +1020,7 @@ constraints:
     THE FACADE-CONSUMER CENSUS IS BY NAME, NOT BY patch() SYNTAX. The authoritative set is the 120
     names the deleted block exports, matched as `_validate.<name>`, `_validate_module.<name>`,
     `patch("validate.<name>")`, `from scripts.validate import <name>`, across tests/ AND
-    config/agent/verification_registry/. Measured: 32 sites in 10 files outside the deleted
+    config/agent/verification_registry/. Measured: 36 sites in 10 files outside the deleted
     monolith, of which only 12 are patch() calls -- the dominant form is a module-level attribute
     BINDING that raises AttributeError at import. A patch()-only sweep certifies a cutover it never
     performed.
@@ -1079,10 +1079,11 @@ context:
     config/sloc_budgets.yaml for BOTH the dec-159 marker text AND the literal
     "tests/test_checks_registry.py: 643" -- deleting that entry orphans it, so it is RETIRED;
     push-context-diff-base-tests (row at :2559, node_id at :2567) and the two TestSequenceInvariants rows (:815, :824) are
-    REPOINTED. 17 rows total are touched (13 rewritten + 3 repointed + 1 retired).
+    REPOINTED. 15 rows total are touched (11 rewritten + 3 repointed + 1 retired); 3 further rows keep a legitimate hub path reference and are deliberately untouched.
   - >-
-    THIRTEEN facade-asserting rows, not fourteen. An earlier draft also listed
-    fast-tier-budget-breach-dominant-phase; it is a test_selector row (node_id
+    ELEVEN rows are rewritten, not thirteen or fourteen -- see the derivation note below for the
+    three that legitimately keep their hub reference. fast-tier-budget-breach-dominant-phase is one
+    of them: it is a test_selector row (node_id
     tests/validate/test_budget.py::TestBudgetAssertion::test_breach_rec_receives_a_real_dominant_phase,
     guard_symbol _scaffold_budget_assertion, registry.yaml:360-369), asserts no facade property, and
     needs no rewrite. The thirteen are: convergence-health-sloc-raise-gate-registered, graduation-completeness-check-registered-both-tiers,
@@ -1235,11 +1236,13 @@ execution_steps:
     scripts/test_coverage_checker.py and delete the now-subjectless _CHECKS_REGISTRY_MECHANISM_FILES
     table (:47) and its consumer (:145). Remove the dec-159 entry from config/sloc_budgets.yaml.
   - >-
-    Sweep ALL 32 facade-consuming sites across the 10 files outside the monolith, by name: 13 in
+    Sweep ALL 36 facade-consuming sites across the 10 files outside the monolith, by name: 13 in
     test_tiers.py (5 patches + 8 module-level bindings at :16-21,:24,:25), 4 in
     test_failed_check_attribution.py plus the vars(_validate) assertion at :35, 4 in
-    test_scaffold_gates.py, 3 in test_budget.py, 2 in test_driver_seam.py, 2 in the verification
-    registry (:884, :4201), and one each in test_validate_tier_floor.py (:94, plus its :6 import),
+    test_scaffold_gates.py, 3 in test_budget.py, 2 in test_driver_seam.py, 5 in the verification
+    registry (:884, :3914, :4071, :4170, :4201) by direct attribute access -- plus further rows
+    reaching the hub via hasattr/getattr/grep that no name matcher can see, which is why step 9's
+    registry leg is a derived all-rows assertion rather than a list --, and one each in test_validate_tier_floor.py (:94, plus its :6 import),
     test_conformance_registration.py (:17, plus :30), validate_contract_drift/conftest.py (:34),
     test_validate_pydantic_yaml_drift.py (:20), test_validate_data_model_standard.py (:185) and
     test_checks_registry_test_obligations.py (:15 and the getattr seam at :51). Extend
@@ -1257,7 +1260,7 @@ execution_steps:
     `# baseline-lowered: dec-NNN` marker naming this PR's new Decision, and confirm every new source
     file reaches 100% per-file coverage (no baseline entry means a 100% default).
   - >-
-    Update config/agent/verification_registry/registry.yaml: rewrite the 13 facade rows onto
+    Update config/agent/verification_registry/registry.yaml: rewrite the 11 hub-reaching rows onto
     manifest resolution, repoint push-context-diff-base-tests and the two TestSequenceInvariants
     rows, RETIRE sloc-budget-marker-dec159-retarget, and add the 6 new rows with the fields
     enumerated in context.
