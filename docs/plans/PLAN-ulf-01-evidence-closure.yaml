@@ -24,7 +24,7 @@ scope:
       Two additions to Decision 83 (entry begins line 4487 at authoring time; the line moves as the
       file grows -- locate by header, never by line number). (a) A second dated
       "**Live-probe verification (2026-08-11):**" block recording the three control states, the run
-      URL, the point-in-time nature of the evidence, and the 2026-07-06..2026-08-10 monitor-blind
+      URL, the point-in-time nature of the evidence, and the 2026-07-06 .. 2026-08-10 monitor-blind
       window. (b) A "**Reversal conditions:**" marker plus a fenced ```yaml reversal-conditions
       stanza (Decision 133's mechanism) so session preflight surfaces the re-verification duty from
       2027-04-30. BOTH must be inserted BEFORE the "**Related:**" line: per
@@ -71,6 +71,20 @@ scope:
       ZERO headroom -- and validate_prose_limits is blocking in --pre. Measured, edit (b) costs +84
       bytes and edit (a) frees 226-296, so the pair stays net negative; no prose-budget raise is
       taken and none is available (see constraints).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Add exactly two graduated rows, one per `graduation: graduate` VP step (steps 1 and 4).
+      STRUCTURALLY REQUIRED, not optional: validate_graduation_completeness runs in BOTH tiers and
+      its implement-PR leg fails for any graduate step lacking a NEW-IN-DIFF row matching both
+      `check_id` AND `plan_slug` (verified at
+      scripts/checks/verification/validate_graduation_completeness.py:218). Without this scope row
+      the plan would be self-blocking -- declaring an obligation its own "only files listed in
+      scope may be modified" constraint forbids discharging. Row shape per
+      docs/contracts/verification-registry.yaml and the precedent row
+      `ci-rca-yml-names-taxonomy-not-retired-set` (registry.yaml:5154): check_id, primitive_slot,
+      guard_target, guard_symbol, plan_slug, graduated_at, graduated_by, check_spec.command as an
+      argv LIST carrying UNESCAPED source. Registry restraint applies -- exactly two rows, no more.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -126,6 +140,11 @@ acceptance_criteria:
   - >-
     docs/ROADMAP-PLATFORM.yaml: T2.13 remains status:complete, its exit_criteria remain four
     entries with no status/met_by changes, and validate_platform_roadmap passes.
+  - >-
+    config/agent/verification_registry/registry.yaml carries exactly two NEW rows, `check_id:
+    decision-83-live-probe-evidence-block` and `check_id: decision-83-reversal-stanza-armed`, both
+    with `plan_slug: ulf-01-evidence-closure`, and validate_graduation_completeness passes in both
+    tiers with no graduate step reported as missing its row.
   - >-
     Four recommendations are filed via the ops portal, each independently actionable rather than
     gated solely on T2.9's reactivation, with distinctive titles matching "post-deploy obligation",
@@ -400,7 +419,46 @@ verification_plan:
       Any check fails -- fix forward. Required by handoff_policy before commit/PR, and the only
       tier running validate_test_coverage.
     graduation: not-applicable
+  - step: 13
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      The two graduated VP steps carry their required registry rows. Appended as step 13 rather
+      than inserted mid-plan deliberately: an earlier renumber in this plan's own revision history
+      left three stale prose cross-references behind, so step ids are append-only from here.
+    command: >-
+      bin/venv-python -c "import yaml;
+      rows=yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'];
+      want={'decision-83-live-probe-evidence-block','decision-83-reversal-stanza-armed'};
+      got={r['check_id'] for r in rows if r.get('plan_slug')=='ulf-01-evidence-closure'};
+      assert want <= got, f'missing registry row(s): {sorted(want-got)}';
+      print('graduation registry rows present:', sorted(got))"
+    expected: exit 0, listing both decision-83 check ids
+    fix_if: >-
+      A missing row means validate_graduation_completeness's implement-PR leg fails the PR (it
+      matches on check_id AND plan_slug, both exactly) -- add the row, or flip the corresponding VP
+      step to `waive` with a substantive reason if it proved un-graduatable. The registry's
+      top-level key is `entries`; read docs/contracts/verification-registry.yaml for the row shape
+      rather than guessing.
+    graduation: not-applicable
 test_obligations:
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Carries one row per graduate-disposition VP step, keyed on check_id plus plan_slug, so
+      validate_graduation_completeness's implement-PR leg resolves both declarations.
+    verification_step: 13
+    command: >-
+      bin/venv-python -c "import yaml;
+      rows=yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'];
+      want={'decision-83-live-probe-evidence-block','decision-83-reversal-stanza-armed'};
+      got={r['check_id'] for r in rows if r.get('plan_slug')=='ulf-01-evidence-closure'};
+      assert want <= got, f'missing registry row(s): {sorted(want-got)}';
+      print('graduation registry rows present:', sorted(got))"
+    waiver_reason: >-
+      Registry rows are data, not code. Their well-formedness is enforced by
+      validate_verification_registry and their discriminating power by its added-entry differential
+      on the implement PR (fail on origin/main, pass on HEAD) -- neither is unit-testable from this
+      plan, and both are live gates in the presubmit tiers rather than assertions a test could add.
   - source: docs/decisions-index.json
     behavior: >-
       Generated artifact stays current with DECISIONS.md and carries a typed currency value on
@@ -412,7 +470,7 @@ test_obligations:
       config/structural_size_budgets.yaml -- it has no behaviour of its own to unit-test. Its
       producer (scripts/decisions_index.py) and its two consumer invariants already carry their own
       suites (tests/test_decisions_index.py, tests/checks/decisions/test_validate_decision_currency.py)
-      on main, and step 8 runs both gates against the regenerated artifact.
+      on main, and step 9 runs both gates against the regenerated artifact.
   - source: .github/workflows/ghas-probe.yml
     behavior: >-
       Header comment records both credential names, scopes and the 2027-05-31 expiry with no token
@@ -446,7 +504,7 @@ constraints:
     push_protection=enabled actions_enabled=True allowed_actions=all (repo_http_status=200
     actions_http_status=200 alerts_http_status=200)". If a later green run is used instead, update
     the run id, the date and EVERY dependent reference (DECISIONS.md, AGENTS.md, the roadmap, and
-    VP steps 1/2/5/6) together. Do NOT author a VP step that re-runs the probe as if unverified.
+    VP steps 1/2/6/7) together. Do NOT author a VP step that re-runs the probe as if unverified.
   - >-
     Decision 101 / public-repo boundary: record CONTROL-STATE and IDENTIFIER data only -- status
     enums, booleans, HTTP codes, secret NAMES, PAT scopes, expiry dates, the run URL. NEVER a token
@@ -618,6 +676,16 @@ context:
     Measured: "90-day" occurs exactly once and "2027-05-31" zero times in AGENTS.md on origin/main,
     so VP step 6's two new conjuncts are a genuine differential.
   - >-
+    DECLINED, deliberately: plan-critique round 2 suggested generalizing the step-4/5 durable /
+    moment-in-time split to steps 6, 7 and 8, so each durable half (the "continuously live-verified"
+    retirement, the run citations, the credential-name greps) could also be graduated. Declined on
+    registry restraint: config/agent/verification_registry/registry.yaml already carries 395 rows,
+    each additional row is permanent maintenance, and three more would triple this plan's registry
+    footprint to guard one-time prose retirements whose regression is implausible (nobody
+    re-introduces a deleted sentence). The two rows kept are the ones guarding SUBSTANCE this plan
+    adds -- the evidence block and the armed stanza. Recorded rather than silently dropped so a
+    future reviewer sees the call was made, not missed.
+  - >-
     GRADUATION ASYMMETRY, recorded so it is not read as an oversight. Step 3 is waived partly
     because as a standing row it would forbid a future Decision 149 compaction of Decision 83,
     while graduated step 1 constrains that same compaction with equal force (it requires two live
@@ -664,6 +732,15 @@ pre_implementation_checklist:
   - >-
     Run 31536138747 re-confirmed conclusion=success via the Actions API before transcribing its
     output; evidence is never taken from this plan's quoted string alone
+  - >-
+    EVERY expiry date committed to a file is confirmed at source before it is written -- the same
+    anti-fabrication discipline this plan applies to the probe evidence. The 2027-05-31 dates come
+    from the operator's direct confirmation on 2026-08-11 (both repo PAT-class credentials), NOT
+    from inference off this plan's text. If the implementing session cannot confirm a date, it
+    records the credential WITHOUT an expiry rather than asserting one.
+  - >-
+    docs/contracts/verification-registry.yaml re-read for the current row shape, and the registry's
+    top-level key confirmed to be `entries`, before authoring the two graduated rows
 execution_steps:
   - >-
     docs/DECISIONS.md: insert the dated "**Live-probe verification (2026-08-11):**" block
@@ -671,7 +748,7 @@ execution_steps:
     secret-scanning enabled, push protection enabled, and Actions permissions enabled with
     allowed_actions=all; the endpoint HTTP statuses; the run URL
     https://github.com/benjamin-blake/agent-platform/actions/runs/31536138747 ; that this is a
-    point-in-time probe rather than continuous coverage; and the 2026-07-06..2026-08-10 window in
+    point-in-time probe rather than continuous coverage; and the 2026-07-06 .. 2026-08-10 window in
     which all six scheduled runs failed unactioned because GHAS_PROBE_TOKEN was unprovisioned, so
     the controls were UNVERIFIED rather than proven-disabled. Leave the 2026-06-08 sentence
     byte-unchanged.
@@ -707,8 +784,18 @@ execution_steps:
     criterion into the same dated, run-citing form. Criterion TEXT only -- no status flips, no
     criterion-shape conversion.
   - >-
+    config/agent/verification_registry/registry.yaml: append EXACTLY two rows under `entries`, one
+    per graduate step -- check_id `decision-83-live-probe-evidence-block` (guard_target
+    docs/DECISIONS.md) and `decision-83-reversal-stanza-armed` (guard_target docs/DECISIONS.md),
+    both with primitive_slot `command_exit_zero`, plan_slug `ulf-01-evidence-closure`, guard_symbol
+    null, graduated_at the implement date, graduated_by `implement-agent`, and check_spec.command as
+    an argv LIST (["bash","-c","<source>"] or ["bin/venv-python","-c","<source>"]) carrying the VP
+    step's command UNESCAPED -- the backslash-escapes that appear in this plan's YAML are shell
+    escaping and raise SyntaxError under shell=False. Test each argv row standalone before
+    committing, and confirm each FAILS against an origin/main worktree and PASSES on HEAD.
+  - >-
     File the four follow-on recs described in Context, calling get_rec_write_guidance() before each
-    file_rec and giving each the distinctive title phrase VP step 9 greps for.
+    file_rec and giving each the distinctive title phrase VP step 10 greps for.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
     and RCA (Decision 55). Do not merge with any step BLOCKED.
