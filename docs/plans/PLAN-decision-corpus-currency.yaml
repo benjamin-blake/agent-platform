@@ -1,0 +1,977 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "decision-corpus-currency"
+intent: >-
+  Give the decision corpus a derived, deterministic per-entry currency projection in the generated
+  docs/decisions-index.json, enforce its safety invariants with a registered check, and repoint the
+  BLOCKING decision-scout gate onto it, so the gate stops branching on free-text status prose and starts
+  annotating the partially-superseded entries it currently reports as fully current.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-decision-corpus-currency.yaml
+phase: >-
+  Platform governance / decision-corpus read model. Not a tier_item slice: this is an ad_hoc_rec pairing
+  (rec-3055 defect + rec-3056 mechanism) against the decision-scout gate. Adjacent to T1.5 (the STRATEGIC,
+  CD.17-frozen portal cutover that eventually retires docs/decisions-index.json); closes none of T1.5's
+  criteria and is designed to survive that cutover unchanged.
+scope:
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      Add FOUR public symbols: bold_status(block) (the normalized bold-marker status VALUE -- first match of
+      _BOLD_STATUS_RE, group(1) split on '--', stripped -- which invariant I4 needs to prefix-test
+      Reversed/Deferred), status_is_superseded(block) (defined as bold_status(block) == "Superseded"; VP
+      step 1 imports it by name and dies on ImportError without it), is_compacted_stub(block) (the promoted
+      predicate, BEHAVIOUR-identical to the two-marker original -- see the constraint, which scopes
+      "verbatim" to behaviour, not text), and derive_currency() returning exactly one token. bold_status is
+      PUBLIC deliberately: without it the check must either re-derive the regex (the DAF-03 violation this
+      plan invokes against others) or reach across for a private name. DAF-03 requires ONE derivation with
+      two consumers.
+  - file: scripts/checks/decisions/validate_decision_entry_conformance.py
+    action: Modify
+    purpose: >-
+      Two edits, BOTH required. (1) Replace the private _is_compacted_stub body with a module-level alias to
+      the promoted predicate -- the alias is mandatory because this module's test imports the private name
+      directly and that file is at exactly 500 SLOC. (2) Re-import _BOLD_STATUS_RE from scripts.decisions_md:
+      it is defined locally at line 48 and still consumed at line 178 by _envelope_body_conflicts, so moving
+      it without re-importing is a NameError at import that kills every decisions check before any VP step
+      can run.
+  - file: scripts/decisions_index.py
+    action: Modify
+    purpose: >-
+      Project a currency value onto live rows only. The generator never raises on an unexpected value --
+      validation is the registered check's job, so check_index_freshness keeps failing cleanly instead of
+      surfacing an uncaught traceback.
+  - file: scripts/checks/decisions/validate_decision_currency.py
+    action: Create
+    purpose: >-
+      New registered check enforcing the five currency invariants that carry this plan's safety property.
+      This is the machine-readable home of the governance rule (only the compaction-stub token may filter),
+      chosen over a numbered Decision per the operator ruling that the proof of a decision belongs in code
+      -- a routing the corpus itself compels, since Decision 150's field_semantics row routes exactly this
+      content to the owning contract and says "Never a numbered Decision".
+  - file: scripts/checks/decisions/_manifest.py
+    action: Modify
+    purpose: >-
+      Declare validate_decision_currency as one Entry literal -- the sole registration surface as of
+      Decision 169, which retired scripts/validate.py's re-export facade in favour of per-domain
+      declarative manifests. Entry carries pre=True with pre_globs covering the surfaces the check reads
+      PLUS its own module path (so a PR editing only the check still runs it), and
+      full_segment="full_after_lint" to match its three decisions-domain siblings.
+  - file: docs/contracts/decision-entry.yaml
+    action: Modify
+    purpose: >-
+      Add the currency section: the four-token vocabulary, each token's derivation rule, the consumer
+      contract that ONLY superseded_compacted may filter, explicit reversal conditions, and the recorded
+      reversed/deferred trade. The grandfather hook itself does NOT go here -- it is a module-level constant
+      in the check module (see constraints).
+  - file: .claude/skills/decision-scout/SKILL.md
+    action: Modify
+    purpose: >-
+      Repoint Phase 2 step 7 onto the typed currency field, add currency to the Phase 1 step 1 field
+      enumeration, and delete the now-moot "Citing reversed decisions as governing" anti-pattern. Must land
+      at or below the 11,325-byte prose budget; the verified formulation lands at 11,318 bytes (7 B slack).
+  - file: config/prose_budgets.yaml
+    action: Modify
+    purpose: >-
+      Ratchet the S4 .claude/skills/decision-scout/SKILL.md entry DOWN from 11325 to the measured post-edit
+      size: 11318 with the shipping step-7 text, or 11294 if the operator elects the amended branch (see the
+      OPERATOR ASSUMPTION context entry, which carries verified text for both). A decrease is always
+      unrestricted by validate_prose_budget_raises.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Append the TWO graduation rows owed by VP steps 1 and 5. In scope deliberately: Decision 166 point 6 calibrated
+      this file's 6,000-line ceiling precisely because "every graduating /implement plan appends to it",
+      and the never-a-second-raise pre-commitment governs what happens when the ceiling FIRES, not whether
+      to graduate. Measured at 4,862 EFFECTIVE lines against the 6,000 limit
+      (config/structural_size_budgets.yaml declares unit: effective-lines), so 1,138 free. Two rows cost
+      roughly 18 lines.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Add the `validate_decision_currency: schema_drift` row to `function_to_category`. Mandatory, not
+      optional: validate_ci_rca_taxonomy is pre=True and fails on ANY registered check missing from that
+      map (a Priority-0 attribution precondition), so omitting it reds --pre on day one. `schema_drift` is
+      what all three decisions-domain siblings use.
+  - file: tests/decisions_md/test_currency.py
+    action: Create
+    purpose: >-
+      Unit coverage for is_compacted_stub and derive_currency across all four tokens, both inbound-edge
+      cases, and explicit PRECEDENCE cases using synthetic rows. New file rather than an append: the
+      sibling test_parse.py is at 493 SLOC.
+  - file: tests/checks/decisions/test_validate_decision_currency.py
+    action: Create
+    purpose: >-
+      Unit coverage for each of the check's five invariants, each with a synthetic FAILING fixture. The
+      failing fixtures live here, on injected input -- never as a verification step that mutates the
+      tracked corpus.
+  - file: tests/test_decisions_index.py
+    action: Modify
+    purpose: >-
+      Integration spot-checks and the live-rows-only invariant. MUST also update
+      test_entry_shape_is_the_stable_projection_only, which asserts an exact 12-key set for every entry and
+      necessarily breaks under a live-only projection.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: Regenerated committed artifact. Never hand-edited.
+bundled_recommendations:
+  - rec-3055
+  - rec-3056
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/decisions-index.json carries a currency field on every live:true entry and on no live:false entry,
+    with values drawn only from the vocabulary declared in docs/contracts/decision-entry.yaml.
+  - >-
+    Decision 44 and Decision 58 derive 'superseded_compacted'; Decision 37 (victim-side pointer) and
+    Decision 80 (inbound supersedes edge from Decision 104's "partially supersedes Decision 80 point 3"
+    heading) both derive 'superseded_pointer'; Decision 43 and Decision 67 derive 'amended'; Decision 168
+    derives 'current'. Additionally the superseded_compacted SET equals the set of live entries carrying a
+    '**Status:** Superseded' marker -- structural and count-free, so it survives corpus growth (both are
+    {44, 58} today). The live distribution measured post-rebase (92 current, 26 amended, 2
+    superseded_pointer, 2 superseded_compacted, over 122 live entries) is INFORMATIONAL: no verification step pins those counts,
+    because VP step 1 is graduated and a pinned count would red-line every unrelated PR adding a Decision.
+  - >-
+    validate_decision_currency is registered via a single Entry in scripts/checks/decisions/_manifest.py
+    (pre=True with pre_globs, full_segment="full_after_lint"), carries the
+    @registry.register("validate_decision_currency", owner="platform") decorator, RESOLVES IN
+    config/ci_rca_taxonomy.yaml's function_to_category map (as schema_drift), passes
+    validate_check_manifests' grammar, and each of its five invariants has a synthetic fixture proving it
+    FAILS when violated. scripts/validate.py is NOT touched (Decision 169).
+  - >-
+    Both graduated verification-registry rows carry check_spec.command as an ARGV LIST
+    (['bin/venv-python', '-c', '<source>']), never the escaped shell string the VP steps carry: verification
+    runs subprocess without shell=True, so a string char-splits and raises FileNotFoundError: 'b', which
+    escapes validate_verification_registry's GraduationError handler as an uncaught --pre traceback.
+  - >-
+    Invariant I1 asserts the DISCRIMINATING direction -- every LIVE entry whose status marker resolves to
+    'Superseded' derives 'superseded_compacted' -- so a malformed compaction that a human reads as superseded
+    but which silently falls out of the filterable class fails the build. The predicate is pinned: FIRST
+    match of scripts.decisions_md._BOLD_STATUS_RE, group(1) split on '--', stripped, compared == 'Superseded'.
+    A PLAIN SUBSTRING match ('**Status:** Superseded' in block) is FORBIDDEN: measured, it matches 15
+    entries including live Decisions 149 and 160, which merely QUOTE the marker in their bodies, and would
+    red-line CI on day one. (findall over _BOLD_STATUS_RE with the same '--' normalization happens to yield
+    the same {44, 58} as first-match today, but first-match is the pinned spelling because it is what
+    is_compacted_stub already uses.)
+  - >-
+    The decision-scout skill's step 7 branches on currency, names 'superseded_compacted' as the only
+    demoting value, states 'superseded_pointer' is never filtered and never severity-reduced, and the skill
+    file is at or below its config/prose_budgets.yaml entry.
+  - >-
+    Exactly one compaction-stub predicate definition exists (in scripts/decisions_md.py); the conformance
+    check reaches it through an alias and its existing test suite -- including the parametrized
+    _is_compacted_stub cases -- passes UNCHANGED.
+  - >-
+    docs/decisions-index.json remains under the 131,000-byte pin and bin/venv-python -m scripts.validate
+    --pre exits 0.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the derivation against the real corpus and assert the token for each representative class,
+      including the inbound-edge case an earlier draft of this plan missed.
+    command: "bin/venv-python -c \"import yaml, pathlib; from scripts.decisions_index import build_index; from scripts.decisions_md import parse_decisions_md, status_is_superseded; ds=build_index()['decisions']; d={e['number']:e for e in ds}; exp={44:'superseded_compacted',58:'superseded_compacted',37:'superseded_pointer',80:'superseded_pointer',43:'amended',67:'amended',168:'current'}; bad={n:(d[n].get('currency'),v) for n,v in exp.items() if d[n].get('currency')!=v}; assert not bad, bad; vocab=set(yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())['currency']['values']); live=[e for e in ds if e['live']]; assert all(e.get('currency') in vocab for e in live), [e['number'] for e in live if e.get('currency') not in vocab]; rows={r['decision_id']:r['raw_block'] for r in parse_decisions_md()}; marked={n for n,b in rows.items() if status_is_superseded(b)}; compacted={e['number'] for e in live if e['currency']=='superseded_compacted'}; assert compacted==(marked & {e['number'] for e in live}), (sorted(compacted), sorted(marked)); print('derivation OK; compacted set ==', sorted(compacted))\""
+    expected: >-
+      Exits 0. The seven named entries carry their expected tokens, every live entry's token is in the
+      contract vocabulary, and the superseded_compacted SET equals the set of live entries carrying a
+      '**Status:** Superseded' marker. All three assertions are structural and count-free, so they survive
+      corpus growth.
+    fix_if: >-
+      A mismatch on 37 or 80 means supersession is being read from only one edge direction; both the
+      victim-side pointer and the inbound supersedes edge must yield 'superseded_pointer'. A set mismatch on
+      the last assertion means a marked entry failed to derive the filterable token (a malformed compaction)
+      or an unmarked entry acquired it. Do NOT pin raw counts here: this step is graduated, and a count would
+      red-line every unrelated PR that adds a Decision.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "decisions-index-currency-derivation"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove invariant I1 is DISCRIMINATING rather than definitional, using the check's own synthetic
+      failing fixtures. No tracked file is mutated: the failing corpora are injected, so there is no
+      restore path to get wrong.
+    command: "bash -c \"grep -q 'class TestInvariantsFailWhenViolated' tests/checks/decisions/test_validate_decision_currency.py || { echo 'required failing-fixture class absent'; exit 1; }; bin/venv-python -m pytest 'tests/checks/decisions/test_validate_decision_currency.py::TestInvariantsFailWhenViolated' -q\""
+    expected: >-
+      The grep guard confirms TestInvariantsFailWhenViolated exists, then every test in it passes. The
+      existence guard is mandatory: `pytest -k` matching nothing exits 0 with '0 selected' (measured), so a
+      selector-only step would pass vacuously if the class were never written. That class must hold one test
+      per invariant (five); the count is the implementer's obligation under test_obligations, not something
+      this command asserts. The I1 fixture is the load-bearing one: an entry carrying '**Status:** Superseded' whose pointer is absent must FAIL the
+      check, proving I1 asserts status-marker implies compacted rather than restating the derivation.
+    fix_if: >-
+      If an I1 fixture passes the check instead of failing it, the invariant was written in the definitional
+      direction (compacted implies markers), which can never fire because the derivation IS that predicate.
+      Invert it to the converse direction.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is a pytest selector over fixtures that exist only to fail; the steady-state invariant it proves
+      is already enforced continuously by validate_decision_currency in both tiers, so a registry row would
+      duplicate a live gate rather than add a signal.
+  - step: 3
+    phase: pre-deploy
+    action: Assert the live-rows-only projection, so archive rows are not thickened ahead of rec-3012's skeletonization.
+    command: "bin/venv-python -c \"from scripts.decisions_index import build_index; ds=build_index()['decisions']; miss=[e['number'] for e in ds if e['live'] and 'currency' not in e]; extra=[e['number'] for e in ds if not e['live'] and 'currency' in e]; assert not miss and not extra, (miss, extra); print('live-only projection OK; live', sum(1 for e in ds if e['live']))\""
+    expected: "Exits 0. Every live:true row has a currency key; no live:false row has one."
+    fix_if: >-
+      Entries in 'extra' mean archive rows are being thickened, which Decision 166's deferral to rec-3012
+      asks to avoid. If tests/test_decisions_index.py::test_entry_shape_is_the_stable_projection_only fails
+      at step 9, that is expected: it asserts an exact 12-key set for EVERY entry and must be updated.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates invariant I2 of validate_decision_currency, which asserts the same live-only shape on every
+      run of both tiers.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the contract vocabulary is causal by removing it: confirm the check FAILS against a contract
+      copy whose currency vocabulary omits a token the corpus actually emits.
+    command: "bash -c \"grep -q 'class TestContractVocabularyIsCausal' tests/checks/decisions/test_validate_decision_currency.py || { echo 'required vocabulary fixture class absent'; exit 1; }; bin/venv-python -m pytest 'tests/checks/decisions/test_validate_decision_currency.py::TestContractVocabularyIsCausal' -q\""
+    expected: >-
+      The grep guard confirms the class TestContractVocabularyIsCausal exists, then every test in it passes.
+      The fixture feeds the check a contract whose values list omits 'superseded_pointer' while the corpus
+      emits it, and the check must report a violation. The existence guard is mandatory for the same reason
+      as step 2: `pytest -k` matching nothing exits 0, so a selector-only step would pass vacuously. This
+      command asserts class EXISTENCE, not a collected count.
+    fix_if: >-
+      If the check passes against the truncated vocabulary, it is reading its token list from the generator
+      rather than the contract, which reduces the contract section to a mention with no reader.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates invariant I3 of validate_decision_currency; the fixture exists to prove the invariant
+      discriminates, and the invariant itself already runs in both tiers.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the single-parser rule by object identity, and that the promotion was verbatim rather than a
+      re-implementation.
+    command: "bin/venv-python -c \"import scripts.decisions_md as m, scripts.checks.decisions.validate_decision_entry_conformance as c, pathlib; assert c._is_compacted_stub is m.is_compacted_stub, 'checks module does not reach the shared predicate object'; assert pathlib.Path('scripts/checks/decisions/validate_decision_entry_conformance.py').read_text().count('def _is_compacted_stub')==0; print('single-parser rule OK (identity-checked)')\""
+    expected: >-
+      Exits 0. The identity check is the discriminating assertion: a re-implemented copy would satisfy a
+      name grep but fail 'is'.
+    fix_if: >-
+      An identity failure means the alias was implemented as a wrapper function or a second definition; make
+      it a direct module-level alias so the two consumers cannot drift.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "compaction-stub-predicate-single-source"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Assert the consumer contract in the gate text itself: step 7 names the only demoting token, states the
+      never-filtered rule, and retains no status-prose fallback.
+    command: "bash -c \"rg -q 'superseded_compacted' .claude/skills/decision-scout/SKILL.md && rg -q 'NEVER filtered and NEVER severity-reduced' .claude/skills/decision-scout/SKILL.md && test $(rg -c 'whose status is active' .claude/skills/decision-scout/SKILL.md || echo 0) -eq 0 && echo 'consumer contract present'\""
+    expected: "Prints 'consumer contract present'."
+    fix_if: >-
+      A missing clause means the skill was repointed without the safety rule, which would let an
+      implementation demote superseded_pointer and reproduce the exact aggressive-filter defect this plan
+      exists to prevent. Note these are presence/absence checks, not semantic ones -- invariant I5 carries
+      all three continuously (including the absence half, so the prose branch cannot be reintroduced later),
+      and neither can prove the LLM honours the clause at dispatch time.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates invariant I5 of validate_decision_currency, which asserts the same three conditions --
+      both presence clauses AND the absence of the status-prose fallback -- against the skill file on every
+      run of both tiers.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Assert the skill file landed within its prose budget as measured against the ORIGIN/MAIN budget value,
+      not the same-commit ratcheted one, so the assertion cannot be satisfied by moving the goalposts.
+    command: "bin/venv-python -c \"import pathlib; n=len(pathlib.Path('.claude/skills/decision-scout/SKILL.md').read_bytes()); assert n<=11325, (n, 11325); print(f'skill {n} B within the pre-existing 11,325 B budget')\""
+    expected: >-
+      Exits 0 against the 11,325 B baseline. 11,318 B (7 B slack) with the shipping step-7 text, or 11,294 B
+      (31 B slack) if the operator elected the amended branch -- both verified by construction, both texts
+      carried in the OPERATOR ASSUMPTION context entry. Ratchet the budget entry to whichever landed.
+    fix_if: >-
+      Over budget means the rewrite did not pay for itself. Shorten the step-7 clause. Do NOT add a raise
+      marker: under Decision 165 it requires a Decision body naming this skill path and this plan mints none,
+      and Decision 160 point 7 deliberately removed the previous marker. If it cannot fit, ABORT the skill
+      edit and re-plan the consumer half; the projection half still ships and is independently useful.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_prose_limits already enforces every S4 entry against config/prose_budgets.yaml on every --pre
+      run, so a registry row would duplicate a live pre-merge gate.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Confirm the committed index is drift-free. Read-only by design: regeneration is an execution step,
+      never a verification step, so this stays safe under validate_vp_replay.
+    command: bin/venv-python -m scripts.decisions_index --check
+    expected: "Prints 'Decisions index is current.' and exits 0."
+    fix_if: >-
+      Drift means the committed artifact was not regenerated. Run
+      bin/venv-python -m scripts.decisions_index --write, then re-run this step.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_decisions_index_freshness is already a registered, UNGATED --pre check performing exactly this
+      drift comparison -- post-Decision-169 its registration is the Entry in
+      scripts/checks/decisions/_manifest.py (pre=True, no pre_globs), not the retired hand-listed sequence
+      in scripts/checks/registry.py.
+  - step: 9
+    phase: pre-deploy
+    action: Run the full test suite for every touched module, including the new unit coverage.
+    command: >-
+      bin/venv-python -m pytest tests/decisions_md/ tests/test_decisions_index.py
+      tests/checks/decisions/test_validate_decision_entry_conformance.py
+      tests/checks/decisions/test_validate_decision_currency.py -q
+    expected: >-
+      All tests pass. The pre-existing conformance suite -- including the parametrized
+      'superseded_with_pointer' case, which has NO **Date:** marker and expects True -- passes UNCHANGED,
+      because the predicate is promoted verbatim rather than strengthened.
+    fix_if: >-
+      A failure on 'superseded_with_pointer' means the predicate was strengthened during promotion. Revert
+      to the verbatim two-marker logic: that test file is at exactly 500 SLOC and cannot absorb an edit, and
+      the four-marker variant classifies the identical set on the real corpus, so the strengthening buys
+      nothing and costs a forbidden oracle edit.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      These selectors already run under both validate tiers via the standing pytest gate; a registry row
+      would restate the pytest invocation without adding an independent signal.
+  - step: 10
+    phase: pre-deploy
+    action: Confirm the index stays under its byte pin and report remaining headroom.
+    command: "bin/venv-python -c \"import pathlib; n=len(pathlib.Path('docs/decisions-index.json').read_bytes()); assert n<=131000, n; print(f'index {n} B, headroom {131000-n} B of the 131,000 B pin')\""
+    expected: >-
+      Exits 0. Measured projection is 116,760 B with 14,240 B of headroom, against a 113,174 B baseline
+      (+3,586 B).
+    fix_if: >-
+      Materially less headroom than about 14,200 B means more than the currency string was projected (an
+      amended_by list or a currency_basis field). Remove the extra field; do not raise the pin, which
+      Decision 166 reversal condition (g) reserves for landing rec-3012 first.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      tests/test_decisions_index.py already pins the committed index against _COMMITTED_INDEX_MAX_BYTES in a
+      standing assertion.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Run the authoritative fast-tier presubmit (which now includes the new currency check), then the FULL
+      tier. Both are required: this plan declares handoff_policy.full_validation_required_before_commit, and
+      validate_handoff_full_tier rejects any segment containing --pre, so a --pre-only plan fails that gate
+      on its own PR. The chained form satisfies the matcher's second segment.
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    expected: >-
+      Both invocations exit 0. NOTE the full tier runs checks --pre does not, including the Decision 161
+      mypy error-count ratchet, whose baseline for every new file is 0 -- so a type error in the new check or
+      test modules surfaces ONLY here, after the fast tier is already green. Expect
+      validate_decision_currency, validate_check_manifests, validate_ci_rca_taxonomy,
+      validate_decisions_index_freshness, validate_prose_limits, validate_sloc_limits,
+      validate_structural_size_limits, validate_handoff_full_tier and validate_verification_registry all
+      passing.
+    fix_if: >-
+      FOUR distinct failure modes, each with its own string. "<file>: N errors exceeds baseline 0" from the
+      mypy error-count ratchet (Decision 161) is FULL-TIER ONLY and applies to every newly created module in
+      this plan; a prototype run hit it on a shadowed loop variable in the check. Fix the type error -- never
+      raise the baseline for a file this plan is creating. "CI-RCA taxonomy: registered check
+      'validate_decision_currency' absent from function_to_category ... (Priority-0 attribution
+      precondition)" means the config/ci_rca_taxonomy.yaml row is missing -- that check is UNGATED in --pre,
+      so it fires on every run; fix it there, NOT in _manifest.py. "manifested-but-unregistered" means the
+      @registry.register decorator is absent from the check module. An unresolved-name or manifest-grammar
+      failure means the Entry is missing from scripts/checks/decisions/_manifest.py, or its module/attr are
+      not bare string literals (which validate_check_manifests rejects). The scripts/validate.py headroom risk earlier drafts carried is
+      GONE: Decision 169 retired its re-export facade (499 -> 315 SLOC) and this plan no longer touches it.
+      tests/test_decisions_index.py is at 457. If tests/test_decisions_index.py crosses 500 (457 today, real headroom), do NOT
+      create a tests/decisions_index/ package: scripts/decisions_index.py is absent from
+      _CONCERN_SPLIT_TEST_PACKAGES and _RETIRING_GRANDFATHER_HOMES is empty, so it mirrors to the FLAT file
+      and a package would fail check_test_file_exists. Move the integration spot-checks into
+      tests/decisions_md/test_currency.py (already in scope) instead.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The presubmit IS the gate; it passes at origin/main, so a registry row would be tautological and
+      inadmissible under the VF-06 origin-must-FAIL differential.
+  - step: 12
+    phase: post-deploy
+    action: Confirm the bundled recommendations closed after the squash merge carried the Resolves trailer.
+    command: "bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c \"import json, pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; latest={r['id']: r for r in rows}; bad={i: latest.get(i,{}).get('status') for i in ('rec-3055','rec-3056') if latest.get(i,{}).get('status')!='closed'}; assert not bad, bad; print('rec-3055 and rec-3056 closed')\""
+    expected: Exits 0. Both recommendations report status 'closed' in the refreshed read cache.
+    fix_if: >-
+      A non-closed status means rec-autoclose.yml did not fire. Fall back to
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "..."
+      per Decision 70. Never call scripts.sync.ops directly and never hand-edit the read cache.
+test_obligations:
+  - source: scripts/decisions_md.py
+    behavior: >-
+      bold_status returns the normalized bold-marker status value (the single shared status regex, consumed
+      by I1 and I4); status_is_superseded is bold_status(block) == "Superseded" and is imported by name in VP
+      step 1; is_compacted_stub is the promoted two-marker predicate, identical in behaviour;
+      derive_currency
+      returns 'superseded_compacted' only for a stub, 'superseded_pointer' for a victim-side pointer OR an
+      inbound supersedes edge, 'amended' for an inbound amends edge or a status-prose amendment, else
+      'current' -- in that precedence order.
+    verification_step: 9
+    test_selector: tests/decisions_md/test_currency.py
+    red_green_expectation: >-
+      Red before (neither symbol exists), green after. The discriminating cases are synthetic: a row that is
+      both a stub and amended must resolve to 'superseded_compacted', and a row with only an inbound
+      supersedes edge must resolve to 'superseded_pointer'. The real corpus discriminates stub-vs-pointer on
+      its own (D44 and D58 are stubs AND carry inbound supersedes edges from 117 and 76), but holds no entry
+      discriminating stub-vs-amended or pointer-vs-amended, which is why those two need synthetic rows.
+  - source: scripts/decisions_index.py
+    behavior: >-
+      currency is projected onto live:true rows only, and build_index stays byte-stable across two
+      consecutive calls. The generator never raises on an unexpected value.
+    verification_step: 9
+    test_selector: tests/test_decisions_index.py
+    red_green_expectation: >-
+      Red before (no currency key on any row), green after. test_entry_shape_is_the_stable_projection_only
+      must be updated in the same commit to branch on live; the determinism and byte-pin tests stay green.
+  - source: scripts/checks/decisions/validate_decision_currency.py
+    behavior: >-
+      Five invariants fail loudly when violated: I1 an entry with a '**Status:** Superseded' marker that does
+      not derive superseded_compacted; I2 currency present on an archive row or missing from a live row; I3
+      an emitted value outside the contract vocabulary; I4 a live entry carrying a Reversed or Deferred
+      status marker -- prefix-tested via the public bold_status(block), never a re-derived regex -- that is not
+      listed in the empty-at-install grandfather hook; I5 the decision-scout skill missing
+      either consumer-contract clause OR carrying the status-prose fallback ("whose status is active")
+      again -- I5 is presence-AND-absence, so reintroducing the prose branch fails the build.
+    verification_step: 9
+    test_selector: tests/checks/decisions/test_validate_decision_currency.py
+    red_green_expectation: >-
+      Red before (module absent), green after, with one passing and one deliberately-FAILING synthetic
+      fixture per invariant so no invariant can pass vacuously. I1's failing fixture is load-bearing.
+  - source: scripts/checks/decisions/validate_decision_entry_conformance.py
+    behavior: >-
+      Compacted-stub exemption behaviour is unchanged after the private predicate becomes an alias, and
+      _is_compacted_stub remains importable by name for the existing parametrized test.
+    verification_step: 9
+    test_selector: tests/checks/decisions/test_validate_decision_entry_conformance.py
+    red_green_expectation: >-
+      Green before and green after. This is a pure de-duplication: the existing suite is the regression
+      oracle and any behavioural delta is a defect in the promotion, not an expectation to update. The
+      'superseded_with_pointer' case (Status + Decision + pointer, NO Date, expects True) is the specific
+      guard that the promotion stayed verbatim.
+  - source: scripts/checks/decisions/_manifest.py
+    behavior: >-
+      The new Entry declares validate_decision_currency into both tiers with its pre_globs, resolves
+      through scripts.checks.registry.resolve to the same-named callable in its own domain package, and
+      satisfies validate_check_manifests' bare-string-literal grammar.
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    red_green_expectation: >-
+      Red before (no Entry, so the check never runs and its five invariants are unenforced), green after
+      with validate_decision_currency named in the --pre output. The parametrized mirror test at
+      tests/checks/decisions/test__manifest.py picks the entry up automatically with no edit.
+  - source: .claude/skills/decision-scout/SKILL.md
+    behavior: >-
+      Phase 2 step 7 branches on currency, names superseded_compacted as the only demoting value, states
+      superseded_pointer is NEVER filtered and NEVER severity-reduced, retains no status-prose fallback, and
+      the file stays within its pre-existing budget.
+    verification_step: 6
+    command: "rg -q 'superseded_compacted' .claude/skills/decision-scout/SKILL.md"
+    red_green_expectation: >-
+      Red before (the token is absent, so rg -q exits 1), green after (present, exits 0). Deliberately NOT
+      `rg -c 'whose status is active'`: that inverts, exiting 0 while the stale text is still there and 1
+      once it is gone.
+  - source: docs/contracts/decision-entry.yaml
+    behavior: >-
+      The currency section declares the four token values, the consumer contract, reversal conditions, and
+      the reversed/deferred grandfather hook; the registered check reads the vocabulary from it, so a token
+      removed from the contract fails the build.
+    verification_step: 4
+    command: "bin/venv-python -m pytest 'tests/checks/decisions/test_validate_decision_currency.py::TestContractVocabularyIsCausal' -q"
+    red_green_expectation: >-
+      Red before (no currency key in the contract, so the check cannot load a vocabulary), green after. The
+      fixture feeds a truncated vocabulary and requires a violation, so a generator-sourced token list turns
+      it red again.
+  - source: config/prose_budgets.yaml
+    behavior: The S4 decision-scout entry is ratcheted down to the measured post-edit size, a decrease that needs no marker.
+    verification_step: 7
+    command: "bin/venv-python -c \"import pathlib; n=len(pathlib.Path('.claude/skills/decision-scout/SKILL.md').read_bytes()); assert n<=11325, (n, 11325); print(f'skill {n} B within the pre-existing 11,325 B budget')\""
+    waiver_reason: >-
+      A budget registry has no behaviour of its own to red/green: it is a declarative pin whose enforcement
+      lives in validate_prose_limits and validate_prose_budget_raises, both already running on every --pre
+      invocation. The linked command deliberately asserts against the ORIGIN/MAIN value so the same commit
+      cannot satisfy it by lowering the bar.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      BOTH appended rows -- decisions-index-currency-derivation (guard_target scripts/decisions_md.py,
+      guard_symbol derive_currency) and compaction-stub-predicate-single-source (guard_target
+      scripts/checks/decisions/validate_decision_entry_conformance.py, guard_symbol _is_compacted_stub) --
+      carry the full required field set (check_id, primitive_slot command_exit_zero, guard_target,
+      guard_symbol, plan_slug decision-corpus-currency, graduated_at, graduated_by, check_spec) and pass the
+      differential admission gate.
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      The registry is an append-only record of graduated checks, not behaviour: its correctness is
+      adjudicated by validate_verification_registry's own differential admission gate, which runs in --pre
+      and already fails a row that does not fail at origin/main.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      validate_decision_currency resolves in function_to_category as schema_drift, satisfying
+      validate_ci_rca_taxonomy's registry-totality assertion (the Priority-0 attribution precondition).
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A category map has no behaviour of its own to red/green: it is a declarative row whose only consumer is
+      validate_ci_rca_taxonomy's totality assertion, which is registered UNGATED in --pre and fails on any
+      registered check absent from the map. Adding the row IS the fix and the assertion IS the test; a
+      bespoke unit test would restate the guard without adding an independent signal.
+  - source: docs/decisions-index.json
+    behavior: The committed artifact matches what the generator produces, so the currency projection is present in the file decision-scout reads.
+    verification_step: 8
+    command: "bin/venv-python -m scripts.decisions_index --check"
+    waiver_reason: >-
+      A generated artifact is never hand-authored and has no behaviour independent of its generator, whose
+      derivation is covered by tests/decisions_md/test_currency.py. Drift is already enforced by
+      validate_decisions_index_freshness, registered UNGATED in the --pre tier.
+constraints:
+  - >-
+    Projection-only on the corpus. No decision entry is edited, no retroactive rewriting, no new authoring
+    obligation on grandfathered entries, and nothing that touches the roughly 19,830 inbound "Decision N" citations (the count drifts as entries land).
+  - >-
+    ONLY the currency value 'superseded_compacted' may remove an entry from a consumer's active set. A
+    supersession pointer, an inbound supersedes edge, and an amends edge annotate and NEVER filter, and never
+    reduce severity. The guard that mints supersession pointers (validate_supersession_annotations, whose
+    _EDGE_RE matches "Supersedes|supersedes|amends|Amends|partially supersedes" identically) structurally
+    cannot distinguish full from partial supersession, which is why the pointer is unfit as a filter signal.
+  - >-
+    The compaction-stub predicate is promoted BEHAVIOUR-VERBATIM -- the existing two-marker logic, with
+    identical results on every input. This explicitly PERMITS the extract-method refactor execution step 1
+    mandates (splitting the status half into status_is_superseded and having is_compacted_stub call it);
+    what it forbids is any change to what the predicate DECIDES. Do NOT strengthen it to Decision 149's full
+    four-marker stub grammar during this plan: measured, the two-marker
+    and four-marker predicates classify the IDENTICAL set on the real corpus ({44, 58}), while strengthening
+    breaks a parametrized case in a test file at exactly 500 SLOC that cannot absorb an edit, and diverges
+    from decision-entry.yaml's own compacted_stub_exemption text, which is written in two-marker terms.
+  - >-
+    NEVER derive the stub predicate by literal substring match against the contract's
+    compaction.stub_grammar.body_markers. Measured: that approach matches NEITHER real stub (the fourth
+    marker is the template '**Superseded by: Decision N**' with a literal N) and DOES match Decision 149
+    itself, whose body quotes the stub grammar verbatim -- filtering the compaction-lifecycle Decision out of
+    the blocking gate. The pointer must resolve through the parser's existing extract_superseded_by regex.
+  - >-
+    The governance prohibition above is enforced by scripts/checks/decisions/validate_decision_currency.py,
+    registered in --pre. No numbered Decision is minted (operator ruling: the proof of a decision belongs in
+    the code). This routing is compelled, not merely permitted: Decision 150's field_semantics row routes
+    exactly this content to the owning contract and says "Never a numbered Decision", and Decision 167 clause
+    2 rejects that claim outright on any entry minting a number. ACCEPTED COST, stated plainly: reversal
+    conditions are MONITORED only as a fenced ```yaml reversal-conditions stanza inside a DECISIONS.md entry
+    (scripts/preflight/decision_conditions.py). The block this plan writes into the contract's currency
+    section is documentation with no monitor, no review_by, and no preflight surfacing -- it does not
+    reproduce what a Decision would have provided, and no claim is made that it does.
+  - >-
+    The prose budget is hard: the .claude/skills/decision-scout/SKILL.md edit must land at or below 11,325
+    bytes measured against the ORIGIN/MAIN budget value. A raise-approved marker is unavailable under
+    Decision 165 without a Decision naming this path, and Decision 160 point 7 deliberately removed the
+    previous marker. If it cannot fit, the abort path is NOT "ship the projection half alone" as-is: I5 and VP step 6 both
+    assert the skill's consumer clauses, so dropping the skill edit while keeping five invariants reds the
+    new check. Aborting means dropping I5 (four invariants), deleting VP step 6, and re-planning the
+    consumer half as its own slice. NOTE step 7's fix_if states only the "re-plan the consumer half" half of
+    this; the I5-and-VP-6 removal is stated HERE and nowhere else, so do not treat fix_if as the complete
+    abort procedure.
+  - >-
+    No amends_scope envelope field (operator ruling: the corpus supersedes and rewrites rather than amending
+    scope in place). Decision 167's envelope is unchanged. Do NOT mint clause identifiers.
+  - >-
+    Reversed and Deferred are deliberately NOT in the vocabulary: the live census is zero such entries, so a
+    token would be dead vocabulary. Invariant I4 fails the build if one appears, and ships with an
+    empty-at-install grandfather hook declared as a MODULE-LEVEL CONSTANT IN THE CHECK, never as a contract
+    key -- Decision 165 clause 4's RETRO_SCAN_GRANDFATHER precedent is explicit that "growing the hook later
+    is a reviewed code edit, never a config edit", and putting it in YAML would invert the half of the
+    precedent that makes it a control. Decision 149 clause 3 is NOT cited here: its orphan_baseline seeds
+    dec-010 rather than shipping empty, so it is not an empty-at-install precedent.
+  - >-
+    Must survive T1.5's portal cutover unchanged. Do not couple the scout's step 7 to the JSON file's path
+    or shape beyond the currency field name.
+  - Only files in the Scope table may be modified. If an entry's markers are wrong, that is a recommendation, not an inline fix.
+  - docs/decisions-index.json is generated. Never hand-edit it.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Single Portal Invariant: closure goes through the Resolves trailer or scripts.ops_data_portal. Never call
+    scripts.sync.ops directly and never edit logs/.recommendations-log.jsonl.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 160, Decision
+    166, Decision 149, Decision 152, Decision 165, Decision 128, Decision 167, Decision 86. CONTRADICT:
+    Decision 150 (WARN, resolved -- no Decision is minted; its own field_semantics routing row compels that);
+    Decision 146 (NOTE, resolved -- tokens renamed to name their derivation). SPIRIT: Decision 168 (WARN,
+    resolved -- the contract vocabulary is read by a registered check with a truncated-vocabulary failing
+    fixture, so it is read not merely mentioned); Decision 166 (NOTE, resolved -- currency is projected on
+    live rows only). RELATED: Decision 37, Decision 134, Decision 151, Decision 131, Decision 105."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE across rounds 1-6 (see the round log below)"
+  - >-
+    Review history: six rounds of three fresh zero-context reviewers each. Every finding was independently
+    verified against the working tree before being actioned, and several reviewer claims were corrected by
+    that verification rather than accepted. The round-by-round detail belongs in the PR body, not here; what
+    survives below are only the findings that still constrain implementation.
+  - >-
+    OPERATOR ASSUMPTION, reversible before /implement: the 'amended' token is PROJECTED into the index and
+    guarded by the check, but decision-scout's step 7 does NOT branch on it in this slice -- amended and
+    current are triaged identically. Rationale: 26 of 122 live entries carry an inbound amends edge,
+    including most of the governance backbone (128/134/146/149/150/160/161/162), and the never-severity-
+    reduced rule is enforceable only as a prose clause on an LLM consumer. Shipping the projection without
+    the branch lands rec-3056's durable mechanism with zero new judgment surface; switching the annotation on
+    is a small follow-on once softening can be observed rather than speculated about. The operator was asked
+    and did not rule; this is the recorded default, not a silent choice.
+    STILL GENUINELY REVERSIBLE, with verified text. A round-6 reviewer asserted the flip no longer fits the
+    prose budget; that was measured and is FALSE. Replacing the step-7 line with this instead lands the file
+    at 11,294 B (31 B under the 11,325 ceiling, MORE slack than the shipping text's 7 B) and keeps both I5
+    literals:
+    7. **Currency filter.** Branch on the typed `currency`, never status prose. `superseded_compacted` is the ONLY value that demotes to RELATED, noted "superseded by Decision M, awareness only". `superseded_pointer` and `amended` are NEVER filtered and NEVER severity-reduced: triage as `current`, annotating "read against Decision M" / "read with amendments". No `currency` key = archived.
+    If the operator elects the branch, swap that line, re-measure, and ratchet config/prose_budgets.yaml to
+    the new size instead of 11318.
+  - >-
+    Verified live (entry counts since superseded by the Decision 169 figures above: the corpus is now 149
+    entries / 122 live). Decision
+    37 has status 'Decided', superseded_by 116, an intact body, and carries "**Superseded by: Decision 116**"
+    at docs/DECISIONS.md:5638, while Decision 116's own title claims it supersedes Decision 49 and never
+    names 37. About 50 non-corpus files cite "Decision 37" by name, including live terraform/personal/*.tf
+    and src/lambdas/ducklake_catalog_dr/handler.py.
+  - >-
+    Round-1 finding, actioned: the first draft read supersession from the victim-side pointer only, so
+    Decision 80 -- whose superseder Decision 104 declares "(partially supersedes Decision 80 point 3)" in its
+    heading, resolved in the index as D104.supersedes == [80] -- derived 'current'. D80 is the ONLY live
+    entry superseded purely by an inbound edge, and was the single genuine partially-superseded live entry
+    the plan claimed to fix.
+  - >-
+    Round-2 finding, actioned (this was the BLOCK): round 1 asked for the stub predicate to be strengthened
+    to Decision 149's four markers. That is now explicitly FORBIDDEN. It breaks
+    tests/checks/decisions/test_validate_decision_entry_conformance.py's parametrized 'superseded_with_pointer'
+    case (Status + Decision + pointer, no Date, expects True) in a file at exactly 500 SLOC that cannot
+    absorb an edit; it diverges from decision-entry.yaml's compacted_stub_exemption, written in two-marker
+    terms; and measured, both predicates classify the identical set {44, 58}. The strengthening bought
+    nothing and cost a forbidden oracle edit.
+  - >-
+    Round-2 finding, actioned: a naive literal match against the contract's stub_grammar.body_markers
+    classifies ONLY Decision 149 as a stub -- its body quotes the grammar verbatim -- while matching neither
+    real stub, because the fourth marker is the template '**Superseded by: Decision N**' with a literal N.
+    That would have filtered the compaction-lifecycle Decision out of the blocking gate. Now an explicit
+    constraint.
+  - >-
+    Round-2 finding, actioned: invariant I1 was written in the definitional direction (superseded_compacted
+    implies four markers), which can NEVER fail when the derivation IS that predicate -- the tautology was
+    moved up a level, not removed. I1 is now the converse: an entry carrying '**Status:** Superseded' must
+    derive superseded_compacted. Corrupting a real stub's pointer leaves the status marker while breaking
+    the stub, so that direction genuinely fires.
+  - >-
+    Round-2 finding, actioned: the mutation test that edited docs/DECISIONS.md in the working tree is
+    removed entirely. It could not restore on the raise path, never printed its backup path, and could not
+    fail as designed. All failing fixtures now live in
+    tests/checks/decisions/test_validate_decision_currency.py on injected input.
+  - >-
+    Registry graduation rationale (settled): Decision 166 point 6 calibrated the 6,000-effective-line ceiling
+    precisely because "every graduating /implement plan appends to it, including this one", and its
+    never-a-second-raise pre-commitment governs what happens when the ceiling FIRES, not whether to
+    graduate. The live figure is in the scope row.
+  - >-
+    Round-2 finding, actioned: requiring the generator to RAISE on vocabulary divergence would turn
+    check_index_freshness (scripts/decisions_index.py:207, which calls build_index unguarded) into an
+    uncaught traceback instead of a clean --pre failure. The generator now projects without validating;
+    validation is invariant I3's job.
+  - >-
+    Round-2 finding, actioned: step 7's budget assertion read the budget file that the same commit ratchets
+    down, so it was self-fulfilling. It now asserts against the literal origin/main value of 11,325.
+  - >-
+    Prose budget, measured not assumed. The skill is at exactly its 11,325-byte budget and Decision 160
+    point 7 ratcheted it DOWN to that figure while REMOVING its dec-152 raise marker. The formulation that
+    fits -- narrowed step 7 (no amended branch), currency added to the Phase 1 field enumeration, and the
+    "Citing reversed decisions as governing" anti-pattern deleted -- was CONSTRUCTED and measured in round 5
+    at 11,318 B, 7 B under. The verbatim text is embedded in the execution steps, so the implementer pastes
+    a verified string rather than re-deriving one. Both freed-byte figures were confirmed exact (line 65 =
+    258 B with its newline, line 145 = 173 B).
+  - >-
+    Round-3 self-check, actioned before dispatch: the graduated step 1 originally pinned the exact live
+    token distribution. That is the tests/CLAUDE.md count-coupling anti-pattern on a GRADUATED check -- the
+    next Decision entry to land flips current from 91 to 92 and red-lines an unrelated PR. Replaced with
+    structural, count-free assertions: the seven named spot-checks, vocabulary membership, and
+    superseded_compacted-set == status-marker-set.
+  - >-
+    Round-3 self-check, actioned before dispatch: VP steps 2 and 4 selected failing fixtures with `pytest
+    -k`. Measured: `pytest -k` matching nothing exits 0 ("61 deselected, 0 selected"), so both steps would
+    have passed vacuously if the fixtures were never written or were named differently. Both now grep for an
+    exactly-named test CLASS and run it as a node id -- an existence guard, not a collected-count assertion.
+  - >-
+    Round-3 finding, actioned with its reasoning recorded rather than deleted: step 5 was previously WAIVED
+    on the ground that its origin/main failure is an AttributeError and therefore an inadmissible vacuous
+    pass. That was wrong. scripts/verification_checks.py::is_admitted returns True iff the check FAILS on
+    the reverted tree, and a non-zero exit from an AttributeError IS a fail for command_exit_zero; there is
+    no vacuous-pass detector. The argument also proved too much -- step 1 fails at origin/main in exactly
+    the same shape (the currency key does not exist there). Step 5's object-identity assertion is hermetic,
+    cheap, and carries no volatile value, so it is the DURABLE graduation candidate; the earlier draft
+    graduated the brittle count-pinned step and waived this one.
+  - >-
+    Round-3 self-check, verified sound: invariant I1 is genuinely discriminating, not a third tautology. A
+    synthetic entry carrying '**Status:** Superseded' with no resolvable pointer yields is_compacted_stub
+    False, so it derives a non-filterable token while still carrying the marker -- exactly the condition I1
+    fires on. That is the malformed-compaction case worth catching.
+  - >-
+    Round-3 finding, re-measured and re-framed in round 5: this plan deletes BOTH the skill's status-active
+    filter (SKILL.md:65) and its "Citing reversed decisions as governing" anti-pattern (SKILL.md:145),
+    leaving marker-exact invariant I4 as the SOLE guard against a reversed entry being cited as governing,
+    and removing the word "reversed" from the skill entirely. Round 5 measured this and found it is NOT a
+    discretionary economy: retaining the anti-pattern lands the file at 11,491 B, and no step-7 formulation
+    carrying all four semantic clauses plus both I5 literals fits the remainder (best candidate 5 B over).
+    The loss is FORCED by the byte ceiling. The live census is zero Reversed/Deferred entries, so nothing
+    regresses today, but this should be stated as a ceiling consequence in the PR body rather than implied
+    to be a considered trade.
+  - >-
+    Budget surfaces measured for completeness, none binding: docs/contracts/decision-entry.yaml sits in the
+    `contracts` structural class (500 effective-line limit, config/structural_size_budgets.yaml) at 401
+    effective lines, so the currency section has roughly 99 lines of room; and
+    config/agent/verification_registry/registry.yaml carries a 2,315-character longest-line pin, which the
+    argv-list form of step 1's ~1,113-character command stays under.
+  - >-
+    Hermetic dispositions, with the reason stated correctly (an earlier draft got this wrong). VP steps 2,
+    4 and 9 are hermetic: false because they INVOKE PYTEST -- the planning skill's Hermetic-authoring rule
+    carves those out explicitly ("Steps needing pytest/deploys stay hermetic: false, excluded with a printed
+    reason"), a carve-out that survives Decision 148's restoration of hermetic: true as the default for
+    ordinary pre-deploy feature verification. The skill rule is the whole basis: a timeout argument was
+    considered and MEASURED AS NOT SUPPORTING IT -- the existing tests/decisions_md/ plus
+    tests/test_decisions_index.py suite runs in about 5.2s against validate_vp_replay's
+    PER_STEP_TIMEOUT_SECONDS = 30 and MAX_AGGREGATE_SECONDS = 120, so cost is not today's reason and should
+    not be cited as one. validate_vp_replay prints these steps as EXCLUDED with an explicit not-hermetic
+    reason rather than skipping them silently. A round-5 reviewer proposed flipping them to hermetic: true on Decision 148 grounds; that
+    reading drops the skill's pytest carve-out and was declined. Separately: step 2's `expected` carries backtick
+    literals (steps 4 and 9 do not), which the replay contract would require to appear in output -- so if a
+    future session ever does flip step 2, strip its backticks in the same edit.
+  - >-
+    Known limitation, not mitigated: invariant I5 and VP step 6 are string-presence checks on the skill text.
+    They prove the safety clause is PRESENT; neither can prove the LLM honours it at dispatch time. The gate's
+    end-to-end safety property is not mechanically enforceable, which is part of why the amended branch is
+    deferred rather than shipped.
+  - >-
+    Residual limitation: status-prose parsing is reduced, not eliminated. The 'amended' branch still reads a
+    status string beginning "Amended". Measured, that residual is ONE entry: Decision 67. Decisions 63, 64 and
+    65 -- the rest of Decision 160 point 8's terse-historical band -- all carry '**Status:** Decided' and
+    derive from typed edges alone, so the band framing overstates it. It is a deterministic Python parse rather than per-dispatch LLM judgment,
+    which is the actual defect rec-3055 filed; a variant spelling such as "Partially amended by" derives
+    'current'.
+  - >-
+    The original framing of rec-3055 ("key step 7 on superseded_by and archive residence") is deliberately
+    NOT implemented: doing so would demote Decision 37 out of a blocking gate while about 50 files still cite
+    it. Record this reframe in the rec's resolution text at closure.
+  - >-
+    rec-3054 (/orient must surface open Critical recs) was assessed and excluded by operator ruling: zero
+    file overlap, zero shared verification, a different subsystem, and its own prose-budget wall on
+    .claude/skills/orient/SKILL.md (also at exactly its 23,595-byte cap). Premise verified live -- /orient
+    contains no occurrence of "critical" and there are 12 open Critical recs with no surfacing lane.
+  - >-
+    Rebased again after Decision 169 landed (the per-domain declarative check manifests that retired
+    scripts/validate.py's re-export facade). That materially changed this plan's registration surface:
+    scripts/validate.py and scripts/checks/registry.py are OUT of scope entirely, replaced by one Entry
+    literal in scripts/checks/decisions/_manifest.py, and the one-line-headroom risk on validate.py is gone
+    (499 -> 315 SLOC). Corpus figures moved with the new entry: 149 entries / 122 live, index baseline
+    113,174 B, +3,586 B with currency to 116,760 B (14,240 B headroom), live distribution 92/26/2/2, live
+    headers 122 of 132, verification registry 4,862 effective. The DERIVATION is unchanged -- all seven
+    spot-checks still hold and Decision 169 itself derives 'current'. Note the vindication of round 3's
+    de-pinning: the informational current count moved 91 -> 92, so the originally-pinned distribution would
+    have red-lined the graduated check on this very rebase.
+  - >-
+    Rebased onto origin/main during the round-4 gate: main had advanced and touched three scope files
+    (scripts/validate.py, scripts/checks/registry.py, config/agent/verification_registry/registry.yaml).
+    That rebase MOVED two load-bearing numbers -- scripts/validate.py went 497 -> 498 SLOC and the
+    verification registry went 4,561 -> 4,707 effective lines. Both were superseded by the later Decision
+    169 rebase recorded above, which removed scripts/validate.py from scope altogether. Neither the decision corpus nor the prose budgets
+    changed, so the index and skill measurements still hold. Preflight was clean with no unresolved ci-rca
+    recs. Fast-tier cost of the new check measured acceptable:
+    build_index() runs in 46-84 ms.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read (149 clause 1, 146, 160 points 7/8, 166 points
+    6/9, 165 clause 4, 128, 167, 168, 86, 150 significance routing)
+  - >-
+    docs/contracts/decision-entry.yaml compaction and metadata_envelope sections read, since the currency
+    section sits alongside them and must not restate them
+  - >-
+    scripts/CLAUDE.md read for the CURRENT check-registration rule (module + one Entry literal in the
+    domain _manifest.py; scripts/validate.py is never touched, per Decision 169) plus
+    docs/contracts/check-manifest.yaml for the Entry grammar
+  - config/agent/verification_registry/registry.yaml row shape read before appending
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/decisions_md.py -- move _is_compacted_stub here VERBATIM as public is_compacted_stub(block),
+    bringing _BOLD_STATUS_RE with it. Do not change its logic. Also expose the status half as public
+    status_is_superseded(block) -- FIRST match of _BOLD_STATUS_RE, group(1) split on '--', stripped, ==
+    'Superseded'. Layer them: bold_status(block) returns that normalized VALUE, status_is_superseded(block)
+    is bold_status(block) == "Superseded", and is_compacted_stub calls status_is_superseded -- so exactly ONE
+    status regex exists, shared by the check (I1 and I4), the graduated VP step 1, and the tests. I4 needs
+    the VALUE, not the boolean, to prefix-test Reversed/Deferred; that is why bold_status is public. Re-implementing it anywhere is the DAF-03
+    violation this plan invokes against others. PIN THE SIGNATURE:
+    derive_currency(row: dict, inbound_supersedes: set[int], inbound_amends: set[int]) -> str, where `row`
+    is a PARSER row from parse_decisions_md (it needs `raw_block`, which the index projection deliberately
+    excludes), and the two arguments are the PER-ROW inbound sets already resolved by the caller from
+    corpus-wide maps -- the generator builds those maps once per build_index() call. `inbound_supersedes`
+    is built from the index's unioned `supersedes` semantics (inverse-superseded_by UNION title_supersedes),
+    matching what build_index already computes.
+    PIN THE STATUS SOURCE: both is_compacted_stub/status_is_superseded AND the `amended` branch's
+    "status begins with 'Amended'" test read the BOLD MARKER on `raw_block`, never `row['status']`.
+    parse_decisions_md prefers the metadata envelope over the bold marker (scripts/decisions_md.py:468), so
+    the two can diverge on any enveloped entry; the bold marker is the corpus-wide spelling and the only one
+    the historical band carries. Add derive_currency(row, inbound_supersedes,
+    inbound_amends) evaluated in this precedence: 'superseded_compacted' if is_compacted_stub; else
+    'superseded_pointer' if the row has a victim-side superseded_by OR an inbound supersedes edge; else
+    'amended' if it has an inbound amends edge OR its status begins with 'Amended'; else 'current'.
+    Corpus-wide edge maps are parameters, never recomputed per row.
+  - >-
+    scripts/checks/decisions/validate_decision_entry_conformance.py -- replace the private function with a
+    module-level alias `_is_compacted_stub = is_compacted_stub`. Do NOT delete the private name: line 22 of
+    its test imports it and that file is at exactly 500 SLOC. CRITICAL: `_BOLD_STATUS_RE` is defined
+    LOCALLY in this module (line 48) and has a SECOND consumer at line 178 (`_envelope_body_conflicts`).
+    Moving it to the parser without re-importing it here is a NameError at import time that kills every
+    decisions check and reds `--pre` before any VP step can run. Extend this module's existing
+    `from scripts.decisions_md import ...` line with `_BOLD_STATUS_RE` in the same edit.
+  - >-
+    docs/contracts/decision-entry.yaml -- add a currency section with `values` (the four tokens), per-token
+    derivation rules, a consumer_contract stating only superseded_compacted may filter and the others
+    annotate without reducing severity, explicit reversal_conditions (documentation only -- see the
+    accepted-cost note in constraints), and a note recording the reversed/deferred trade. The grandfather
+    hook itself does NOT go here: it is a module-level constant in the check module, per Decision 165 clause
+    4 ("growing the hook later is a reviewed code edit, never a config edit"). Decision 149 clause 3 is NOT
+    a precedent for it -- orphan_baseline.yaml seeds dec-010 and is a config file, so it is neither
+    empty-at-install nor code-resident. Cross-reference compaction.stub_grammar rather than restating it.
+  - >-
+    scripts/decisions_index.py -- build the two inverted edge maps once per build_index() call and project
+    currency onto live rows only. The generator does NOT validate or raise. Preserve byte-stability. Extend
+    the module docstring's field-derivation list.
+  - >-
+    scripts/checks/decisions/validate_decision_currency.py -- new check module. It MUST carry the
+    decorator `@registry.register("validate_decision_currency", owner="platform")`: the manifest Entry
+    alone is NOT registration, and without the decorator the registry bijection test fails with
+    "manifested-but-unregistered: ['validate_decision_currency']". Five invariants: I1 every LIVE entry whose
+    status marker resolves to 'Superseded' derives superseded_compacted, using the FIRST match of
+    _BOLD_STATUS_RE with '--' normalization (never a substring/findall match, which hits live Decisions 149
+    and 160 where the marker is merely QUOTED; I1 is live-scoped because currency is, and under the PINNED
+    first-match predicate that scoping is a no-op today -- zero archive entries resolve to 'Superseded'.
+    The 11-archive-entry figure quoted in earlier drafts came from the plain-substring measure this plan
+    forbids); I2 currency present on exactly the live
+    rows; I3 every emitted value is in the contract vocabulary; I4 no live entry carries a Reversed or
+    Deferred status marker outside the grandfather hook; I5 the decision-scout skill contains both
+    consumer-contract clauses AND that the status-prose fallback is ABSENT (the literal
+    "whose status is active" must not appear). The absence half is the headline safety property -- without
+    it nothing standing prevents the prose branch being reintroduced -- so I5 is presence-AND-absence, not
+    presence-only.
+    PIN THE INPUT MODEL (do not invent one): the check signature is
+    validate_decision_currency(failed: list[str], root: Path | None = None) with root defaulting to
+    _common.ROOT, mirroring the seam validate_decision_entry_conformance already uses. It reads currency
+    values from the COMMITTED root/docs/decisions-index.json (never build_index(), which takes no arguments
+    and hardcodes its paths, so it cannot be pointed at a fixture); status markers from
+    parse_decisions_md(paths=[root/docs/DECISIONS.md, root/docs/DECISIONS_ARCHIVE.md]); live scoping from
+    decision_header_numbers(paths=[root/docs/DECISIONS.md]); the vocabulary from
+    root/docs/contracts/decision-entry.yaml; and the consumer clauses from
+    root/.claude/skills/decision-scout/SKILL.md. Fixtures therefore build a synthetic tree under tmp_path
+    and pass root -- no monkeypatching of module globals, and no seam added to build_index (out of scope).
+    I5's two required literals are exactly `superseded_compacted` and
+    `NEVER filtered and NEVER severity-reduced`; VP step 6 greps the same two strings.
+  - >-
+    scripts/checks/decisions/_manifest.py -- append ONE Entry literal to ENTRIES:
+    Entry(name="validate_decision_currency", module="scripts.checks.decisions.validate_decision_currency",
+    attr="validate_decision_currency", pre=True, pre_globs=("docs/DECISIONS.md",
+    "docs/DECISIONS_ARCHIVE.md", "docs/decisions-index.json", "docs/contracts/decision-entry.yaml",
+    ".claude/skills/decision-scout/SKILL.md", "scripts/checks/decisions/validate_decision_currency.py"),
+    full_segment="full_after_lint"). Bare string literals only -- never a combined "module:attr" and never
+    a computed value; validate_check_manifests enforces that grammar and docs/contracts/check-manifest.yaml
+    is its contract. Do NOT touch scripts/validate.py or scripts/checks/registry.py: Decision 169 retired
+    the re-export facade, dispatch is now scripts.checks.registry.resolve(name)(failed) via late-bound
+    getattr, and scripts/CLAUDE.md states the aggregator "is never touched". The mirror test
+    tests/checks/decisions/test__manifest.py is fully parametrized over ENTRIES, so it covers the new entry
+    with no edit.
+  - >-
+    .claude/skills/decision-scout/SKILL.md -- three edits, all measured to land at 11,318 B (7 B under the
+    11,325 B ceiling). Do not re-derive the wording; it was constructed and verified against the ceiling and
+    against invariant I5's greps.
+    (a) REPLACE the whole `7. **Status filter.**` line with EXACTLY this single line:
+    7. **Currency filter.** Branch on the typed `currency`, never status prose. `superseded_compacted` is the ONLY value that demotes to RELATED, noted "superseded by Decision M, awareness only". `superseded_pointer` is NEVER filtered and NEVER severity-reduced: triage exactly as `current`, annotated "read against Decision M". `amended` is treated as `current` for now. No `currency` key = archived, out of scope.
+    (b) In the Phase 1 step 1 field enumeration, replace the substring "carries none), and `category_tags`"
+    with "carries none), `currency`, and `category_tags`" (+12 B).
+    (c) DELETE the whole `- **Citing reversed decisions as governing.**` line plus its newline (frees 173 B).
+    Step (c) is FORCED, not a discretionary economy: retaining that bullet lands the file at 11,491 B, and no
+    formulation of step 7 that still carries all four semantic clauses plus both I5 literals fits in the
+    remaining budget (the most compressed candidate measured 5 B over). Verify the final byte count before
+    committing.
+  - >-
+    config/prose_budgets.yaml -- ratchet the S4 .claude/skills/decision-scout/SKILL.md entry from 11325 down
+    to the measured post-edit size (11318 if the embedded verbatim text is used unchanged).
+  - >-
+    config/agent/verification_registry/registry.yaml -- append TWO rows, one per graduated step, each with
+    the full field set. Row 1: check_id decisions-index-currency-derivation, primitive_slot
+    command_exit_zero, guard_target scripts/decisions_md.py, guard_symbol derive_currency. Row 2: check_id
+    compaction-stub-predicate-single-source, primitive_slot command_exit_zero, guard_target
+    scripts/checks/decisions/validate_decision_entry_conformance.py, guard_symbol _is_compacted_stub. Both
+    carry plan_slug decision-corpus-currency plus graduated_at / graduated_by.
+    CRITICAL -- check_spec SHAPE: each row's check_spec.command is an ARGV LIST, never the escaped shell
+    string this plan's VP steps carry:
+    `command: ['bin/venv-python', '-c', '<python source>']`. scripts/verification_graduation.py does
+    CommandExitZeroCheck(command=list(spec["command"])) and scripts/verification_checks.py runs
+    subprocess.run(self.command) with NO shell=True, so a string is char-split into ['b','i','n',...] and
+    raises FileNotFoundError: 'b'. validate_verification_registry catches only GraduationError, so that
+    escapes as an uncaught --pre traceback. All 173 existing command_exit_zero rows use a list; zero use a
+    string. Translate step 1's and step 5's commands into that form.
+    ADMISSION, stated honestly: both rows WILL be admitted, but for a weaker reason than a naive reading
+    suggests. In a local detached worktree at origin/main there is no .venv, so `bin/venv-python` exits
+    non-zero before Python starts; is_admitted reads any non-zero exit as FAIL, so admission succeeds
+    without the assertion ever running. The differential is genuine only in venv-less CI, where the hosted
+    interpreter can import the deps and the real assertion fires. Do not record the local run as evidence
+    that the assertions discriminate.
+  - >-
+    config/ci_rca_taxonomy.yaml -- add `validate_decision_currency: schema_drift` to function_to_category,
+    alphabetically alongside validate_decision_entry_conformance / validate_decisions_index_freshness /
+    validate_decisions_size. Without it validate_ci_rca_taxonomy (pre=True) fails with "registered check
+    'validate_decision_currency' absent from function_to_category".
+  - >-
+    tests/decisions_md/test_currency.py -- unit coverage for both symbols including synthetic PRECEDENCE
+    cases and both inbound-edge cases.
+  - >-
+    tests/checks/decisions/test_validate_decision_currency.py -- one passing and one deliberately-FAILING
+    synthetic fixture per invariant. The failing fixtures MUST live in two exactly-named classes --
+    TestInvariantsFailWhenViolated (one test per invariant, five total) and TestContractVocabularyIsCausal
+    -- because VP steps 2 and 4 grep for those class names and run them as node ids. Do not use -k-friendly
+    free naming: tests/CLAUDE.md forbids -k selectors in generated commands.
+  - >-
+    tests/test_decisions_index.py -- add the corpus spot-checks and the live-only invariant, and UPDATE
+    test_entry_shape_is_the_stable_projection_only (lines 49-66) to branch on live rather than assert one
+    fixed key set. Watch the 500 SLOC limit (457 today). If it would cross, move the spot-checks into
+    tests/decisions_md/test_currency.py -- NOT into a new tests/decisions_index/ package, which the
+    coverage checker's mirror map does not accept for this source.
+  - Regenerate the committed index -- bin/venv-python -m scripts.decisions_index --write.
+  - >-
+    Execute the Verification Plan -- run each step, loop until pass. On an unrecoverable failure, stop and
+    run RCA rather than working around it (Decision 55).
+  - >-
+    File the carrier for the deferred scope BEFORE closing anything: rec-3056 explicitly specifies the
+    scout branch ("amended never filtered but flagged 'read with amendments'"), and this plan ships the
+    projection without that branch. Call get_rec_write_guidance() then file_rec() for a follow-on rec
+    covering the decision-scout amended branch, referencing this plan and the residual-risk finding (26 of
+    122 live entries, governance backbone included). A merged plan document is not a work-tracking surface;
+    AGENTS.md routes deferred scope to file_rec.
+  - >-
+    Commit with the subject `feat(decision-corpus-currency): <summary>` -- the slug prefix is REQUIRED, not
+    stylistic: validate_graduation_completeness's implement-PR leg resolves this plan from `feat({slug})`
+    subjects on `git log origin/main..HEAD` and then demands a new-in-diff registry row per graduated step,
+    so a differently-prefixed subject silently skips that leg. Put "Resolves: rec-3055, rec-3056" in the
+    squash-merge commit body, and in rec-3056's resolution
+    text name the follow-on rec id that carries the deferred branch, so its closure is honest about being
+    partial. When closing rec-3055, state
+    that the shipped fix reframes the filed one (status-prose keying was the defect; keying on superseded_by
+    would have been the more dangerous bug).
+  - >-
+    Report: what was implemented, measured index size and headroom, measured skill size against its budget,
+    and the verification results.
+work_areas: []
+rollback: >-
+  Revertible in one commit, with one caveat stated honestly. Reverting scripts/decisions_index.py and
+  regenerating restores the previous index byte-for-byte (build_index is deterministic and excludes volatile
+  fields). Reverting the skill, the prose-budget ratchet, and the one Entry literal in
+  scripts/checks/decisions/_manifest.py restores the prior gate behaviour; the new check module can be
+  deleted and its two verification-registry rows removed. The predicate promotion
+  in scripts/decisions_md.py IS genuinely behaviour-preserving in this revision -- it is a verbatim move, not
+  a strengthening -- so it may be left in place independently. No corpus entry, warehouse row, or deployed
+  artifact is touched. The caveat: the blocking gate itself is the live surface, so any plan scoped between
+  merge and revert was scoped under the new filter and is not retroactively re-scoped by the revert.
