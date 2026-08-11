@@ -20,12 +20,15 @@ scope:
   - file: scripts/decisions_md.py
     action: Modify
     purpose: >-
-      Add THREE public symbols: is_compacted_stub(block) (the promoted predicate, BEHAVIOUR-identical to
-      the two-marker original -- see the constraint, which scopes "verbatim" to behaviour, not text),
-      status_is_superseded(block) (the status half, extracted so exactly one status predicate exists for the
-      check, VP step 1 and the tests to share), and derive_currency() returning exactly one token. All three
-      are load-bearing: VP step 1 imports status_is_superseded by name and dies on ImportError without it.
-      DAF-03's single-parser rule requires ONE derivation with two consumers.
+      Add FOUR public symbols: bold_status(block) (the normalized bold-marker status VALUE -- first match of
+      _BOLD_STATUS_RE, group(1) split on '--', stripped -- which invariant I4 needs to prefix-test
+      Reversed/Deferred), status_is_superseded(block) (defined as bold_status(block) == "Superseded"; VP
+      step 1 imports it by name and dies on ImportError without it), is_compacted_stub(block) (the promoted
+      predicate, BEHAVIOUR-identical to the two-marker original -- see the constraint, which scopes
+      "verbatim" to behaviour, not text), and derive_currency() returning exactly one token. bold_status is
+      PUBLIC deliberately: without it the check must either re-derive the regex (the DAF-03 violation this
+      plan invokes against others) or reach across for a private name. DAF-03 requires ONE derivation with
+      two consumers.
   - file: scripts/checks/decisions/validate_decision_entry_conformance.py
     action: Modify
     purpose: >-
@@ -360,13 +363,18 @@ verification_plan:
       on its own PR. The chained form satisfies the matcher's second segment.
     command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     expected: >-
-      Both invocations exit 0, with validate_decision_currency, validate_check_manifests,
-      validate_ci_rca_taxonomy,
+      Both invocations exit 0. NOTE the full tier runs checks --pre does not, including the Decision 161
+      mypy error-count ratchet, whose baseline for every new file is 0 -- so a type error in the new check or
+      test modules surfaces ONLY here, after the fast tier is already green. Expect
+      validate_decision_currency, validate_check_manifests, validate_ci_rca_taxonomy,
       validate_decisions_index_freshness, validate_prose_limits, validate_sloc_limits,
       validate_structural_size_limits, validate_handoff_full_tier and validate_verification_registry all
       passing.
     fix_if: >-
-      Three distinct failure modes, each with its own string. "CI-RCA taxonomy: registered check
+      FOUR distinct failure modes, each with its own string. "<file>: N errors exceeds baseline 0" from the
+      mypy error-count ratchet (Decision 161) is FULL-TIER ONLY and applies to every newly created module in
+      this plan; a prototype run hit it on a shadowed loop variable in the check. Fix the type error -- never
+      raise the baseline for a file this plan is creating. "CI-RCA taxonomy: registered check
       'validate_decision_currency' absent from function_to_category ... (Priority-0 attribution
       precondition)" means the config/ci_rca_taxonomy.yaml row is missing -- that check is UNGATED in --pre,
       so it fires on every run; fix it there, NOT in _manifest.py. "manifested-but-unregistered" means the
@@ -396,8 +404,9 @@ verification_plan:
 test_obligations:
   - source: scripts/decisions_md.py
     behavior: >-
-      is_compacted_stub is the promoted two-marker predicate, identical in behaviour; status_is_superseded
-      exposes its status half as the single shared status predicate (VP step 1 imports it by name);
+      bold_status returns the normalized bold-marker status value (the single shared status regex, consumed
+      by I1 and I4); status_is_superseded is bold_status(block) == "Superseded" and is imported by name in VP
+      step 1; is_compacted_stub is the promoted two-marker predicate, identical in behaviour;
       derive_currency
       returns 'superseded_compacted' only for a stub, 'superseded_pointer' for a victim-side pointer OR an
       inbound supersedes edge, 'amended' for an inbound amends edge or a status-prose amendment, else
@@ -424,7 +433,8 @@ test_obligations:
       Five invariants fail loudly when violated: I1 an entry with a '**Status:** Superseded' marker that does
       not derive superseded_compacted; I2 currency present on an archive row or missing from a live row; I3
       an emitted value outside the contract vocabulary; I4 a live entry carrying a Reversed or Deferred
-      status marker not listed in the empty-at-install grandfather hook; I5 the decision-scout skill missing
+      status marker -- prefix-tested via the public bold_status(block), never a re-derived regex -- that is not
+      listed in the empty-at-install grandfather hook; I5 the decision-scout skill missing
       either consumer-contract clause OR carrying the status-prose fallback ("whose status is active")
       again -- I5 is presence-AND-absence, so reintroducing the prose branch fails the build.
     verification_step: 9
@@ -790,8 +800,10 @@ execution_steps:
     scripts/decisions_md.py -- move _is_compacted_stub here VERBATIM as public is_compacted_stub(block),
     bringing _BOLD_STATUS_RE with it. Do not change its logic. Also expose the status half as public
     status_is_superseded(block) -- FIRST match of _BOLD_STATUS_RE, group(1) split on '--', stripped, ==
-    'Superseded' -- and have is_compacted_stub call it, so exactly ONE status predicate exists for the check
-    (I1), the graduated VP step 1, and the tests to share. Re-implementing it anywhere is the DAF-03
+    'Superseded'. Layer them: bold_status(block) returns that normalized VALUE, status_is_superseded(block)
+    is bold_status(block) == "Superseded", and is_compacted_stub calls status_is_superseded -- so exactly ONE
+    status regex exists, shared by the check (I1 and I4), the graduated VP step 1, and the tests. I4 needs
+    the VALUE, not the boolean, to prefix-test Reversed/Deferred; that is why bold_status is public. Re-implementing it anywhere is the DAF-03
     violation this plan invokes against others. PIN THE SIGNATURE:
     derive_currency(row: dict, inbound_supersedes: set[int], inbound_amends: set[int]) -> str, where `row`
     is a PARSER row from parse_decisions_md (it needs `raw_block`, which the index projection deliberately
