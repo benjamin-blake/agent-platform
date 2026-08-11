@@ -1,8 +1,5 @@
 """validate_decision_entry_conformance's --pre tier registration (PLAN-decision-entry-flow-
-governance, CFG-03's "fails --pre" acceptance). A NEW module: tests/test_checks_registry.py is
-at 643/643 SLOC with a dec-159 raise-approved pin and zero headroom -- any added line would fail
-both validate_sloc_limits and validate_sloc_budget_raises in --pre. That file is out of this
-plan's scope and is not edited here.
+governance, CFG-03's "fails --pre" acceptance).
 
 Before this plan, validate_decision_entry_conformance was full-tier only (registry.py), so it
 fired post-merge on main and never gated the PR -- this module's own assertion is genuinely red
@@ -14,7 +11,9 @@ which adding a check never reddens.
 from __future__ import annotations
 
 from scripts.checks import registry
-from scripts.validate import validate_decision_entry_conformance as _validate_module_export
+from scripts.checks.decisions.validate_decision_entry_conformance import (
+    validate_decision_entry_conformance as _defining_module_export,
+)
 
 
 class TestPreTierRegistration:
@@ -24,13 +23,10 @@ class TestPreTierRegistration:
         step = steps["validate_decision_entry_conformance"]
         assert step.pre_globs == ("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md")
 
-    def test_resolves_as_a_module_level_global_of_validate_py(self) -> None:
-        """Dispatch is globals()[name](failed) in scripts/validate.py -- without the facade
-        re-export line, --pre KeyErrors on the check name."""
-        import scripts.validate as validate_module
-
-        assert hasattr(validate_module, "validate_decision_entry_conformance")
-        assert validate_module.validate_decision_entry_conformance is _validate_module_export
+    def test_resolves_via_the_registry_to_its_defining_module(self) -> None:
+        """Dispatch is registry.resolve(name)(failed) in scripts/validate.py (Decision 169) --
+        without a manifest Entry, resolve() raises UnknownCheckError on the check name."""
+        assert registry.resolve("validate_decision_entry_conformance") is _defining_module_export
 
     def test_also_present_in_full_sequence(self) -> None:
         """Full-tier registration (pre-existing) is unchanged by this plan -- both tiers now

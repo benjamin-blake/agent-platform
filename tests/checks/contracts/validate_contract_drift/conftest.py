@@ -8,30 +8,24 @@ module, EXTENDED to answer `git ls-tree`, `git diff -M --name-status`, and `git 
 Every fixture passes an explicit fake/baseline_reader rather than relying on module state --
 _shared.py deliberately has no memoization, so the suite must not either.
 
-Also loads scripts/validate.py by path (the same idiom the monolith used) so
-scripts.checks.registry.all_checks() / pre_sequence() / full_sequence() are fully populated for
-the evaluator-resolution fixtures, which exercise REAL registered checks (validate_placement,
-validate_sloc_budget_raises) as both verified poles.
+The evaluator-resolution fixtures exercise REAL registered checks (validate_placement,
+validate_sloc_budget_raises) as both verified poles -- registry.all_checks() (Decision 169)
+eagerly imports every manifest-declared module at CALL TIME, so no separate warm-up load of
+scripts/validate.py is needed to populate it.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 import yaml as _yaml_module
 
-_SCRIPT_PATH = Path(__file__).parents[4] / "scripts" / "validate.py"
-_spec = importlib.util.spec_from_file_location("validate_contract_drift_under_test", _SCRIPT_PATH)
-_validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_validate)  # type: ignore[union-attr]
-sys.modules["validate_contract_drift_under_test"] = _validate
-
-validate_contract_drift = _validate.validate_contract_drift
+from scripts.checks.contracts.validate_contract_drift import (
+    validate_contract_drift,  # noqa: F401  (re-exported for `from .conftest import validate_contract_drift` in sibling test modules)
+)
 
 
 class _FakeGit:
@@ -87,7 +81,7 @@ class _FakeGit:
                 return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="path not in tree")
             return subprocess.CompletedProcess(cmd, 0, stdout=text, stderr="")
         if cmd[:3] == ["git", "cat-file", "--batch"]:
-            raw_input = kwargs.get("input") or ""
+            raw_input = str(kwargs.get("input") or "")
             refs = [line for line in raw_input.splitlines() if line]
             parts = []
             for ref in refs:

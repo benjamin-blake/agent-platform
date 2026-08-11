@@ -34,9 +34,8 @@ def test_dispatch_recording_attributes_each_newly_appended_label() -> None:
         failed.append("first problem")
         failed.append("second problem")
 
-    namespace = {"validate_two_things": _two_failures}
     failed: list[str] = []
-    validation_result.dispatch_recording("validate_two_things", failed, namespace)
+    validation_result.dispatch_recording("validate_two_things", failed, _two_failures)
     assert failed == ["first problem", "second problem"]
     assert validation_result._ATTRIBUTIONS == [
         {"check": "validate_two_things", "label": "first problem"},
@@ -45,9 +44,8 @@ def test_dispatch_recording_attributes_each_newly_appended_label() -> None:
 
 
 def test_dispatch_recording_attributes_nothing_on_a_passing_check() -> None:
-    namespace = {"validate_ok": lambda failed: None}
     failed: list[str] = []
-    validation_result.dispatch_recording("validate_ok", failed, namespace)
+    validation_result.dispatch_recording("validate_ok", failed, lambda failed: None)
     assert failed == []
     assert validation_result._ATTRIBUTIONS == []
 
@@ -59,20 +57,24 @@ def test_dispatch_recording_does_not_attribute_pre_existing_entries() -> None:
     def _adds_one_more(failed: list[str]) -> None:
         failed.append("new problem")
 
-    namespace = {"validate_second": _adds_one_more}
     failed: list[str] = ["earlier problem"]
-    validation_result.dispatch_recording("validate_second", failed, namespace)
+    validation_result.dispatch_recording("validate_second", failed, _adds_one_more)
     assert failed == ["earlier problem", "new problem"]
     assert validation_result._ATTRIBUTIONS == [{"check": "validate_second", "label": "new problem"}]
 
 
-def test_dispatch_recording_intercepts_via_namespace_patch() -> None:
-    """The namespace dict is consulted at call time (not a captured reference), matching
-    validate.py's `patch("validate.<name>")` interception contract."""
-    namespace = {"validate_x": lambda failed: failed.append("original")}
-    namespace["validate_x"] = lambda failed: failed.append("patched")
+def test_dispatch_recording_calls_the_resolved_callable_at_call_time() -> None:
+    """`fn` is whatever the CALLER resolved (scripts.checks.registry.resolve(name)) and is invoked
+    directly -- late-bound by the caller, not by a namespace lookup inside this function."""
+    calls: list[str] = []
+
+    def _fn(failed: list[str]) -> None:
+        calls.append("called")
+        failed.append("patched")
+
     failed: list[str] = []
-    validation_result.dispatch_recording("validate_x", failed, namespace)
+    validation_result.dispatch_recording("validate_x", failed, _fn)
+    assert calls == ["called"]
     assert failed == ["patched"]
     assert validation_result._ATTRIBUTIONS == [{"check": "validate_x", "label": "patched"}]
 

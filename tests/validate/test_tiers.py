@@ -9,20 +9,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from scripts.checks import registry
+from scripts.checks.contracts._shared import _load_prompt_compliance
 from scripts.checks.deps import affected_tests as at
+from scripts.checks.misc.validate_test_coverage import _load_coverage_checker
 from tests.fixtures.subprocess_stubs import _pre_mock_run
 from tests.fixtures.validate_module import _validate
 
-validate_cli_tools_in_prompts = _validate.validate_cli_tools_in_prompts
-validate_sloc_limits = _validate.validate_sloc_limits
-validate_cc_limits = _validate.validate_cc_limits
-_load_coverage_checker = _validate._load_coverage_checker
-_load_prompt_compliance = _validate._load_prompt_compliance
-validate_iam_runner_policy = _validate.validate_iam_runner_policy
+# get_changed_files/ROOT/_pre_glob_match/_should_run_in_pre are still reachable on the "validate"
+# module object -- the two former are retained _common re-exports (scripts/validate.py:42), the
+# two latter are module-local functions never extracted (Decision 169 only deleted the check
+# facade, lines 63-261).
 get_changed_files = _validate.get_changed_files
 ROOT = _validate.ROOT
-validate_import_contracts = _validate.validate_import_contracts
-validate_prompt_files = _validate.validate_prompt_files
 _pre_glob_match = _validate._pre_glob_match
 _should_run_in_pre = _validate._should_run_in_pre
 
@@ -329,7 +327,7 @@ class TestSlocLimitsInPreMode:
             patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=("validate_sloc_limits",))),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_sloc_limits", side_effect=capture_sloc),
+            patch("scripts.checks.sloc.sloc_limits.validate_sloc_limits", side_effect=capture_sloc),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -361,8 +359,8 @@ class TestSlocLimitsInPreMode:
             ),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_cc_limits", side_effect=capture_cc),
-            patch("validate.validate_sloc_limits", side_effect=capture_sloc),
+            patch("scripts.checks.sloc.cc_limits.validate_cc_limits", side_effect=capture_cc),
+            patch("scripts.checks.sloc.sloc_limits.validate_sloc_limits", side_effect=capture_sloc),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit),
         ):
@@ -394,7 +392,10 @@ class TestPreModeChecks:
             patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=("validate_subprocess_encoding",))),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_subprocess_encoding", side_effect=capture_encoding),
+            patch(
+                "scripts.checks.hygiene.validate_subprocess_encoding.validate_subprocess_encoding",
+                side_effect=capture_encoding,
+            ),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -429,7 +430,7 @@ class TestPreModeRegistryIsolation:
             patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=("validate_import_contracts",))),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_import_contracts"),
+            patch("scripts.checks.deps.validate_import_contracts.validate_import_contracts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -590,7 +591,8 @@ class TestPreGlobsGateEndToEnd:
             pytest.raises(SystemExit) as exc_info,
         ):
             for name, mock in mocks.items():
-                stack.enter_context(patch(f"validate.{name}", mock))
+                defining_module = registry._ALL_ENTRIES[name].module
+                stack.enter_context(patch(f"{defining_module}.{name}", mock))
             _validate.main()
 
         assert exc_info.value.code == 0

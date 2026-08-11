@@ -2,22 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
 from typing import Annotated, Optional
 
 from pydantic import BaseModel
 
+from scripts.checks.ops_governance.validate_pydantic_yaml_drift import _check_drift_for_table
 from src.schemas.annotations import DqAcceptedValues, DqDeleted, DqNotNull, migrating
-
-_SCRIPT_PATH = Path(__file__).parent.parent.parent.parent / "scripts" / "validate.py"
-_spec = importlib.util.spec_from_file_location("validate_drift", _SCRIPT_PATH)
-_validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_validate)  # type: ignore[union-attr]
-sys.modules["validate_drift"] = _validate
-
-_check_drift_for_table = _validate._check_drift_for_table
 
 
 def _table(columns: dict) -> dict:

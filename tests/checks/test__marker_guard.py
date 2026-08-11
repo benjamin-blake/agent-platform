@@ -434,16 +434,21 @@ class TestCheckDiffAndCheckPresentMarkersDirectly:
 
 
 class TestCoverageGrandfatheredCommentsAreNotMarkers:
-    """VP acceptance criterion 12: coverage's 9 `# grandfathered dec-159` roster comments carry
-    no marker token and must never be treated as markers by the retroactive scan."""
+    """VP acceptance criterion 12: coverage's `# grandfathered dec-159` roster comments carry no
+    marker token and must never be treated as markers by the retroactive scan. Decision 169
+    deliberately converts the scripts/validate.py entry from grandfathered to a real, authorized
+    `baseline-lowered: dec-169` marker -- the roster count drops from 9 to 8, and that one entry
+    is the sole legitimate exception to the "no entry parses as a marker" rule."""
 
     def test_grandfathered_comments_carry_no_baseline_lowered_token(self) -> None:
         raw_text = (_common.ROOT / coverage_module._SPEC.rel_path).read_text(encoding="utf-8")
-        assert raw_text.count("# grandfathered dec-159") >= 9, "expected the 9 known grandfathered roster comments"
+        assert raw_text.count("# grandfathered dec-159") >= 8, "expected the 8 known grandfathered roster comments"
 
         entries = coverage_module._SPEC.extractor(raw_text)
         markers = [(k, e.marker) for k, e in entries.items() if e.marker is not None]
-        assert markers == [], f"grandfathered comments must never parse as markers, got: {markers}"
+        assert markers == [("scripts/validate.py", "dec-169")], (
+            f"only the deliberate scripts/validate.py baseline-lowered marker may parse as a marker, got: {markers}"
+        )
 
 
 class TestGrandfatherHookFrozenAndEmpty:

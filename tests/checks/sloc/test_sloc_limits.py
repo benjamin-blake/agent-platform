@@ -216,3 +216,24 @@ class TestValidateSlocLimits:
             second_pass = (tmp_path / "config" / "sloc_budgets.yaml").read_text(encoding="utf-8")
 
         assert first_pass == second_pass
+
+
+class TestUpdateSlocBudgetsLoweringGap:
+    """rec-2420: a file shrinks from an existing budget of 700 to 550 SLOC (still over 500) --
+    the budget should lower from 700 to 550, not stay frozen at the old value. Relocated from
+    the retired tests/test_checks_registry.py monolith (Decision 169), repointed onto
+    scripts.checks.sloc.sloc_limits directly."""
+
+    def test_update_sloc_budgets_lowers_shrunken_oversized(self, tmp_path: Path) -> None:
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (scripts_dir / "shrunk_but_still_big.py").write_text("x = 1\n" * 550, encoding="utf-8")
+        (config_dir / "sloc_budgets.yaml").write_text("budgets:\n  scripts/shrunk_but_still_big.py: 700\n", encoding="utf-8")
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            _update_sloc_budgets()
+            result = _load_sloc_budgets()
+
+        assert result["scripts/shrunk_but_still_big.py"] == 550

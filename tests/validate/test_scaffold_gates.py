@@ -9,17 +9,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.checks.sloc._shared import iter_gated_py_files
+from scripts.checks.sloc.cc_limits import validate_cc_limits
+from scripts.checks.sloc.sloc_limits import _update_sloc_budgets, validate_sloc_limits
 from tests.fixtures.subprocess_stubs import _mock_completed
 from tests.fixtures.validate_module import _validate
 
-validate_sloc_limits = _validate.validate_sloc_limits
-validate_cc_limits = _validate.validate_cc_limits
+# ensure_fresh_dq_results/run_coverage_check/get_changed_files/ROOT are still reachable on the
+# "validate" module object -- all four are retained _common/_scaffolding re-exports
+# (scripts/validate.py:42-61), unaffected by Decision 169's check-facade deletion.
 ensure_fresh_dq_results = _validate.ensure_fresh_dq_results
 run_coverage_check = _validate.run_coverage_check
 get_changed_files = _validate.get_changed_files
 ROOT = _validate.ROOT
-_update_sloc_budgets = _validate._update_sloc_budgets
-iter_gated_py_files = _validate.iter_gated_py_files
 
 
 class TestRunCoverageCheck:
@@ -318,3 +320,22 @@ class TestVerifierCoverageArgv:
         with patch("validate.run_coverage_check"), pytest.raises(SystemExit):
             _validate.main()
         assert "DEPRECATED" not in capsys.readouterr().out
+
+
+class TestUpdateSlocBudgetsArgv:
+    """--update-sloc-budgets main()-argv wiring: the import is deferred (Decision 169) so this
+    branch does not make scripts/validate.py eagerly import a check-defining module -- patching
+    the defining module (not a validate.* alias) proves the deferred import still resolves live."""
+
+    def test_update_sloc_budgets_flag_runs_and_exits_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", "--update-sloc-budgets"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.setenv("CI", "true")  # skip the branch guard; not under test here
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        with (
+            patch("scripts.checks.sloc.sloc_limits._update_sloc_budgets") as mock_update,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+        assert exc_info.value.code == 0
+        mock_update.assert_called_once_with()

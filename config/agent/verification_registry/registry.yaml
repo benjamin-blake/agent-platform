@@ -806,22 +806,22 @@ entries:
         assert 'validate_prose_allowlist' in full\n"
   - check_id: checks-registry-membership-floor-detects-removal
     primitive_slot: test_selector
-    guard_target: tests/test_checks_registry.py
+    guard_target: scripts/checks/registry.py
     guard_symbol: null
     plan_slug: checks-registry-growth-safe-baseline
     graduated_at: '2026-07-13'
     graduated_by: implement-agent
     check_spec:
-      node_id: tests/test_checks_registry.py::TestSequenceInvariants::test_membership_floor_detects_removal
+      node_id: tests/checks/registry/test_sequences.py::TestMembershipFloors::test_membership_assertion_has_teeth_against_a_synthetic_removal
   - check_id: checks-registry-scaffold-anchor-order-full
     primitive_slot: test_selector
-    guard_target: tests/test_checks_registry.py
+    guard_target: scripts/checks/registry.py
     guard_symbol: null
     plan_slug: checks-registry-growth-safe-baseline
     graduated_at: '2026-07-13'
     graduated_by: implement-agent
     check_spec:
-      node_id: tests/test_checks_registry.py::TestSequenceInvariants::test_full_scaffold_anchor_order
+      node_id: tests/checks/registry/test_sequences.py::TestOD3ScaffoldAnchorOrder::test_full_tier_scaffold_anchors_in_frozen_order
   - check_id: ducklake-code-drift-source-registered
     primitive_slot: grep_count
     guard_target: config/agent/data_quality/source_registry.yaml
@@ -881,8 +881,8 @@ entries:
         - python
         - -c
         - |
-          from scripts.validate import validate_sloc_budget_raises
-          from scripts.checks.registry import pre_sequence
+          from scripts.checks.registry import pre_sequence, resolve
+          assert resolve("validate_sloc_budget_raises")
           assert any(s.name == "validate_sloc_budget_raises" for s in pre_sequence())
   - check_id: convergence-health-coverage-mapping-registered
     primitive_slot: command_exit_zero
@@ -984,9 +984,9 @@ entries:
       command:
       - python
       - -c
-      - "from scripts.checks.registry import pre_sequence, full_sequence\nassert any(s.name=='validate_graduation_completeness'\
+      - "from scripts.checks.registry import pre_sequence, full_sequence, resolve\nassert any(s.name=='validate_graduation_completeness'\
         \ for s in pre_sequence())\nassert any(s.name=='validate_graduation_completeness' for\
-        \ s in full_sequence())\nimport scripts.validate as v\nassert hasattr(v, 'validate_graduation_completeness')\n"
+        \ s in full_sequence())\nassert resolve('validate_graduation_completeness')\n"
   - check_id: graduation-completeness-implement-pr-leg
     primitive_slot: test_selector
     guard_target: scripts/checks/verification/validate_graduation_completeness.py
@@ -1881,10 +1881,13 @@ entries:
     graduated_by: implement-agent
     check_spec:
       command:
-      - bash
+      - bin/venv-python
       - -c
       - |
-        test "$(grep -c 'validate_reconcile_pending_gate' scripts/checks/registry.py)" = "2" && grep -q "validate_reconcile_pending_gate" scripts/validate.py
+        from scripts.checks.registry import pre_sequence, full_sequence, resolve
+        assert resolve("validate_reconcile_pending_gate")
+        assert any(s.name == "validate_reconcile_pending_gate" for s in pre_sequence())
+        assert any(s.name == "validate_reconcile_pending_gate" for s in full_sequence())
   - check_id: ducklake-deploy-job-topology
     primitive_slot: command_exit_zero
     guard_target: .github/workflows/deploy-ducklake-lambdas.yml
@@ -2564,7 +2567,7 @@ entries:
     graduated_at: '2026-07-30'
     graduated_by: implement-agent
     check_spec:
-      node_id: tests/test_checks_registry.py::TestPushContextBase
+      node_id: tests/checks/_common/test_push_context_base.py::TestPushContextBase
   - check_id: coverage-baseline-gate-tests
     primitive_slot: test_selector
     guard_target: scripts/checks/misc/coverage_baseline.py
@@ -3191,7 +3194,6 @@ entries:
       - |2
 
         from scripts.checks import registry
-        import scripts.validate as v
         name = 'validate_fallback_reevaluation'
         pre = {s.name: s for s in registry.pre_sequence() if s.kind == 'check'}
         full = [s.name for s in registry.full_sequence() if s.kind == 'check']
@@ -3201,7 +3203,7 @@ entries:
         globs = pre[name].pre_globs
         assert globs, f'{name} runs ungated in --pre; it parses the whole plans directory and must carry pre_globs'
         assert any('docs/plans' in g for g in globs) and any('ROADMAP' in g for g in globs), f'pre_globs misses a trigger surface: {globs}'
-        assert callable(getattr(v, name, None)), f'{name} is not a module-level global of scripts/validate.py -- dispatch will KeyError'
+        assert callable(registry.resolve(name)), f'{name} does not resolve via registry.resolve() -- dispatch will fail'
         import pathlib, yaml
         LB = r'(?<![\w.])'
         LA = r'(?![\w])'
@@ -3214,7 +3216,7 @@ entries:
             dumped = yaml.safe_dump(row[0]['check_spec'])
             assert LB in dumped, 'the graduated row and the carrier module have DIVERGED on the boundary-aware lookbehind'
             assert LA in dumped, 'the graduated row and the carrier module have DIVERGED on the boundary-aware lookahead'
-        print('OK registered in both tiers, reachable from validate.py, boundary-aware match (both halves) enforced at', 1 + len(row), 'site(s); pre_globs', globs)
+        print('OK registered in both tiers, resolves via the registry, boundary-aware match (both halves) enforced at', 1 + len(row), 'site(s); pre_globs', globs)
   - check_id: fallback-reevaluation-unit-guards
     primitive_slot: test_selector
     guard_target: scripts/checks/roadmap/validate_fallback_reevaluation.py
@@ -3428,9 +3430,9 @@ entries:
       command:
       - bin/venv-python
       - -c
-      - import sys;sys.path.insert(0,'.');from scripts.checks import registry;import scripts.validate as v;n='validate_handoff_full_tier';pre={s.name
-        for s in registry.pre_sequence() if s.kind=='check'};full={s.name for s in registry.full_sequence() if s.kind=='check'};print('pre:',n
-        in pre,'full:',n in full,'facade:',hasattr(v,n));sys.exit(0 if (n in pre and n in full and hasattr(v,n)) else 1)
+      - import sys;sys.path.insert(0,'.');from scripts.checks import registry;n='validate_handoff_full_tier';pre={s.name
+        for s in registry.pre_sequence() if s.kind=='check'};full={s.name for s in registry.full_sequence() if s.kind=='check'};resolved=bool(registry.resolve(n))
+        if n in registry._ALL_ENTRIES else False;print('pre:',n in pre,'full:',n in full,'resolves:',resolved);sys.exit(0 if (n in pre and n in full and resolved) else 1)
   - check_id: handoff-full-tier-coverage-100
     primitive_slot: command_exit_zero
     guard_target: scripts/checks/verification/validate_handoff_full_tier.py
@@ -3721,20 +3723,6 @@ entries:
         - -q
         - -k
         - live_markers or install_population
-  - check_id: sloc-budget-marker-dec159-retarget
-    primitive_slot: command_exit_zero
-    guard_target: config/sloc_budgets.yaml
-    guard_symbol: null
-    plan_slug: size-gov-marker-guard
-    graduated_at: "2026-08-04"
-    graduated_by: implement-agent
-    check_spec:
-      command:
-        - bash
-        - -c
-        - >-
-          grep -q "tests/test_checks_registry.py:.*raise-approved: dec-159" config/sloc_budgets.yaml && grep -q
-          "tests/test_checks_registry.py: 643" config/sloc_budgets.yaml && echo "rec-2974 OK"
   - check_id: marker-guard-uses-shared-decisions-parser
     primitive_slot: command_exit_zero
     guard_target: scripts/checks/_marker_guard.py
@@ -3894,7 +3882,7 @@ entries:
       command:
       - bin/venv-python
       - -c
-      - 'import scripts.validate as v
+      - 'from scripts.checks.registry import resolve
 
         from scripts.checks.structural import _classify
 
@@ -3911,7 +3899,7 @@ entries:
         assert ''docs/ROADMAP-PLATFORM.yaml'' not in measured, ''PLATFORM must defer to validate_platform_roadmap (Decisions
         114/147)''
 
-        failed=[]; v.validate_structural_size_limits(failed)
+        failed=[]; resolve(''validate_structural_size_limits'')(failed)
 
         assert not failed, f''installing PR is NOT green by construction: {failed}''
 
@@ -4066,9 +4054,9 @@ entries:
       command:
       - bin/venv-python
       - -c
-      - 'import scripts.validate as v
+      - 'from scripts.checks.registry import resolve
 
-        failed=[]; v.validate_structural_size_budget_raises(failed)
+        failed=[]; resolve(''validate_structural_size_budget_raises'')(failed)
 
         assert not failed, f''raise-guard red: {failed}''
 
@@ -4088,8 +4076,6 @@ entries:
       - -c
       - 'from scripts.checks import registry
 
-        import scripts.validate as v
-
         names=(''validate_structural_size_limits'',''validate_structural_size_budget_raises'')
 
         pre={s.name: s for s in registry.pre_sequence() if s.kind==''check''}
@@ -4105,8 +4091,10 @@ entries:
         assert not [n for n in names if pre[n].pre_globs is not None], ''must be unscoped (no pre_globs): '' + str([n for n
         in names if pre[n].pre_globs is not None])
 
-        assert not [n for n in names if not callable(getattr(v, n, None))], ''not re-exported as a scripts/validate.py global:
-        '' + str([n for n in names if not callable(getattr(v, n, None))])
+        resolves=lambda n: n in registry._ALL_ENTRIES and callable(registry.resolve(n))
+
+        assert not [n for n in names if not resolves(n)], ''does not resolve via the registry: '' + str([n for n in names
+        if not resolves(n)])
 
         print(''REGISTERED_BOTH_TIERS_UNSCOPED'')
 
@@ -4165,9 +4153,9 @@ entries:
       command:
       - bin/venv-python
       - -c
-      - 'import time, scripts.validate as v
+      - 'import time; from scripts.checks.registry import resolve
 
-        t=time.perf_counter(); failed=[]; v.validate_structural_size_limits(failed); d=time.perf_counter()-t
+        t=time.perf_counter(); failed=[]; resolve(''validate_structural_size_limits'')(failed); d=time.perf_counter()-t
 
         assert not failed, failed
 
@@ -4198,7 +4186,7 @@ entries:
       command:
         - bash
         - -c
-        - 'bin/venv-python -c "from unittest.mock import patch; from tests.fixtures.validate_module import _validate; from scripts.checks import validation_result; import pathlib; validation_result._ATTRIBUTIONS.clear(); _dispatch_check = _validate._dispatch_check; p = patch(''validate.validate_invariants'', lambda failed: failed.append(''Coverage below 100%'')); p.start(); failed = []; _dispatch_check(''validate_invariants'', failed); p.stop(); assert failed == [''Coverage below 100%''], failed; assert validation_result._ATTRIBUTIONS == [{''check'': ''validate_invariants'', ''label'': ''Coverage below 100%''}], validation_result._ATTRIBUTIONS; sloc = len([l for l in pathlib.Path(''scripts/validate.py'').read_text().splitlines() if l.strip() and not l.strip().startswith(''#'')]); assert sloc <= 499, sloc; print(''ok'')"'
+        - 'bin/venv-python -c "from unittest.mock import patch; from tests.fixtures.validate_module import _validate; from scripts.checks import validation_result; import pathlib; validation_result._ATTRIBUTIONS.clear(); _dispatch_check = _validate._dispatch_check; p = patch(''scripts.checks.misc.validate_invariants.validate_invariants'', lambda failed: failed.append(''Coverage below 100%'')); p.start(); failed = []; _dispatch_check(''validate_invariants'', failed); p.stop(); assert failed == [''Coverage below 100%''], failed; assert validation_result._ATTRIBUTIONS == [{''check'': ''validate_invariants'', ''label'': ''Coverage below 100%''}], validation_result._ATTRIBUTIONS; sloc = len([l for l in pathlib.Path(''scripts/validate.py'').read_text().splitlines() if l.strip() and not l.strip().startswith(''#'')]); assert sloc <= 320, sloc; print(''ok'')"'
   - check_id: validation-result-schema-v2-attributions
     primitive_slot: command_exit_zero
     guard_target: scripts/checks/validation_result.py
@@ -4255,7 +4243,7 @@ entries:
       command:
         - bash
         - -c
-        - bin/venv-python -c "import scripts.validate; from scripts.checks.registry import all_checks; from scripts.ci_rca.taxonomy import load_taxonomy; missing=sorted(set(all_checks())-set(load_taxonomy().get('function_to_category') or {})); print(len(missing), missing[:5]); assert not missing, missing"
+        - bin/venv-python -c "from scripts.checks.registry import all_checks; from scripts.ci_rca.taxonomy import load_taxonomy; missing=sorted(set(all_checks())-set(load_taxonomy().get('function_to_category') or {})); print(len(missing), missing[:5]); assert not missing, missing"
   - check_id: ci-rca-refusal-gate-and-junit-precedence
     primitive_slot: command_exit_zero
     guard_target: scripts/ci_rca/taxonomy.py
@@ -4987,3 +4975,66 @@ entries:
       - pytest
       - tests/validate/test_driver_seam.py::TestRegistryRows
       - -q
+  - check_id: validate-import-closure-excludes-check-modules
+    primitive_slot: command_exit_zero
+    guard_target: scripts/validate.py
+    guard_symbol: null
+    plan_slug: validate-facade-manifest-dispatch
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import importlib,sys
+        importlib.import_module('scripts.validate')
+        leaked={m for m in sys.modules if m.startswith('scripts.checks.') and m.count('.')>=3 and not m.rsplit('.',1)[1].startswith('_')}
+        allowed={'scripts.checks.iam_tf.validate_terraform_try'}
+        assert leaked==allowed, ('leak set != declared exception set', sorted(leaked^allowed))
+        print('OK')
+  - check_id: registry-resolve-is-late-bound
+    primitive_slot: test_selector
+    guard_target: scripts/checks/registry.py
+    guard_symbol: resolve
+    plan_slug: validate-facade-manifest-dispatch
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/registry/test_resolution.py
+  - check_id: manifest-registry-bijection-holds
+    primitive_slot: test_selector
+    guard_target: scripts/checks/_schema.py
+    guard_symbol: Entry
+    plan_slug: validate-facade-manifest-dispatch
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/registry/test_manifest_contracts.py::TestBijection
+  - check_id: manifest-entries-are-bare-string-literals
+    primitive_slot: test_selector
+    guard_target: scripts/checks/deps/validate_check_manifests.py
+    guard_symbol: validate_check_manifests
+    plan_slug: validate-facade-manifest-dispatch
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/deps/test_validate_check_manifests.py
+  - check_id: manifest-driver-edges-match-entry-modules
+    primitive_slot: test_selector
+    guard_target: scripts/dependency_graph.py
+    guard_symbol: build_graph
+    plan_slug: validate-facade-manifest-dispatch
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/registry/test_manifest_contracts.py::TestGraphEdges
+  - check_id: affected-set-retains-driver-tests-under-synthetic-diff
+    primitive_slot: test_selector
+    guard_target: scripts/checks/deps/affected_tests.py
+    guard_symbol: derive_affected_tests
+    plan_slug: validate-facade-manifest-dispatch
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/registry/test_manifest_contracts.py::TestAffectedSetSurvival

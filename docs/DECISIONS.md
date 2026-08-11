@@ -2,6 +2,49 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 169: scripts/validate.py's check facade is retired in favour of per-domain declarative manifests -- dispatch, tier sequencing, and the equivalence oracle all move off the aggregator (amends Decision 104) (Decided)
+
+```yaml
+number: 169
+status: Decided
+decided_date: "2026-08-11"
+amends: [104]
+significance:
+  value: numbered_decision
+  justification: A durable architectural commitment removing the check-facade mechanism Decision 104 installed and replacing its dispatch, tier-sequencing, and equivalence-oracle clauses with a new mechanism, with reversal-relevant consequences for how every future check is added.
+```
+
+**Status:** Decided
+**Date:** 2026-08-11
+**Warehouse ID:** dec-169 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** Decision 104 decomposed the pre-existing `scripts/validate.py` monolith into `scripts/checks/<domain>/` modules, but kept one coupling in place: `scripts/validate.py` retained a 187-SLOC block of 98 `from scripts.checks.<domain>.<module> import <name>` re-export statements (120 names), dispatched via `globals()[name](failed)`. Every new check therefore required an edit to `scripts/validate.py` -- the exact "adding a check touches the SLOC-capped aggregator" coupling Decision 104 was meant to end, just moved one level down from function bodies to import statements. The facade block's own growth rate (roughly 2 lines per check) meant `scripts/validate.py` was on the same upward SLOC trajectory Decision 104 was ratified to stop. Decision 104's byte-for-byte "Equivalence oracle" clause compounded this: `tests/test_checks_registry.py` froze the exact ordered check sequence for both tiers, so registry changes needed synchronous, coupled test edits -- a coupling that escaped the diff-aware `--pre` tier twice (rec-2673, rec-2674) because nothing bound registry.py changes to that frozen test file's selection.
+
+**Decision:**
+This amends Decision 104 by negating three of its clauses and replacing them with a new mechanism:
+
+1. **The facade re-export clause is negated.** `scripts/validate.py`'s check-facade block (98 import statements exporting 120 names) is deleted outright. `scripts/validate.py` retains only the argparse surface, the recursion/branch guards, the fast-tier budget assertion, the non-check scaffolding steps, and the RETAINED `_common`/`_scaffolding` primitive re-exports (unaffected -- these back ~60 live patch targets and are not part of this Decision). `scripts/validate.py` drops from 499 to 314 SLOC, with no entry added to `config/sloc_budgets.yaml` (Decision 128: decompose, never raise).
+2. **The `globals()[name](failed)` dispatch clause is negated.** Dispatch now resolves through `scripts.checks.registry.resolve(name)`, which imports the check's OWN DEFINING module and does a late-bound `getattr` at call time -- never caching the resolved callable, so `patch("<the check's defining module>.<name>", ...)` intercepts through a real dispatch pass exactly as `patch("validate.<name>")` did before. Adding a check now touches only `scripts/checks/<domain>/`: the module, its `@register(...)` call, and one `Entry` literal in that domain's `scripts/checks/<domain>/_manifest.py` -- `scripts/validate.py` is never touched again.
+3. **The byte-for-byte "Equivalence oracle" clause is negated.** `tests/test_checks_registry.py`'s frozen ordered-tuple baseline is retired (the file is deleted; its nine test classes relocate to `tests/checks/registry/` and `tests/checks/_common/`, concern-split per Decision 131). Tier sequencing (`pre_sequence()`/`full_sequence()`) is now DERIVED from the 18 per-domain manifests plus a compact, checked-in per-segment domain-order key (Decision 169's own `_PRE_DOMAIN_ORDER`/`_FULL_SEGMENT_DOMAIN_ORDER` constants in `registry.py`) -- not hand-authored, and not required to match the pre-change byte order. MEMBERSHIP parity is still required and asserted (both tiers' check-name sets are unchanged except for one deliberate addition, `validate_check_manifests`); byte-parity of ORDER is explicitly NOT claimed or achievable, since domain-block grouping is a genuine reordering relative to the prior 45-non-contiguous-run sequence.
+
+**New mechanism.** Each domain's `scripts/checks/<domain>/_manifest.py` declares a tuple of `Entry(name=, module=, attr=, ...)` literals (`scripts/checks/_schema.py`), naming its checks' defining module and attribute as BARE STRING LITERALS -- never a combined `"module:attr"` form, and never computed (an f-string or joined value is invisible to `scripts.dependency_graph`'s AST-based edge scan and would silently sever the driver->check graph edge, Decision 135's failure class). `docs/contracts/check-manifest.yaml` (a new Class D contract, Decision 168) owns this grammar; `scripts/checks/deps/validate_check_manifests.py` is its registered, tier-sequenced evaluator, enforcing the bare-literal rule and graph-node resolution by AST, and asserting `scripts.checks._schema.SEGMENT_TOKENS` equals the contract's own declared token set (derive-and-assert, so the dataclass and the contract cannot silently drift). `registry.all_checks()` eagerly imports every manifest-declared module AT CALL TIME (never at `registry.py`'s own import time, which would be a genuine circular import) to populate the `@register` roster for consumers like `validate_ci_rca_taxonomy` that need a complete roster without importing `scripts.validate`.
+
+**Table-shaped vs logic-shaped decomposition precedent.** The facade-to-manifest conversion is a specific instance of a general, reusable call: convert a growing SET OF SIMILAR ITEMS from one-statement-per-item CODE into a DATA TABLE plus one generic interpreter, when ALL THREE hold:
+   (a) the items are a flat collection of (name, target) pairs with no meaningful per-item control flow -- dispatch is purely by name lookup;
+   (b) the file's growth is driven by ADDING MORE ITEMS OF THE SAME SHAPE, not by adding new behaviour; and
+   (c) the consuming code can be written ONCE as a generic loop over the data, with no per-item special-casing required in the driver.
+`scripts/validate.py`'s facade block satisfied all three (98 near-identical import statements, growth by check addition alone, one generic `globals()[name]` dispatch loop) -- this is why the manifest/`Entry` conversion applies here. `scripts/checks/_scaffolding.py` does NOT qualify: its scaffold functions (terraform checks, dependency health, DQ-freshness auto-invoke, budget-breach/bypass rec filing) have genuinely different control flow and side effects per function, failing condition (a) -- a table-shaped conversion would not fit. If `_scaffolding.py` ever needs decomposing under Decision 128's SLOC pressure, the correct instrument is a COHESION SPLIT (grouping related scaffold functions into separate modules, the ordinary Decision 80/104 facade-package pattern), never a manifest table.
+
+**Reversal conditions:** (a) the per-domain manifest/`Entry` grammar proves unable to express a genuine check registration (e.g. a check needing per-item control flow beyond name/module/attr and tier/segment membership) -- extend the `Entry` dataclass, never fork a second dispatch mechanism; (b) `registry.resolve()`'s late-bound, non-caching contract is shown to regress test-interception reliability more than once -- fix the resolution path, never reintroduce a facade re-export as a workaround; (c) the domain-order derivation constants are shown to produce an UNDETERMINED sequence (two implementers deriving different rosters) -- pin the missing order explicitly, never fall back to hand-authoring the full sequence.
+
+**Rationale:** The facade block was Decision 104's own acknowledged residual coupling -- every check addition still touched the one SLOC-capped file, just via an import line instead of a function body. Converting that coupling from CODE (98 statements, one per check) to DATA (18 small manifest files, one `Entry` per check, aggregated by one generic `registry.py`) is what actually ends the "adding a check touches `scripts/validate.py`" property Decision 104 targeted but did not fully close. The equivalence-oracle retirement follows from the same logic: a frozen byte-for-byte baseline is itself a facade-shaped coupling (every registry change needs a synchronised test edit), replaced here by membership-parity assertions plus a small set of explicit, checked ordering invariants (OD-0 through OD-6, `tests/checks/registry/test_sequences.py`) that do not grow with the check count.
+
+**Significance:** clears the Decision 150 significance bar -- a durable architectural commitment removing a coupling mechanism Decision 104 installed and replacing it with a new one, with reversal-relevant consequences for how every future `scripts/checks/**` check is registered and dispatched; not a CD state-flip, operational fact, or field-semantics change (the full `Entry` grammar, the bare-string-literal rule, and the segment-token vocabulary live in `docs/contracts/check-manifest.yaml` per Decision 86/127 routing, not restated here).
+
+**Related:** Decision 104 (amended -- the facade/dispatch/equivalence-oracle clauses this Decision negates), Decision 168 (the Class D contract mechanism `docs/contracts/check-manifest.yaml` uses), Decision 135 (the AST-based driver->check graph edge scan the bare-string-literal rule protects), Decision 131 (test-mirror convention the relocated `tests/test_checks_registry.py` classes follow), Decision 128 (decompose-by-default -- `scripts/validate.py`'s 314 SLOC, no budget entry added), Decision 165 (the shared raise-marker mechanism the `config/coverage_baseline.yaml` `baseline-lowered` marker on `scripts/validate.py` binds to, since the 187 deleted lines were fully-covered imports and their removal lowers the file's measured coverage below the prior dec-159 grandfather pin), Decision 159 (the coverage-baseline grandfather roster this Decision's marker amends one entry of; the `_CHECKS_REGISTRY_MECHANISM_FILES` retirement this Decision discharges, folding `scripts/checks/registry.py`/`scripts/checks/_common.py` into `scripts.test_coverage_checker`'s `_CONCERN_SPLIT_TEST_PACKAGES` instead), Decision 86/127 (rationale-in-Decision, field-semantics-in-contract routing this entry and `docs/contracts/check-manifest.yaml` follow). Roadmap ref: PLAN-validate-facade-manifest-dispatch (this Decision's carrying plan; PR2 of a two-PR split, PR1 merged as c2d0acd (#881)).
+
+---
+
 ## Decision 168: Contracts gain a fourth class -- Class D mechanism contracts, gated on a declared evaluator that demonstrably reads the contract (amends Decision 118) (Decided)
 
 ```yaml
@@ -231,6 +274,11 @@ scheduled sides of the split).
 **Date:** 2026-08-03
 **Warehouse ID:** dec-163 (canonical; per Decision 84)
 
+> **Amended by Decision 169 (2026-08-11):** `validate_handoff_full_tier`'s matcher no longer
+> reaches through a `scripts/validate.py` facade -- the check is dispatched via
+> `scripts.checks.registry.resolve()` (Decision 169 retires Decision 104's check-facade
+> mechanism). This body is otherwise unedited; see Decision 169 for the full derivation.
+
 **Problem:**
 rec-2965: main went red on the next push touching `scripts/checks/roadmap/validate_candidate_decision_ratification.py`, because PR #836's carrying plan declared `handoff_policy.full_validation_required_before_commit: true` -- mandatory, required metadata on every schema_version-3 IMPLEMENTATION plan (`plan_document.py`, `Literal[True]`, no opt-out) -- while its `verification_plan` executed only the fast (`--pre`) tier. The fast tier's diff-scoped coverage check cannot catch a gap on a file that was already below 100% before the PR touched it (measured: the file was 87% covered pre-#836, identical four arms uncovered; PR #836's extraction of `_load_roadmap` merely moved them and raised the ratio to 92.1%, still short of the file's own 100% requirement once touched). The declared obligation -- run the full tier before handoff -- was pure prose plus a metadata flag; nothing executable checked that the plan's own steps actually invoked it, so the obligation was silently skippable by construction, not merely skipped by oversight this one time.
 
@@ -259,6 +307,12 @@ The fast (`--pre`) tier's diff-scoped design (Decision 73) is deliberately narro
 > `scripts/checks/_marker_guard.py` authorization mechanism, upgrading its marker check from
 > existence to authorization. This body is otherwise unedited; see Decision 165 for the full
 > derivation.
+
+> **Amended by Decision 169 (2026-08-11):** the reversal path in point 4's Rationale-adjacent
+> registration language (registration in `scripts/checks/registry.py` and `scripts/validate.py`)
+> is unaffected in substance -- `scripts/validate.py` no longer carries a check facade, but the
+> guard's own registration in `scripts/checks/registry.py` is what the revert path names. This
+> body is otherwise unedited; see Decision 169 for the full derivation.
 
 **Problem:**
 rec-2923: `write-convergence-record`'s always-run status writer accepted an EMPTY reviewer outcome as if it meant "not starved," latching a false platform-halting red for a run in which terraform apply never executed. The producer half was already fixed by PR #812 (commit 0726593) -- `review.sh` clears the inherited composite-step errexit and pre-writes a fail-closed `outcome=starved` before any fallible command -- but that fix addressed one symptom of a defect CLASS that remains structurally reproducible anywhere else in this repo's `.github/actions/`: CI-embedded shell whose control flow can silently not run (inherited errexit aborting a body mid-assignment), leaving a step output undefined for a downstream consumer to misread as a legitimate value. Two of the three actions that bind a step output to a consumed `outputs.<id>.value` today -- `deterministic-guard` and `fetch-saved-plan` -- still carry inline, non-delegated bash bodies producing exactly such outputs; only `subagent-plan-review` (post-#812) is a thin, testable adapter. Nothing prevented a fourth such action, or a regression of the third, from reintroducing rec-2923's shape unnoticed.
@@ -3341,6 +3395,14 @@ mechanism surface / contract routing).
 **Status:** Decided
 **Date:** 2026-07-01
 **Warehouse ID:** dec-104 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+> **Amended by Decision 169 (2026-08-11):** the facade re-export clause, the `globals()[name]`
+> dispatch clause, and the byte-for-byte "Equivalence oracle" clause are each negated and
+> replaced by a per-domain declarative-manifest mechanism (`scripts.checks.registry.resolve()`,
+> `docs/contracts/check-manifest.yaml`). Every other clause of this Decision (the `Check`
+> dataclass, the `_common.py` shared-primitives convention, the per-check-per-file decomposition,
+> the owner-tagging convention, the coverage-gate mapping extension) is otherwise unedited; see
+> Decision 169 for the full derivation.
 
 **Problem:**
 `scripts/validate.py` is the mandatory convergence point for every platform check ("never add a

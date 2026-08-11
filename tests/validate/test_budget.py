@@ -11,8 +11,9 @@ from scripts.checks import registry
 from tests.fixtures.subprocess_stubs import _pre_mock_run
 from tests.fixtures.validate_module import _validate
 
-validate_cli_tools_in_prompts = _validate.validate_cli_tools_in_prompts
-validate_iam_runner_policy = _validate.validate_iam_runner_policy
+# All of the below are still reachable on the "validate" module object -- retained
+# _common/_scaffolding re-exports (scripts/validate.py:42-61) or module-local constants/helpers,
+# unaffected by Decision 169's check-facade deletion.
 get_changed_files = _validate.get_changed_files
 _file_budget_breach_rec = _validate._file_budget_breach_rec
 _file_budget_bypass_rec = _validate._file_budget_bypass_rec
@@ -20,7 +21,6 @@ _mirror_budget_notice_to_summary = _validate._mirror_budget_notice_to_summary
 _FAST_TIER_BUDGET_SECONDS = _validate._FAST_TIER_BUDGET_SECONDS
 _FORCED_FULL_SUITE_CEILING_SECONDS = _validate._FORCED_FULL_SUITE_CEILING_SECONDS
 run_pytest_diff = _validate.run_pytest_diff
-validate_prompt_files = _validate.validate_prompt_files
 
 
 class TestBudgetAssertion:

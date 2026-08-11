@@ -2,8 +2,9 @@
 
 Placement alone is not the guard: asserting only that validate_plan_documents appears in the
 pre sequence stays green if the obligation logic becomes a no-op. These tests dispatch the check
-the way the fast tier does -- via the scripts.validate facade global the registry name resolves
-to -- against a fixture plan that declares behavior-changing scope with no obligation.
+the way the fast tier does -- via registry.resolve(), which the real _dispatch_check chokepoint
+uses (Decision 169) -- against a fixture plan that declares behavior-changing scope with no
+obligation.
 """
 
 from __future__ import annotations
@@ -12,8 +13,7 @@ from pathlib import Path
 
 import yaml
 
-import scripts.validate
-from scripts.checks.registry import full_sequence, pre_sequence
+from scripts.checks.registry import full_sequence, pre_sequence, resolve
 
 _CHECK_NAME = "validate_plan_documents"
 
@@ -45,10 +45,10 @@ def _behavior_plan_without_obligations() -> dict:
 
 
 def _dispatch_as_pre_tier(plans_dir: Path) -> list[str]:
-    """Resolve and call the check exactly as scripts/validate.py's globals() dispatch does."""
+    """Resolve and call the check exactly as scripts/validate.py's registry.resolve() dispatch does."""
     step = next(s for s in pre_sequence() if s.name == _CHECK_NAME)
     failed: list[str] = []
-    getattr(scripts.validate, step.name)(failed, plans_dir=plans_dir, added_plan_names=set())
+    resolve(step.name)(failed, plans_dir=plans_dir, added_plan_names=set())
     return failed
 
 

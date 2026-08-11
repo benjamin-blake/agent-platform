@@ -1,0 +1,69 @@
+contract:
+  id: check-manifest
+  class: D
+  contract_version: 1
+  status: ratified
+  ratified_via: "Decision 169 / PLAN-validate-facade-manifest-dispatch"
+  description: >-
+    The per-domain check-manifest grammar (scripts/checks/<domain>/_manifest.py) that
+    scripts/checks/registry.py aggregates into resolve()/all_checks()/pre_sequence()/
+    full_sequence(), replacing scripts/validate.py's deleted check-facade re-export block
+    (Decision 104, amended by Decision 169). Self-hosting: this file's own evaluator,
+    validate_check_manifests, is the registered check that enforces every rule this document
+    declares.
+  subject: check-manifest
+  evaluator:
+    check: validate_check_manifests
+
+amendment_log: []
+
+entry_grammar:
+  two_field_rule: >-
+    Every manifest Entry declares `module=` and `attr=` as TWO SEPARATE fields, never a combined
+    "module:attr" string. scripts/dependency_graph.py's `_PATCH_STRING_RE` is anchored
+    `^(src|scripts)(\.\w+)+$` -- a bare module path matches it (and so produces a real
+    driver->check graph edge); "module:attr" does not, and would silently sever the edge with no
+    error anywhere. `attr` is the module-level callable name `registry.resolve()` looks up via
+    `getattr` at call time.
+  bare_string_literal_rule: >-
+    Every Entry's `module=` and `attr=` value must be a bare `ast.Constant` string literal in
+    executable context -- never an f-string, a computed/joined value, or a `__name__`-derived
+    self-reference. `scripts/dependency_graph.py`'s driver->check edge is produced by an AST scan
+    over exactly these literals (`_patch_string_module_targets`); a computed value is invisible to
+    that scan and produces no edge, reproducing Decision 135's silent-failure class.
+  no_module_self_derivation: >-
+    A check's own module must never derive its manifest `module=` value via `@register(module=
+    __name__)` or equivalent -- that yields only a self-edge and drops the real driver->check
+    edge entirely. The manifest is authored in the DOMAIN'S manifest file, naming the check
+    module's dotted path as a plain string.
+  segment_tokens: >-
+    `Entry.full_segment` is `None` (the check is not in the full tier) or one of the tokens
+    declared by `scripts.checks._schema.SEGMENT_TOKENS`: full_after_lint, full_after_unit_tests,
+    full_after_terraform_checks, full_after_dependency_health, full_after_ensure_fresh_dq -- named
+    for the full-tier scaffold step immediately preceding that segment. This document's own
+    declared set (below) must equal `_schema.SEGMENT_TOKENS` exactly; validate_check_manifests
+    derives-and-asserts the equality rather than either side restating the other.
+  declared_segment_tokens:
+    - full_after_lint
+    - full_after_unit_tests
+    - full_after_terraform_checks
+    - full_after_dependency_health
+    - full_after_ensure_fresh_dq
+  unsequenced_entries: >-
+    A manifest Entry MAY declare `pre=False` and `full_segment=None` together -- registered but
+    dispatched in neither tier. The sole instance at this contract's landing is
+    validate_terraform_try (invoked directly inside the full tier's `terraform_checks` scaffold
+    bundle, never dispatched by name).
+
+evaluator_obligations:
+  ast_literal_check: >-
+    Fails on any Entry whose `module=`/`attr=` value is not a plain `ast.Constant` string (an
+    f-string, a `module + "." + attr` computed expression, or a `"module:attr"` colon form).
+  graph_node_resolution: >-
+    Fails when an Entry's `module=` value does not resolve to a real node in
+    scripts.dependency_graph's built graph -- an orphaned manifest entry pointing at a module that
+    does not exist, or was renamed without updating the manifest.
+  segment_token_equality: >-
+    Fails when `scripts.checks._schema.SEGMENT_TOKENS` and this contract's
+    `declared_segment_tokens` are not set-identical, so the dataclass and the contract cannot
+    silently drift apart while both gates stay green.
