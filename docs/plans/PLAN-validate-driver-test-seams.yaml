@@ -1,0 +1,441 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "validate-driver-test-seams"
+intent: >-
+  Replace the blanket `_neutralized_pre_registry` fixture -- which stubs every one of the ~60
+  pre-tier checks on the `validate` hub namespace -- with a derived step selector, collapsing
+  per-test hub coupling from the whole tier to the handful of checks each test actually needs live.
+  Touches no runtime code, so the facade deletion in PR2 becomes a smaller, reviewable change.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-validate-driver-test-seams.yaml
+phase: >-
+  Platform hygiene / SLOC governance (Decision 128), applying Decision 131 clause 3's per-package
+  conftest direction. PR1 of a two-PR split; PR2 deletes the 207-SLOC facade re-export block and
+  rewires dispatch to per-domain manifests.
+scope:
+  - file: tests/fixtures/pre_sequence_stub.py
+    action: Create
+    purpose: >-
+      The selector. `select_steps(*, checks=(), scaffolds="all", sequence="pre")` returns REAL Step
+      objects filtered from the live registry sequence, preserving tier order and production
+      pre_globs, and raises a named error on any name absent from that sequence. Lives in
+      tests/fixtures/ (exempt from validate_no_cross_test_imports per Decision 131 clause 2) so
+      test_driver_seam.py can import and test it directly.
+  - file: tests/validate/conftest.py
+    action: Create
+    purpose: >-
+      Package-scoped, non-autouse factory fixture wrapping the selector for tests/validate/.
+      Decision 131 clause 3. Non-autouse and outside the root conftest, so it does NOT trip
+      affected_tests.py's full-suite forcing.
+  - file: tests/conftest.py
+    action: Modify
+    purpose: Delete `_neutralized_pre_registry` and its blanket loop. Nothing replaces it at root scope.
+  - file: tests/validate/test_driver_seam.py
+    action: Create
+    purpose: >-
+      Guard the selector and the seam. TestSelectorFidelity: raises on a check name absent from the
+      live sequence, raises on an unknown scaffold, returns tier order rather than requested order,
+      and patching registry.pre_sequence intercepts dispatch bidirectionally. TestFixtureHoming:
+      the factory is package-scoped and non-autouse. TestRegistryRows: no in-scope graduated row
+      references the retired fixture, and every in-scope node_id still collects under pytest.
+  - file: tests/validate/test_tiers.py
+    action: Modify
+    purpose: >-
+      Migrate ALL fixture consumers including TestPreGlobsGateEndToEnd (derived Steps carry real
+      pre_globs, so nothing is lost). TestPreModeRegistryIsolation keeps driving main() and keeps
+      its banner assertion, but must SELECT and PATCH validate_import_contracts rather than rely on
+      scaffold-only exclusion -- see constraints.
+  - file: tests/validate/test_budget.py
+    action: Modify
+    purpose: Migrate the four consumers onto the factory; delete stand-in triples no longer needed.
+  - file: tests/validate/test_manifest_isolation.py
+    action: Modify
+    purpose: Migrate its single consumer onto the factory.
+  - file: tests/checks/roadmap/test_check_graduation_guard.py
+    action: Modify
+    purpose: >-
+      Remove the class-level fixture marker from TestGraduationGuard (inert for 7 of its 8 tests,
+      which call _check_graduation_guard directly) and convert
+      test_pre_mode_does_not_call_guard into a hermetic registry assertion -- present in
+      full_sequence(), absent from pre_sequence() -- with no main() run at all.
+  - file: tests/test_plan_document.py
+    action: Modify
+    purpose: >-
+      Re-point `from scripts.validate import validate_plan_documents` (line 14) at
+      scripts.checks.roadmap.validate_plan_documents. Line 13's scripts.roadmap.plan_document import
+      is a DIFFERENT module -- do not conflate. File is at 495/500 SLOC; keep this net-neutral.
+  - file: tests/test_ci_claude_p_retry.py
+    action: Modify
+    purpose: >-
+      Re-point the five function-scope imports of `_check_claude_p_raw_invocations` at the module
+      scripts.checks.ci_guards.validate_claude_p_retry_wrapper, which exports it.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      RETIRE `graduation-guard-pre-registry-neutralized` (its premise dies with the fixture);
+      keep `pre-tier-registry-isolation-guard` unchanged (its node_id survives, and the guarded
+      property is preserved by selecting+patching rather than excluding); add the THREE new rows
+      this plan graduates (VP steps 3, 7 and 8).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/validate.py is byte-identical to its pre-change state -- this PR changes no runtime code.
+  - No test contains a BLANKET neutralization loop -- that is, a loop iterating a registry sequence and patching each step's name on the validate namespace. Bounded, explicit patches of named checks a test declares are retained and are PR2's to retire.
+  - The selector returns real Step objects drawn from the live registry sequence, in tier order, and raises on any name absent from it; no test constructs a Step by hand.
+  - Reordering two checks in the live registry reddens the migrated tests -- proving the selector returns TIER order, not requested order. Verified by mutation with a passing control arm.
+  - No test executes a real check body it did not explicitly declare; TestGraduationGuard's previously-fixed ~78s real-registry run does not return.
+  - tests/validate/test_tiers.py ends at or below 499 SLOC; tests/test_plan_document.py stays at or below 495; tests/test_checks_registry.py is untouched; config/sloc_budgets.yaml gains no new entry and no raised entry.
+  - The fixture lives in package-scoped, non-autouse conftests, so editing it no longer forces the full suite.
+  - Every graduated registry row referencing an in-scope path either still resolves or is deliberately retired in this PR, with the choice recorded.
+  - The full presubmit tier passes and emits the same check roster as a baseline captured before editing.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Prove this PR changes no runtime code (tests, plan, and the verification registry only).
+    command: 'bin/venv-python -c "import subprocess,sys; subprocess.run([\"git\",\"fetch\",\"origin\",\"main\",\"--quiet\"],check=False); r=subprocess.run([\"git\",\"diff\",\"origin/main\",\"--name-only\"],capture_output=True,text=True,check=True); u=subprocess.run([\"git\",\"status\",\"--porcelain\",\"--untracked-files=all\"],capture_output=True,text=True,check=True); allowed=(\"tests/\",\"docs/plans/\",\"config/agent/verification_registry/registry.yaml\",\"docs/ROADMAP-PLATFORM.yaml\"); tracked=[f for f in r.stdout.split() if f]; untracked=[l[3:] for l in u.stdout.splitlines() if l.startswith(\"??\")]; files=tracked+untracked; assert files, \"empty diff -- origin/main unfetched or shallow; refusing to pass vacuously\"; bad=[f for f in files if not f.startswith(allowed)]; print(\"tracked\",len(tracked),\"untracked\",len(untracked),\"disallowed:\",bad); sys.exit(1 if bad else 0)"'
+    expected: >-
+      Every changed path -- tracked OR untracked -- is under tests/, docs/plans/, or the
+      verification registry, and the diff is non-empty (an empty diff is treated as a broken
+      harness, not a pass).
+    fix_if: >-
+      A scripts/ path means the change is no longer behaviour-neutral and belongs in PR2. An empty
+      diff means origin/main was never fetched -- this step is hermetic and replayed in CI by
+      validate_vp_replay, where a shallow clone would otherwise make it pass vacuously.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a property of THIS migration's diff against origin/main, not a durable repo invariant.
+      Graduating it would permanently forbid runtime edits to any file this plan happens to touch.
+  - step: 2
+    phase: pre-deploy
+    action: No BLANKET neutralization loop survives (bounded explicit patches are allowed by design).
+    command: 'bin/venv-python -c "import pathlib,re,sys; skip={\"tests/validate/test_driver_seam.py\"}; bad=[]; [bad.append((str(p),m.group(0)[:70])) for p in pathlib.Path(\"tests\").rglob(\"*.py\") if p.as_posix() not in skip for m in re.finditer(r\"for\\s+\\w+\\s+in\\s+[^\\n]*_sequence\\(\\)[\\s\\S]{0,200}?patch\\(f\", p.read_text(encoding=\"utf-8\"))]; print(bad or \"no blanket neutralization loop\"); sys.exit(1 if bad else 0)"'
+    expected: >-
+      Zero matches. Targets the loop SHAPE (iterate a registry sequence, then patch by interpolated
+      name), not any f-string patch -- TestPreGlobsGateEndToEnd's bounded five-check loop is
+      legitimate and stays. Verified against the current tree: matches tests/conftest.py and does
+      NOT match tests/validate/test_tiers.py:597.
+    fix_if: >-
+      A surviving blanket loop means the whole-tier hub coupling PR2 must remove is still present.
+      tests/validate/test_driver_seam.py is excluded by name because it legitimately iterates a
+      sequence AND patches by name in order to TEST the selector -- without that exclusion the
+      proximity window false-fails on the one file that must do both.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The hub namespace it guards is deleted by PR2, so this check goes moot within one PR;
+      graduating a row that must immediately be retired is churn.
+  - step: 3
+    phase: pre-deploy
+    action: Selector fidelity -- raises on absent names, returns tier order, intercepts bidirectionally.
+    command: 'bin/venv-python -m pytest tests/validate/test_driver_seam.py -q'
+    expected: >-
+      Unknown check name raises; unknown scaffold raises; requesting checks out of order returns
+      them in TIER order; a check in the stub is dispatched and a real-tier check absent from the
+      stub is not.
+    fix_if: A silent skip on an unknown name reintroduces the drift the derived selector exists to prevent.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "pre-sequence-stub-derives-from-live-registry"
+  - step: 4
+    phase: pre-deploy
+    action: MUTATION with control arm -- reordering the live registry must redden the migrated tests.
+    command: 'bin/venv-python -c "import pathlib,re,shutil,subprocess,sys,tempfile; q=chr(34); CC=\"_c(\"+q+\"validate_cc_limits\"+q+\", pre_globs=(\"+q+\"**/*.py\"+q+\",)),\"; SL=\"_c(\"+q+\"validate_sloc_limits\"+q+\"),\"; PAD=chr(10)+\"        \"; tmp=pathlib.Path(tempfile.mkdtemp())/\"wt\"; subprocess.run([\"git\",\"worktree\",\"add\",\"--detach\",str(tmp)],check=True,capture_output=True); shutil.copytree(\"tests\",tmp/\"tests\",dirs_exist_ok=True); sel=[\"tests/validate/test_tiers.py\",\"tests/validate/test_budget.py\",\"tests/validate/test_manifest_isolation.py\"]; run=lambda: subprocess.run([sys.executable,\"-m\",\"pytest\",*sel,\"-q\"],cwd=tmp,capture_output=True,text=True).returncode; ctl=run(); assert ctl==0, (\"CONTROL ARM FAILED -- harness broken, result is meaningless\", ctl); p=tmp/\"scripts/checks/registry.py\"; s=p.read_text(); old=CC+PAD+SL; assert old in s, \"adjacent pre_sequence pair not found -- registry.py changed shape\"; s2=s.replace(old, SL+PAD+CC, 1); nm=lambda t: re.findall(r\"_c\\(.(\\w+).\", t.split(\"def pre_sequence\")[1].split(\"def \")[0]); a=nm(s); b=nm(s2); assert sorted(a)==sorted(b), \"MUTATION IS NOT A PURE REORDER -- membership changed, harness invalid\"; assert a!=b, \"mutation did not change order\"; p.write_text(s2); mut=run(); subprocess.run([\"git\",\"worktree\",\"remove\",\"--force\",str(tmp)],capture_output=True); print(\"control\",ctl,\"mutant\",mut,\"| reorder verified: membership preserved, order changed\"); sys.exit(0 if mut!=0 else 1)"'
+    expected: >-
+      Control arm exits 0 (harness sound), mutant exits non-zero. Swapping cc_limits/sloc_limits
+      keeps both names resolvable, so ONLY a test bound to real tier order can detect it.
+    fix_if: >-
+      Control failing means the harness is broken and the result is meaningless. Mutant passing means
+      the migrated tests no longer bind to real tier order -- the tautology this plan exists to avoid.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Requires a scratch git worktree, a patch application and a source mutation -- multi-command and
+      non-hermetic, so not expressible in any canonical primitive slot. It is the one-time decisive
+      proof that test intent survived, not a standing gate.
+  - step: 5
+    phase: pre-deploy
+    action: No real check body runs unless a test declared it -- the 78s regression does not return.
+    command: 'bin/venv-python -c "import subprocess,sys,time; t=time.monotonic(); r=subprocess.run([sys.executable,\"-m\",\"pytest\",\"tests/checks/roadmap/test_check_graduation_guard.py\",\"-q\"],capture_output=True,text=True); el=time.monotonic()-t; print(\"exit\",r.returncode,\"elapsed %.1fs\"%el); assert r.returncode==0, r.stdout[-800:]; sys.exit(0 if el<30 else 1)"'
+    expected: >-
+      Under 30s. PLAN-pre-validation-performance records this file at ~78s when it ran the real
+      registry unmocked; that fix must survive the fixture's removal.
+    fix_if: A run near 78s means un-neutralized checks are executing for real again.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Cannot be graduated: verified that this file already passes in ~1.1s on origin/main, so the
+      differential admission gate (run_differential requires FAIL at main) would reject the row as
+      tautological. It is also self-limiting -- this plan removes the last main() call from the
+      file, so post-change the property can never approach 30s from this cause. Kept as a one-time
+      regression check for this migration only.
+  - step: 6
+    phase: pre-deploy
+    action: At-ceiling files did not grow.
+    command: 'bin/venv-python -c "import pathlib,sys; s=lambda f: len([l for l in pathlib.Path(f).read_text().splitlines() if l.strip() and not l.strip().startswith(chr(35))]); a=s(\"tests/validate/test_tiers.py\"); b=s(\"tests/test_plan_document.py\"); print(\"test_tiers\",a,\"test_plan_document\",b); sys.exit(0 if a<=499 and b<=495 else 1)"'
+    expected: >-
+      test_tiers.py at or below 499 and test_plan_document.py at or below 495. Up to 36 stand-in
+      lines are deletable: the three at :589-591 are also unnecessary under a derived selection
+      (those checks are not in TestPreGlobsGateEndToEnd's six-check selection at all), so keeping
+      or deleting them is a style call, not a constraint.
+    fix_if: Growth forces a decomposition or an unmarked raise, both disallowed by Decision 128/165.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the standing validate_sloc_limits gate; pinning 499/495 would freeze transient
+      numbers that PR2's decomposition is expected to move.
+  - step: 7
+    phase: pre-deploy
+    action: The fixture no longer forces the full suite.
+    command: 'bin/venv-python -c "import pathlib,sys; root=pathlib.Path(\"tests/conftest.py\").read_text(); assert \"_neutralized_pre_registry\" not in root, \"blanket fixture still in root conftest\"; pkg=[p for p in (pathlib.Path(\"tests/validate/conftest.py\"),) if p.exists()]; assert len(pkg)==1, pkg; bad=[str(p) for p in pkg if \"autouse=True\" in p.read_text()]; assert not bad, (\"package conftest declares autouse -- still forces full suite\", bad); print(\"fixture is package-scoped and non-autouse\")" && bin/venv-python -m pytest "tests/validate/test_driver_seam.py::TestFixtureHoming::test_factory_is_package_scoped_and_not_autouse" -q'
+    expected: Root conftest is clean; both package conftests exist and declare no autouse fixture.
+    fix_if: >-
+      Verified: full_suite_forced keys on the literal path tests/conftest.py alone, so leaving the
+      fixture at root scope restores the 1500s-ceiling tax. An autouse package conftest does NOT
+      force the full suite -- it promotes only its own subtree to the uncapped channel -- but is
+      still barred here to keep the selection cappable.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "pre-sequence-fixture-is-package-scoped"
+  - step: 8
+    phase: pre-deploy
+    action: Every graduated row referencing an in-scope path still resolves, or is deliberately retired.
+    command: 'bin/venv-python -m pytest "tests/validate/test_driver_seam.py::TestRegistryRows" -q'
+    expected: >-
+      Enumerates every row touching an in-scope file, confirms none references the retired fixture,
+      AND confirms every node_id still collects under pytest. graduation-guard-pre-registry-neutralized
+      must be gone, not rewritten.
+    fix_if: >-
+      validate_verification_registry differentials only NEWLY-ADDED rows, so an invalidated existing
+      row stays green while guarding nothing -- it must be caught here.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "in-scope-graduated-rows-still-resolve"
+  - step: 9
+    phase: pre-deploy
+    action: The whole migrated test surface passes with no collection-time error.
+    command: 'bin/venv-python -m pytest tests/validate/test_tiers.py tests/validate/ tests/checks/roadmap/test_check_graduation_guard.py tests/test_plan_document.py tests/test_ci_claude_p_retry.py -q'
+    expected: All green; no ImportError during collection.
+    fix_if: A collection error means a re-pointed import names a symbol its defining module does not export.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A multi-path pytest invocation is not expressible as a single node_id row, and each of these
+      modules is already permanently guarded by its own mirror test under Decision 131.
+  - step: 10
+    phase: pre-deploy
+    action: Full presubmit passes and emits the same check roster as the captured baseline.
+    command: 'bin/venv-python -m scripts.validate > logs/debug/roster-now.txt 2>&1 && bin/venv-python -c "import pathlib,sys; b=pathlib.Path(\"logs/debug/roster-baseline.txt\"); n=pathlib.Path(\"logs/debug/roster-now.txt\"); assert b.exists(), \"baseline missing -- capture it before editing (pre_implementation_checklist)\"; B=sorted(l for l in b.read_text().splitlines() if l.startswith(\"=== \")); N=sorted(l for l in n.read_text().splitlines() if l.startswith(\"=== \")); missing=[x for x in B if x not in N]; added=[x for x in N if x not in B]; print(\"roster before/after\",len(B),len(N),\"added\",added); assert not missing, (\"check heading disappeared\", missing)"'
+    expected: >-
+      Exit 0 and every check heading present before the change is still present; additions are
+      reported too. Note this is a PARTIAL projection -- a check that prints no heading cannot be
+      detected this way, so it complements rather than replaces step 9.
+    fix_if: A missing heading means the migration silently dropped a check from a tier.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating the full presubmit into the registry the presubmit itself validates is circular, and
+      Decision 163 already makes full-tier execution a structurally enforced universal obligation.
+test_obligations:
+  - source: tests/fixtures/pre_sequence_stub.py
+    behavior: >-
+      select_steps returns real Step objects from the live registry sequence in TIER order and
+      raises on any name absent from it, so neither a vanished check nor a caller's assumed ordering
+      can silently pass.
+    verification_step: 3
+    test_selector: tests/validate/test_driver_seam.py
+    red_green_expectation: >-
+      red before (module absent, so the raise-on-absent and tier-order assertions cannot even
+      import), green after
+  - source: tests/validate/conftest.py
+    behavior: >-
+      Provides a non-autouse, package-scoped factory over the shared selector, so tests/validate/
+      gets sequence injection without the root-conftest full-suite forcing.
+    verification_step: 7
+    test_selector: tests/validate/test_driver_seam.py::TestFixtureHoming::test_factory_is_package_scoped_and_not_autouse
+    red_green_expectation: red before (file absent, so the package-conftest assertion fails), green after
+  - source: tests/conftest.py
+    behavior: >-
+      No blanket neutralization loop remains at root scope; the whole-tier hub coupling is gone.
+    verification_step: 9
+    test_selector: tests/validate/test_tiers.py
+    red_green_expectation: >-
+      green after; discrimination is proven separately by the step-4 reorder mutation and its
+      control arm, rather than by the mere absence of a symbol
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      The row pinning the retired fixture is gone, no in-scope row references it, and every
+      in-scope node_id still collects -- so a graduated guard cannot survive in name while its
+      target has been renamed or deleted.
+    verification_step: 8
+    test_selector: tests/validate/test_driver_seam.py::TestRegistryRows
+    red_green_expectation: >-
+      red before (graduation-guard-pre-registry-neutralized still pins the
+      _neutralized_pre_registry literal, so the stale assertion fires), green after
+constraints:
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    This PR must not modify scripts/validate.py. Its value is being behaviour-neutral and
+    independently revertible; a runtime change forfeits both.
+  - >-
+    TWO SEPARATE CONCERNS, and PR1 owns only the first. (a) SEQUENCE SELECTION -- which steps the
+    driver iterates -- moves to the derived selector. (b) NEUTRALIZATION -- stopping a check body
+    from executing -- still requires a hub patch while the facade binds names eagerly, and moves in
+    PR2 with the dispatch swap. PR1's goal is therefore NOT "no hub patching": it is collapsing the
+    blanket ~60-check loop into the handful of bounded, explicit patches each test declares.
+  - >-
+    DERIVE, DON'T DECLARE. The selector returns real Step objects from the live registry and raises
+    on absence. Hand-authored Step literals are forbidden: a stale literal list confidently
+    green-lights a tier that no longer exists.
+  - >-
+    A check NOT in the selected sequence never executes, so exclusion is itself neutralization. Any
+    check a test DOES select must be explicitly patched by that test, or its real body runs -- this
+    is what resurrected the documented ~78s TestGraduationGuard regression in an earlier draft.
+  - >-
+    The selector is a FACTORY callable inside a test body, not a class-level marker. A class-scoped
+    fixture cannot exempt a single method, and parametrized cases need per-case sequences.
+  - >-
+    No test is carved out of migration. Derived Steps carry production pre_globs and tier order, so
+    TestPreGlobsGateEndToEnd migrates like the rest; the earlier carve-out rested on a premise that
+    was checked and found false.
+  - >-
+    TestPreModeRegistryIsolation KEEPS driving main() and KEEPS its validate_import_contracts
+    banner assertion, but must SELECT that check and patch it rather than rely on scaffold-only
+    exclusion. Verified: validate_import_contracts IS in pre_sequence(), so under a scaffold-only
+    selection the banner cannot print regardless of neutralization -- the assertion would be true
+    by exclusion and the graduated row pre-tier-registry-isolation-guard would survive in name
+    while guarding nothing. Selecting and patching keeps it a real interception guard.
+  - >-
+    graduation-guard-pre-registry-neutralized is RETIRED, not rewritten: its premise (that the class
+    needs blanket neutralization) is false once test_pre_mode_does_not_call_guard becomes a hermetic
+    registry assertion and the other 8 tests call the guard directly.
+  - >-
+    The injection seam works because scripts/validate.py resolves registry.pre_sequence() /
+    full_sequence() as call-time module attribute access (verified: :36 imports the module object;
+    :339 and :573 are attribute lookups, no caching, no eager binding). Do not refactor those into
+    eagerly-bound locals.
+  - >-
+    Check-name patches cannot move to defining modules in this PR. Verified empirically: while the
+    facade binds eagerly, patching the defining module leaves validate.py's globals() holding the
+    original object and the real check runs.
+  - >-
+    At-ceiling files: tests/validate/test_tiers.py (499/500, unregistered) and
+    tests/test_plan_document.py (495/500, unregistered). Do not touch tests/test_checks_registry.py
+    (643 = exactly its dec-159 budget); its reachability tests are PR2's to retire.
+  - >-
+    Residual hub consumers deliberately left for PR2 (they use `import scripts.validate` /
+    `importlib.import_module`, not the `from ... import` form): test_validate_tier_floor.py:6,
+    test_validate_data_model_standard.py:185, test_checks_registry_test_obligations.py:15,
+    test_conformance_registration.py:30, test_checks_registry.py. This PR does not claim to have
+    eliminated them.
+  - Graduated node_ids inside migrated classes must be preserved verbatim -- a rename silently orphans a row.
+context:
+  - >-
+    "Decision-scout verdict + CITE list: FLAGS_FOUND (scoped against the combined plan this was
+    split from). CITE: dec-104, dec-128, dec-131, dec-159, dec-165, dec-73, plus dec-132 and dec-148
+    added post-scout (the scout missed both and both bind this plan: 132 makes every `graduate`
+    disposition oblige a new-in-diff verification_registry row, which is why VP step 1 allowlists
+    that path; 148 means hermetic VP steps are replayed by validate_vp_replay on the implementing
+    PR, so a hermetic step contradicting another gate wedges the PR deterministically). Decision 131
+    clause 3 is now APPLIED rather than deferred -- the fixture moves to package-scoped conftests."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    PR1 of a two-PR split. Four review rounds: round 1 rejected the combined ~80-file plan; rounds 2
+    and 3 returned BLOCK on successive PR1 drafts. Round 3's blockers were introduced by round 2's
+    fixes, which is why this revision is a fixture REDESIGN rather than another patch.
+  - >-
+    Root cause of rounds 2-3 churn, now named explicitly: `_neutralized_pre_registry` does two jobs
+    -- sequence control and callable neutralization -- and earlier drafts replaced only the first
+    while assuming the second came along. Every downstream contradiction (the carve-out trilemma, the
+    unsatisfiable grep, the resurrected 78s regression) descends from that conflation.
+  - >-
+    Verified this session: PLAN-pre-validation-performance.yaml:17 records TestGraduationGuard as
+    "the ~78s culprit that invokes real main(--pre) with the ~28 registered checks unmocked", fixed
+    by applying the very fixture this plan retires. VP step 5 is the standing guard that the fix
+    survives.
+  - >-
+    Verified this session: tests/checks/conftest.py already exists as Decision 131's pattern scaffold
+    and covers tests/checks/roadmap/, so the earlier claim that a package-scoped home required
+    cross-tree resolution first was false.
+  - >-
+    Verified this session: pre-tier-registry-isolation-guard is a test_selector keyed on node_id with
+    no pattern referencing the fixture; only graduation-guard-pre-registry-neutralized has such a
+    pattern. An earlier criterion asserting "both rows" was wrong.
+  - >-
+    Consumer count: 12 @pytest.mark.usefixtures usages across 4 files (test_tiers.py 6,
+    test_budget.py 4, test_manifest_isolation.py 1, test_check_graduation_guard.py 1).
+    test_scaffold_gates.py and test_terraform_checks.py have zero and are not in scope.
+  - >-
+    New graduated rows this plan adds -- specify all fields so the same-PR verifier guard and the
+    differential admission gate both resolve: (1) pre-sequence-stub-derives-from-live-registry,
+    primitive_slot test_selector, guard_target tests/fixtures/pre_sequence_stub.py, guard_symbol
+    select_steps; (2) [WITHDRAWN -- the ~1.1s property already holds at origin/main, so the differential
+    admission gate would reject it as tautological; VP step 5 is waived instead]; (3)
+    pre-sequence-fixture-is-package-scoped, primitive_slot command_exit_zero, guard_target
+    tests/validate/conftest.py; (4) in-scope-graduated-rows-still-resolve, primitive_slot
+    command_exit_zero, guard_target config/agent/verification_registry/registry.yaml. Each is
+    legitimately red at origin/main (its target file or property does not exist there), so the
+    differential gate admits them on merit rather than on absence.
+  - >-
+    Findings carried forward to PR2 (do not re-derive): registry.yaml holds 22 references to validate
+    across ~14 entries including executable facade assertions; map_source_to_test demands mirror
+    tests for every new _manifest.py and for _schema.py; byte-parity on tier order is unachievable
+    (full tier has 45 domain runs across 18 domains, ops_governance alone in 7 non-contiguous
+    blocks); registry.all_checks() returns 97 eager and 0 lazy, with production consumers at
+    validate_ci_rca_taxonomy.py:38 and contracts/_population.py:244; and a check-module change
+    currently selects 18 tests and zero tests/validate/*, with CAP=35 truncation making a one-file
+    chain sentinel vacuous.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections (104, 128, 131, 132, 148, 159, 165, 73)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "Baseline captured: bin/venv-python -m scripts.validate > logs/debug/roster-baseline.txt 2>&1 (logs/debug/ is gitignored, so it cannot wedge VP step 1), plus test_tiers.py and test_plan_document.py SLOC"
+execution_steps:
+  - >-
+    Capture the baseline roster and the two at-ceiling SLOC counts before editing, so the
+    behaviour-neutrality and no-growth claims are checkable rather than asserted.
+  - >-
+    Create tests/fixtures/pre_sequence_stub.py with select_steps(*, checks=(), scaffolds="all",
+    sequence="pre"): resolve the live registry sequence, filter to the requested names, return real
+    Step objects IN TIER ORDER, and raise a named error listing valid names on any absent check or
+    unknown scaffold. Support sequence="full" so full-tier membership is expressible.
+  - >-
+    Create tests/validate/conftest.py and extend tests/checks/conftest.py with thin, NON-AUTOUSE
+    factory fixtures delegating to the selector. Delete _neutralized_pre_registry and its blanket
+    loop from tests/conftest.py.
+  - >-
+    Create tests/validate/test_driver_seam.py: raises on unknown check, raises on unknown scaffold,
+    returns tier order when names are requested out of order, and dispatch is bidirectional (a
+    selected check runs; a real-tier check not selected does not).
+  - >-
+    Migrate all 12 consumers across the 4 files onto the factory, including
+    TestPreGlobsGateEndToEnd with per-parametrize-case selections. Each test explicitly patches the
+    checks it selects. Delete the 33 now-unneeded stand-in triple lines in test_tiers.py (the three
+    at :589-591 stay) and the 45 in test_budget.py.
+  - >-
+    Keep TestPreModeRegistryIsolation driving main() scaffold-only with its banner assertion intact;
+    change only the failure-message string that names the old fixture.
+  - >-
+    Convert test_pre_mode_does_not_call_guard into a hermetic registry assertion (present in
+    full_sequence(), absent from pre_sequence()) with no main() run, and remove the class-level
+    fixture marker from TestGraduationGuard.
+  - >-
+    Re-point tests/test_plan_document.py line 14 at scripts.checks.roadmap.validate_plan_documents
+    (NOT line 13's scripts.roadmap.plan_document) and tests/test_ci_claude_p_retry.py's five imports
+    at scripts.checks.ci_guards.validate_claude_p_retry_wrapper.
+  - >-
+    Update config/agent/verification_registry/registry.yaml: retire
+    graduation-guard-pre-registry-neutralized, leave pre-tier-registry-isolation-guard untouched, and
+    add the four new rows with the fields enumerated in Context.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results, and the baseline comparison'
+work_areas: []
+rollback: >-
+  Revert the single squash commit. No runtime file is touched, so a revert restores the previous test
+  topology exactly and cannot affect the CI gate's behaviour -- the reason this work was separated
+  from the facade deletion. The verification-registry rows revert with it, in the same commit.
