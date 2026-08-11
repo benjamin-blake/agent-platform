@@ -78,7 +78,7 @@ scope:
       STRUCTURALLY REQUIRED, not optional: validate_graduation_completeness runs in BOTH tiers and
       its implement-PR leg fails for any graduate step lacking a NEW-IN-DIFF row matching both
       `check_id` AND `plan_slug` (verified at
-      scripts/checks/verification/validate_graduation_completeness.py:218). Without this scope row
+      scripts/checks/verification/validate_graduation_completeness.py:216-217). Without this scope row
       the plan would be self-blocking -- declaring an obligation its own "only files listed in
       scope may be modified" constraint forbids discharging. Row shape per
       docs/contracts/verification-registry.yaml and the precedent row
@@ -431,9 +431,9 @@ verification_plan:
       rows=yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'];
       want={'decision-83-live-probe-evidence-block','decision-83-reversal-stanza-armed'};
       got={r['check_id'] for r in rows if r.get('plan_slug')=='ulf-01-evidence-closure'};
-      assert want <= got, f'missing registry row(s): {sorted(want-got)}';
+      assert got == want, f'missing: {sorted(want-got)} unexpected: {sorted(got-want)}';
       print('graduation registry rows present:', sorted(got))"
-    expected: exit 0, listing both decision-83 check ids
+    expected: exit 0, listing exactly the two decision-83 check ids
     fix_if: >-
       A missing row means validate_graduation_completeness's implement-PR leg fails the PR (it
       matches on check_id AND plan_slug, both exactly) -- add the row, or flip the corresponding VP
@@ -452,7 +452,7 @@ test_obligations:
       rows=yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'];
       want={'decision-83-live-probe-evidence-block','decision-83-reversal-stanza-armed'};
       got={r['check_id'] for r in rows if r.get('plan_slug')=='ulf-01-evidence-closure'};
-      assert want <= got, f'missing registry row(s): {sorted(want-got)}';
+      assert got == want, f'missing: {sorted(want-got)} unexpected: {sorted(got-want)}';
       print('graduation registry rows present:', sorted(got))"
     waiver_reason: >-
       Registry rows are data, not code. Their well-formedness is enforced by
@@ -589,8 +589,8 @@ context:
     dec-62 [NOTE], dec-93 [NOTE]. SPIRIT: dec-136 [NOTE], dec-133 [NOTE]. RELATED: dec-89, dec-111,
     dec-134, dec-145, dec-149, dec-160, dec-128, dec-165, dec-105, dec-40 (superseded by dec-122)."
   - >-
-    "gates: decision-scout=FLAGS_FOUND (2 rounds, both 122 of 122); plan-critique=<verdict> after
-    <N> round(s)"
+    "gates: decision-scout=FLAGS_FOUND (2 rounds, both 122 of 122); plan-critique=PROCEED after 3
+    round(s) -- round 1 REVISE (5 findings), round 2 REVISE (5 findings, 3 blocking), round 3 PROCEED"
   - >-
     ORIGIN. PLAN-close-audit-ulf-01 split delivery into a pre-deploy half (check module, workflow,
     tests, and prose edits to AGENTS.md + ROADMAP-PLATFORM.yaml asserting the controls are
@@ -677,8 +677,8 @@ context:
     NOT populate those variables even if a workflow injected them -- anyone wiring them later gets a
     silent empty value, not an error. The rec's question is therefore "who reads these two secrets,
     and should they be deleted or rewired", NEVER "are ExternalIds unused";
-    (ii) DUCKLAKE_WRITER_URL is referenced by four workflows
-    (rec-autoclose, cost-reconciliation, reconcile, and rec-autoclose's backfill step) but is NOT a
+    (ii) DUCKLAKE_WRITER_URL is referenced at four sites
+    across THREE workflow files (rec-autoclose twice, cost-reconciliation, reconcile) but is NOT a
     repository secret, and rec-autoclose declares no `environment:` -- yet its backfill demonstrably
     succeeds, so the writer URL is resolving through the OIDC AWS path rather than the env var, and
     the `secrets.DUCKLAKE_WRITER_URL` references may be vestigial. Record names only, never values
