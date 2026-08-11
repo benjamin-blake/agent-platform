@@ -54,12 +54,18 @@ scope:
   - file: AGENTS.md
     action: Modify
     purpose: >-
-      Rewrite ONLY the T2.12 bullet (line 73 at authoring time) so its claim is dated and
+      TWO edits. (a) Rewrite the T2.12 bullet (line 73 at authoring time) so its claim is dated and
       evidence-citing instead of an unevidenced "continuously live-verified", and so it points at
-      where the credential scopes/expiries are recorded. Net bytes MUST end <= 33190 (the
-      origin/main size): config/prose_budgets.yaml pins S1 root_ambient_load_set at 33201 against a
-      current 33201 -- ZERO headroom -- and validate_prose_limits is blocking in --pre. The rewrite
-      shrinks the file; no prose-budget raise is taken and none is available (see constraints).
+      where the credential scopes/expiries are recorded. (b) Correct the stale rotation sentence in
+      the "Claude Code OAuth token" runbook: replace "Set a 90-day calendar reminder." with the real
+      2027-05-31 expiry plus the same pointer. The operator confirmed on 2026-08-11 that BOTH repo
+      credentials expire 2027-05-31 and that the 90-day text predates that and is now misleading;
+      leaving it would keep two contradicting expiries live in the ambient load-set, which is the
+      drift shape this plan exists to close. Net bytes MUST end <= 33190 (the origin/main size):
+      config/prose_budgets.yaml pins S1 root_ambient_load_set at 33201 against a current 33201 --
+      ZERO headroom -- and validate_prose_limits is blocking in --pre. Measured, edit (b) costs +84
+      bytes and edit (a) frees 226-296, so the pair stays net negative; no prose-budget raise is
+      taken and none is available (see constraints).
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -105,6 +111,10 @@ acceptance_criteria:
     "continuously live-verified"; each instead carries the dated 2026-08-11 claim citing run
     31536138747. CodeQL's separate characterization (evidenced by green codeql.yml runs, not by
     this probe) is preserved in both.
+  - >-
+    AGENTS.md's "Claude Code OAuth token" runbook no longer says "90-day" and instead records the
+    2027-05-31 expiry, so the file carries exactly one expiry story for CLAUDE_CODE_OAUTH_TOKEN
+    rather than two contradicting ones.
   - >-
     AGENTS.md ends at <= 33190 bytes and validate_prose_limits passes with no budget raise and no
     `# raise-approved:` marker added to config/prose_budgets.yaml.
@@ -245,18 +255,22 @@ verification_plan:
     phase: pre-deploy
     hermetic: true
     action: >-
-      AGENTS.md carries the dated, evidence-citing claim, no longer asserts continuous
-      verification, and did not grow against its zero-headroom prose budget.
+      AGENTS.md carries the dated, evidence-citing claim, carries exactly one expiry story for
+      CLAUDE_CODE_OAUTH_TOKEN, no longer asserts continuous verification, and did not grow against
+      its zero-headroom prose budget.
     command: >-
       bash -c '! grep -q "continuously live-verified" AGENTS.md &&
       grep -q "31536138747" AGENTS.md && grep -q "2026-08-11" AGENTS.md &&
-      grep -q "ghas-probe.yml" AGENTS.md &&
+      grep -q "ghas-probe.yml" AGENTS.md && ! grep -q "90-day" AGENTS.md &&
+      grep -q "2027-05-31" AGENTS.md &&
       b=$(wc -c < AGENTS.md) && [ "$b" -le 33190 ] && echo "AGENTS.md ok ($b bytes <= 33190)"'
     expected: exit 0, prints "AGENTS.md ok (N bytes <= 33190)"
     fix_if: >-
       A surviving "continuously live-verified" means the stale claim was not retired. A missing
       ghas-probe.yml reference means the bullet does not point at where the credential scopes and
-      expiries are recorded (acceptance criterion 6). A byte count over 33190 means the bullet
+      expiries are recorded. A surviving "90-day" or a missing "2027-05-31" means the OAuth
+      runbook's stale rotation sentence was not corrected, leaving two contradicting expiries in
+      the ambient load-set. A byte count over 33190 means the bullet
       rewrite did not fund itself: compress the T2.12 bullet further -- do NOT add a
       config/prose_budgets.yaml raise, which validate_prose_budget_raises would reject for want of
       an authorizing Decision (Decision 165).
@@ -579,6 +593,15 @@ context:
     additions is near 4070 bytes, inside the 6144 per-entry cap (which per Decision 167 binds new
     entries only, and Decision 83 is baseline).
   - >-
+    CREDENTIAL EXPIRY, resolved by the operator (2026-08-11). Plan-critique round 1 caught that
+    AGENTS.md's OAuth runbook prescribes a 90-day rotation reminder while this plan records a
+    2027-05-31 expiry for both credentials. The operator confirmed both credentials genuinely
+    expire 2027-05-31 and that the 90-day text is stale, so the correction lands in this plan's
+    AGENTS.md edit rather than being deferred to a rec -- deferring it would leave the ambient
+    load-set carrying two contradicting expiries, the same claim-outlives-reality shape ULF-01 is.
+    Measured: "90-day" occurs exactly once and "2027-05-31" zero times in AGENTS.md on origin/main,
+    so VP step 6's two new conjuncts are a genuine differential.
+  - >-
     GRADUATION ASYMMETRY, recorded so it is not read as an oversight. Step 3 is waived partly
     because as a standing row it would forbid a future Decision 149 compaction of Decision 83,
     while graduated step 1 constrains that same compaction with equal force (it requires two live
@@ -653,7 +676,10 @@ execution_steps:
     AGENTS.md: rewrite the T2.12 bullet so it is dated and evidence-citing (controls live-verified
     2026-08-11 by ghas-probe run 31536138747; standing weekly monitor; dated evidence and the blind
     window on Decision 83) and points at the workflow header for credential scopes and expiries.
-    Preserve CodeQL's separate characterization. Verify the file ends at <= 33190 bytes.
+    Preserve CodeQL's separate characterization. In the SAME edit, replace the stale sentence
+    "Set a 90-day calendar reminder." in the "Claude Code OAuth token" runbook with the real
+    2027-05-31 expiry and the same pointer (measured +84 bytes, funded by the bullet's 226-296).
+    Verify the file ends at <= 33190 bytes.
   - >-
     docs/ROADMAP-PLATFORM.yaml: rewrite the "continuously live-verified" clause in T2.13's re-homed
     criterion into the same dated, run-citing form. Criterion TEXT only -- no status flips, no
