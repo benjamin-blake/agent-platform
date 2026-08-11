@@ -63,10 +63,12 @@ scope:
     purpose: >-
       Repoint Phase 2 step 7 onto the typed currency field, add currency to the Phase 1 step 1 field
       enumeration, and delete the now-moot "Citing reversed decisions as governing" anti-pattern. Must land
-      at or below the 11,325-byte prose budget; the measured formulation lands at 11,315 bytes.
+      at or below the 11,325-byte prose budget; the verified formulation lands at 11,318 bytes (7 B slack).
   - file: config/prose_budgets.yaml
     action: Modify
-    purpose: Ratchet the S4 decision-scout entry DOWN to the post-edit size. A decrease is always unrestricted.
+    purpose: >-
+      Ratchet the S4 .claude/skills/decision-scout/SKILL.md entry DOWN from 11325 to the measured post-edit
+      size of 11318. A decrease is always unrestricted by validate_prose_budget_raises.
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
@@ -259,8 +261,8 @@ verification_plan:
       not the same-commit ratcheted one, so the assertion cannot be satisfied by moving the goalposts.
     command: "bin/venv-python -c \"import pathlib; n=len(pathlib.Path('.claude/skills/decision-scout/SKILL.md').read_bytes()); assert n<=11325, (n, 11325); print(f'skill {n} B within the pre-existing 11,325 B budget')\""
     expected: >-
-      Exits 0. The measured formulation lands at 11,315 B against the 11,325 B baseline; the budget entry is
-      then ratcheted down to the measured size in the same commit.
+      Exits 0 at 11,318 B against the 11,325 B baseline -- 7 B of slack, verified by actually constructing
+      the edit rather than by arithmetic. The budget entry is ratcheted down to 11,318 in the same commit.
     fix_if: >-
       Over budget means the rewrite did not pay for itself. Shorten the step-7 clause. Do NOT add a raise
       marker: under Decision 165 it requires a Decision body naming this skill path and this plan mints none,
@@ -620,8 +622,10 @@ context:
     Prose budget, measured not assumed. The skill is at exactly its 11,325-byte budget and Decision 160
     point 7 ratcheted it DOWN to that figure while REMOVING its dec-152 raise marker. The formulation that
     fits -- narrowed step 7 (no amended branch), currency added to the Phase 1 field enumeration, and the
-    "Citing reversed decisions as governing" anti-pattern deleted -- measures 11,315 B, 10 B under. That
-    margin is thin by construction; step 7's fix_if names the abort path rather than pretending otherwise.
+    "Citing reversed decisions as governing" anti-pattern deleted -- was CONSTRUCTED and measured in round 5
+    at 11,318 B, 7 B under. The verbatim text is embedded in the execution steps, so the implementer pastes
+    a verified string rather than re-deriving one. Both freed-byte figures were confirmed exact (line 65 =
+    258 B with its newline, line 145 = 173 B).
   - >-
     Round-3 self-check, actioned before dispatch: the graduated step 1 originally pinned the exact live
     token distribution. That is the tests/CLAUDE.md count-coupling anti-pattern on a GRADUATED check -- the
@@ -648,11 +652,15 @@ context:
     False, so it derives a non-filterable token while still carrying the marker -- exactly the condition I1
     fires on. That is the malformed-compaction case worth catching.
   - >-
-    Round-3 finding, recorded not silenced: this plan deletes BOTH the skill's status-active filter
-    (SKILL.md:65) and its "Citing reversed decisions as governing" anti-pattern (SKILL.md:145), partly to
-    stay inside a 10-byte prose margin. That leaves marker-exact invariant I4 as the SOLE guard against a
-    reversed entry being cited as governing. The live census is zero such entries, but a safety net partly
-    funded by a byte margin is a trade worth naming explicitly rather than discovering later.
+    Round-3 finding, re-measured and re-framed in round 5: this plan deletes BOTH the skill's status-active
+    filter (SKILL.md:65) and its "Citing reversed decisions as governing" anti-pattern (SKILL.md:145),
+    leaving marker-exact invariant I4 as the SOLE guard against a reversed entry being cited as governing,
+    and removing the word "reversed" from the skill entirely. Round 5 measured this and found it is NOT a
+    discretionary economy: retaining the anti-pattern lands the file at 11,491 B, and no step-7 formulation
+    carrying all four semantic clauses plus both I5 literals fits the remainder (best candidate 5 B over).
+    The loss is FORCED by the byte ceiling. The live census is zero Reversed/Deferred entries, so nothing
+    regresses today, but this should be stated as a ceiling consequence in the PR body rather than implied
+    to be a considered trade.
   - >-
     Budget surfaces measured for completeness, none binding: docs/contracts/decision-entry.yaml sits in the
     `contracts` structural class (500 effective-line limit, config/structural_size_budgets.yaml) at 401
@@ -805,12 +813,21 @@ execution_steps:
     tests/checks/decisions/test__manifest.py is fully parametrized over ENTRIES, so it covers the new entry
     with no edit.
   - >-
-    .claude/skills/decision-scout/SKILL.md -- replace Phase 2 step 7 with the currency branch (naming
-    superseded_compacted as the only demoting value and superseded_pointer as NEVER filtered and NEVER
-    severity-reduced, treating amended as current for now), add `currency` to the Phase 1 step 1 field
-    enumeration, and delete the "Citing reversed decisions as governing" anti-pattern. Measure bytes before
-    and after; target 11,315 B, hard ceiling 11,325 B.
-  - config/prose_budgets.yaml -- ratchet the S4 decision-scout entry down to the measured post-edit size.
+    .claude/skills/decision-scout/SKILL.md -- three edits, all measured to land at 11,318 B (7 B under the
+    11,325 B ceiling). Do not re-derive the wording; it was constructed and verified against the ceiling and
+    against invariant I5's greps.
+    (a) REPLACE the whole `7. **Status filter.**` line with EXACTLY this single line:
+    7. **Currency filter.** Branch on the typed `currency`, never status prose. `superseded_compacted` is the ONLY value that demotes to RELATED, noted "superseded by Decision M, awareness only". `superseded_pointer` is NEVER filtered and NEVER severity-reduced: triage exactly as `current`, annotated "read against Decision M". `amended` is treated as `current` for now. No `currency` key = archived, out of scope.
+    (b) In the Phase 1 step 1 field enumeration, replace the substring "carries none), and `category_tags`"
+    with "carries none), `currency`, and `category_tags`" (+12 B).
+    (c) DELETE the whole `- **Citing reversed decisions as governing.**` line plus its newline (frees 173 B).
+    Step (c) is FORCED, not a discretionary economy: retaining that bullet lands the file at 11,491 B, and no
+    formulation of step 7 that still carries all four semantic clauses plus both I5 literals fits in the
+    remaining budget (the most compressed candidate measured 5 B over). Verify the final byte count before
+    committing.
+  - >-
+    config/prose_budgets.yaml -- ratchet the S4 .claude/skills/decision-scout/SKILL.md entry from 11325 down
+    to the measured post-edit size (11318 if the embedded verbatim text is used unchanged).
   - >-
     config/agent/verification_registry/registry.yaml -- append TWO rows, one per graduated step, each with
     the full field set. Row 1: check_id decisions-index-currency-derivation, primitive_slot
