@@ -74,7 +74,9 @@ scope:
     action: Modify
     purpose: >-
       Ratchet the S4 .claude/skills/decision-scout/SKILL.md entry DOWN from 11325 to the measured post-edit
-      size of 11318. A decrease is always unrestricted by validate_prose_budget_raises.
+      size: 11318 with the shipping step-7 text, or 11294 if the operator elects the amended branch (see the
+      OPERATOR ASSUMPTION context entry, which carries verified text for both). A decrease is always
+      unrestricted by validate_prose_budget_raises.
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
@@ -282,8 +284,9 @@ verification_plan:
       not the same-commit ratcheted one, so the assertion cannot be satisfied by moving the goalposts.
     command: "bin/venv-python -c \"import pathlib; n=len(pathlib.Path('.claude/skills/decision-scout/SKILL.md').read_bytes()); assert n<=11325, (n, 11325); print(f'skill {n} B within the pre-existing 11,325 B budget')\""
     expected: >-
-      Exits 0 at 11,318 B against the 11,325 B baseline -- 7 B of slack, verified by actually constructing
-      the edit rather than by arithmetic. The budget entry is ratcheted down to 11,318 in the same commit.
+      Exits 0 against the 11,325 B baseline. 11,318 B (7 B slack) with the shipping step-7 text, or 11,294 B
+      (31 B slack) if the operator elected the amended branch -- both verified by construction, both texts
+      carried in the OPERATOR ASSUMPTION context entry. Ratchet the budget entry to whichever landed.
     fix_if: >-
       Over budget means the rewrite did not pay for itself. Shorten the step-7 clause. Do NOT add a raise
       marker: under Decision 165 it requires a Decision body naming this skill path and this plan mints none,
@@ -496,6 +499,17 @@ test_obligations:
       The registry is an append-only record of graduated checks, not behaviour: its correctness is
       adjudicated by validate_verification_registry's own differential admission gate, which runs in --pre
       and already fails a row that does not fail at origin/main.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      validate_decision_currency resolves in function_to_category as schema_drift, satisfying
+      validate_ci_rca_taxonomy's registry-totality assertion (the Priority-0 attribution precondition).
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A category map has no behaviour of its own to red/green: it is a declarative row whose only consumer is
+      validate_ci_rca_taxonomy's totality assertion, which is registered UNGATED in --pre and fails on any
+      registered check absent from the map. Adding the row IS the fix and the assertion IS the test; a
+      bespoke unit test would restate the guard without adding an independent signal.
   - source: docs/decisions-index.json
     behavior: The committed artifact matches what the generator produces, so the currency projection is present in the file decision-scout reads.
     verification_step: 8
