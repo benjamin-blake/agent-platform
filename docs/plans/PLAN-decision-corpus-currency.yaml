@@ -78,6 +78,13 @@ scope:
       to graduate. Measured at 4,862 EFFECTIVE lines against the 6,000 limit
       (config/structural_size_budgets.yaml declares unit: effective-lines), so 1,138 free. Two rows cost
       roughly 18 lines.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Add the `validate_decision_currency: schema_drift` row to `function_to_category`. Mandatory, not
+      optional: validate_ci_rca_taxonomy is pre=True and fails on ANY registered check missing from that
+      map (a Priority-0 attribution precondition), so omitting it reds --pre on day one. `schema_drift` is
+      what all three decisions-domain siblings use.
   - file: tests/decisions_md/test_currency.py
     action: Create
     purpose: >-
@@ -335,6 +342,7 @@ verification_plan:
     command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     expected: >-
       Both invocations exit 0, with validate_decision_currency, validate_check_manifests,
+      validate_ci_rca_taxonomy,
       validate_decisions_index_freshness, validate_prose_limits, validate_sloc_limits,
       validate_structural_size_limits, validate_handoff_full_tier and validate_verification_registry all
       passing.
@@ -774,7 +782,10 @@ execution_steps:
     currency onto live rows only. The generator does NOT validate or raise. Preserve byte-stability. Extend
     the module docstring's field-derivation list.
   - >-
-    scripts/checks/decisions/validate_decision_currency.py -- five invariants: I1 every LIVE entry whose
+    scripts/checks/decisions/validate_decision_currency.py -- new check module. It MUST carry the
+    decorator `@registry.register("validate_decision_currency", owner="platform")`: the manifest Entry
+    alone is NOT registration, and without the decorator the registry bijection test fails with
+    "manifested-but-unregistered: ['validate_decision_currency']". Five invariants: I1 every LIVE entry whose
     status marker resolves to 'Superseded' derives superseded_compacted, using the FIRST match of
     _BOLD_STATUS_RE with '--' normalization (never a substring/findall match, which hits live Decisions 149
     and 160 where the marker is merely QUOTED; I1 is live-scoped because currency is, and under the PINNED
@@ -841,7 +852,7 @@ execution_steps:
     CommandExitZeroCheck(command=list(spec["command"])) and scripts/verification_checks.py runs
     subprocess.run(self.command) with NO shell=True, so a string is char-split into ['b','i','n',...] and
     raises FileNotFoundError: 'b'. validate_verification_registry catches only GraduationError, so that
-    escapes as an uncaught --pre traceback. All 167 existing command_exit_zero rows use a list; zero use a
+    escapes as an uncaught --pre traceback. All 173 existing command_exit_zero rows use a list; zero use a
     string. Translate step 1's and step 5's commands into that form.
     ADMISSION, stated honestly: both rows WILL be admitted, but for a weaker reason than a naive reading
     suggests. In a local detached worktree at origin/main there is no .venv, so `bin/venv-python` exits
@@ -849,6 +860,11 @@ execution_steps:
     without the assertion ever running. The differential is genuine only in venv-less CI, where the hosted
     interpreter can import the deps and the real assertion fires. Do not record the local run as evidence
     that the assertions discriminate.
+  - >-
+    config/ci_rca_taxonomy.yaml -- add `validate_decision_currency: schema_drift` to function_to_category,
+    alphabetically alongside validate_decision_entry_conformance / validate_decisions_index_freshness /
+    validate_decisions_size. Without it validate_ci_rca_taxonomy (pre=True) fails with "registered check
+    'validate_decision_currency' absent from function_to_category".
   - >-
     tests/decisions_md/test_currency.py -- unit coverage for both symbols including synthetic PRECEDENCE
     cases and both inbound-edge cases.
@@ -876,7 +892,11 @@ execution_steps:
     121 live entries, governance backbone included). A merged plan document is not a work-tracking surface;
     AGENTS.md routes deferred scope to file_rec.
   - >-
-    Commit with "Resolves: rec-3055, rec-3056" in the squash-merge commit body, and in rec-3056's resolution
+    Commit with the subject `feat(decision-corpus-currency): <summary>` -- the slug prefix is REQUIRED, not
+    stylistic: validate_graduation_completeness's implement-PR leg resolves this plan from `feat({slug})`
+    subjects on `git log origin/main..HEAD` and then demands a new-in-diff registry row per graduated step,
+    so a differently-prefixed subject silently skips that leg. Put "Resolves: rec-3055, rec-3056" in the
+    squash-merge commit body, and in rec-3056's resolution
     text name the follow-on rec id that carries the deferred branch, so its closure is honest about being
     partial. When closing rec-3055, state
     that the shipped fix reframes the filed one (status-prose keying was the defect; keying on superseded_by
