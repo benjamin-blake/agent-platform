@@ -44,10 +44,15 @@ scope:
   - file: .github/workflows/ghas-probe.yml
     action: Modify
     purpose: >-
-      Extend the existing header COMMENT block only, recording both repo credentials: their secret
-      names, scopes, the shared 2027-05-31 expiry, and the rotation procedure. Interim home per the
-      operator's decision (see the Decision 127 deferral in constraints); rec (c) owns the durable
-      contract home. MUST NOT touch the `Run GHAS live-probe (loud-fail)` step body --
+      Extend the existing header COMMENT block only, recording the two PAT-class credentials --
+      GHAS_PROBE_TOKEN and CLAUDE_CODE_OAUTH_TOKEN -- with their secret names, scopes, the shared
+      2027-05-31 expiry, and the rotation procedure. It MUST say in the comment that this is the
+      two PAT expiries, NOT a complete credential inventory: the repo also carries
+      TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID and TF_VAR_PLATFORM_DEV_EXTERNAL_ID, which are a different
+      class (IAM ExternalIds, no GitHub PAT clock) and belong to rec (c)'s inventory, not here.
+      Recording NAMES and dates only -- an ExternalId VALUE is explicitly on AGENTS.md's
+      never-publish list. Interim home per the operator's decision (see the Decision 127 deferral
+      in constraints); rec (c) owns the durable contract home. MUST NOT touch the `Run GHAS live-probe (loud-fail)` step body --
       config/composite_action_body_baseline.yaml pins it at 1 effective line as an ENFORCED
       CEILING with no raise-approved escape. Comment lines are excluded from the effective-line
       count, so header growth is size-neutral.
@@ -578,7 +583,18 @@ context:
     persistent-unavailability-alarm clause, and explicitly NOT a ci_rca watch.
     (c) title carrying "credential inventory contract" -- a durable Decision 127/168-conformant home
     for the repo credential inventory (names, scopes, expiries), replacing the interim workflow
-    comment.
+    comment. Scope it to the FULL inventory confirmed by the operator on 2026-08-11, not just the
+    two PATs: repository secrets are CLAUDE_CODE_OAUTH_TOKEN, GHAS_PROBE_TOKEN,
+    TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID and TF_VAR_PLATFORM_DEV_EXTERNAL_ID. Two anomalies to carry
+    into that rec, both established by grep/API this session and NEITHER fixed here: (i) the two
+    TF_VAR_PLATFORM_*_EXTERNAL_ID secrets are referenced NOWHERE under .github/ -- they are
+    IAM-ExternalId-bearing repository secrets with no CI consumer, so their rotation owner and
+    continued necessity are unestablished; (ii) DUCKLAKE_WRITER_URL is referenced by four workflows
+    (rec-autoclose, cost-reconciliation, reconcile, and rec-autoclose's backfill step) but is NOT a
+    repository secret, and rec-autoclose declares no `environment:` -- yet its backfill demonstrably
+    succeeds, so the writer URL is resolving through the OIDC AWS path rather than the env var, and
+    the `secrets.DUCKLAKE_WRITER_URL` references may be vestigial. Record names only, never values
+    (these are ExternalIds -- AGENTS.md's boundary names them explicitly).
     (d) title carrying "T2.13 bare-string" -- convert T2.13's four bare-string exit_criteria to
     ExitCriterion objects; note that met_by is not derivable from a shallow clone and must come
     from the warehouse or PR history, never inference. Priority Low.
@@ -621,10 +637,16 @@ context:
     owning Decision plus recommendations -- never a new number. This also avoids the numbering race
     that has already cost other plans a claimed number.
   - >-
-    ops_decisions PROJECTION IS AUTOMATIC. .github/workflows/rec-autoclose.yml runs on push to main,
-    detects a DECISIONS.md change, and calls backfill_decisions_from_md, so no post-deploy portal
-    step is needed for the warehouse projection. Authoring one would reproduce this plan's own
-    anti-pattern.
+    ops_decisions PROJECTION IS AUTOMATIC, and this was VERIFIED rather than assumed (the assumption
+    is exactly the shape this plan exists to distrust). .github/workflows/rec-autoclose.yml runs on
+    push to main, detects a DECISIONS.md change, and calls backfill_decisions_from_md. Evidence: run
+    31508090279 on edab65c -- a commit that did touch docs/DECISIONS.md -- executed step 8 "Backfill
+    decisions to warehouse" with conclusion success, taking 4m10s (15:39:58Z to 15:44:08Z), a
+    runtime consistent with a real multi-row write rather than a skipped or no-op step. So no
+    post-deploy portal step is needed for the warehouse projection; authoring one would reproduce
+    this plan's own anti-pattern. Do NOT infer this from the workflow's overall green conclusion
+    alone -- the backfill step is conditional on a DECISIONS.md change, so a green run on a commit
+    that did not touch the file proves nothing about it.
   - >-
     OUT OF SCOPE, deliberately: dedup-probe has never passed (ModuleNotFoundError -- the script is
     heredoc'd into /tmp so the repo root is never on sys.path); that is its own plan. Open recs
