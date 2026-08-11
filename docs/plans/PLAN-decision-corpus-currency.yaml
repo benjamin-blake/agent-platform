@@ -43,19 +43,14 @@ scope:
       chosen over a numbered Decision per the operator ruling that the proof of a decision belongs in code
       -- a routing the corpus itself compels, since Decision 150's field_semantics row routes exactly this
       content to the owning contract and says "Never a numbered Decision".
-  - file: scripts/checks/registry.py
+  - file: scripts/checks/decisions/_manifest.py
     action: Modify
     purpose: >-
-      Sequence validate_decision_currency into the --pre and full tiers, glob-gated on the surfaces it
-      reads (docs/DECISIONS.md, docs/DECISIONS_ARCHIVE.md, docs/decisions-index.json,
-      docs/contracts/decision-entry.yaml, .claude/skills/decision-scout/SKILL.md) PLUS its own module path,
-      following the validate_actions_evidence precedent -- otherwise a PR editing only the check itself
-      skips it in --pre.
-  - file: scripts/validate.py
-    action: Modify
-    purpose: >-
-      Add the facade re-export line for validate_decision_currency. Required: dispatch is
-      globals()[name](failed), so without it --pre KeyErrors on the check name.
+      Declare validate_decision_currency as one Entry literal -- the sole registration surface as of
+      Decision 169, which retired scripts/validate.py's re-export facade in favour of per-domain
+      declarative manifests. Entry carries pre=True with pre_globs covering the surfaces the check reads
+      PLUS its own module path (so a PR editing only the check still runs it), and
+      full_segment="full_after_lint" to match its three decisions-domain siblings.
   - file: docs/contracts/decision-entry.yaml
     action: Modify
     purpose: >-
@@ -78,9 +73,9 @@ scope:
       Append the TWO graduation rows owed by VP steps 1 and 5. In scope deliberately: Decision 166 point 6 calibrated
       this file's 6,000-line ceiling precisely because "every graduating /implement plan appends to it",
       and the never-a-second-raise pre-commitment governs what happens when the ceiling FIRES, not whether
-      to graduate. Measured post-rebase at 4,707 EFFECTIVE lines against the 6,000 limit
-      (config/structural_size_budgets.yaml declares unit: effective-lines), so 1,293 free; raw count 4,885.
-      Two rows cost roughly 18 lines.
+      to graduate. Measured at 4,862 EFFECTIVE lines against the 6,000 limit
+      (config/structural_size_budgets.yaml declares unit: effective-lines), so 1,138 free. Two rows cost
+      roughly 18 lines.
   - file: tests/decisions_md/test_currency.py
     action: Create
     purpose: >-
@@ -116,13 +111,15 @@ acceptance_criteria:
     heading) both derive 'superseded_pointer'; Decision 43 and Decision 67 derive 'amended'; Decision 168
     derives 'current'. Additionally the superseded_compacted SET equals the set of live entries carrying a
     '**Status:** Superseded' marker -- structural and count-free, so it survives corpus growth (both are
-    {44, 58} today). The live distribution measured at planning time (91 current, 26 amended, 2
-    superseded_pointer, 2 superseded_compacted) is INFORMATIONAL: no verification step pins those counts,
+    {44, 58} today). The live distribution measured post-rebase (92 current, 26 amended, 2
+    superseded_pointer, 2 superseded_compacted, over 122 live entries) is INFORMATIONAL: no verification step pins those counts,
     because VP step 1 is graduated and a pinned count would red-line every unrelated PR adding a Decision.
   - >-
-    validate_decision_currency is registered, glob-gated, sequenced into --pre and full, re-exported in
-    scripts/validate.py, and each of its five invariants has a synthetic fixture proving it FAILS when
-    violated.
+    validate_decision_currency is registered via a single Entry in scripts/checks/decisions/_manifest.py
+    (pre=True with pre_globs, full_segment="full_after_lint"), resolves through
+    scripts.checks.registry.resolve, passes validate_check_manifests' grammar, and each of its five
+    invariants has a synthetic fixture proving it FAILS when violated. scripts/validate.py is NOT touched
+    (Decision 169).
   - >-
     Invariant I1 asserts the DISCRIMINATING direction -- every LIVE entry whose status marker resolves to
     'Superseded' derives 'superseded_compacted' -- so a malformed compaction that a human reads as superseded
@@ -315,10 +312,10 @@ verification_plan:
     action: Confirm the index stays under its byte pin and report remaining headroom.
     command: "bin/venv-python -c \"import pathlib; n=len(pathlib.Path('docs/decisions-index.json').read_bytes()); assert n<=131000, n; print(f'index {n} B, headroom {131000-n} B of the 131,000 B pin')\""
     expected: >-
-      Exits 0. Measured projection is 115,871 B with 15,129 B of headroom, against a 112,314 B baseline
-      (+3,557 B).
+      Exits 0. Measured projection is 116,760 B with 14,240 B of headroom, against a 113,174 B baseline
+      (+3,586 B).
     fix_if: >-
-      Materially less headroom than about 15,100 B means more than the currency string was projected (an
+      Materially less headroom than about 14,200 B means more than the currency string was projected (an
       amended_by list or a currency_basis field). Remove the extra field; do not raise the pin, which
       Decision 166 reversal condition (g) reserves for landing rec-3012 first.
     hermetic: true
@@ -335,15 +332,16 @@ verification_plan:
       on its own PR. The chained form satisfies the matcher's second segment.
     command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     expected: >-
-      Both invocations exit 0, with validate_decision_currency, validate_decisions_index_freshness,
-      validate_prose_limits, validate_sloc_limits, validate_structural_size_limits,
-      validate_handoff_full_tier and validate_verification_registry all passing.
+      Both invocations exit 0, with validate_decision_currency, validate_check_manifests,
+      validate_decisions_index_freshness, validate_prose_limits, validate_sloc_limits,
+      validate_structural_size_limits, validate_handoff_full_tier and validate_verification_registry all
+      passing.
     fix_if: >-
-      A KeyError on validate_decision_currency means the scripts/validate.py facade re-export line is
-      missing. A validate_sloc_limits failure names the file: scripts/validate.py is at 498 of 500 SLOC, so
-      the re-export takes it to 499, leaving ONE line of headroom -- if it crosses, the re-export block is
-      the wrong place to absorb it, so decompose per Decision 80's facade pattern rather than registering a
-      budget entry for the repo's central gate file; tests/test_decisions_index.py is at 457. If tests/test_decisions_index.py crosses 500 (457 today, real headroom), do NOT
+      An unresolved-name failure on validate_decision_currency means the Entry is missing from
+      scripts/checks/decisions/_manifest.py, or its module/attr are not bare string literals (which
+      validate_check_manifests rejects). The scripts/validate.py headroom risk earlier drafts carried is
+      GONE: Decision 169 retired its re-export facade (498 -> 315 SLOC) and this plan no longer touches it.
+      tests/test_decisions_index.py is at 457. If tests/test_decisions_index.py crosses 500 (457 today, real headroom), do NOT
       create a tests/decisions_index/ package: scripts/decisions_index.py is absent from
       _CONCERN_SPLIT_TEST_PACKAGES and _RETIRING_GRANDFATHER_HOMES is empty, so it mirrors to the FLAT file
       and a package would fail check_test_file_exists. Move the integration spot-checks into
@@ -410,18 +408,17 @@ test_obligations:
       oracle and any behavioural delta is a defect in the promotion, not an expectation to update. The
       'superseded_with_pointer' case (Status + Decision + pointer, NO Date, expects True) is the specific
       guard that the promotion stayed verbatim.
-  - source: scripts/checks/registry.py
-    behavior: validate_decision_currency is sequenced into both tiers, glob-gated on the surfaces it reads, and reachable by name.
-    verification_step: 11
-    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
-    red_green_expectation: Red before (the check does not run, so its invariants are unenforced), green after with the check named in the output.
-  - source: scripts/validate.py
-    behavior: The facade re-export makes validate_decision_currency a module-level global so registry dispatch via globals()[name] resolves it.
+  - source: scripts/checks/decisions/_manifest.py
+    behavior: >-
+      The new Entry declares validate_decision_currency into both tiers with its pre_globs, resolves
+      through scripts.checks.registry.resolve to the same-named callable in its own domain package, and
+      satisfies validate_check_manifests' bare-string-literal grammar.
     verification_step: 11
     command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
     red_green_expectation: >-
-      Red before (dispatch KeyErrors on the check name once sequenced), green after. This is the exact
-      failure mode scripts/CLAUDE.md warns about for a registered check with no re-export line.
+      Red before (no Entry, so the check never runs and its five invariants are unenforced), green after
+      with validate_decision_currency named in the --pre output. The parametrized mirror test at
+      tests/checks/decisions/test__manifest.py picks the entry up automatically with no edit.
   - source: .claude/skills/decision-scout/SKILL.md
     behavior: >-
       Phase 2 step 7 branches on currency, names superseded_compacted as the only demoting value, states
@@ -614,8 +611,9 @@ context:
     Round-2 finding, actioned: step 7's budget assertion read the budget file that the same commit ratchets
     down, so it was self-fulfilling. It now asserts against the literal origin/main value of 11,325.
   - >-
-    Corrected measurements, re-run after the token change: live-only currency costs +3,557 B, landing the
-    index at 115,871 B with 15,129 B of headroom. The earlier +3,535 B figure was measured before D37/D80
+    Historical measurement note (superseded by the Decision 169 rebase figures above, retained to show the
+    correction chain): at that time live-only currency cost +3,557 B, landing the index at 115,871 B with
+    15,129 B of headroom. The earlier +3,535 B figure was measured before D37/D80
     moved from 'current' to 'superseded_pointer'. Live distribution: 91 current, 26 amended, 2
     superseded_pointer, 2 superseded_compacted.
   - >-
@@ -688,11 +686,22 @@ context:
     .claude/skills/orient/SKILL.md (also at exactly its 23,595-byte cap). Premise verified live -- /orient
     contains no occurrence of "critical" and there are 12 open Critical recs with no surfacing lane.
   - >-
+    Rebased again after Decision 169 landed (the per-domain declarative check manifests that retired
+    scripts/validate.py's re-export facade). That materially changed this plan's registration surface:
+    scripts/validate.py and scripts/checks/registry.py are OUT of scope entirely, replaced by one Entry
+    literal in scripts/checks/decisions/_manifest.py, and the one-line-headroom risk on validate.py is gone
+    (498 -> 315 SLOC). Corpus figures moved with the new entry: 149 entries / 122 live, index baseline
+    113,174 B, +3,586 B with currency to 116,760 B (14,240 B headroom), live distribution 92/26/2/2, live
+    headers 122 of 132, verification registry 4,862 effective. The DERIVATION is unchanged -- all seven
+    spot-checks still hold and Decision 169 itself derives 'current'. Note the vindication of round 3's
+    de-pinning: the informational current count moved 91 -> 92, so the originally-pinned distribution would
+    have red-lined the graduated check on this very rebase.
+  - >-
     Rebased onto origin/main during the round-4 gate: main had advanced and touched three scope files
     (scripts/validate.py, scripts/checks/registry.py, config/agent/verification_registry/registry.yaml).
-    That rebase MOVED two load-bearing numbers -- scripts/validate.py went 497 -> 498 SLOC (so the mandated
-    re-export now leaves ONE line, not two, under the 500 limit) and the verification registry went 4,561 ->
-    4,707 effective lines. Both are corrected above. Neither the decision corpus nor the prose budgets
+    That rebase MOVED two load-bearing numbers -- scripts/validate.py went 497 -> 498 SLOC and the
+    verification registry went 4,561 -> 4,707 effective lines. Both were superseded by the later Decision
+    169 rebase recorded above, which removed scripts/validate.py from scope altogether. Neither the decision corpus nor the prose budgets
     changed, so the index and skill measurements still hold. Preflight was clean with no unresolved ci-rca
     recs. Fast-tier cost of the new check measured acceptable:
     build_index() runs in 46-84 ms.
@@ -705,7 +714,10 @@ pre_implementation_checklist:
   - >-
     docs/contracts/decision-entry.yaml compaction and metadata_envelope sections read, since the currency
     section sits alongside them and must not restate them
-  - scripts/CLAUDE.md read for the three-part check-registration requirement (module, registry sequence, validate.py re-export)
+  - >-
+    scripts/CLAUDE.md read for the CURRENT check-registration rule (module + one Entry literal in the
+    domain _manifest.py; scripts/validate.py is never touched, per Decision 169) plus
+    docs/contracts/check-manifest.yaml for the Entry grammar
   - config/agent/verification_registry/registry.yaml row shape read before appending
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
@@ -780,12 +792,18 @@ execution_steps:
     I5's two required literals are exactly `superseded_compacted` and
     `NEVER filtered and NEVER severity-reduced`; VP step 6 greps the same two strings.
   - >-
-    scripts/checks/registry.py -- sequence validate_decision_currency into --pre and full, glob-gated on
-    docs/DECISIONS.md, docs/DECISIONS_ARCHIVE.md, docs/decisions-index.json,
-    docs/contracts/decision-entry.yaml and .claude/skills/decision-scout/SKILL.md. scripts/validate.py --
-    add the matching re-export line. The file is at 498 of 500 SLOC post-rebase, so the re-export lands at
-    499 -- ONE line of headroom. Verify before adding; if it does not fit, decompose per Decision 80 rather
-    than registering a budget entry for the repo's central gate file.
+    scripts/checks/decisions/_manifest.py -- append ONE Entry literal to ENTRIES:
+    Entry(name="validate_decision_currency", module="scripts.checks.decisions.validate_decision_currency",
+    attr="validate_decision_currency", pre=True, pre_globs=("docs/DECISIONS.md",
+    "docs/DECISIONS_ARCHIVE.md", "docs/decisions-index.json", "docs/contracts/decision-entry.yaml",
+    ".claude/skills/decision-scout/SKILL.md", "scripts/checks/decisions/validate_decision_currency.py"),
+    full_segment="full_after_lint"). Bare string literals only -- never a combined "module:attr" and never
+    a computed value; validate_check_manifests enforces that grammar and docs/contracts/check-manifest.yaml
+    is its contract. Do NOT touch scripts/validate.py or scripts/checks/registry.py: Decision 169 retired
+    the re-export facade, dispatch is now scripts.checks.registry.resolve(name)(failed) via late-bound
+    getattr, and scripts/CLAUDE.md states the aggregator "is never touched". The mirror test
+    tests/checks/decisions/test__manifest.py is fully parametrized over ENTRIES, so it covers the new entry
+    with no edit.
   - >-
     .claude/skills/decision-scout/SKILL.md -- replace Phase 2 step 7 with the currency branch (naming
     superseded_compacted as the only demoting value and superseded_pointer as NEVER filtered and NEVER
@@ -853,8 +871,9 @@ work_areas: []
 rollback: >-
   Revertible in one commit, with one caveat stated honestly. Reverting scripts/decisions_index.py and
   regenerating restores the previous index byte-for-byte (build_index is deterministic and excludes volatile
-  fields). Reverting the skill, prose-budget, registry-sequence and validate.py re-export restores the prior
-  gate behaviour; the new check module can be deleted and its registry row removed. The predicate promotion
+  fields). Reverting the skill, the prose-budget ratchet, and the one Entry literal in
+  scripts/checks/decisions/_manifest.py restores the prior gate behaviour; the new check module can be
+  deleted and its two verification-registry rows removed. The predicate promotion
   in scripts/decisions_md.py IS genuinely behaviour-preserving in this revision -- it is a verbatim move, not
   a strengthening -- so it may be left in place independently. No corpus entry, warehouse row, or deployed
   artifact is touched. The caveat: the blocking gate itself is the live surface, so any plan scoped between
