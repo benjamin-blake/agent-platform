@@ -320,3 +320,22 @@ class TestVerifierCoverageArgv:
         with patch("validate.run_coverage_check"), pytest.raises(SystemExit):
             _validate.main()
         assert "DEPRECATED" not in capsys.readouterr().out
+
+
+class TestUpdateSlocBudgetsArgv:
+    """--update-sloc-budgets main()-argv wiring: the import is deferred (Decision 169) so this
+    branch does not make scripts/validate.py eagerly import a check-defining module -- patching
+    the defining module (not a validate.* alias) proves the deferred import still resolves live."""
+
+    def test_update_sloc_budgets_flag_runs_and_exits_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", "--update-sloc-budgets"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.setenv("CI", "true")  # skip the branch guard; not under test here
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        with (
+            patch("scripts.checks.sloc.sloc_limits._update_sloc_budgets") as mock_update,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+        assert exc_info.value.code == 0
+        mock_update.assert_called_once_with()

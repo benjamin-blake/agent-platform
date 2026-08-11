@@ -26,19 +26,45 @@ from scripts.verification_checks import CheckStatus
 # `python -m scripts.verification_graduation --run-verifier ...` in that tree's cwd can resolve
 # its own import chain (the real repo always carries this closure at HEAD; a fixture repo must
 # replicate it explicitly).
+_MANIFEST_DOMAINS = (
+    "ci_guards",
+    "contracts",
+    "decisions",
+    "deps",
+    "executor",
+    "hygiene",
+    "iam_tf",
+    "lambda_pkg",
+    "misc",
+    "ops_governance",
+    "product",
+    "prompts",
+    "prose",
+    "roadmap",
+    "sloc",
+    "structural",
+    "typing",
+    "verification",
+)
+
 _GRADUATION_DEPS = (
-    "scripts/verification_graduation.py",
-    "scripts/verification_checks.py",
-    "scripts/checks/__init__.py",
-    "scripts/checks/_common.py",
-    "scripts/checks/_scaffolding.py",
-    "scripts/checks/_budget_recs.py",
-    "scripts/checks/_terraform.py",
-    "scripts/checks/registry.py",
-    "scripts/checks/verification/__init__.py",
-    "scripts/checks/verification/validate_verifier_hermeticity.py",
-    "scripts/checks/iam_tf/__init__.py",
-    "scripts/checks/iam_tf/validate_terraform_try.py",
+    (
+        "scripts/verification_graduation.py",
+        "scripts/verification_checks.py",
+        "scripts/checks/__init__.py",
+        "scripts/checks/_common.py",
+        "scripts/checks/_scaffolding.py",
+        "scripts/checks/_budget_recs.py",
+        "scripts/checks/_terraform.py",
+        "scripts/checks/_schema.py",
+        "scripts/checks/registry.py",
+        "scripts/checks/verification/validate_verifier_hermeticity.py",
+        "scripts/checks/iam_tf/validate_terraform_try.py",
+    )
+    # registry.py imports every domain's _manifest.py (Decision 169) -- a synthetic tree missing
+    # any one of them fails the whole import chain, not just that domain's checks.
+    + tuple(f"scripts/checks/{domain}/__init__.py" for domain in _MANIFEST_DOMAINS)
+    + tuple(f"scripts/checks/{domain}/_manifest.py" for domain in _MANIFEST_DOMAINS)
 )
 
 

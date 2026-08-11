@@ -124,3 +124,70 @@ class TestSegmentTokenMismatchFails:
         _write_tree(tmp_path, _ENTRY_LITERAL, contract_text=contract)
         failed = _run(tmp_path)
         assert any("SEGMENT_TOKENS" in f for f in failed), failed
+
+
+class TestMissingFieldFails:
+    def test_entry_missing_attr_kwarg_fails(self, tmp_path: Path) -> None:
+        """An Entry() call that omits `attr=` entirely (not merely a non-literal value) exercises
+        _kwarg_value's not-found return distinctly from the wrong-type branch above."""
+        body = (
+            "from scripts.checks._schema import Entry\n\n"
+            'ENTRIES = (Entry(name="validate_x", module="scripts.checks.fake_domain.validate_x"),)\n'
+        )
+        _write_tree(tmp_path, body)
+        failed = _run(tmp_path)
+        assert any("is missing `attr=`" in f for f in failed), failed
+
+    def test_unnamed_entry_uses_placeholder_display_name(self, tmp_path: Path) -> None:
+        """An Entry() with no `name=` kwarg still produces a readable failure message via the
+        "<unnamed>" placeholder rather than raising."""
+        body = (
+            "from scripts.checks._schema import Entry\n\n"
+            'ENTRIES = (Entry(module="scripts.checks.fake_domain.validate_x"),)\n'
+        )
+        _write_tree(tmp_path, body)
+        failed = _run(tmp_path)
+        assert any("<unnamed>" in f and "is missing `attr=`" in f for f in failed), failed
+
+
+class TestNoManifestFilesFails:
+    def test_no_manifest_files_found_fails(self, tmp_path: Path) -> None:
+        (tmp_path / "scripts" / "checks").mkdir(parents=True)
+        contracts_dir = tmp_path / "docs" / "contracts"
+        contracts_dir.mkdir(parents=True)
+        (contracts_dir / "check-manifest.yaml").write_text(_VALID_CONTRACT, encoding="utf-8")
+        failed = _run(tmp_path)
+        assert any("no scripts/checks/*/_manifest.py files found" in f for f in failed), failed
+
+
+class TestManifestSyntaxErrorFails:
+    def test_unparseable_manifest_fails(self, tmp_path: Path) -> None:
+        _write_tree(tmp_path, "def broken(:\n    pass\n")
+        failed = _run(tmp_path)
+        assert any("fake_domain/_manifest.py" in f for f in failed), failed
+
+
+class TestContractFileFails:
+    def test_missing_contract_file_fails(self, tmp_path: Path) -> None:
+        manifest_dir = tmp_path / "scripts" / "checks" / "fake_domain"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "_manifest.py").write_text(_ENTRY_LITERAL, encoding="utf-8")
+        (tmp_path / "docs" / "contracts").mkdir(parents=True)
+        failed = _run(tmp_path)
+        assert any("check-manifest.yaml" in f for f in failed), failed
+
+    def test_invalid_yaml_contract_fails(self, tmp_path: Path) -> None:
+        _write_tree(tmp_path, _ENTRY_LITERAL, contract_text="contract: [unclosed\n")
+        failed = _run(tmp_path)
+        assert any("check-manifest.yaml" in f for f in failed), failed
+
+    def test_contract_missing_declared_segment_tokens_key_fails(self, tmp_path: Path) -> None:
+        contract = "contract:\n  id: check-manifest\namendment_log: []\n"
+        _write_tree(tmp_path, _ENTRY_LITERAL, contract_text=contract)
+        failed = _run(tmp_path)
+        assert any("missing entry_grammar.declared_segment_tokens" in f for f in failed), failed
+
+    def test_contract_not_a_mapping_fails(self, tmp_path: Path) -> None:
+        _write_tree(tmp_path, _ENTRY_LITERAL, contract_text="- just\n- a\n- list\n")
+        failed = _run(tmp_path)
+        assert any("did not parse to a YAML mapping" in f for f in failed), failed
