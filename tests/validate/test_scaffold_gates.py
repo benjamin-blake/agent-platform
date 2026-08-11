@@ -9,17 +9,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.checks.sloc._shared import iter_gated_py_files
+from scripts.checks.sloc.cc_limits import validate_cc_limits
+from scripts.checks.sloc.sloc_limits import _update_sloc_budgets, validate_sloc_limits
 from tests.fixtures.subprocess_stubs import _mock_completed
 from tests.fixtures.validate_module import _validate
 
-validate_sloc_limits = _validate.validate_sloc_limits
-validate_cc_limits = _validate.validate_cc_limits
+# ensure_fresh_dq_results/run_coverage_check/get_changed_files/ROOT are still reachable on the
+# "validate" module object -- all four are retained _common/_scaffolding re-exports
+# (scripts/validate.py:42-61), unaffected by Decision 169's check-facade deletion.
 ensure_fresh_dq_results = _validate.ensure_fresh_dq_results
 run_coverage_check = _validate.run_coverage_check
 get_changed_files = _validate.get_changed_files
 ROOT = _validate.ROOT
-_update_sloc_budgets = _validate._update_sloc_budgets
-iter_gated_py_files = _validate.iter_gated_py_files
 
 
 class TestRunCoverageCheck:

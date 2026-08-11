@@ -3,14 +3,13 @@
 Covers: a merge_key-bearing storage-substrate entry missing grain fails, a complete entry
 passes, a group entry without merge_key is skipped (no false positive), a missing/malformed
 data-modeling-standard.yaml fails, the diff gate skips when neither trigger file changed, and
-the check is wired into both presubmit tiers + the scripts.validate facade (VP step 2, -k
-wiring). Follows the tmp_path + contracts_dir/changed_files override pattern used by
+the check is wired into both presubmit tiers + resolves via scripts.checks.registry (Decision
+169, -k wiring). Follows the tmp_path + contracts_dir/changed_files override pattern used by
 test_validate_intent_doc_freeze.py / test_validate_contract_drift.py.
 """
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import yaml
@@ -181,8 +180,8 @@ class TestWiring:
         assert "validate_data_model_standard" in pre_names
         assert "validate_data_model_standard" in full_names
 
-    def test_wiring_resolves_on_validate_facade(self) -> None:
-        mod = importlib.import_module("scripts.validate")
+    def test_wiring_resolves_via_the_registry(self) -> None:
+        resolved = registry.resolve("validate_data_model_standard")
 
-        assert hasattr(mod, "validate_data_model_standard")
-        assert callable(mod.validate_data_model_standard)
+        assert callable(resolved)
+        assert resolved is validate_data_model_standard

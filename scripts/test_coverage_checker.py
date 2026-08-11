@@ -40,12 +40,6 @@ def extract_definitions(file_path: Path) -> list[str]:
     return names
 
 
-# scripts/checks/registry.py and _common.py are the check-registry mechanism itself
-# (Decision 104); they're exercised directly by tests/test_checks_registry.py (frozen
-# baseline, facade completeness, mock-interception, owner metadata), not by any
-# individual check's tests in tests/test_validate.py.
-_CHECKS_REGISTRY_MECHANISM_FILES = {"_common.py", "registry.py"}
-
 # scripts/checks/_scaffolding.py and _terraform.py are orchestration-internal helper modules --
 # not themselves registered checks -- whose tests have always lived alongside the orchestrator's
 # own tests (never with the per-check mirrors). Once "test_validate.py" retires from
@@ -96,8 +90,12 @@ def _grandfathered_source_to_test(source_path: Path) -> Path | None:
     src/**/*.py           -> tests/test_{module}.py  (e.g. src/common/config.py -> tests/test_config.py)
     scripts/*.py          -> tests/test_{name}.py     (e.g. scripts/validate.py -> tests/test_validate.py)
     scripts/checks/**/*.py -> tests/test_validate.py  (every extracted check's tests live there,
-                              colocated with the pre-decomposition monolith's test file -- Decision 104),
-                              except registry.py/_common.py which map to tests/test_checks_registry.py.
+                              colocated with the pre-decomposition monolith's test file -- Decision 104).
+                              registry.py/_common.py are CONCERN-SPLIT (_CONCERN_SPLIT_TEST_PACKAGES
+                              below) and resolve to their own test package directories instead
+                              (Decision 169, folding the former dec-159 mechanism-files special
+                              case into the concern-split set now that the pre-decomposition
+                              monolith's test file no longer exists).
     scripts/convergence_health/*.py -> tests/test_convergence_health.py (facade decomposition of
                               the former single-file convergence_health monolith, same Decision 104
                               colocation precedent -- PLAN-convergence-health-sloc-decompose-guardrails).
@@ -142,8 +140,6 @@ def _grandfathered_source_to_test(source_path: Path) -> Path | None:
         stem = rel.stem
         return ROOT / "tests" / f"test_{stem}.py"
     elif parts[0] == "scripts" and len(parts) >= 2 and parts[1] == "checks":
-        if len(parts) >= 3 and parts[2] in _CHECKS_REGISTRY_MECHANISM_FILES:
-            return ROOT / "tests" / "test_checks_registry.py"
         return ROOT / "tests" / "test_validate.py"
     elif parts[0] == "scripts" and len(parts) == 3 and parts[1] == "convergence_health":
         return ROOT / "tests" / "test_convergence_health.py"
@@ -211,6 +207,8 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = set()
 # map_source_to_test's direct membership check, which fires before the final `return home`).
 _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
     {
+        "scripts/checks/registry.py",
+        "scripts/checks/_common.py",
         "scripts/ops_writer.py",
         "scripts/ops_data_portal.py",
         "scripts/s3_log_store.py",

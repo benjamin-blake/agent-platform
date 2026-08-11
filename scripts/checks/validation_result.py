@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 RESULT_PATH = Path("logs/debug/validation-result.json")
 
@@ -26,14 +26,15 @@ def clear(path: Path = RESULT_PATH) -> None:
     _ATTRIBUTIONS.clear()
 
 
-def dispatch_recording(name: str, failed: list[str], namespace: dict[str, Any]) -> None:
-    """Run a registered check via `namespace[name](failed)`, attributing each label it newly
-    appends to `failed` back to `name`. `namespace` is the caller's own globals() (validate.py's
-    _dispatch_check passes its module globals()) so a `patch("validate.<name>")` interception
-    still resolves -- this preserves validate.py's existing dispatch contract exactly.
+def dispatch_recording(name: str, failed: list[str], fn: Callable[[list[str]], None]) -> None:
+    """Run a registered check via `fn(failed)`, attributing each label it newly appends to
+    `failed` back to `name`. `fn` is resolved by the CALLER (scripts.checks.registry.resolve(name),
+    late-bound at call time -- Decision 169, amending Decision 104's namespace-dict dispatch) so a
+    `patch("<the check's defining module>.<name>", ...)` interception still resolves through a
+    real dispatch pass.
     """
     before = len(failed)
-    namespace[name](failed)
+    fn(failed)
     for label in failed[before:]:
         _ATTRIBUTIONS.append({"check": name, "label": label})
 

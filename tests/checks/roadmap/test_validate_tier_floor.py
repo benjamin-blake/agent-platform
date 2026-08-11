@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import scripts.validate as _validate_module
+from scripts.checks import registry
 from scripts.checks.roadmap.validate_tier_floor import validate_tier_floor
 
 
@@ -91,7 +91,7 @@ class TestValidateTierFloor:
         assert failed == []
 
     def test_alias_matches_registered_check(self) -> None:
-        assert validate_tier_floor is _validate_module.validate_tier_floor
+        assert validate_tier_floor is registry.resolve("validate_tier_floor")
 
     def test_lambda_manifest_load_failure_treated_as_no_code_files(self, tmp_path: Path) -> None:
         from scripts.checks.roadmap import validate_tier_floor as _tier_floor_module

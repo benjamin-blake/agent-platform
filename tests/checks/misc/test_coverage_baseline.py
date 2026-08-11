@@ -1,6 +1,7 @@
 """Tests for scripts/checks/misc/coverage_baseline.py: load/compare, the measurement engine,
 and validate_coverage_baseline_edits() (Decision 128 mirror tamper guard)."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -418,3 +419,38 @@ class TestValidateCoverageBaselineEdits:
             coverage_baseline.validate_coverage_baseline_edits(failed, base_reader=base_reader)
 
         assert len(failed) == 1
+
+
+class TestValidatePyEntryCarriesAnAuthorizedMarker:
+    """Decision 169 (amends Decision 104): the lowered scripts/validate.py entry must carry a
+    `baseline-lowered` marker naming a real, AUTHORIZING Decision -- a real assertion, since the
+    module mirror test alone would pass whether or not the marker exists at all."""
+
+    def test_entry_carries_a_baseline_lowered_marker(self) -> None:
+        from scripts.checks import _common
+
+        text = (_common.ROOT / "config" / "coverage_baseline.yaml").read_text(encoding="utf-8")
+        line = next(line for line in text.splitlines() if line.strip().startswith("scripts/validate.py:"))
+        match = re.search(r"#\s*baseline-lowered:\s*dec-(\d+)", line)
+        assert match, f"scripts/validate.py's coverage_baseline.yaml entry carries no baseline-lowered marker: {line!r}"
+
+        decision_number = int(match.group(1))
+        decisions_text = (_common.ROOT / "docs" / "DECISIONS.md").read_text(encoding="utf-8")
+        assert re.search(rf"^## Decision {decision_number}:", decisions_text, re.M), (
+            f"marker cites dec-{decision_number}, but no such Decision header exists"
+        )
+
+    def test_marker_is_authorized_by_its_cited_decision(self) -> None:
+        from scripts.checks import _common, _marker_guard
+        from scripts.checks.misc.coverage_baseline import _SPEC
+
+        text = (_common.ROOT / "config" / "coverage_baseline.yaml").read_text(encoding="utf-8")
+        entries = _SPEC.extractor(text)
+        entry = entries.get("scripts/validate.py")
+        assert entry is not None and entry.marker is not None, "scripts/validate.py entry has no parsed marker"
+
+        bodies = _marker_guard.load_decision_bodies()
+        assert not _marker_guard.authorization_failure(entry.marker, "scripts/validate.py", bodies), (
+            f"marker {entry.marker!r} does not authorize the scripts/validate.py entry -- its Decision body "
+            "must contain the literal string 'scripts/validate.py'"
+        )

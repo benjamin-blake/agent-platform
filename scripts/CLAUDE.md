@@ -29,14 +29,21 @@ platform and resolves the correct venv binary. Each Bash tool call is independen
 `source .venv/bin/activate`.
 
 ## Adding a validate.py check
-CI checks are registered via `@register(...)` and tier-ordered in `scripts/checks/registry.py`,
-not hand-wired step-by-step into `scripts/validate.py` -- but a registered check still requires
-one explicit line in `scripts/validate.py`. Add the module under `scripts/checks/<domain>/`,
-decorate it `@register(...)`, insert its name in the ordered tier sequence(s) in
-`scripts/checks/registry.py`, AND add a "from scripts.checks.<domain>.<module> import <name>
-# noqa: F401,E402" re-export line in `scripts/validate.py`'s facade re-export block. Dispatch is
-`globals()[name](failed)` in `scripts/validate.py` (no walk_packages auto-discovery), so without
-that re-export line the check is not a module-level global there: `validate --pre` KeyErrors on
-the check name and the reachability tests in `tests/test_checks_registry.py` fail.
-`scripts/validate.py` is the single source of truth for CI gates (AGENTS.md merge protocol) --
-never add a CI check without adding it here first.
+CI checks are registered via `@register(...)` and tier-sequenced by per-domain declarative
+manifests (Decision 169, amends Decision 104) -- `scripts/validate.py` is NEVER touched. Add the
+module under `scripts/checks/<domain>/`, decorate it `@register(...)`, and add one `Entry(name=,
+module=, attr=, ...)` literal (bare string literals for `module=`/`attr=` -- never a combined
+`"module:attr"` form, never computed; see `docs/contracts/check-manifest.yaml`) to that domain's
+`scripts/checks/<domain>/_manifest.py`. Set `pre=True` (+ `pre_globs=` if the check should be
+gated to specific changed paths) for `--pre` membership, and `full_segment=` (one of
+`scripts.checks._schema.SEGMENT_TOKENS`) for full-tier membership; a check may be unsequenced
+(neither) if it is invoked directly elsewhere (the sole instance: `validate_terraform_try`, called
+inside the `terraform_checks` scaffold bundle).
+
+Dispatch is `scripts.checks.registry.resolve(name)(failed)` -- `resolve()` imports the Entry's
+defining module and does a late-bound `getattr` at CALL TIME (never caching the resolved
+callable), so `unittest.mock.patch("<the check's defining module>.<name>", ...)` intercepts a real
+dispatch pass. There is no facade re-export in `scripts/validate.py` to add or patch against.
+`scripts/checks/deps/validate_check_manifests.py` (registered in both tiers) enforces the
+manifest grammar; add a mirror test at `tests/checks/<domain>/test__manifest.py`-adjacent files
+(see the 18 existing ones) if your domain's manifest doesn't already have one.

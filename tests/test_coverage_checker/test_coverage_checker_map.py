@@ -163,19 +163,23 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "checks" / "contracts" / "test__shared.py"
 
-    def test_maps_scripts_checks_registry_to_test_checks_registry(self) -> None:
-        """scripts/checks/registry.py maps to tests/test_checks_registry.py, not test_validate.py."""
+    def test_maps_scripts_checks_registry_to_its_concern_split_package(self) -> None:
+        """scripts/checks/registry.py is a declared concern-split monolith (Decision 169) and
+        maps to its own test package directory, not test_validate.py nor the retired
+        tests/test_checks_registry.py."""
         source = ROOT / "scripts" / "checks" / "registry.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_checks_registry.py"
+        assert result == ROOT / "tests" / "checks" / "registry"
 
-    def test_maps_scripts_checks_common_to_test_checks_registry(self) -> None:
-        """scripts/checks/_common.py maps to tests/test_checks_registry.py, not test_validate.py."""
+    def test_maps_scripts_checks_common_to_its_concern_split_package(self) -> None:
+        """scripts/checks/_common.py is a declared concern-split monolith (Decision 169) and
+        maps to its own test package directory, not test_validate.py nor the retired
+        tests/test_checks_registry.py."""
         source = ROOT / "scripts" / "checks" / "_common.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_checks_registry.py"
+        assert result == ROOT / "tests" / "checks" / "_common"
 
     @pytest.mark.parametrize(
         "stem",
