@@ -7,9 +7,15 @@ tier-sequence derivation now come from the 18 per-domain scripts/checks/<domain>
 ``Entry`` manifests (grammar: docs/contracts/check-manifest.yaml), never from a facade re-export
 block in scripts/validate.py.
 
-Adding a check touches ONLY this package: create scripts/checks/<domain>/<module>.py, decorate it
-with ``@register(...)``, and add its ``Entry`` (bare string-literal module=/attr=) to that
-domain's ``_manifest.py`` -- scripts/validate.py is never touched.
+Registering a new check touches SIX surfaces, not merely this package (retracts the earlier
+"touches ONLY this package" claim -- three of the six sit outside scripts/checks entirely; plan-
+obligation-closure / docs/contracts/plan-obligations.yaml): (1) the check module under
+scripts/checks/<domain>/; (2) its ``@register(...)`` decoration; (3) an ``Entry`` literal (bare
+string-literal module=/attr=) in that domain's ``_manifest.py``; (4) a
+config/ci_rca_taxonomy.yaml ``function_to_category`` row; (5) a
+config/agent/verification_registry/registry.yaml row per GRADUATED verification_plan step (not
+per check); (6) the mirror test at tests/<mirrored>/test_<module>.py. scripts/validate.py itself
+is still never touched. scripts/CLAUDE.md points at this enumeration; it does not restate it.
 
 ``resolve(name)`` imports the Entry's defining module and returns ``getattr(module, entry.attr)``
 at CALL TIME. The module import may be cached (importlib's own sys.modules cache); the RESOLVED

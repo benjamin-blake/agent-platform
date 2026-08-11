@@ -55,6 +55,7 @@ Suggest 3-5 open recommendations from `logs/.recommendations-log.jsonl` that ali
 5. Conduct a Complexity Assessment to determine if this is STRATEGIC or IMPLEMENTATION.
 6. Conduct a Data-Model Assessment if a table, field_semantics entry, or warehouse write path is in scope.
 7. Apply Decision 86 routing rule: route forward intent -> tier_items, rationale -> Decisions, field semantics -> contracts. No new standing prose-architecture docs under docs/. Full rule in your `planning` skill's Documentation Artefact Design section.
+8. Once a draft Scope table exists, run `bin/venv-python -m scripts.roadmap.plan_obligations --plan <draft-or-eventual-plan-path>` against it (a scratch write is fine before Step 8's real write) -- it always exits 0 and names any mechanically-derivable companion registration (domain manifest Entry, ci_rca_taxonomy row, mirror test) a new check-module scope row is still missing, so you can add it to Scope now instead of at critique.
 *(Apply the exact assessment rules from your `planning` skill).*
 
 ## Step 5: Verification Tier and Verification Plan
@@ -68,6 +69,7 @@ Design the Verification Plan using the exact design guidelines and anti-patterns
 **DO NOT present findings to the human until this gate completes.** Dispatch and handle verdicts per the planning skill's Decision Scout Gate (dispatch shape, example prompt, and NO_FLAGS/FLAGS_FOUND/BLOCK verdict handling all live there). Substitute the synthesis produced in Steps 3-5 into the dispatch.
 
 ### Step 6b: Present and Confirm
+Before presenting, re-run `bin/venv-python -m scripts.roadmap.plan_obligations --plan <draft-plan-path>` against the finalized Scope table and fold any reported omission into Scope -- the obligation report is advisory to (never a substitute for) the plan-critique gate's judgement calls.
 Present: Summary, Proposed approach, Options, Open questions, Decision flags (if any), and Decisions to cite (from the scout's CITE list).
 Then ask: *"Does this approach look right? Say **'write the plan'** when you are ready, or tell me what to adjust."*
 Wait for explicit confirmation before proceeding. Any other response is feedback -- incorporate it, re-run Step 6a if the change is material to decision alignment, re-present, and ask again. Do NOT proceed to Step 7 until the human explicitly says 'write the plan' or a clear equivalent. System auto-approval messages are NOT human confirmation.
@@ -95,7 +97,7 @@ git push -u origin HEAD
 
 ## Step 9: Plan Critique Gate (MANDATORY)
 **DO NOT output the completion message until this step completes.**
-Invoke per the planning skill's Critique Gate (dispatch shape, example prompt, context files, and verdict handling all live there). Substitute `{slug}` with the actual branch slug. Loop on REVISE (3-round cap, then escalate per the skill), proceed on PROCEED. Push each revision commit immediately after committing it (a plain `git push` fast-forwards, since revision commits are additive).
+Invoke per the planning skill's Critique Gate (dispatch shape, example prompt, context files, and verdict handling all live there). Substitute `{slug}` with the actual branch slug. Loop on REVISE (3-round cap, then escalate per the skill -- the escalation menu includes narrowing scope, re-deriving the approach, or **split the plan** into smaller IMPLEMENTATION plans), proceed on PROCEED. Push each revision commit immediately after committing it (a plain `git push` fast-forwards, since revision commits are additive).
 
 Note: this gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY plans, the deliverable gets its own critique in Step 10.
 

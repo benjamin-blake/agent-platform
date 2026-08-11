@@ -5188,3 +5188,220 @@ entries:
         - bin/venv-python
         - -c
         - import scripts.decisions_md as m, scripts.checks.decisions.validate_decision_entry_conformance as c, pathlib; assert c._is_compacted_stub is m.is_compacted_stub, 'checks module does not reach the shared predicate object'; assert pathlib.Path('scripts/checks/decisions/validate_decision_entry_conformance.py').read_text().count('def _is_compacted_stub')==0; print('single-parser rule OK (identity-checked)')
+  - check_id: plan-obligations-independent-evidence
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/roadmap/validate_plan_scope_closure.py
+    guard_symbol: validate_plan_scope_closure
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml, tempfile, pathlib
+        from scripts.checks.roadmap.validate_plan_scope_closure import validate_plan_scope_closure as C
+
+        d = pathlib.Path(tempfile.mkdtemp())
+        base = {
+            "schema_version": 4,
+            "plan_type": "IMPLEMENTATION",
+            "slug": "fixture-probe",
+            "plan_path": "docs/plans/PLAN-fixture-probe.yaml",
+            "scope": [
+                {"file": "scripts/checks/roadmap/validate_x.py", "action": "Create", "purpose": "p"},
+                {"file": "scripts/checks/roadmap/_manifest.py", "action": "Modify", "purpose": "p"},
+                {"file": "config/ci_rca_taxonomy.yaml", "action": "Modify", "purpose": "p"},
+                {"file": "tests/checks/roadmap/test_validate_x.py", "action": "Create", "purpose": "p"},
+            ],
+        }
+        good = d / "PLAN-fixture-probe.yaml"
+        good.write_text(yaml.safe_dump(base))
+        f = []
+        C(f, plan_paths=[good])
+        assert not f, f"positive control failed: {f}"
+        miss = 0
+        for drop in ("scripts/checks/roadmap/_manifest.py", "config/ci_rca_taxonomy.yaml", "tests/checks/roadmap/test_validate_x.py"):
+            bad = dict(base)
+            bad["scope"] = [r for r in base["scope"] if r["file"] != drop]
+            p = d / "PLAN-fixture-probe.yaml"
+            p.write_text(yaml.safe_dump(bad))
+            g = []
+            C(g, plan_paths=[p])
+            assert g and any(drop in str(x) for x in g), f"not flagged: {drop} -> {g}"
+            miss += 1
+        print(f"independent evidence ok: positive control clean, {miss}/3 omissions named")
+  - check_id: plan-obligations-grandfathering
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/roadmap/validate_plan_scope_closure.py
+    guard_symbol: validate_plan_scope_closure
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml, tempfile, pathlib
+        from scripts.checks.roadmap.validate_plan_scope_closure import validate_plan_scope_closure as C
+
+        d = pathlib.Path(tempfile.mkdtemp())
+        old = {
+            "schema_version": 3,
+            "plan_type": "IMPLEMENTATION",
+            "slug": "legacy-probe",
+            "plan_path": "docs/plans/PLAN-legacy-probe.yaml",
+            "scope": [{"file": "scripts/checks/roadmap/validate_y.py", "action": "Create", "purpose": "p"}],
+        }
+        p = d / "PLAN-legacy-probe.yaml"
+        p.write_text(yaml.safe_dump(old))
+        f = []
+        C(f, plan_paths=[p])
+        assert not f, f"sub-v4 plan flagged: {f}"
+        print("grandfathering ok")
+  - check_id: plan-obligations-cli-advisory
+    primitive_slot: command_exit_zero
+    guard_target: scripts/roadmap/plan_obligations.py
+    guard_symbol: main
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        bin/venv-python -m scripts.roadmap.plan_obligations --plan docs/plans/PLAN-plan-obligation-closure.yaml >/dev/null 2>&1
+        a=$?
+        H=$(git status --porcelain | md5sum)
+        bin/venv-python -m scripts.roadmap.plan_obligations --plan docs/plans/PLAN-plan-obligation-closure.yaml >/dev/null 2>&1
+        b=$?
+        A=$(git status --porcelain | md5sum)
+        if [ "$a" != "0" ] || [ "$b" != "0" ]; then echo "CLI exited non-zero ($a,$b) - it is a gate, not advisory"; exit 1; fi
+        if [ "$H" != "$A" ]; then echo "tree mutated"; exit 1; fi
+        echo advisory ok
+  - check_id: plan-obligations-no-glob-no-raise
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/roadmap/validate_plan_scope_closure.py
+    guard_symbol: validate_plan_scope_closure
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import time, tempfile, pathlib
+        from scripts.checks.roadmap.validate_plan_scope_closure import validate_plan_scope_closure as C
+
+        t = time.monotonic()
+        f = []
+        C(f, plan_paths=[])
+        assert not f, f"empty plan_paths produced findings - it globbed: {f}"
+        e = time.monotonic() - t
+        assert e < 1.0, f"took {e:.2f}s on an empty path list - it globbed the corpus"
+        g = []
+        C(g, plan_paths=[pathlib.Path(tempfile.mkdtemp()) / "PLAN-absent.yaml"])
+        print(f"no-glob ok ({e:.3f}s), missing file handled without raising")
+  - check_id: plan-obligations-contract-as-sot
+    primitive_slot: command_exit_zero
+    guard_target: scripts/roadmap/plan_obligations.py
+    guard_symbol: null
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import pathlib, re
+
+        src = pathlib.Path("scripts/roadmap/plan_obligations.py").read_text()
+        body = re.sub(r'(?s)""".*?"""', "", src)
+        body = re.sub(r"(?m)^\s*#.*$", "", body)
+        assert "plan-obligations.yaml" in body, "contract basename absent from executable code - one-hop evaluator resolution will fail"
+        assert not re.search(r"(?m)^\s+(import|from)\s+.*plan_obligations", src), "deferred import breaks one-hop resolution"
+        print("contract-as-sot ok")
+  - check_id: plan-obligations-router-route
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/file-router.yaml
+    guard_symbol: null
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml
+
+        r = yaml.safe_load(open("docs/contracts/file-router.yaml"))
+        c = yaml.safe_load(open("docs/contracts/plan-obligations.yaml"))["contract"]
+        hit = [x for x in r["routes"] if x.get("topic") == c["subject"] and "docs/contracts/plan-obligations.yaml" in x.get("targets", [])]
+        assert hit, "no route binding topic to subject"
+        print("route ok")
+  - check_id: plan-obligations-enumeration-homed
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: null
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        bin/venv-python <<'PYEOF'
+        import re, pathlib, sys
+        d = re.search('"""(.*?)"""', pathlib.Path("scripts/checks/registry.py").read_text(), re.S).group(1)
+        miss = [s for s in ("ci_rca_taxonomy", "verification_registry", "test_") if s not in d]
+        sys.exit(f"registry.py docstring omits {miss}" if miss else 0)
+        PYEOF
+        if [ $? -ne 0 ]; then exit 1; fi
+        b=$(git show origin/main:scripts/CLAUDE.md | wc -c)
+        a=$(wc -c < scripts/CLAUDE.md)
+        if [ "$a" -ge "$b" ]; then echo "scripts/CLAUDE.md did not shrink ($b -> $a)"; exit 1; fi
+        grep -q "test__manifest.py" scripts/CLAUDE.md || { echo "mirror-test sentence was cut"; exit 1; }
+        echo "enumeration homed, CLAUDE.md shrank"
+  - check_id: plan-obligations-critic-consumes-report
+    primitive_slot: command_exit_zero
+    guard_target: .claude/skills/plan-critique/SKILL.md
+    guard_symbol: null
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import pathlib
+
+        t = pathlib.Path(".claude/skills/plan-critique/SKILL.md").read_text()
+        assert "scripts.roadmap.plan_obligations" in t, "critic does not invoke the obligation query"
+        assert "finding-origin attribution" in t.lower(), "no finding-origin attribution in the output shape"
+        print("critic consumes report ok")
+  - check_id: plan-obligations-command-wired
+    primitive_slot: command_exit_zero
+    guard_target: .claude/commands/plan.md
+    guard_symbol: null
+    plan_slug: plan-obligation-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import pathlib
+
+        t = pathlib.Path(".claude/commands/plan.md").read_text()
+        assert "scripts.roadmap.plan_obligations" in t, "Steps 4/6b do not invoke the obligation query"
+        assert "split the plan" in t.lower(), "convergence escalation lacks the split option"
+        print("command wired ok")
