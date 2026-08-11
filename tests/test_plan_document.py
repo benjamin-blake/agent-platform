@@ -10,8 +10,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from scripts.checks.roadmap.validate_plan_documents import validate_plan_documents
 from scripts.roadmap.plan_document import PlanDocument, load, main, validate_paths
-from scripts.validate import validate_plan_documents
 
 FIXTURES = Path(__file__).parent / "fixtures" / "plan_documents"
 
