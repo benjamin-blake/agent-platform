@@ -26,7 +26,7 @@ from scripts.decisions_index import (
     check_index_freshness,
     main,
 )
-from scripts.decisions_md import decision_header_numbers, parse_decisions_md
+from scripts.decisions_md import decision_header_numbers, parse_decisions_md, status_is_superseded
 
 
 class TestDeterminism:
@@ -47,8 +47,10 @@ class TestDeterminism:
             assert not (volatile & entry.keys()), f"dec-{entry['number']} leaked volatile field(s): {volatile & entry.keys()}"
 
     def test_entry_shape_is_the_stable_projection_only(self) -> None:
+        """PLAN-decision-corpus-currency: `currency` is a live-only key, so the stable shape now
+        branches on `live` rather than asserting one fixed key set for every entry."""
         idx = build_index()
-        expected_keys = {
+        base_keys = {
             "number",
             "title",
             "status",
@@ -62,8 +64,10 @@ class TestDeterminism:
             "triage_excerpt_truncated",
             "category_tags",
         }
+        live_keys = base_keys | {"currency"}
         for entry in idx["decisions"]:
-            assert set(entry.keys()) == expected_keys
+            expected_keys = live_keys if entry["live"] else base_keys
+            assert set(entry.keys()) == expected_keys, entry["number"]
 
 
 class TestBothFilesCoverage:
@@ -192,6 +196,37 @@ class TestLiveField:
         idx = build_index()
         d = {x["number"]: x for x in idx["decisions"]}
         assert d[36]["live"] is False
+
+
+class TestCurrencyProjection:
+    """PLAN-decision-corpus-currency: `currency` is a live-only key, matching representative
+    classes across the real corpus. Structural/count-free (round-3 de-pinning): no raw
+    distribution is asserted, since it grows with every new live Decision."""
+
+    def test_currency_present_iff_live(self) -> None:
+        idx = build_index()
+        for entry in idx["decisions"]:
+            assert ("currency" in entry) == entry["live"], entry["number"]
+
+    def test_representative_classes_and_compacted_set_equals_status_marker_set(self) -> None:
+        idx = build_index()["decisions"]
+        by_number = {e["number"]: e for e in idx}
+        expected = {
+            44: "superseded_compacted",
+            58: "superseded_compacted",
+            37: "superseded_pointer",
+            80: "superseded_pointer",
+            43: "amended",
+            67: "amended",
+            168: "current",
+        }
+        for n, want in expected.items():
+            assert by_number[n]["currency"] == want, (n, by_number[n]["currency"])
+
+        live_numbers = {e["number"] for e in idx if e["live"]}
+        marked = {r["decision_id"] for r in parse_decisions_md() if status_is_superseded(r["raw_block"])}
+        compacted = {e["number"] for e in idx if e.get("currency") == "superseded_compacted"}
+        assert compacted == (marked & live_numbers)
 
 
 class TestTriageExcerptUnit:

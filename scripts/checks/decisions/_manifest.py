@@ -40,4 +40,19 @@ ENTRIES: tuple[Entry, ...] = (
         attr="validate_supersession_annotations",
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_decision_currency",
+        module="scripts.checks.decisions.validate_decision_currency",
+        attr="validate_decision_currency",
+        pre=True,
+        pre_globs=(
+            "docs/DECISIONS.md",
+            "docs/DECISIONS_ARCHIVE.md",
+            "docs/decisions-index.json",
+            "docs/contracts/decision-entry.yaml",
+            ".claude/skills/decision-scout/SKILL.md",
+            "scripts/checks/decisions/validate_decision_currency.py",
+        ),
+        full_segment="full_after_lint",
+    ),
 )

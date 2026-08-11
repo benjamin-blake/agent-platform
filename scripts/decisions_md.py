@@ -40,6 +40,14 @@ for every entry with no envelope (forward-only; the historical band is untouched
 it carries one). Surfaces a new `significance` row key (the envelope's routing claim dict, or {}
 when absent) -- INDEX-ONLY like amends/title_supersedes: never added to _DECISION_BACKFILL_COLS,
 DecisionPayload, or the warehouse projection (Decision 166 point 9).
+
+Decision-corpus currency (PLAN-decision-corpus-currency, rec-3055/rec-3056): promotes
+is_compacted_stub() (formerly private to scripts.checks.decisions.
+validate_decision_entry_conformance, now a module-level alias back to it) to public status here,
+alongside its status-half bold_status()/status_is_superseded() and the new derive_currency() --
+the single derivation scripts.decisions_index projects as each live row's `currency` field and
+scripts.checks.decisions.validate_decision_currency enforces (DAF-03: one derivation, several
+consumers, never a re-derived regex).
 """
 
 from __future__ import annotations
@@ -208,6 +216,89 @@ def extract_superseded_by(text: str) -> str:
 # Private alias retained so existing internal callers (this module's own parse_decisions_md)
 # keep working unchanged.
 _extract_superseded_by = extract_superseded_by
+
+
+# The bold **Status:** marker regex -- promoted here from scripts.checks.decisions.
+# validate_decision_entry_conformance (PLAN-decision-corpus-currency, DAF-03) so the status
+# derivation it and scripts.checks.decisions.validate_decision_currency both need has exactly
+# one definition.
+_BOLD_STATUS_RE = re.compile(r"\*\*Status:\*\*\s*(.+)")
+
+
+def bold_status(block: str) -> str:
+    """Normalized **Status:** marker value from a heading-inclusive raw block.
+
+    The FIRST match of _BOLD_STATUS_RE, its captured group split on '--' and stripped (the
+    same normalization the pre-promotion _is_compacted_stub used). Returns "" when block carries
+    no bold Status marker.
+
+    Public (DAF-03 / PLAN-decision-corpus-currency): the single shared status-marker VALUE
+    derivation. status_is_superseded and is_compacted_stub below build on it; so does
+    scripts.checks.decisions.validate_decision_currency's invariant I4, which needs the VALUE
+    (not a boolean) to prefix-test 'Reversed'/'Deferred'. Re-implementing this regex anywhere
+    else is exactly the divergence DAF-03 closes.
+    """
+    m = _BOLD_STATUS_RE.search(block)
+    if not m:
+        return ""
+    return m.group(1).strip().split("--")[0].strip()
+
+
+def status_is_superseded(block: str) -> bool:
+    """True iff block's bold_status() value is exactly 'Superseded'.
+
+    Public (PLAN-decision-corpus-currency): imported by name in the currency derivation's
+    graduated verification step, so it must exist as a stable public symbol, not merely be
+    inlined into is_compacted_stub.
+    """
+    return bold_status(block) == "Superseded"
+
+
+def is_compacted_stub(block: str) -> bool:
+    """A Decision 149 compacted stub: '**Status:** Superseded' plus a live '**Superseded by:
+    Decision N**' pointer -- the fixed shape compaction.stub_grammar mandates.
+
+    Public (DAF-03 / PLAN-decision-corpus-currency): promoted BEHAVIOUR-VERBATIM from
+    scripts.checks.decisions.validate_decision_entry_conformance._is_compacted_stub, which is
+    now a module-level alias to this function -- one definition, two consumers (that check
+    module and scripts.decisions_index's currency derivation), never a second implementation.
+    """
+    return status_is_superseded(block) and bool(extract_superseded_by(block))
+
+
+def derive_currency(row: dict, inbound_supersedes: set[int], inbound_amends: set[int]) -> str:
+    """Derive one of the four currency tokens for a live decision row.
+
+    row is a parser row from parse_decisions_md() (needs 'raw_block', which the index
+    projection deliberately excludes). inbound_supersedes / inbound_amends are corpus-wide sets
+    -- built ONCE per scripts.decisions_index.build_index() call from its own supersedes/amends
+    maps -- never recomputed per row; a row's membership in either set is the only per-row test
+    this function performs against them.
+
+    Precedence (first match wins):
+      1. 'superseded_compacted' -- row is a compacted stub (is_compacted_stub).
+      2. 'superseded_pointer' -- row carries a victim-side superseded_by, OR its number is the
+         target of an inbound supersedes edge (title_supersedes/envelope-supersedes from
+         another entry).
+      3. 'amended' -- row's number is the target of an inbound amends edge, OR its bold status
+         marker begins with 'Amended' (the residual status-prose band, e.g. Decision 67).
+      4. 'current' -- none of the above.
+
+    Both the status_is_superseded/is_compacted_stub checks above and the 'amended' bold-marker
+    check here read the BOLD marker on raw_block, never row['status'] -- parse_decisions_md
+    prefers the metadata envelope over the bold marker, so the two can diverge on any enveloped
+    entry; the bold marker is the corpus-wide spelling and the only one the historical
+    status-prose 'amended' band carries.
+    """
+    block = row.get("raw_block", "")
+    number = row["decision_id"]
+    if is_compacted_stub(block):
+        return "superseded_compacted"
+    if row.get("superseded_by") or number in inbound_supersedes:
+        return "superseded_pointer"
+    if number in inbound_amends or bold_status(block).startswith("Amended"):
+        return "amended"
+    return "current"
 
 
 # DCG-08 (PLAN-dcg-decisions-index) title-relation extraction, shared by the public

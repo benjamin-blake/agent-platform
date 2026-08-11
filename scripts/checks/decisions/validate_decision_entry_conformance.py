@@ -40,12 +40,17 @@ import yaml
 from scripts.checks import _common, registry
 from scripts.checks.decisions._baseline import BaselineReaderFn
 from scripts.checks.decisions._baseline import baseline_decision_numbers as _default_baseline_decision_numbers
-from scripts.decisions_md import _DECISION_MARKER_BODY, extract_entry_envelope, extract_superseded_by, iter_decision_headings
+from scripts.decisions_md import (
+    _BOLD_STATUS_RE,
+    _DECISION_MARKER_BODY,
+    extract_entry_envelope,
+    is_compacted_stub,
+    iter_decision_headings,
+)
 
 _CONTRACT_REL_PATH = "docs/contracts/decision-entry.yaml"
 _DECISIONS_REL_PATHS = ("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md")
 
-_BOLD_STATUS_RE = re.compile(r"\*\*Status:\*\*\s*(.+)")
 _BOLD_DATE_RE = re.compile(r"\*\*Date:\*\*\s*(.+)")
 _NEVER_NUMBERED_DECISION_TEXT = "Never a numbered Decision"
 
@@ -160,15 +165,12 @@ def _load_envelope_config(root: Path, failed: list[str]) -> Optional[tuple[list[
     return [str(f) for f in envelope_cfg["required_fields"]], {str(k): str(v) for k, v in routing.items()}
 
 
-def _is_compacted_stub(block: str) -> bool:
-    """A Decision 149 compacted stub: '**Status:** Superseded' plus a live '**Superseded by:
-    Decision N**' pointer -- the fixed shape compaction.stub_grammar mandates. Exempt from the
-    envelope obligation (a compaction replaces a body it never authored)."""
-    status_m = _BOLD_STATUS_RE.search(block)
-    if not status_m:
-        return False
-    status = status_m.group(1).strip().split("--")[0].strip()
-    return status == "Superseded" and bool(extract_superseded_by(block))
+# Module-level alias, not a re-implementation: the compaction-stub predicate is promoted to
+# scripts.decisions_md.is_compacted_stub (DAF-03 / PLAN-decision-corpus-currency) so exactly one
+# definition exists. Retained under this private name because this module's existing test suite
+# (tests/checks/decisions/test_validate_decision_entry_conformance.py) imports it directly and
+# this module is at its 500-SLOC budget -- an import-and-rename edit there is unwarranted churn.
+_is_compacted_stub = is_compacted_stub
 
 
 def _envelope_body_conflicts(envelope: dict, block: str) -> list[str]:
