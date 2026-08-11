@@ -125,10 +125,12 @@ class UnknownCheckError(KeyError):
     """Raised by resolve() when `name` has no manifest Entry in any of the 18 domains."""
 
 
-def resolve(name: str) -> Callable[[list[str]], None]:
+def resolve(name: str) -> Callable[..., None]:
     """Import the Entry's defining module and return getattr(module, entry.attr) -- late-bound,
     never caching the resolved callable. See module docstring for the interception contract this
-    preserves."""
+    preserves. Callable[..., None] (not [[list[str]], None]) because a handful of checks accept
+    additional keyword-only params beyond `failed` (e.g. validate_plan_documents' plans_dir/
+    added_plan_names, used by non-dispatch-path test callers)."""
     entry = _ALL_ENTRIES.get(name)
     if entry is None:
         raise UnknownCheckError(f"no manifest Entry for check {name!r}")

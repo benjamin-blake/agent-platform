@@ -58,9 +58,7 @@ class TestOD0DomainOrderReDerivation:
         actually present in each segment."""
         by_domain = registry._entries_by_domain()
 
-        pre_domains_present = {
-            entry.module.split(".")[2] for entries in by_domain.values() for entry in entries if entry.pre
-        }
+        pre_domains_present = {entry.module.split(".")[2] for entries in by_domain.values() for entry in entries if entry.pre}
         assert pre_domains_present <= set(registry._PRE_DOMAIN_ORDER)
 
         for segment, declared_domains in registry._FULL_SEGMENT_DOMAIN_ORDER.items():
@@ -70,7 +68,8 @@ class TestOD0DomainOrderReDerivation:
                 for entry in entries
                 if entry.full_segment == segment
             }
-            assert present <= set(declared_domains), f"segment {segment!r}: undeclared domain(s) {present - set(declared_domains)}"
+            undeclared = present - set(declared_domains)
+            assert present <= set(declared_domains), f"segment {segment!r}: undeclared domain(s) {undeclared}"
 
 
 class TestOD1And2SlocOrdering:

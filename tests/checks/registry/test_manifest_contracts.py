@@ -180,7 +180,6 @@ class TestAffectedSetSurvival:
         "scripts/checks/sloc/complexity.py",
         "scripts/checks/misc/validate_invariants.py",
         "scripts/checks/misc/validate_ghas_probe.py",
-        "scripts/checks/hygiene/validate_placement.py",
         "scripts/checks/hygiene/validate_sys_executable.py",
         "scripts/checks/hygiene/validate_prose_allowlist.py",
         "scripts/checks/ci_guards/validate_ci_workflow_guards.py",

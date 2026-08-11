@@ -29,21 +29,15 @@ platform and resolves the correct venv binary. Each Bash tool call is independen
 `source .venv/bin/activate`.
 
 ## Adding a validate.py check
-CI checks are registered via `@register(...)` and tier-sequenced by per-domain declarative
-manifests (Decision 169, amends Decision 104) -- `scripts/validate.py` is NEVER touched. Add the
-module under `scripts/checks/<domain>/`, decorate it `@register(...)`, and add one `Entry(name=,
-module=, attr=, ...)` literal (bare string literals for `module=`/`attr=` -- never a combined
-`"module:attr"` form, never computed; see `docs/contracts/check-manifest.yaml`) to that domain's
-`scripts/checks/<domain>/_manifest.py`. Set `pre=True` (+ `pre_globs=` if the check should be
-gated to specific changed paths) for `--pre` membership, and `full_segment=` (one of
-`scripts.checks._schema.SEGMENT_TOKENS`) for full-tier membership; a check may be unsequenced
-(neither) if it is invoked directly elsewhere (the sole instance: `validate_terraform_try`, called
-inside the `terraform_checks` scaffold bundle).
+Checks are `@register(...)`-decorated and tier-sequenced by per-domain manifests (Decision 169,
+amends Decision 104) -- `scripts/validate.py` is never touched. Add the module under
+`scripts/checks/<domain>/`, decorate it, and add one `Entry(name=, module=, attr=, ...)` literal
+(bare string literals only -- never `"module:attr"` or computed; see
+`docs/contracts/check-manifest.yaml`) to that domain's `_manifest.py`. Set `pre=True` (+
+`pre_globs=`) for `--pre` membership and `full_segment=` (`_schema.SEGMENT_TOKENS`) for full-tier
+membership; omit both if invoked directly elsewhere (e.g. `validate_terraform_try`).
 
-Dispatch is `scripts.checks.registry.resolve(name)(failed)` -- `resolve()` imports the Entry's
-defining module and does a late-bound `getattr` at CALL TIME (never caching the resolved
-callable), so `unittest.mock.patch("<the check's defining module>.<name>", ...)` intercepts a real
-dispatch pass. There is no facade re-export in `scripts/validate.py` to add or patch against.
-`scripts/checks/deps/validate_check_manifests.py` (registered in both tiers) enforces the
-manifest grammar; add a mirror test at `tests/checks/<domain>/test__manifest.py`-adjacent files
-(see the 18 existing ones) if your domain's manifest doesn't already have one.
+Dispatch is `scripts.checks.registry.resolve(name)(failed)`: a late-bound `getattr` on the Entry's
+module at call time, so `unittest.mock.patch("<defining module>.<name>", ...)` still intercepts.
+`validate_check_manifests.py` enforces the grammar; mirror tests live at
+`tests/checks/<domain>/test__manifest.py`.

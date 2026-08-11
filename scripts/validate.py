@@ -59,7 +59,6 @@ from scripts.checks._scaffolding import (  # noqa: F401,E402
     run_terraform_checks,
     run_terraform_creds_free,
 )
-from scripts.checks.sloc.sloc_limits import _update_sloc_budgets  # noqa: E402
 
 _FAST_TIER_BUDGET_SECONDS = 300
 
@@ -234,6 +233,10 @@ def main() -> None:
 
     # --update-sloc-budgets: regenerate the SLOC budget registry and exit
     if args.update_sloc_budgets:
+        # Deferred import (Decision 169): a module-level import here would make this file eagerly
+        # import a check-defining module, which the import-closure verification gate forbids.
+        from scripts.checks.sloc.sloc_limits import _update_sloc_budgets  # noqa: PLC0415
+
         _update_sloc_budgets()
         sys.exit(0)
 

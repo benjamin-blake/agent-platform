@@ -81,7 +81,7 @@ class _FakeGit:
                 return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="path not in tree")
             return subprocess.CompletedProcess(cmd, 0, stdout=text, stderr="")
         if cmd[:3] == ["git", "cat-file", "--batch"]:
-            raw_input = kwargs.get("input") or ""
+            raw_input = str(kwargs.get("input") or "")
             refs = [line for line in raw_input.splitlines() if line]
             parts = []
             for ref in refs:

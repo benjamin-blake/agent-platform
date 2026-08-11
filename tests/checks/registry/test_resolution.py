@@ -95,7 +95,7 @@ class TestDispatchInterceptsThroughARealTierRun:
 
         import scripts.checks.hygiene.validate_placement as defining_module
 
-        def _run_once(fn) -> int:
+        def _run_once(fn) -> int | str | None:
             monkeypatch.setenv("_VALIDATE_DEPTH", "0")  # reset the recursion guard for each run
             with (
                 patch.object(registry, "pre_sequence", return_value=steps),
