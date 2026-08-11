@@ -239,8 +239,12 @@ scope:
   - file: tests/checks/registry/test_resolution.py
     action: Create
     purpose: >-
-      resolve() is late-bound (patching the DEFINING module intercepts) and does NOT cache the
-      callable; unknown name raises a named error; the module cache does not defeat interception.
+      resolve() is late-bound and does NOT cache the callable; unknown name raises a named error;
+      the module cache does not defeat interception. The DECISIVE test drives a ONE-CHECK TIER end
+      to end -- select_steps from tests/fixtures/pre_sequence_stub.py patched over
+      registry.pre_sequence, run through scripts.validate.main(), with the check's DEFINING module
+      patched. Calling _dispatch_check directly is NOT sufficient and must not be the only shape
+      here: a dispatch table built at main() entry is still empty at a direct call.
   - file: tests/checks/registry/test_manifest_contracts.py
     action: Create
     purpose: >-
@@ -307,7 +311,7 @@ scope:
   - file: tests/checks/test_validation_result.py
     action: Modify
     purpose: >-
-      Calls the retired dispatch_recording at :39,:50,:64 and holds
+      Calls the retired dispatch_recording at :39,:50,:64,:75 and holds
       test_dispatch_recording_intercepts_via_namespace_patch (:69), whose premise dies with
       namespace dispatch. This file is ALSO where the new callable-dispatch form must reach its
       100% per-file coverage default -- map_source_to_test(scripts/checks/validation_result.py)
@@ -391,7 +395,7 @@ acceptance_criteria:
   - Every Entry.module is a plain string constant that resolves to a real dependency-graph node, enforced by a registered check (not prose), which fails on an f-string, a colon form, and an unresolvable module.
   - The driver->check graph edges the manifests produce equal the set of declared Entry.module values -- compared by edge IDENTITY, not cardinality.
   - Under a ~20-file synthetic check-module diff, the affected-set selector still selects the manifest/registry tests despite CAP=35 truncation; a one-file sentinel is explicitly NOT accepted as evidence.
-  - Tier check-name MEMBERSHIP is preserved exactly for both tiers against a baseline captured before editing; scaffold anchors keep their exact frozen order; and ordering dependencies OD-1..OD-6 hold. Byte-parity of check ORDER is explicitly NOT claimed.
+  - Tier check-name MEMBERSHIP is preserved exactly for both tiers against a baseline captured before editing; scaffold anchors keep their exact frozen order; and ordering dependencies OD-0..OD-6 hold. Byte-parity of check ORDER is explicitly NOT claimed.
   - >-
     ZERO of the 120 facade-exported names is still consumed anywhere outside the deleted
     monolith, in ANY form -- `_validate.<name>`, `_validate_module.<name>`,
@@ -522,7 +526,7 @@ verification_plan:
     graduation_check_id: "affected-set-retains-driver-tests-under-synthetic-diff"
   - step: 7
     phase: pre-deploy
-    action: MUTATION with control arm -- an f-string module value in a real manifest must redden the grammar evaluator.
+    action: MUTATION with control arm -- a computed (non-literal) module value in a real manifest must redden the grammar evaluator.
     command: >-
       bin/venv-python -c 'import pathlib,re,shutil,subprocess,sys,tempfile; Q=chr(34); tmp=pathlib.Path(tempfile.mkdtemp())/"wt"; subprocess.run(["git","worktree","add","--detach",str(tmp)],check=True,capture_output=True); [(shutil.rmtree(tmp/d,ignore_errors=True), shutil.copytree(d,tmp/d)) for d in ("scripts","tests","docs/contracts")]; sel=["tests/checks/deps/test_validate_check_manifests.py"]; run=lambda: subprocess.run([sys.executable,"-m","pytest",*sel,"-q"],cwd=tmp,capture_output=True,text=True).returncode; ctl=run(); assert ctl==0, ("CONTROL ARM FAILED -- harness broken, result is meaningless", ctl); p=tmp/"scripts/checks/sloc/_manifest.py"; s=p.read_text(); m=re.search("module=" + Q + r"(scripts\.[\w.]+)" + Q, s); assert m, "no bare module= literal found -- manifest shape changed"; head,tail=m.group(1).rsplit(".",1); ins=max([s.index(chr(10), s.index(ln))+1 for ln in ("from __future__","import ","from ") if ln in s] or [0]); body=s[:m.start()] + "module=_MODPREFIX + " + Q + "." + tail + Q + s[m.end():]; p.write_text(body[:ins] + "_MODPREFIX = " + Q + head + Q + chr(10) + body[ins:]); mut=run(); subprocess.run(["git","worktree","remove","--force",str(tmp)],capture_output=True); print("control",ctl,"mutant",mut); sys.exit(0 if mut!=0 else 1)'
     expected: >-
@@ -580,12 +584,17 @@ verification_plan:
     phase: pre-deploy
     action: NO facade-exported name is still consumed anywhere -- census by NAME, covering the attribute-read form.
     command: >-
-      bin/venv-python -c 'import pathlib,re,sys; from scripts.checks import registry; helpers={"_load_boundary_patterns","_load_coverage_checker","_load_prompt_compliance","_extract_enforced_map","_check_drift_for_table","_dotted_name_from_attr","_verifier_is_non_hermetic","_extract_verifier_covers","_is_inside_try","check_claude_md_pointer_invariant","_check_claude_p_raw_invocations","_load_sloc_budgets","_update_sloc_budgets"}; consts={"_BRANCH_TYPES","_CC_LIMIT","_EXECUTOR_BOUNDARY_PATTERNS","_KNOWN_CLI_TOOLS","_OPTIONAL_CLI_TOOLS","_SLOC_EXCLUDE_DIRS","_SLOC_LIMIT","_UNIT_TEST_HERMETICITY_FLAGS","_WAIVER_PATTERN","iter_gated_py_files"}; gone=set(registry.all_checks())|helpers|consts; assert len(gone)>115, ("forbidden-name set collapsed -- all_checks() returned an unpopulated roster, so this sweep would silently check only the 23 non-check names", len(gone)); alias=lambda tx: {"validate","_validate","_validate_module","scripts.validate"}|set(re.findall(r"import\s+scripts\.validate\s+as\s+(\w+)", tx))|set(re.findall(r"from\s+scripts\s+import\s+validate\s+as\s+(\w+)", tx)); mk=lambda tx: re.compile("(?:" + "|".join(sorted((re.escape(a) for a in alias(tx)), key=len, reverse=True)) + r")\.(\w+)|from\s+scripts\.validate\s+import\s+(\w+)"); files=[q for r in ("tests","config/agent/verification_registry") for q in pathlib.Path(r).rglob("*") if q.is_file() and q.suffix in (".py",".yaml",".yml")]; texts={q.as_posix(): q.read_text(encoding="utf-8") for q in files}; hits=[(fn, tx[:m.start()].count(chr(10))+1, m.group(1) or m.group(2)) for fn,tx in texts.items() for m in mk(tx).finditer(tx)]; keep={"ROOT","PYTHON","run","invoke_step","get_changed_files","get_status_aware_diff","shutil","subprocess","time","validation_result","run_lint_checks","run_precommit_checks","run_pytest_diff","run_terraform_checks","run_coverage_check","run_dependency_checks","ensure_fresh_dq_results","_file_budget_breach_rec","_file_budget_bypass_rec","_build_unit_test_cmd"}; bad=[h for h in hits if h[2] in gone]; scaf=len([h for h in hits if h[2] in keep]); print("surviving facade consumers:", bad); print("scaffolding sites still resolving:", scaf); assert scaf>0, "scaffold site count is zero -- the regex is broken or the RETAINED _common/_scaffolding re-exports were deleted too"; assert not bad, bad; fpat=re.compile("patch\\(\\s*f[" + chr(34) + chr(39) + "](?:scripts\\.)?validate\\.\\{"); fbad=[(fn, tx[:m.start()].count(chr(10))+1) for fn,tx in texts.items() for m in fpat.finditer(tx)]; print("interpolated hub patches:", fbad); assert not fbad, fbad; import yaml as _y; _rows=_y.safe_load(pathlib.Path("config/agent/verification_registry/registry.yaml").read_text(encoding="utf-8")); _rows=_rows.get("checks") or list(_rows.values())[0]; _allow={"structural-modules-under-own-limit"}; _hub=[r["check_id"] for r in _rows if r["check_id"] not in _allow and re.search(r"scripts\.validate|scripts/validate\.py", _y.safe_dump(r))]; print("registry rows still reaching the hub:", _hub); assert not _hub, _hub'
+      bin/venv-python -c 'import pathlib,re,sys; from scripts.checks import registry; helpers={"_load_boundary_patterns","_load_coverage_checker","_load_prompt_compliance","_extract_enforced_map","_check_drift_for_table","_dotted_name_from_attr","_verifier_is_non_hermetic","_extract_verifier_covers","_is_inside_try","check_claude_md_pointer_invariant","_check_claude_p_raw_invocations","_load_sloc_budgets","_update_sloc_budgets"}; consts={"_BRANCH_TYPES","_CC_LIMIT","_EXECUTOR_BOUNDARY_PATTERNS","_KNOWN_CLI_TOOLS","_OPTIONAL_CLI_TOOLS","_SLOC_EXCLUDE_DIRS","_SLOC_LIMIT","_UNIT_TEST_HERMETICITY_FLAGS","_WAIVER_PATTERN","iter_gated_py_files"}; gone=set(registry.all_checks())|helpers|consts; assert len(gone)>115, ("forbidden-name set collapsed -- all_checks() returned an unpopulated roster, so this sweep would silently check only the 23 non-check names", len(gone)); alias=lambda tx: {"validate","_validate","_validate_module","scripts.validate"}|set(re.findall(r"import\s+scripts\.validate\s+as\s+(\w+)", tx))|set(re.findall(r"from\s+scripts\s+import\s+validate\s+as\s+(\w+)", tx)); mk=lambda tx: re.compile("(?:" + "|".join(sorted((re.escape(a) for a in alias(tx)), key=len, reverse=True)) + r")\.(\w+)|from\s+scripts\.validate\s+import\s+(\w+)"); files=[q for r in ("tests","config/agent/verification_registry") for q in pathlib.Path(r).rglob("*") if q.is_file() and q.suffix in (".py",".yaml",".yml")]; texts={q.as_posix(): q.read_text(encoding="utf-8") for q in files}; hits=[(fn, tx[:m.start()].count(chr(10))+1, m.group(1) or m.group(2)) for fn,tx in texts.items() for m in mk(tx).finditer(tx)]; import ast as _a; _src=pathlib.Path("scripts/validate.py").read_text(encoding="utf-8"); keep={al.asname or al.name for n in _a.parse(_src).body if isinstance(n,_a.ImportFrom) and n.module in ("scripts.checks._common","scripts.checks._scaffolding") for al in n.names}|{"shutil","subprocess","time","validation_result","_common","registry"}; assert len(keep)>20, ("retained re-export set collapsed -- the WRONG block was deleted", sorted(keep)); bad=[h for h in hits if h[2] in gone]; scaf=len([h for h in hits if h[2] in keep]); print("surviving facade consumers:", bad); print("scaffolding sites still resolving:", scaf); assert scaf>0, "scaffold site count is zero -- the regex is broken or the RETAINED _common/_scaffolding re-exports were deleted too"; assert not bad, bad; fpat=re.compile("patch\\(\\s*f[" + chr(34) + chr(39) + "](?:scripts\\.)?validate\\.\\{"); fbad=[(fn, tx[:m.start()].count(chr(10))+1) for fn,tx in texts.items() for m in fpat.finditer(tx)]; print("interpolated hub patches:", fbad); assert not fbad, fbad; import yaml as _y; _rows=_y.safe_load(pathlib.Path("config/agent/verification_registry/registry.yaml").read_text(encoding="utf-8")); _rows=_rows.get("checks") or list(_rows.values())[0]; _allow={"structural-modules-under-own-limit"}; _hub=[r["check_id"] for r in _rows if r["check_id"] not in _allow and re.search(r"scripts\.validate|scripts/validate\.py", _y.safe_dump(r))]; print("registry rows still reaching the hub:", _hub); assert not _hub, _hub'
     expected: >-
       Zero surviving consumers of any of the 120 deleted names, with the scaffolding site count
-      strictly positive. The scaffolding counter tallies ONLY names from the RETAINED lines 42-62
-      re-export set -- not merely anything-not-forbidden, which would be satisfied by _dispatch_check
-      or main and would stay green even if the wrong block were deleted. Two things make this non-trivial. (a) Scanning
+      strictly positive. The scaffolding counter is DERIVED from the live file -- it AST-extracts
+      whatever scripts/validate.py still imports from scripts.checks._common and
+      scripts.checks._scaffolding, plus the module-level patch targets (shutil, subprocess, time,
+      validation_result, _common, registry). Do not hardcode that list: it drifts, and a hardcoded
+      version was both missing seven retained names and carrying four that lines 42-62 never
+      exported. Deriving it also makes the companion assertion meaningful -- if the WRONG block were
+      deleted, the derived set collapses and the step fails loudly instead of passing on a
+      counter that merely tallied anything-not-forbidden. Two things make this non-trivial. (a) Scanning
       config/agent/verification_registry/ as well as tests/ is required: EIGHT rows there embed
       facade consumption in their commands -- convergence-health-sloc-raise-gate-registered,
       graduation-completeness-check-registered-both-tiers, handoff-full-tier-registered-both-tiers,
@@ -871,7 +880,7 @@ test_obligations:
   - source: config/sloc_budgets.yaml
     behavior: The dec-159 raise entry is removed with its subject file, and no entry is added or raised.
     verification_step: 12
-    command: 'dec-159 budget entry survives its subject file'
+    command: "assert 'tests/test_checks_registry.py' not in b"
     red_green_expectation: >-
       green after. Stated honestly: removals are unrestricted at the gate (Decision 165), so no
       standing check reddens on this alone -- step 12's literal assertion IS the evidence, which is
@@ -943,7 +952,7 @@ constraints:
     BYTE-PARITY ON TIER ORDER IS UNACHIEVABLE and must not be claimed. full_sequence today is 93
     checks over 18 domains in 45 non-contiguous runs (ops_governance alone in 7); domain-block
     derivation yields 18 contiguous blocks. MEMBERSHIP parity IS required and is asserted; order
-    is re-derived once, with OD-1..OD-6 pinned as explicit assertions.
+    is re-derived once, with OD-0..OD-6 pinned as explicit assertions.
   - >-
     Do NOT create a golden/generated sequence file. Without a "GENERATED -- DO NOT EDIT" banner it
     classifies as residual at 500 and grows ~2.6 lines/check -- a worse slope than the facade it
@@ -1003,7 +1012,7 @@ constraints:
   - >-
     AT MOST THREE hermetic VP steps. validate_vp_replay.py:63 sets MAX_AGGREGATE_SECONDS = 120 and
     :207-212 appends to `failed` on breach -- a HARD failure, not a benign stop, shared across every
-    plan in the diff. Steps 1, 9 and 12 are hermetic (each a sub-second, pytest-free one-liner);
+    plan in the diff. Steps 1, 9 and 12 are hermetic (each a pytest-free one-liner, measured at roughly 1-2s: step 9 eagerly imports the check roster, rglobs tests/ and regexes a ~5000-line registry.yaml, so it is not sub-second);
     every pytest invocation, graph build and contract-drift run is hermetic: false with a printed
     reason. Adding a fourth hermetic step risks a deterministic PR wedge no implementation fix
     addresses.
