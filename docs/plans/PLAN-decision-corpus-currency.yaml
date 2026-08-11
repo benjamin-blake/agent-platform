@@ -20,15 +20,21 @@ scope:
   - file: scripts/decisions_md.py
     action: Modify
     purpose: >-
-      Promote the compaction-stub predicate out of the checks layer into the shared parser as a public
-      is_compacted_stub(block), moved VERBATIM (same two-marker logic), and add derive_currency() returning
-      exactly one token. DAF-03's single-parser rule requires ONE derivation with two consumers.
+      Add THREE public symbols: is_compacted_stub(block) (the promoted predicate, BEHAVIOUR-identical to
+      the two-marker original -- see the constraint, which scopes "verbatim" to behaviour, not text),
+      status_is_superseded(block) (the status half, extracted so exactly one status predicate exists for the
+      check, VP step 1 and the tests to share), and derive_currency() returning exactly one token. All three
+      are load-bearing: VP step 1 imports status_is_superseded by name and dies on ImportError without it.
+      DAF-03's single-parser rule requires ONE derivation with two consumers.
   - file: scripts/checks/decisions/validate_decision_entry_conformance.py
     action: Modify
     purpose: >-
-      Replace the private _is_compacted_stub body with a module-level alias to the promoted predicate, the
-      same private-alias pattern scripts/decisions_md.py already uses for _extract_superseded_by. The alias
-      is required: this module's test imports the private name directly and that file is at exactly 500 SLOC.
+      Two edits, BOTH required. (1) Replace the private _is_compacted_stub body with a module-level alias to
+      the promoted predicate -- the alias is mandatory because this module's test imports the private name
+      directly and that file is at exactly 500 SLOC. (2) Re-import _BOLD_STATUS_RE from scripts.decisions_md:
+      it is defined locally at line 48 and still consumed at line 178 by _envelope_body_conflicts, so moving
+      it without re-importing is a NameError at import that kills every decisions check before any VP step
+      can run.
   - file: scripts/decisions_index.py
     action: Modify
     purpose: >-
@@ -131,6 +137,11 @@ acceptance_criteria:
     validate_check_manifests' grammar, and each of its five invariants has a synthetic fixture proving it
     FAILS when violated. scripts/validate.py is NOT touched (Decision 169).
   - >-
+    Both graduated verification-registry rows carry check_spec.command as an ARGV LIST
+    (['bin/venv-python', '-c', '<source>']), never the escaped shell string the VP steps carry: verification
+    runs subprocess without shell=True, so a string char-splits and raises FileNotFoundError: 'b', which
+    escapes validate_verification_registry's GraduationError handler as an uncaught --pre traceback.
+  - >-
     Invariant I1 asserts the DISCRIMINATING direction -- every LIVE entry whose status marker resolves to
     'Superseded' derives 'superseded_compacted' -- so a malformed compaction that a human reads as superseded
     but which silently falls out of the filterable class fails the build. The predicate is pinned: FIRST
@@ -217,9 +228,11 @@ verification_plan:
       copy whose currency vocabulary omits a token the corpus actually emits.
     command: "bash -c \"grep -q 'class TestContractVocabularyIsCausal' tests/checks/decisions/test_validate_decision_currency.py || { echo 'required vocabulary fixture class absent'; exit 1; }; bin/venv-python -m pytest 'tests/checks/decisions/test_validate_decision_currency.py::TestContractVocabularyIsCausal' -q\""
     expected: >-
-      Collects at least one vocabulary fixture and it passes. The fixture feeds the check a contract whose
-      values list omits 'superseded_pointer' while the corpus emits it, and the check must report a
-      violation. The collection-count guard is mandatory for the same reason as step 2.
+      The grep guard confirms the class TestContractVocabularyIsCausal exists, then every test in it passes.
+      The fixture feeds the check a contract whose values list omits 'superseded_pointer' while the corpus
+      emits it, and the check must report a violation. The existence guard is mandatory for the same reason
+      as step 2: `pytest -k` matching nothing exits 0, so a selector-only step would pass vacuously. This
+      command asserts class EXISTENCE, not a collected count.
     fix_if: >-
       If the check passes against the truncated vocabulary, it is reading its token list from the generator
       rather than the contract, which reduces the contract section to a mention with no reader.
@@ -380,7 +393,9 @@ verification_plan:
 test_obligations:
   - source: scripts/decisions_md.py
     behavior: >-
-      is_compacted_stub is the promoted two-marker predicate, byte-for-byte in behaviour; derive_currency
+      is_compacted_stub is the promoted two-marker predicate, identical in behaviour; status_is_superseded
+      exposes its status half as the single shared status predicate (VP step 1 imports it by name);
+      derive_currency
       returns 'superseded_compacted' only for a stub, 'superseded_pointer' for a victim-side pointer OR an
       inbound supersedes edge, 'amended' for an inbound amends edge or a status-prose amendment, else
       'current' -- in that precedence order.
@@ -500,8 +515,11 @@ constraints:
     _EDGE_RE matches "Supersedes|supersedes|amends|Amends|partially supersedes" identically) structurally
     cannot distinguish full from partial supersession, which is why the pointer is unfit as a filter signal.
   - >-
-    The compaction-stub predicate is promoted VERBATIM -- the existing two-marker logic, unchanged. Do NOT
-    strengthen it to Decision 149's full four-marker stub grammar during this plan: measured, the two-marker
+    The compaction-stub predicate is promoted BEHAVIOUR-VERBATIM -- the existing two-marker logic, with
+    identical results on every input. This explicitly PERMITS the extract-method refactor execution step 1
+    mandates (splitting the status half into status_is_superseded and having is_compacted_stub call it);
+    what it forbids is any change to what the predicate DECIDES. Do NOT strengthen it to Decision 149's full
+    four-marker stub grammar during this plan: measured, the two-marker
     and four-marker predicates classify the IDENTICAL set on the real corpus ({44, 58}), while strengthening
     breaks a parametrized case in a test file at exactly 500 SLOC that cannot absorb an edit, and diverges
     from decision-entry.yaml's own compacted_stub_exemption text, which is written in two-marker terms.
@@ -528,7 +546,9 @@ constraints:
     previous marker. If it cannot fit, the abort path is NOT "ship the projection half alone" as-is: I5 and VP step 6 both
     assert the skill's consumer clauses, so dropping the skill edit while keeping five invariants reds the
     new check. Aborting means dropping I5 (four invariants), deleting VP step 6, and re-planning the
-    consumer half as its own slice -- exactly what step 7's fix_if says.
+    consumer half as its own slice. NOTE step 7's fix_if states only the "re-plan the consumer half" half of
+    this; the I5-and-VP-6 removal is stated HERE and nowhere else, so do not treat fix_if as the complete
+    abort procedure.
   - >-
     No amends_scope envelope field (operator ruling: the corpus supersedes and rewrites rather than amending
     scope in place). Decision 167's envelope is unchanged. Do NOT mint clause identifiers.
@@ -558,23 +578,31 @@ context:
     resolved -- the contract vocabulary is read by a registered check with a truncated-vocabulary failing
     fixture, so it is read not merely mentioned); Decision 166 (NOTE, resolved -- currency is projected on
     live rows only). RELATED: Decision 37, Decision 134, Decision 151, Decision 131, Decision 105."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE,REVISE then PROCEED after 3 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE across rounds 1-6 (see the round log below)"
   - >-
-    Rounds 1 and 2 each ran three fresh zero-context reviewers (plan-critique skill, adversarial correctness,
-    governance/blast-radius). Round 1: three REVISE. Round 2: two REVISE, one BLOCK. Every finding was
-    independently verified against the working tree before being actioned; several reviewer claims were
-    corrected by that verification rather than accepted.
+    Review history: six rounds of three fresh zero-context reviewers each. Every finding was independently
+    verified against the working tree before being actioned, and several reviewer claims were corrected by
+    that verification rather than accepted. The round-by-round detail belongs in the PR body, not here; what
+    survives below are only the findings that still constrain implementation.
   - >-
     OPERATOR ASSUMPTION, reversible before /implement: the 'amended' token is PROJECTED into the index and
     guarded by the check, but decision-scout's step 7 does NOT branch on it in this slice -- amended and
-    current are triaged identically. Rationale: 26 of 121 live entries carry an inbound amends edge,
+    current are triaged identically. Rationale: 26 of 122 live entries carry an inbound amends edge,
     including most of the governance backbone (128/134/146/149/150/160/161/162), and the never-severity-
     reduced rule is enforceable only as a prose clause on an LLM consumer. Shipping the projection without
     the branch lands rec-3056's durable mechanism with zero new judgment surface; switching the annotation on
     is a small follow-on once softening can be observed rather than speculated about. The operator was asked
     and did not rule; this is the recorded default, not a silent choice.
+    STILL GENUINELY REVERSIBLE, with verified text. A round-6 reviewer asserted the flip no longer fits the
+    prose budget; that was measured and is FALSE. Replacing the step-7 line with this instead lands the file
+    at 11,294 B (31 B under the 11,325 ceiling, MORE slack than the shipping text's 7 B) and keeps both I5
+    literals:
+    7. **Currency filter.** Branch on the typed `currency`, never status prose. `superseded_compacted` is the ONLY value that demotes to RELATED, noted "superseded by Decision M, awareness only". `superseded_pointer` and `amended` are NEVER filtered and NEVER severity-reduced: triage as `current`, annotating "read against Decision M" / "read with amendments". No `currency` key = archived.
+    If the operator elects the branch, swap that line, re-measure, and ratchet config/prose_budgets.yaml to
+    the new size instead of 11318.
   - >-
-    Verified live 2026-08-10. Index holds 148 entries (121 live), 14 with a populated superseded_by. Decision
+    Verified live (entry counts since superseded by the Decision 169 figures above: the corpus is now 149
+    entries / 122 live). Decision
     37 has status 'Decided', superseded_by 116, an intact body, and carries "**Superseded by: Decision 116**"
     at docs/DECISIONS.md:5638, while Decision 116's own title claims it supersedes Decision 49 and never
     names 37. About 50 non-corpus files cite "Decision 37" by name, including live terraform/personal/*.tf
@@ -611,14 +639,10 @@ context:
     fail as designed. All failing fixtures now live in
     tests/checks/decisions/test_validate_decision_currency.py on injected input.
   - >-
-    Round-2 finding, actioned: the registry-budget reasoning was INVERTED. Decision 166 point 6 calibrated
-    the 6,000-line ceiling precisely because "every graduating /implement plan appends to it, including this
-    one", and the never-a-second-raise pre-commitment governs what happens when the ceiling FIRES. Using it
-    to waive six steps was graduation-avoidance. config/agent/verification_registry/registry.yaml is now in
-    Scope (measured at that time as 4,561 EFFECTIVE lines of the 6,000 ceiling -- an earlier draft of this
-    note wrongly subtracted the 4,739 RAW count from an effective-line limit; see the round-4 note for the
-    current post-rebase figures) and step 1 -- the corpus derivation, which had NO
-    standing guard and whose waiver reason was simply false -- is graduated.
+    Registry graduation rationale (settled): Decision 166 point 6 calibrated the 6,000-effective-line ceiling
+    precisely because "every graduating /implement plan appends to it, including this one", and its
+    never-a-second-raise pre-commitment governs what happens when the ceiling FIRES, not whether to
+    graduate. The live figure is in the scope row.
   - >-
     Round-2 finding, actioned: requiring the generator to RAISE on vocabulary divergence would turn
     check_index_freshness (scripts/decisions_index.py:207, which calls build_index unguarded) into an
@@ -627,12 +651,6 @@ context:
   - >-
     Round-2 finding, actioned: step 7's budget assertion read the budget file that the same commit ratchets
     down, so it was self-fulfilling. It now asserts against the literal origin/main value of 11,325.
-  - >-
-    Historical measurement note (superseded by the Decision 169 rebase figures above, retained to show the
-    correction chain): at that time live-only currency cost +3,557 B, landing the index at 115,871 B with
-    15,129 B of headroom. The earlier +3,535 B figure was measured before D37/D80
-    moved from 'current' to 'superseded_pointer'. Live distribution: 91 current, 26 amended, 2
-    superseded_pointer, 2 superseded_compacted.
   - >-
     Prose budget, measured not assumed. The skill is at exactly its 11,325-byte budget and Decision 160
     point 7 ratcheted it DOWN to that figure while REMOVING its dec-152 raise marker. The formulation that
@@ -650,8 +668,8 @@ context:
   - >-
     Round-3 self-check, actioned before dispatch: VP steps 2 and 4 selected failing fixtures with `pytest
     -k`. Measured: `pytest -k` matching nothing exits 0 ("61 deselected, 0 selected"), so both steps would
-    have passed vacuously if the fixtures were never written or were named differently. Both now assert a
-    minimum collected count before running the selection.
+    have passed vacuously if the fixtures were never written or were named differently. Both now grep for an
+    exactly-named test CLASS and run it as a node id -- an existence guard, not a collected-count assertion.
   - >-
     Round-3 finding, actioned with its reasoning recorded rather than deleted: step 5 was previously WAIVED
     on the ground that its origin/main failure is an AttributeError and therefore an inadmissible vacuous
@@ -693,9 +711,9 @@ context:
     PER_STEP_TIMEOUT_SECONDS = 30 and MAX_AGGREGATE_SECONDS = 120, so cost is not today's reason and should
     not be cited as one. validate_vp_replay prints these steps as EXCLUDED with an explicit not-hermetic
     reason rather than skipping them silently. A round-5 reviewer proposed flipping them to hermetic: true on Decision 148 grounds; that
-    reading drops the skill's pytest carve-out and was declined. Separately: those steps' `expected` fields
-    carry backtick literals, which the replay contract would require to appear in output -- so if a future
-    session ever does flip them, strip the backticks in the same edit.
+    reading drops the skill's pytest carve-out and was declined. Separately: step 2's `expected` carries backtick
+    literals (steps 4 and 9 do not), which the replay contract would require to appear in output -- so if a
+    future session ever does flip step 2, strip its backticks in the same edit.
   - >-
     Known limitation, not mitigated: invariant I5 and VP step 6 are string-presence checks on the skill text.
     They prove the safety clause is PRESENT; neither can prove the LLM honours it at dispatch time. The gate's
@@ -905,7 +923,7 @@ execution_steps:
     scout branch ("amended never filtered but flagged 'read with amendments'"), and this plan ships the
     projection without that branch. Call get_rec_write_guidance() then file_rec() for a follow-on rec
     covering the decision-scout amended branch, referencing this plan and the residual-risk finding (26 of
-    121 live entries, governance backbone included). A merged plan document is not a work-tracking surface;
+    122 live entries, governance backbone included). A merged plan document is not a work-tracking surface;
     AGENTS.md routes deferred scope to file_rec.
   - >-
     Commit with the subject `feat(decision-corpus-currency): <summary>` -- the slug prefix is REQUIRED, not
