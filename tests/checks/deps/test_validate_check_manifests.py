@@ -142,8 +142,7 @@ class TestMissingFieldFails:
         """An Entry() with no `name=` kwarg still produces a readable failure message via the
         "<unnamed>" placeholder rather than raising."""
         body = (
-            "from scripts.checks._schema import Entry\n\n"
-            'ENTRIES = (Entry(module="scripts.checks.fake_domain.validate_x"),)\n'
+            'from scripts.checks._schema import Entry\n\nENTRIES = (Entry(module="scripts.checks.fake_domain.validate_x"),)\n'
         )
         _write_tree(tmp_path, body)
         failed = _run(tmp_path)

@@ -27,25 +27,9 @@ from scripts.verification_checks import CheckStatus
 # its own import chain (the real repo always carries this closure at HEAD; a fixture repo must
 # replicate it explicitly).
 _MANIFEST_DOMAINS = (
-    "ci_guards",
-    "contracts",
-    "decisions",
-    "deps",
-    "executor",
-    "hygiene",
-    "iam_tf",
-    "lambda_pkg",
-    "misc",
-    "ops_governance",
-    "product",
-    "prompts",
-    "prose",
-    "roadmap",
-    "sloc",
-    "structural",
-    "typing",
-    "verification",
-)
+    "ci_guards contracts decisions deps executor hygiene iam_tf lambda_pkg misc "
+    "ops_governance product prompts prose roadmap sloc structural typing verification"
+).split()
 
 _GRADUATION_DEPS = (
     (
