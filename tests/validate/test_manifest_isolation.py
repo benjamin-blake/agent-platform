@@ -18,18 +18,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scripts.checks import _common
+from scripts.checks import _common, registry
 from scripts.checks.deps import affected_tests as at
 from tests.fixtures.subprocess_stubs import _pre_mock_run
 from tests.fixtures.validate_module import _validate
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestSelectionManifestIsolation:
     """--pre driven end-to-end (real derive_affected_tests + real emit_manifest) must never
     touch the tracked selection-manifest.json, and must write into the redirected temp target."""
 
-    def test_pre_run_does_not_clobber_tracked_manifest_and_redirects_to_temp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_pre_run_does_not_clobber_tracked_manifest_and_redirects_to_temp(
+        self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub
+    ) -> None:
         real_manifest_path = _common.ROOT / "logs" / "debug" / "selection-manifest.json"
         before = real_manifest_path.read_bytes() if real_manifest_path.exists() else None
 
@@ -42,11 +43,9 @@ class TestSelectionManifestIsolation:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):

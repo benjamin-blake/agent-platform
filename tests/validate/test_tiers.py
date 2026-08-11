@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.checks import registry
 from scripts.checks.deps import affected_tests as at
 from tests.fixtures.subprocess_stubs import _pre_mock_run
 from tests.fixtures.validate_module import _validate
@@ -72,11 +73,10 @@ class TestLoadHelpers:
         assert result is None
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreModeDiffAware:
     """Tests that --pre passes changed files to ruff/mypy/pytest."""
 
-    def test_passes_changed_py_files_to_ruff(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_passes_changed_py_files_to_ruff(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -91,11 +91,9 @@ class TestPreModeDiffAware:
         changed = ["scripts/validate.py", "tests/test_validate.py"]
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=changed),
             patch("scripts.checks._common.run", side_effect=tracking_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -106,7 +104,7 @@ class TestPreModeDiffAware:
         assert ruff_check, "No ruff check command issued"
         assert "scripts/validate.py" in ruff_check[0]
 
-    def test_skips_lint_when_no_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_skips_lint_when_no_files_changed(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -119,11 +117,9 @@ class TestPreModeDiffAware:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -133,7 +129,9 @@ class TestPreModeDiffAware:
         ruff_cmds = [c for c in captured_cmds if "ruff" in c]
         assert not ruff_cmds, f"Unexpected ruff invocation: {ruff_cmds}"
 
-    def test_source_only_change_now_selects_reverse_dep_tests_via_affected_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_source_only_change_now_selects_reverse_dep_tests_via_affected_set(
+        self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub
+    ) -> None:
         """Superseded by Decision affected-set-selection: a source-only diff (no test file
         literally changed) used to skip pytest entirely under the old edited-set selection.
         The live affected-set derivation now walks scripts/validate.py's REAL reverse-dependency
@@ -152,11 +150,9 @@ class TestPreModeDiffAware:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -167,7 +163,9 @@ class TestPreModeDiffAware:
         assert pytest_cmds, "expected the import-closure channel to select scripts.validate's real reverse-dep tests"
         assert "scripts/validate.py" not in pytest_cmds[0], "a changed SOURCE file must never itself be a pytest target"
 
-    def test_invokes_pytest_with_explicit_files_when_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_invokes_pytest_with_explicit_files_when_test_files_changed(
+        self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub
+    ) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -180,11 +178,9 @@ class TestPreModeDiffAware:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "tests/test_validate.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -197,7 +193,7 @@ class TestPreModeDiffAware:
         assert "--picked" not in pytest_cmds[0], "--picked must not appear in pytest argv"
         assert "not integration" in pytest_cmds[0]
 
-    def test_treats_pytest_exit_5_as_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_treats_pytest_exit_5_as_failure(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -211,11 +207,9 @@ class TestPreModeDiffAware:
             return result
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=["tests/test_validate.py"]),
             patch("scripts.checks._common.run", side_effect=exit5_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -224,7 +218,6 @@ class TestPreModeDiffAware:
         assert exc_info.value.code != 0
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreModePytestSelection:
     """Regression tests locking the explicit-file pytest selection contract.
 
@@ -234,7 +227,7 @@ class TestPreModePytestSelection:
     (c) no test files changed -> pytest not invoked at all
     """
 
-    def test_explicit_path_in_argv_no_picked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_explicit_path_in_argv_no_picked(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -247,11 +240,9 @@ class TestPreModePytestSelection:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=["tests/test_x.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -263,7 +254,7 @@ class TestPreModePytestSelection:
         assert "tests/test_x.py" in pytest_cmds[0], "explicit file path missing from pytest argv"
         assert "--picked" not in pytest_cmds[0], "--picked must not appear (explicit-file transport)"
 
-    def test_exit_5_with_changed_tests_reddens_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_exit_5_with_changed_tests_reddens_gate(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -277,11 +268,9 @@ class TestPreModePytestSelection:
             return result
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=["tests/test_x.py"]),
             patch("scripts.checks._common.run", side_effect=exit5_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -289,7 +278,9 @@ class TestPreModePytestSelection:
 
         assert exc_info.value.code != 0, "exit 5 / 0-collected with changed test files must redden the gate"
 
-    def test_source_only_changes_now_select_reverse_dep_tests_via_affected_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_source_only_changes_now_select_reverse_dep_tests_via_affected_set(
+        self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub
+    ) -> None:
         """Superseded by Decision affected-set-selection (see the sibling test in
         TestPreModeDiffAware): two source-only changes with real reverse-dep test modules
         (scripts.validate, scripts.sync.ops both have several) now select those tests via the
@@ -306,11 +297,9 @@ class TestPreModePytestSelection:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "scripts/sync/ops.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -321,11 +310,10 @@ class TestPreModePytestSelection:
         assert pytest_cmds, "expected the import-closure channel to select real reverse-dep tests"
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestSlocLimitsInPreMode:
     """Assert validate_sloc_limits runs in the --pre tier (rec-2106 RCA fix)."""
 
-    def test_sloc_limits_called_in_pre_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_sloc_limits_called_in_pre_mode(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         """validate_sloc_limits must be invoked during --pre alongside validate_cc_limits."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -338,11 +326,9 @@ class TestSlocLimitsInPreMode:
             sloc_called.append(True)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=("validate_sloc_limits",))),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_sloc_limits", side_effect=capture_sloc),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
@@ -352,7 +338,7 @@ class TestSlocLimitsInPreMode:
         assert exc_info.value.code == 0
         assert sloc_called, "validate_sloc_limits was NOT called in --pre mode"
 
-    def test_sloc_limits_called_after_cc_limits_in_pre(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_sloc_limits_called_after_cc_limits_in_pre(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         """validate_sloc_limits is called in the same --pre block as validate_cc_limits."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -368,11 +354,13 @@ class TestSlocLimitsInPreMode:
             call_order.append("sloc")
 
         with (
+            patch.object(
+                registry,
+                "pre_sequence",
+                return_value=pre_sequence_stub(checks=("validate_cc_limits", "validate_sloc_limits")),
+            ),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_cc_limits", side_effect=capture_cc),
             patch("validate.validate_sloc_limits", side_effect=capture_sloc),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
@@ -387,11 +375,10 @@ class TestSlocLimitsInPreMode:
         assert cc_idx < sloc_idx, "validate_sloc_limits must be called after validate_cc_limits"
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreModeChecks:
     """Assert validate_subprocess_encoding runs in the --pre tier (rec-2382 RCA fix)."""
 
-    def test_pre_mode_calls_subprocess_encoding(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_pre_mode_calls_subprocess_encoding(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         """validate_subprocess_encoding must be invoked during --pre (tier-membership regression guard)."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -404,11 +391,9 @@ class TestPreModeChecks:
             encoding_called.append(True)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=("validate_subprocess_encoding",))),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_subprocess_encoding", side_effect=capture_encoding),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
@@ -419,7 +404,6 @@ class TestPreModeChecks:
         assert encoding_called, "validate_subprocess_encoding was NOT called in --pre mode"
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreModeRegistryIsolation:
     """Isolation-guard test (defect 2 lock-in): proves the real check registry is not
     executed inside a neutralized --pre main() call, so a future edit that silently
@@ -427,11 +411,14 @@ class TestPreModeRegistryIsolation:
     of resurfacing as a slow/flaky fast-tier gate."""
 
     def test_real_registry_check_not_invoked_under_neutralization(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, pre_sequence_stub
     ) -> None:
         """validate_import_contracts prints a distinctive banner when it actually runs
-        (see scripts/checks/deps/validate_import_contracts.py); the neutralization fixture
-        replaces it with a plain no-op MagicMock, so that banner must never appear here.
+        (see scripts/checks/deps/validate_import_contracts.py). SELECTING it (rather than
+        relying on scaffold-only exclusion) and then patching it here is what makes this a real
+        interception guard: excluding it from the selection would make the banner assertion
+        true regardless of whether interception works, silently orphaning the graduated row
+        pre-tier-registry-isolation-guard.
         """
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -439,8 +426,10 @@ class TestPreModeRegistryIsolation:
         monkeypatch.delenv("CI", raising=False)
 
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=("validate_import_contracts",))),
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_import_contracts"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -450,7 +439,7 @@ class TestPreModeRegistryIsolation:
         captured = capsys.readouterr()
         assert "Import contracts (Decision 80" not in captured.out, (
             "validate_import_contracts printed its real banner -- the real check ran "
-            "instead of being neutralized by the _neutralized_pre_registry fixture"
+            "instead of being intercepted by the test's own explicit patch"
         )
 
 
@@ -540,9 +529,17 @@ class TestShouldRunInPre:
         assert _should_run_in_pre(("tests/**",), set(), True) is True
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreGlobsGateEndToEnd:
     """End-to-end --pre dispatch tests for the VTS-09 pre_globs gate (VP step 3)."""
+
+    _SIX_CHECKS = (
+        "validate_platform_roadmap",
+        "validate_plan_documents",
+        "validate_tier_floor",
+        "validate_test_count_coupling",
+        "validate_no_cross_test_imports",
+        "validate_cc_limits",
+    )
 
     @pytest.mark.parametrize(
         "changed_path,skipped,run",
@@ -572,6 +569,7 @@ class TestPreGlobsGateEndToEnd:
         self,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture,
+        pre_sequence_stub,
         changed_path: str,
         skipped: list[str],
         run: list[str],
@@ -583,12 +581,10 @@ class TestPreGlobsGateEndToEnd:
 
         mocks = {name: MagicMock() for name in skipped + run}
         with (
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=self._SIX_CHECKS)),
             patch("scripts.checks._common.get_changed_files", return_value=[changed_path]),
             patch("scripts.checks._common.get_status_aware_diff", return_value=[("M", changed_path)]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
             ExitStack() as stack,
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,

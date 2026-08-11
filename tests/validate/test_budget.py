@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.checks import registry
 from tests.fixtures.subprocess_stubs import _pre_mock_run
 from tests.fixtures.validate_module import _validate
 
@@ -22,11 +23,10 @@ run_pytest_diff = _validate.run_pytest_diff
 validate_prompt_files = _validate.validate_prompt_files
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestBudgetAssertion:
     """Tests for the 5-minute fast-tier wall-clock budget assertion."""
 
-    def test_exits_1_on_budget_breach(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_exits_1_on_budget_breach(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -35,9 +35,7 @@ class TestBudgetAssertion:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("validate._file_budget_breach_rec"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
             pytest.raises(SystemExit) as exc_info,
@@ -47,7 +45,7 @@ class TestBudgetAssertion:
         assert exc_info.value.code == 1
 
     def test_budget_breach_output_contains_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, pre_sequence_stub
     ) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -57,9 +55,7 @@ class TestBudgetAssertion:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("validate._file_budget_breach_rec"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
             pytest.raises(SystemExit),
@@ -69,7 +65,7 @@ class TestBudgetAssertion:
         captured = capsys.readouterr()
         assert "Fast tier exceeded budget" in captured.out
 
-    def test_exits_0_within_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_exits_0_within_budget(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -78,9 +74,7 @@ class TestBudgetAssertion:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -91,7 +85,7 @@ class TestBudgetAssertion:
     def test_budget_constant_is_300(self) -> None:
         assert _FAST_TIER_BUDGET_SECONDS == 300
 
-    def test_breach_rec_receives_a_real_dominant_phase(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_breach_rec_receives_a_real_dominant_phase(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         """The dominant phase threaded to _file_budget_breach_rec must correctly identify WHICH
         step actually dominated the elapsed wall-clock -- not merely be non-None. Makes
         pytest_diff artificially slow (a real, attributable jump in the mocked clock) relative to
@@ -113,9 +107,7 @@ class TestBudgetAssertion:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("validate._file_budget_breach_rec") as mock_breach,
             patch("validate.run_pytest_diff", side_effect=slow_pytest_diff),
             patch("time.monotonic", side_effect=fake_monotonic),
@@ -127,7 +119,7 @@ class TestBudgetAssertion:
         assert dominant_phase_arg == "pytest_diff"
 
     def test_breach_console_error_names_dominant_phase(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, pre_sequence_stub
     ) -> None:
         """Same correctness bar as above, applied to the printed console diagnostic."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
@@ -146,9 +138,7 @@ class TestBudgetAssertion:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("validate._file_budget_breach_rec"),
             patch("validate.run_pytest_diff", side_effect=slow_pytest_diff),
             patch("time.monotonic", side_effect=fake_monotonic),
@@ -160,7 +150,6 @@ class TestBudgetAssertion:
         assert "Dominant phase: pytest_diff" in captured.out
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestForcedFullSuiteWaiver:
     """Decision 153: a root-conftest-forced full-suite --pre run warns-and-passes instead of
     hard-failing, bounded by a forced-run ceiling derived from the pr-validate job timeout.
@@ -175,7 +164,7 @@ class TestForcedFullSuiteWaiver:
     def _selection(forced: bool) -> dict:
         return {"selected": [], "manifest": {"full_suite_forced": forced}}
 
-    def test_forced_breach_within_ceiling_warns_and_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_forced_breach_within_ceiling_warns_and_passes(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -184,9 +173,7 @@ class TestForcedFullSuiteWaiver:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
             patch("scripts.checks.deps.affected_tests.emit_manifest"),
             patch("validate._file_budget_breach_rec") as mock_breach,
@@ -198,7 +185,9 @@ class TestForcedFullSuiteWaiver:
         assert exc_info.value.code == 0
         mock_breach.assert_not_called()
 
-    def test_waiver_notice_is_distinct(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    def test_waiver_notice_is_distinct(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, pre_sequence_stub
+    ) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -207,9 +196,7 @@ class TestForcedFullSuiteWaiver:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
             patch("scripts.checks.deps.affected_tests.emit_manifest"),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
@@ -222,7 +209,7 @@ class TestForcedFullSuiteWaiver:
         assert "budget waived: full-suite scope forced by root-conftest change" in captured.out
         assert "Fast tier exceeded budget" not in captured.out
 
-    def test_non_forced_breach_still_hard_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_non_forced_breach_still_hard_fails(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -231,9 +218,7 @@ class TestForcedFullSuiteWaiver:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(False)),
             patch("scripts.checks.deps.affected_tests.emit_manifest"),
             patch("validate._file_budget_breach_rec") as mock_breach,
@@ -245,7 +230,9 @@ class TestForcedFullSuiteWaiver:
         assert exc_info.value.code == 1
         mock_breach.assert_called_once()
 
-    def test_forced_breach_at_exactly_ceiling_warns_and_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_forced_breach_at_exactly_ceiling_warns_and_passes(
+        self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub
+    ) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -254,9 +241,7 @@ class TestForcedFullSuiteWaiver:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
             patch("scripts.checks.deps.affected_tests.emit_manifest"),
             patch("validate._file_budget_breach_rec") as mock_breach,
@@ -272,7 +257,7 @@ class TestForcedFullSuiteWaiver:
         mock_breach.assert_not_called()
 
     def test_forced_breach_over_ceiling_hard_fails(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, pre_sequence_stub
     ) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -282,9 +267,7 @@ class TestForcedFullSuiteWaiver:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
             patch("scripts.checks.deps.affected_tests.emit_manifest"),
             patch("validate._file_budget_breach_rec") as mock_breach,
@@ -302,11 +285,10 @@ class TestForcedFullSuiteWaiver:
         assert "ceiling" in captured.out.lower()
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestIgnoreBudgetFlag:
     """Tests for the --ignore-budget escape hatch."""
 
-    def test_bypass_calls_bypass_rec_helper(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_bypass_calls_bypass_rec_helper(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -315,9 +297,7 @@ class TestIgnoreBudgetFlag:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit) as exc_info,
@@ -327,7 +307,7 @@ class TestIgnoreBudgetFlag:
         assert exc_info.value.code == 0
         mock_bypass.assert_called_once()
 
-    def test_bypass_reason_captured_when_provided(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_bypass_reason_captured_when_provided(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget", "--ignore-budget-reason", "disk slow"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -336,9 +316,7 @@ class TestIgnoreBudgetFlag:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit),
@@ -348,7 +326,7 @@ class TestIgnoreBudgetFlag:
         reason_arg = mock_bypass.call_args[0][2]
         assert reason_arg == "disk slow"
 
-    def test_bypass_reason_null_when_omitted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_bypass_reason_null_when_omitted(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -357,9 +335,7 @@ class TestIgnoreBudgetFlag:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit),
@@ -369,7 +345,7 @@ class TestIgnoreBudgetFlag:
         reason_arg = mock_bypass.call_args[0][2]
         assert reason_arg is None
 
-    def test_bypass_skips_budget_assertion(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_bypass_skips_budget_assertion(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         """Breach rec is NOT filed when --ignore-budget is set, even if elapsed > 300."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -379,9 +355,7 @@ class TestIgnoreBudgetFlag:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
             patch("validate._file_budget_bypass_rec"),
             patch("validate._file_budget_breach_rec") as mock_breach,
@@ -393,7 +367,6 @@ class TestIgnoreBudgetFlag:
         mock_breach.assert_not_called()
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestIgnoreBudgetCIGuard:
     """Tests for the CI guard that forbids --ignore-budget in CI environments."""
 
@@ -422,7 +395,7 @@ class TestIgnoreBudgetCIGuard:
         captured = capsys.readouterr()
         assert "cannot be used in CI" in captured.out
 
-    def test_allows_ignore_budget_when_ci_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_allows_ignore_budget_when_ci_not_set(self, monkeypatch: pytest.MonkeyPatch, pre_sequence_stub) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.delenv("CI", raising=False)
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
@@ -431,9 +404,7 @@ class TestIgnoreBudgetCIGuard:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("validate.validate_iam_runner_policy"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
+            patch.object(registry, "pre_sequence", return_value=pre_sequence_stub(checks=())),
             patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec"),
             pytest.raises(SystemExit) as exc_info,

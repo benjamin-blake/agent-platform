@@ -4,10 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from scripts.checks.roadmap.check_graduation_guard import _check_graduation_guard, _extract_enforced_map
-from tests.fixtures.validate_module import _validate
 
 
 class TestExtractEnforcedMap:
@@ -66,7 +63,6 @@ class TestExtractEnforcedMap:
         assert result == {}
 
 
-@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestGraduationGuard:
     """Tests for _check_graduation_guard() -- enforced flip validation."""
 
@@ -245,19 +241,14 @@ class TestGraduationGuard:
         assert failed == []
 
     def test_pre_mode_does_not_call_guard(self) -> None:
-        """main() --pre does not invoke _check_graduation_guard."""
-        with (
-            patch("validate._check_graduation_guard") as mock_guard,
-            patch("validate.run_lint_checks"),
-            patch("validate.validate_prompt_files"),
-            patch("validate.validate_cli_tools_in_prompts"),
-            patch("scripts.checks._common.run", return_value=MagicMock(stdout="agent/test\n", returncode=0)),
-            patch.dict("os.environ", {"_VALIDATE_DEPTH": "0"}),
-            patch("sys.argv", ["validate.py", "--pre"]),
-        ):
-            with pytest.raises(SystemExit):
-                _validate.main()
-        mock_guard.assert_not_called()
+        """_check_graduation_guard is a full-tier-only check: present in full_sequence(),
+        absent from pre_sequence(). Hermetic registry assertion -- no main() run needed."""
+        from scripts.checks import registry
+
+        pre_names = {step.name for step in registry.pre_sequence() if step.kind == "check"}
+        full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "_check_graduation_guard" in full_names
+        assert "_check_graduation_guard" not in pre_names
 
 
 class TestGraduationGuardUnavailableCarveout:
