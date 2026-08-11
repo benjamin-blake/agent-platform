@@ -4503,6 +4503,31 @@ The merge-gate design consequences of Decision 89 are PRESERVED, not overturned.
 - Dependabot: 5 `dependabot/pip/*` branches active (authoritative).
 - GHAS secret-scanning + CodeQL: 403 on alert endpoints (web PAT lacks `security_events`); configuration evidence = `terraform/github/repo.tf` `secret_scanning status=enabled` + committed `.github/workflows/codeql.yml` + CodeQL workflow runs (`success`). Live-probe verification outstanding; one-time UI confirmation recommended.
 
+**Live-probe verification (2026-08-11):**
+- Secret scanning: `scanning_status=enabled` (GitHub API, `repo_http_status=200`).
+- Push protection: `push_protection=enabled` (same endpoint).
+- Actions permissions: `actions_enabled=True`, `allowed_actions=all` (`actions_http_status=200`; alerts endpoint `alerts_http_status=200`).
+- Run: https://github.com/benjamin-blake/agent-platform/actions/runs/31536138747 (workflow_dispatch, main @ 84f9209, 2026-08-11T21:04:49Z, conclusion=success) -- the sole Actions run id cited anywhere in this file.
+- This is a point-in-time probe, not continuous coverage. The monitor-blind window 2026-07-06 .. 2026-08-10 saw all six scheduled runs fail unactioned because `GHAS_PROBE_TOKEN` was unprovisioned, so the three controls were UNVERIFIED across that window (not proven-disabled) until this run confirmed them. The monitor still carries no persistent-unavailability alarm, so a recurrence before this stanza's review_by would again surface to nobody.
+
+**Reversal conditions:**
+This live-probe annotation is re-verified, never silently renewed, when either of the following fires: (a) `GHAS_PROBE_TOKEN` nears or reaches its 2027-05-31 expiry -- re-verify the three controls and record dated evidence on this Decision, or mark them UNVERIFIED, then re-arm; or (b) the ghas-probe monitor goes blind again (no successful run in more than 14 days, the 2026-07/08 shape) -- investigate and restore probing, then update the evidence. This stanza schedules re-verification of Decision 83's live-probe ANNOTATION only, never re-decision of its holding: a token expiry cannot un-reverse Decision 89's premise, which stands independent of probe cadence.
+
+```yaml reversal-conditions
+decision: 83
+review_by: 2027-04-30
+on_trigger: "re-verify the three controls and record dated evidence on Decision 83, or mark them UNVERIFIED, then re-arm; never silently renew"
+conditions:
+  - id: probe-token-expiry
+    kind: manual
+    description: "GHAS_PROBE_TOKEN expires 2027-05-31 and its lapse makes the 2026-08-11 evidence above stale"
+  - id: probe-monitor-blind
+    kind: repo_state
+    predicate: null
+    params: {}
+    description: "no successful ghas-probe run in more than 14 days, the 2026-07/08 recurrence shape"
+```
+
 **Related:** Decision 89 (premise reversed here; merge-gate design preserved), Decision 76 (foresaw reversal; deferred follow-up now unblocked), Decision 77 (guard rationale preserved -- guard is the plan-CONTENT control, not a branch-protection substitute), Decision 73 (public flip enabling the apply), Decision 75 (sanctioned premise correction).
 
 ---
