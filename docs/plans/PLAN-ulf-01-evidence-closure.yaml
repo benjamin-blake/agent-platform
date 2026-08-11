@@ -645,9 +645,20 @@ context:
     two PATs: repository secrets are CLAUDE_CODE_OAUTH_TOKEN, GHAS_PROBE_TOKEN,
     TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID and TF_VAR_PLATFORM_DEV_EXTERNAL_ID. Two anomalies to carry
     into that rec, both established by grep/API this session and NEITHER fixed here: (i) the two
-    TF_VAR_PLATFORM_*_EXTERNAL_ID secrets are referenced NOWHERE under .github/ -- they are
-    IAM-ExternalId-bearing repository secrets with no CI consumer, so their rotation owner and
-    continued necessity are unestablished; (ii) DUCKLAKE_WRITER_URL is referenced by four workflows
+    TF_VAR_PLATFORM_*_EXTERNAL_ID GitHub-secret COPIES appear to have no reader -- state it that
+    precisely, because the looser phrasing is false. ExternalId VALUES are very much in use: an
+    agent in the CC-web container uses one through the ~/.aws/config assume-role chain
+    (agent_static -> agent_platform), and CI uses both -- but CI materialises them by pulling
+    terraform.personal.tfvars from AWS Secrets Manager (agent-platform-terraform-personal-tfvars)
+    over OIDC (terraform-drift.yml:124-131), then consumes them only to REDACT those values out of
+    plan output and logs (terraform-apply-sandbox.yml:604-605). Neither path reads the GitHub
+    secret. Carry this latent trap with the rec: terraform matches TF_VAR_<name> case-sensitively
+    against the declared variable name, and terraform/personal/variables.tf declares lowercase
+    `platform_dev_external_id` / `platform_admin_external_id`, so the uppercase secret names would
+    NOT populate those variables even if a workflow injected them -- anyone wiring them later gets a
+    silent empty value, not an error. The rec's question is therefore "who reads these two secrets,
+    and should they be deleted or rewired", NEVER "are ExternalIds unused";
+    (ii) DUCKLAKE_WRITER_URL is referenced by four workflows
     (rec-autoclose, cost-reconciliation, reconcile, and rec-autoclose's backfill step) but is NOT a
     repository secret, and rec-autoclose declares no `environment:` -- yet its backfill demonstrably
     succeeds, so the writer URL is resolving through the OIDC AWS path rather than the env var, and
