@@ -125,18 +125,30 @@ verification_plan:
     hermetic: true
     action: >-
       INDEPENDENT EVIDENCE -- Decision 83 carries a SECOND dated live-probe block citing the real
-      run URL and naming all three probed controls with their states.
+      run URL, naming all three probed controls with their states, AND carrying the adverse
+      disclosure (the monitor-blind window, the UNVERIFIED characterization, and the point-in-time
+      caveat) that acceptance criterion 2 requires. The disclosure conjuncts are the load-bearing
+      half: a clean "controls verified enabled" block that quietly drops the five-week blind window
+      is the single most plausible subtle failure of this plan, and it is exactly the
+      claim-without-evidence shape the plan exists to close one level up.
     command: >-
       bash -c 'D=docs/DECISIONS.md; [ "$(grep -c "Live-probe verification (20" "$D")" -ge 2 ] &&
       grep -q "actions/runs/31536138747" "$D" && grep -q "scanning_status=enabled" "$D" &&
       grep -q "push_protection=enabled" "$D" && grep -q "allowed_actions=all" "$D" &&
+      grep -qi "monitor-blind" "$D" && grep -q "UNVERIFIED" "$D" &&
+      grep -q "point-in-time" "$D" && grep -qF "2026-07-06 .. 2026-08-10" "$D" &&
       echo "evidence block ok"'
     expected: exit 0, prints "evidence block ok"
     fix_if: >-
       Count < 2 means only the pre-existing 2026-06-08 block exists and the new evidence was never
-      transcribed. A missing run URL or control state means the block is incomplete. Evidence MUST
-      come from ghas-probe run 31536138747 (or a later green run, with every reference updated
-      together) -- never fabricated, never inferred from the workflow file.
+      transcribed. A missing run URL or control state means the block is incomplete. A missing
+      monitor-blind / UNVERIFIED / point-in-time / window token means the block records the good
+      news and suppresses the adverse half -- rewrite it to disclose both. Evidence MUST come from
+      ghas-probe run 31536138747 (or a later green run, with every reference updated together) --
+      never fabricated, never inferred from the workflow file. NOTE the four disclosure tokens are
+      chosen because each has ZERO occurrences in DECISIONS.md on origin/main; the bare dates
+      2026-07-06 and 2026-08-10 each already occur 3 times, so grepping them individually would
+      pass on the unchanged tree and give a false differential.
     graduation: graduate
     graduation_check_id: decision-83-live-probe-evidence-block
   - step: 2
@@ -183,64 +195,93 @@ verification_plan:
     phase: pre-deploy
     hermetic: true
     action: >-
-      INDEPENDENT EVIDENCE -- the reversal-conditions stanza is well-formed, monitored, correctly
-      dated, and carries both conditions, evaluated through the same parser session preflight uses.
+      INDEPENDENT EVIDENCE -- the reversal-conditions stanza exists, is well-formed, and carries
+      both conditions, evaluated through the same parser session preflight uses (not a grep for a
+      fence). Deliberately asserts only the RE-ARM-DURABLE properties; the authoring-time date and
+      state are step 5's job.
     command: >-
       bin/venv-python -c "from scripts.preflight.decision_conditions import evaluate;
       r={x.decision_id: x for x in evaluate()}; s=r.get(83);
       assert s is not None, 'Decision 83 carries no reversal-conditions stanza';
       assert s.state != 'MALFORMED', s.error;
-      assert s.review_by == '2027-04-30', s.review_by;
       ids={c.id for c in s.conditions};
       assert {'probe-token-expiry','probe-monitor-blind'} <= ids, ids;
-      print('stanza ok:', s.state, s.review_by, sorted(ids))"
-    expected: >-
-      exit 0, printing a stanza line whose state is not-due, review_by is 2027-04-30, and condition
-      ids are probe-monitor-blind and probe-token-expiry
+      print('stanza armed:', sorted(ids))"
+    expected: exit 0, printing a stanza-armed line listing probe-monitor-blind and probe-token-expiry
     fix_if: >-
       "no reversal-conditions stanza" means the fence is absent or not at column 0. MALFORMED names
       the exact defect -- required top keys are decision/review_by/on_trigger/conditions, `decision`
-      must equal 83, each condition needs id/kind/description, and kind is manual or repo_state. A
-      state of `manual-review-due` at authoring time means review_by was set in the past.
+      must equal 83, each condition needs id/kind/description, and kind is manual or repo_state.
     graduation: graduate
     graduation_check_id: decision-83-reversal-stanza-armed
   - step: 5
     phase: pre-deploy
     hermetic: true
     action: >-
+      The stanza is armed to the correct date and is not-yet-due at authoring time. Split from step
+      4 deliberately: `review_by` and `state` both change on a legitimate re-arm, which the stanza's
+      own on_trigger prescribes, so pinning them standing would plant a scheduled false-red.
+    command: >-
+      bin/venv-python -c "from scripts.preflight.decision_conditions import evaluate;
+      s={x.decision_id: x for x in evaluate()}.get(83);
+      assert s is not None, 'Decision 83 carries no stanza at all -- see step 4';
+      assert s.review_by == '2027-04-30', s.review_by;
+      assert s.state == 'not-due', s.state;
+      print('stanza dated ok', s.review_by, s.state)"
+    expected: exit 0, printing a stanza-dated-ok line with 2027-04-30 and not-due
+    fix_if: >-
+      A wrong review_by means the date was mistyped -- it must be 2027-04-30, a month of lead time
+      before the 2027-05-31 expiry. A state of `manual-review-due` means review_by was set in the
+      past; `fired` means a condition predicate evaluated true, which cannot happen while
+      probe-monitor-blind ships predicate null.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Both asserted values are moment-in-time. The stanza's on_trigger instructs "then re-arm",
+      and re-arming necessarily moves review_by and flips state to not-due against a NEW date, so a
+      graduated row here would red in 2027 for the exact behaviour the stanza prescribes -- a guard
+      someone must edit to permit correct behaviour, which this plan rejects at step 2 and must not
+      then commit at step 4. The durable half is graduated at step 4 instead.
+  - step: 6
+    phase: pre-deploy
+    hermetic: true
+    action: >-
       AGENTS.md carries the dated, evidence-citing claim, no longer asserts continuous
       verification, and did not grow against its zero-headroom prose budget.
     command: >-
-      bash -c 'A=AGENTS.md; ! grep -q "continuously live-verified" "$A" &&
-      grep -q "31536138747" "$A" && grep -q "2026-08-11" "$A" &&
-      b=$(wc -c < "$A") && [ "$b" -le 33190 ] && echo "AGENTS.md ok ($b bytes <= 33190)"'
+      bash -c '! grep -q "continuously live-verified" AGENTS.md &&
+      grep -q "31536138747" AGENTS.md && grep -q "2026-08-11" AGENTS.md &&
+      grep -q "ghas-probe.yml" AGENTS.md &&
+      b=$(wc -c < AGENTS.md) && [ "$b" -le 33190 ] && echo "AGENTS.md ok ($b bytes <= 33190)"'
     expected: exit 0, prints "AGENTS.md ok (N bytes <= 33190)"
     fix_if: >-
-      A surviving "continuously live-verified" means the stale claim was not retired. A byte count
-      over 33190 means the bullet rewrite did not fund itself: compress the T2.12 bullet further --
-      do NOT add a config/prose_budgets.yaml raise, which validate_prose_budget_raises would reject
-      for want of an authorizing Decision (Decision 165).
+      A surviving "continuously live-verified" means the stale claim was not retired. A missing
+      ghas-probe.yml reference means the bullet does not point at where the credential scopes and
+      expiries are recorded (acceptance criterion 6). A byte count over 33190 means the bullet
+      rewrite did not fund itself: compress the T2.12 bullet further -- do NOT add a
+      config/prose_budgets.yaml raise, which validate_prose_budget_raises would reject for want of
+      an authorizing Decision (Decision 165).
     graduation: waive
     graduation_waiver_reason: >-
       The byte half is a ratchet already owned by validate_prose_limits in --pre, and the literal
       33190 is a snapshot of today's origin/main that a legitimate future shrink would make stale.
       Graduating it would pin one moment of a budget designed to ratchet down.
-  - step: 6
+  - step: 7
     phase: pre-deploy
     hermetic: true
     action: >-
       The roadmap assertion is retired and re-grounded, with T2.13's status and criterion shape
       untouched (Status-Trusted-Never-Inferred).
     command: >-
-      bin/venv-python -c "import yaml, pathlib;
-      t=pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text();
+      bin/venv-python -c "import pathlib; t=pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text();
       assert 'continuously live-verified' not in t, 'stale roadmap assertion survives';
-      assert '31536138747' in t, 'roadmap does not cite the run';
-      d=yaml.safe_load(t); it=[i for i in d['tier_items'] if i['id']=='T2.13'][0];
+      assert '31536138747' in t, 'roadmap does not cite the run'; print('roadmap text re-grounded')"
+      && bin/venv-python -c "import yaml, pathlib;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
+      it=[i for i in d['tier_items'] if i['id']=='T2.13'][0];
       assert it['status']=='complete', it['status'];
       assert len(it['exit_criteria'])==4, len(it['exit_criteria']);
       assert all(isinstance(c, str) for c in it['exit_criteria']), 'criterion shape changed';
-      print('roadmap ok: T2.13 complete, 4 criteria, text re-grounded')"
+      print('T2.13 shape intact')"
     expected: >-
       exit 0, printing a roadmap-ok line confirming T2.13 is complete with 4 criteria and the
       criterion text re-grounded
@@ -253,17 +294,20 @@ verification_plan:
       Half the assertion (status and criterion shape) is already enforced by
       validate_platform_roadmap and the RoadmapDocument schema in both tiers; the other half pins
       one criterion's prose, which the exit-criteria ledger sweep is entitled to restructure.
-  - step: 7
+  - step: 8
     phase: pre-deploy
     hermetic: true
     action: >-
       Both credentials are documented in the workflow header with no token value, and the pinned
       run-step body ceiling is intact.
     command: >-
-      bash -c 'W=.github/workflows/ghas-probe.yml; grep -q "GHAS_PROBE_TOKEN" "$W" &&
-      grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$W" && grep -q "2027-05-31" "$W" &&
-      grep -qi "Administration" "$W" && grep -qi "Secret scanning alerts" "$W" &&
-      ! grep -qiE "gh[po]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}" "$W" &&
+      bash -c 'grep -q "GHAS_PROBE_TOKEN" .github/workflows/ghas-probe.yml &&
+      grep -q "CLAUDE_CODE_OAUTH_TOKEN" .github/workflows/ghas-probe.yml &&
+      grep -q "2027-05-31" .github/workflows/ghas-probe.yml &&
+      grep -qi "Administration" .github/workflows/ghas-probe.yml &&
+      grep -qi "Secret scanning alerts" .github/workflows/ghas-probe.yml &&
+      ! grep -qiE "gh[po]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}"
+      .github/workflows/ghas-probe.yml &&
       bin/venv-python -c "from scripts.checks import registry;
       fn=registry.resolve(\"validate_composite_action_shell_bodies\"); f=[]; fn(f);
       assert not f, f; print(\"credentials documented, step-body ceiling intact\")"'
@@ -278,7 +322,7 @@ verification_plan:
       The step-body half is already gated in both tiers by validate_composite_action_shell_bodies,
       and the token-shape half duplicates the pre-commit never-commit hook and GHAS push
       protection, which are the load-bearing controls for a pasted credential.
-  - step: 8
+  - step: 9
     phase: pre-deploy
     hermetic: true
     action: >-
@@ -299,7 +343,7 @@ verification_plan:
     graduation_waiver_reason: >-
       All three delegated checks are themselves sequenced in both presubmit tiers, so a graduated
       row would re-run live gates and add nothing they do not already assert on every run.
-  - step: 9
+  - step: 10
     phase: pre-deploy
     hermetic: false
     action: >-
@@ -316,7 +360,7 @@ verification_plan:
       (call get_rec_write_guidance() first). A portal write that cannot complete FAILS LOUDLY --
       there is no offline outbox (Decision 84 I-4); restore connectivity and re-file.
     graduation: not-applicable
-  - step: 10
+  - step: 11
     phase: pre-deploy
     hermetic: false
     action: Fast tier is green.
@@ -327,7 +371,7 @@ verification_plan:
       points at AGENTS.md byte growth; validate_plan_documents at a missing test_obligation row;
       validate_reversal_stanzas at stanza shape.
     graduation: not-applicable
-  - step: 11
+  - step: 12
     phase: pre-deploy
     hermetic: false
     action: Full tier is green (handoff_policy obligation, Decision 163).
@@ -342,7 +386,7 @@ test_obligations:
     behavior: >-
       Generated artifact stays current with DECISIONS.md and carries a typed currency value on
       every live row.
-    verification_step: 8
+    verification_step: 9
     command: bin/venv-python -m scripts.decisions_index --check
     waiver_reason: >-
       A generated file with a do-not-edit banner, listed as generated_pinned in
@@ -354,8 +398,8 @@ test_obligations:
     behavior: >-
       Header comment records both credential names, scopes and the 2027-05-31 expiry with no token
       value, while the pinned run-step body stays at its enforced 1-line ceiling.
-    verification_step: 7
-    command: grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$W"
+    verification_step: 8
+    command: grep -q "CLAUDE_CODE_OAUTH_TOKEN" .github/workflows/ghas-probe.yml
     waiver_reason: >-
       The edit is confined to YAML comment lines, which are excluded from every effective-line
       count and executed by nothing -- there is no behaviour change to guard with a test. The
@@ -365,8 +409,11 @@ test_obligations:
     behavior: >-
       T2.13's criterion text is re-grounded while its status, criterion count and criterion shape
       stay untouched.
-    verification_step: 6
-    command: assert 'continuously live-verified' not in t
+    verification_step: 7
+    command: >-
+      bin/venv-python -c "import pathlib; t=pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text();
+      assert 'continuously live-verified' not in t, 'stale roadmap assertion survives';
+      assert '31536138747' in t, 'roadmap does not cite the run'; print('roadmap text re-grounded')"
     waiver_reason: >-
       Roadmap data, not code -- its schema and referential integrity are enforced by
       validate_platform_roadmap and the RoadmapDocument Pydantic model in both tiers, both already
@@ -407,13 +454,18 @@ constraints:
     significance bar, so minting one to authorize a raise would itself be improper.
   - >-
     Decision 127 DEFERRAL (explicit, not an oversight): point 2 routes new operator procedures to a
-    `procedure:` block in the owning docs/contracts/*.yaml. The credential procedure lands instead
-    in the ghas-probe.yml header comment, per the operator's decision, because that keeps it out of
-    the Layer-1 ambient load-set (the failure mode Decision 127's own Problem statement names) at
-    zero prose-byte cost and colocates it with the mechanism it serves. This is INTERIM: rec (c)
-    owns the durable contract home and must satisfy Decision 168 -- an existing contract's
-    `procedure:` block, or a Class D contract with a declared evaluator that demonstrably reads it.
-    A bare inventory file would fail that gate.
+    `procedure:` block in the owning docs/contracts/*.yaml. The load-bearing reason that route is
+    not taken here is that NO existing contract owns repo/GitHub-Actions credentials --
+    docs/contracts/credential-routing.yaml is a Class C broker-to-Secrets-Manager routing contract,
+    not a repo-credential inventory -- so point 3's "existing contract" host does not exist, and
+    minting a new one engages Decision 168's declared-evaluator gate (a Class D contract needs an
+    evaluator that demonstrably reads it), which is real work outside a V2 doc plan. Do NOT argue
+    this deferral from "keeps it out of the Layer-1 ambient load-set": a contract `procedure:`
+    block is not Layer-1 either, so that reasoning only rules out AGENTS.md/CLAUDE.md, which is not
+    the prescribed route. CAVEAT to record: CLAUDE_CODE_OAUTH_TOKEN is not referenced anywhere in
+    ghas-probe.yml (only GHAS_PROBE_TOKEN is wired, at its env: block), so the colocation rationale
+    covers one of the two credentials, not both -- the second is there for operator convenience
+    pending rec (c). This is INTERIM: rec (c) owns the durable, Decision 168-conformant home.
   - >-
     Decision 136 DEFERRAL (explicit): validate_platform_roadmap forbids a touched tier_item from
     retaining bare-string criteria, but keys `touched_ids` off `^[+-]\s+- id:` diff lines, so an
@@ -433,11 +485,16 @@ constraints:
     BLOCK /plan on a fix only a human can perform (the convergence-health wedge pattern). The
     liveness advisory is proposed via rec (b), not implemented here.
   - >-
-    Decision 133 stanza framing: `on_trigger` phrases the duty as RE-DECIDING the claim -- re-verify
+    Decision 133 stanza framing: `on_trigger` phrases the duty as re-verifying the CLAIM -- re-probe
     the three controls and record dated evidence, or mark them UNVERIFIED on Decision 83, then
     re-arm -- not as a rotation runbook. The mechanical rotation steps stay in the workflow comment
-    (and later the contract), keeping the stanza a re-decision instrument rather than a task
-    scheduler.
+    (and later the contract), keeping the stanza an evidence instrument rather than a task
+    scheduler. The block text MUST also state in prose that this stanza schedules re-verification
+    of Decision 83's live-probe ANNOTATION, not re-decision of its holding (a token expiry cannot
+    un-reverse Decision 89's premise). This matters because print_decision_conditions renders only
+    "Decision 83: REVIEW DUE (review_by ...)" and NEVER prints on_trigger -- so a 2027 reader who
+    follows that line back to the entry must find the scope of the review stated in the entry
+    itself, or they will read it as the whole Decision being reopened.
   - >-
     Recs must be INDEPENDENTLY ACTIONABLE. T2.9 (Secrets rotation policy + automation) is
     status:deferred_post_mvp and therefore absent from the lean preflight/orient digest; attaching
@@ -521,6 +578,16 @@ context:
     occurrence in ROADMAP-PLATFORM.yaml at line 3838. Projected Decision 83 entry after both
     additions is near 4070 bytes, inside the 6144 per-entry cap (which per Decision 167 binds new
     entries only, and Decision 83 is baseline).
+  - >-
+    GRADUATION ASYMMETRY, recorded so it is not read as an oversight. Step 3 is waived partly
+    because as a standing row it would forbid a future Decision 149 compaction of Decision 83,
+    while graduated step 1 constrains that same compaction with equal force (it requires two live
+    blocks plus the run URL to persist in docs/DECISIONS.md, and unlike step 4's parser -- which
+    reads DECISIONS_ARCHIVE.md too -- step 1 greps only the live file, so archival alone would red
+    it). The distinction is deliberate: step 1 pins the SUBSTANCE this plan exists to add, and a
+    compaction that drops the live-probe evidence should red until someone re-homes it; step 3
+    pins an incidental historical sentence. If Decision 83 is ever compacted or archived,
+    decision-83-live-probe-evidence-block is the row to revisit.
   - >-
     LINE NUMBERS ARE AUTHORING-TIME SNAPSHOTS. Locate Decision 83 by its "## Decision 83:" header,
     the AGENTS.md bullet by its "T2.12 security gate" text, and the roadmap assertion by grepping
