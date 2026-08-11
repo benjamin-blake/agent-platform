@@ -5405,3 +5405,37 @@ entries:
         assert "scripts.roadmap.plan_obligations" in t, "Steps 4/6b do not invoke the obligation query"
         assert "split the plan" in t.lower(), "convergence escalation lacks the split option"
         print("command wired ok")
+  - check_id: decision-83-live-probe-evidence-block
+    primitive_slot: command_exit_zero
+    guard_target: docs/DECISIONS.md
+    guard_symbol: null
+    plan_slug: ulf-01-evidence-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        D=docs/DECISIONS.md
+        [ "$(grep -c "Live-probe verification (20" "$D")" -ge 2 ] && grep -q "actions/runs/31536138747" "$D" && grep -q "scanning_status=enabled" "$D" && grep -q "push_protection=enabled" "$D" && grep -q "allowed_actions=all" "$D" && grep -qi "monitor-blind" "$D" && grep -q "UNVERIFIED" "$D" && grep -q "point-in-time" "$D" && grep -qF "2026-07-06 .. 2026-08-10" "$D" && echo "evidence block ok"
+  - check_id: decision-83-reversal-stanza-armed
+    primitive_slot: command_exit_zero
+    guard_target: docs/DECISIONS.md
+    guard_symbol: null
+    plan_slug: ulf-01-evidence-closure
+    graduated_at: "2026-08-11"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from scripts.preflight.decision_conditions import evaluate
+        r={x.decision_id: x for x in evaluate()}
+        s=r.get(83)
+        assert s is not None, 'Decision 83 carries no reversal-conditions stanza'
+        assert s.state != 'MALFORMED', s.error
+        ids={c.id for c in s.conditions}
+        assert {'probe-token-expiry','probe-monitor-blind'} <= ids, ids
+        print('stanza armed:', sorted(ids))

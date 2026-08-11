@@ -70,7 +70,7 @@ You are a Lead Software Developer writing production-quality Python. Primary dev
   Active artifacts (`status: active` in `src/lambdas/<slug>/manifest.yaml`) must include per-Lambda
   build + deploy + smoke-test steps (V3 tier). Stub artifacts (`status: stub`) need no deploy step.
   `config/agent/` is NOT Lambda-packaged. Decision 67's STRATEGIC-plan clause is RETAINED (see above).
-- **T2.12 security gate (CD.20) -- apply landed; branch protection + Dependabot live (Decision 83):** `terraform/github/` human-gated local apply landed 2026-06-08. Confirmed live via GitHub API: `main-protection` ruleset (active, admin bypass actor, non-wedging: strict=false, required = pr-validate + terraform-validate, terraform-converged advisory) and Dependabot (5 active branches). GHAS secret-scanning, push protection, and Actions permissions: apply landed per `repo.tf` / committed `.github/`, and are continuously live-verified by the standing `ghas-probe` monitor (`.github/workflows/ghas-probe.yml`, ULF-01) -- dated evidence is recorded on Decision 83. CodeQL is verified separately via its own green `codeql.yml` runs (not covered by the ghas-probe monitor).
+- **T2.12 security gate (CD.20) -- apply landed; branch protection + Dependabot live (Decision 83):** `terraform/github/` human-gated local apply landed 2026-06-08; `main-protection` ruleset and Dependabot confirmed live via GitHub API. GHAS secret-scanning, push protection, and Actions permissions were live-verified 2026-08-11 by `ghas-probe` run 31536138747 (`.github/workflows/ghas-probe.yml`, ULF-01; credential scopes/expiries recorded in its header) -- standing weekly monitor; dated evidence and the monitor-blind window are recorded on Decision 83. CodeQL is verified separately via its own green `codeql.yml` runs (not covered by ghas-probe).
 
 ## Memory policy — CLAUDE.md is canonical persistence
 Do **not** write to the auto-memory system (`~/.claude/projects/.../memory/`) in this project. The user's persistence model is git-tracked CLAUDE.md files (root + per-directory) plus structured logs (`docs/SESSION_LOG.md`, `docs/DECISIONS.md`, `logs/.recommendations-log.jsonl`).
@@ -311,7 +311,8 @@ In GitHub: repo -> Settings -> Secrets and variables -> Actions -> Repository se
 -> New secret. Name: `CLAUDE_CODE_OAUTH_TOKEN`. Paste the token.
 
 Rotation: re-run `claude setup-token` from the CC-web terminal. Update the GH Actions secret with
-the new token. Set a 90-day calendar reminder. If the scheduled agent workflow fails
+the new token. This token expires 2027-05-31; see `.github/workflows/ghas-probe.yml`'s header for
+both repo PAT expiries and the rotation procedure. If the scheduled agent workflow fails
 with auth errors, check token expiry first.
 
 Do not share this token or commit it to any file in the repository.
