@@ -71,35 +71,65 @@ scope:
       blind spot: its twin deploy-ducklake-lambdas is watched on the argument that "a build/deploy/
       smoke failure in the governed code-deploy CD channel is genuinely invisible today and
       warrants a critical", and deploy-prod-lambdas.yml:12 states it mirrors that workflow for the
-      prod class (Decision 126 point 1 makes it the sanctioned prod deploy verb). Also extend the
-      existing designed-refusal declared_jobs so a standing prod refusal cannot mint a fresh
-      L5/L6 critical on every push (Decision 73 / Decision 62 mitigation).
+      prod class (Decision 126 point 1 makes it the sanctioned prod deploy verb). This is the ONLY
+      edit to this file -- no designed-refusal change is made here or anywhere (see the
+      deploy-prod-lambdas context bullet for why none is owed).
   - file: docs/contracts/ci-rca-lifecycle.yaml
     action: Modify
     purpose: >-
       Retire watched_workflow_set as a second registry: replace the watched:/excluded: maps with a
       pointer naming config/ci_rca_taxonomy.yaml's `workflows:` as the sole source of truth, and
       name validate_ci_rca_adjudication as its evaluator. The per-entry adjudication PROSE is not
-      lost -- it migrates verbatim into the taxonomy entries' `rationale:` fields. Keeps the
-      designed_refusal, closure_dependency and starved_review_observability sections unchanged.
+      lost -- it migrates verbatim into the taxonomy entries' `rationale:` fields. The
+      designed_refusal, closure_dependency and starved_review_observability sections are left
+      untouched.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Three obligations land here, all in the implement PR. (i) Add one NEW row per `graduate` VP
+      step (8 rows: steps 1, 2, 3, 4, 6, 9, 10, 11) with check_id equal to that step's
+      graduation_check_id -- validate_graduation_completeness's implement-PR leg requires a
+      new-in-diff row per graduated step, and the 8 slugs are collision-free against the existing
+      check_ids. (ii) Repoint the graduated row `ci-rca-lifecycle-records-watched-set`, whose
+      command does `raw.index('terraform-drift')` / `raw.index('dedup-probe')` against strings that
+      exist ONLY inside the watched:/excluded: maps this plan deletes -- update its check_spec to
+      probe the new pointer text, or retire the row. (iii) Repoint the graduated row
+      `ci-rca-refusal-gate-and-junit-precedence` (guard_target scripts/ci_rca/taxonomy.py), whose
+      command builds `{'workflow_to_tier': {}}` and would raise ValueError against the migrated
+      required-keys set.
   - file: tests/checks/ci_guards/test_validate_ci_rca_adjudication.py
     action: Create
     purpose: >-
       Unit tests for the new check: both directions of workflow-set equality, both directions of
       filter/watched equality, missing/invalid owner, missing rationale, invalid ci_rca value, and
-      the happy path against the real repo state.
+      the happy path against the real repo state. Every negative case must assert a NON-EMPTY
+      failed list -- a guard that cannot fail is the defect this plan exists to prevent.
   - file: tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
     action: Modify
     purpose: Update the inline taxonomy fixtures to the nested `workflows:` shape.
-  - file: tests/checks/ci_guards/test__manifest.py
-    action: Modify
-    purpose: Extend the domain's manifest mirror test to cover the new Entry.
   - file: tests/ci_rca/taxonomy/test_load_and_classify.py
     action: Modify
     purpose: >-
-      The dedicated suite for scripts/ci_rca/taxonomy.py -- update any inline taxonomy literals to
-      the nested `workflows:` shape and add the resolve_workflow_tier return-contract assertion that
+      The dedicated suite for scripts/ci_rca/taxonomy.py -- update any taxonomy literals to the
+      nested `workflows:` shape and add the resolve_workflow_tier return-contract assertion that
       guards the migration seam.
+  - file: tests/ci_rca/taxonomy/test_classify_failures_plural.py
+    action: Modify
+    purpose: >-
+      Census-identified consumer. Carries four inline flat taxonomy literals written to temp files
+      and passed as `path=` into classify_failure/classify_failures, each routing through
+      load_taxonomy -- all four hard-break on the migrated required-keys set. It ALSO imports the
+      shared fixture, so migrating the fixture alone is insufficient.
+  - file: tests/ci_rca/evidence/test_fingerprint.py
+    action: Modify
+    purpose: >-
+      Census-identified consumer: inline flat taxonomy literal written to disk and passed as
+      `taxonomy_path=`; hard-breaks on the migrated required-keys set.
+  - file: tests/ci_rca/evidence/test_priority_zero.py
+    action: Modify
+    purpose: >-
+      Census-identified consumer: module-level flat taxonomy literal fed through `_taxonomy_file()`
+      into generate_bundles; hard-breaks on the migrated required-keys set.
   - file: tests/fixtures/ci_rca/taxonomy_data.py
     action: Modify
     purpose: Update the shared taxonomy fixture to the nested `workflows:` shape.
@@ -133,7 +163,16 @@ acceptance_criteria:
   - >-
     docs/contracts/ci-rca-lifecycle.yaml no longer carries a watched:/excluded: workflow registry
     and names config/ci_rca_taxonomy.yaml as the source of truth plus its evaluator check.
-  - No reference to the retired `workflow_to_tier` key survives anywhere in the tracked tree.
+  - >-
+    No LIVE consumer references the retired `workflow_to_tier` key -- scoped to scripts/, tests/,
+    config/, docs/contracts/ and .github/. Historical plan documents, the grandfathered
+    docs/INTENT-ci-rca-methodology.md, the audit prompt, and the evidence-bundle SCHEMA FIELD
+    `workflow_to_tier_resolution` are deliberately out of jurisdiction: the field name is a
+    published bundle key that constraint 4 holds out of scope, and rewriting history is not a goal.
+  - >-
+    Both graduated verification-registry rows that the migration would break
+    (`ci-rca-lifecycle-records-watched-set`, `ci-rca-refusal-gate-and-junit-precedence`) are
+    repointed or retired in the same PR, and one new row exists per `graduate` VP step.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -226,8 +265,13 @@ verification_plan:
       A tier value changed, or resolve_workflow_tier raised (it reads the nested mapping
       incorrectly, e.g. returns the dict instead of entry['tier']).
     hermetic: true
-    graduation: graduate
-    graduation_check_id: "ci-rca-tier-resolution-stable"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Structurally non-admissible, not merely inconvenient. This is a NO-CHANGE proof: it passes on
+      the origin/main leg as well as HEAD (verified by direct execution during plan critique --
+      exits 0 today). VF-06 admission requires a graduated check to FAIL on origin/main and PASS on
+      HEAD, so graduating this step would make the implement PR red on its own graduation row. Its
+      regression value is real but belongs to the migration window only.
   - step: 6
     phase: pre-deploy
     action: >-
@@ -262,28 +306,32 @@ verification_plan:
       Any negative-case test passes when the check should have appended to failed -- the guard is
       vacuous. Do not weaken the test; fix the check.
     hermetic: false
-    graduation: waive
-    graduation_waiver_reason: >-
-      This step's evidence is the pytest suite for the guard's own negative cases. Graduating a
-      test_selector row that merely re-runs this file would duplicate the standing obligation
-      already carried by the test_obligations rows below, which bind the same selector to the same
-      sources. The behavioural assertions worth standing guard duty are graduated individually as
-      steps 1-6.
+    graduation: graduate
+    graduation_check_id: "ci-rca-adjudication-guard-not-vacuous"
   - step: 8
     phase: pre-deploy
     action: >-
-      Confirm the migrated taxonomy fixtures did not break the existing CI-RCA taxonomy and
-      evidence suites.
+      Confirm the migrated taxonomy fixtures did not break the census-identified consumer suites.
+      Selector list is derived from the anchored `workflow_to_tier` census, NOT from the scope
+      table.
     command: >-
       bin/venv-python -m pytest tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
-      tests/checks/ci_guards/test__manifest.py tests/ci_rca/taxonomy/test_load_and_classify.py
-      tests/test_ci_rca_evidence_ast.py -p no:randomly
-    expected: All four suites pass against the nested `workflows:` shape.
+      tests/ci_rca/taxonomy/test_load_and_classify.py
+      tests/ci_rca/taxonomy/test_classify_failures_plural.py
+      tests/ci_rca/evidence/test_fingerprint.py tests/ci_rca/evidence/test_priority_zero.py
+      -p no:randomly
+    expected: All five suites pass against the nested `workflows:` shape.
     fix_if: >-
-      A fixture still declares the flat `workflow_to_tier` shape, or an evidence test depends on
-      the retired key.
+      A fixture or inline literal still declares the flat `workflow_to_tier` shape, so load_taxonomy
+      raises ValueError on its required-keys set.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is a one-shot migration-window regression sweep over five suites that carried flat
+      taxonomy literals. Post-migration those literals no longer exist, so a graduated row would
+      assert a shape no longer under threat -- the standing guard against reintroducing the flat
+      shape is step 1's `assert 'workflow_to_tier' not in t`, which IS graduated. Kept as a VP step
+      because the migration must not be declared done on an unrun suite.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -309,7 +357,7 @@ verification_plan:
       survived the migration into the taxonomy entries rather than being dropped.
     command: >-
       bin/venv-python -c "from scripts.ci_rca.taxonomy import load_taxonomy; w=load_taxonomy()
-      ['workflows']; import re; probes={'terraform-drift':'Decision 92','convergence-health':
+      ['workflows']; probes={'terraform-drift':'Decision 92','convergence-health':
       'Decision 62','dedup-probe':'probes','rec-autoclose':'2026-07-24','reconcile':'Decision 154'};
       bad=[k for k,p in probes.items() if p.lower() not in str(w[k]['rationale']).lower()];
       assert not bad, bad; print('rationale migration OK')"
@@ -324,16 +372,19 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Stale-reference sweep for the retired surface (closure obligation: this plan performs a
-      `workflow_to_tier` -> `workflows` migration). Confirm the retired key name survives nowhere
-      in the tracked tree.
+      `workflow_to_tier` -> `workflows` migration). The token is ANCHORED so it cannot match the
+      distinct published bundle key `workflow_to_tier_resolution`, and the pathspec is scoped to
+      LIVE surfaces so historical plan documents and the grandfathered INTENT doc are out of
+      jurisdiction by construction rather than by exception.
     command: >-
-      ! git grep -n "workflow_to_tier" -- ':!docs/plans/PLAN-ci-rca-adjudication-guard.yaml'
+      ! git grep -nE '(^|[^_[:alnum:]])workflow_to_tier([^_[:alnum:]]|$)' -- 'scripts/**'
+      'tests/**' 'config/**' 'docs/contracts/**' '.github/**'
     expected: >-
-      No matches (git grep exits 1, negated to 0). The only permitted mention is this plan
-      document's own description of the migration.
+      No matches (git grep exits 1, negated to 0). Ten live files match today; all ten are in this
+      plan's scope table.
     fix_if: >-
-      Any tracked file still names the retired key -- a consumer, a fixture, a docstring, or a
-      contract. Update it; do not add an exclusion to widen this sweep.
+      A live consumer still names the retired key. Update it -- and if it is NOT in the scope table,
+      stop and re-scope rather than editing an unscoped file.
     hermetic: true
     graduation: graduate
     graduation_check_id: "ci-rca-workflow-to-tier-retired"
@@ -341,7 +392,9 @@ verification_plan:
     phase: pre-deploy
     action: Run the authoritative fast presubmit tier across the changed surface.
     command: bin/venv-python -m scripts.validate --pre
-    expected: Fast tier passes with the new check dispatching and no regression.
+    expected: >-
+      Fast tier passes with the new check dispatching, validate_plan_documents green on this plan,
+      and no regression.
     fix_if: >-
       Any check regresses. Fix forward (Decision 55); never weaken a check to pass. If
       validate_sloc_limits flags the new module, decompose it (Decision 128) -- do not raise its
@@ -359,6 +412,25 @@ test_obligations:
     red_green_expectation: >-
       red before (the module does not exist, so the selector errors on collection), green after
       with every negative case asserting a non-empty failed list.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      The migrated `workflows:` map keeps bidirectional parity with .github/workflows/*.yml, and
+      every entry carries a valid ci_rca / owner / rationale -- the properties the new check reads.
+      A regression here (a dropped entry, a reintroduced stale key, a bare-string value) must red.
+    verification_step: 7
+    test_selector: tests/checks/ci_guards/test_validate_ci_rca_adjudication.py
+    red_green_expectation: >-
+      red before (the suite's happy-path case asserts an empty failed list against the real
+      taxonomy, which today still declares the flat retired key), green after the migration.
+  - source: .github/workflows/ci-rca.yml
+    behavior: >-
+      The runtime workflow_run filter stays exactly equal to the watched set, so a workflow can
+      never be watched in the taxonomy but absent from the filter (or vice versa).
+    verification_step: 7
+    test_selector: tests/checks/ci_guards/test_validate_ci_rca_adjudication.py
+    red_green_expectation: >-
+      red before (the filter/watched equality cases cannot pass while the filter omits
+      deploy-prod-lambdas and the taxonomy has no ci_rca field), green after.
   - source: scripts/ci_rca/taxonomy.py
     behavior: >-
       resolve_workflow_tier reads entry['tier'] from the nested mapping and preserves its str
@@ -378,14 +450,49 @@ test_obligations:
     red_green_expectation: >-
       red before (the check reads the retired key, so the migrated fixture yields a spurious
       coverage failure), green after.
+  - source: docs/contracts/ci-rca-lifecycle.yaml
+    behavior: >-
+      The contract carries no second workflow registry and names both the taxonomy source of truth
+      and validate_ci_rca_adjudication as its evaluator -- Decision 168's "a rule with no evaluator
+      is not a rule".
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/ci-rca-lifecycle.yaml'));
+      s=d.get('watched_workflow_set',{}); assert 'watched' not in s and 'excluded' not in s,
+      'second registry survives'; raw=open('docs/contracts/ci-rca-lifecycle.yaml').read();
+      assert 'config/ci_rca_taxonomy.yaml' in raw and 'validate_ci_rca_adjudication' in raw;
+      print('contract points at SoT + evaluator')"
+    red_green_expectation: >-
+      red before (the watched:/excluded: maps are present and no evaluator is named), green after
+      the retirement.
   - source: scripts/checks/ci_guards/_manifest.py
     behavior: >-
       The domain manifest declares the new check with two bare string literals and both tier
-      memberships, so registry.resolve() dispatches it.
-    verification_step: 8
-    test_selector: tests/checks/ci_guards/test__manifest.py
+      memberships, so registry.resolve() dispatches it in --pre and full.
+    verification_step: 6
+    command: >-
+      bin/venv-python -c "from scripts.checks import registry;
+      n='validate_ci_rca_adjudication'; assert n in registry.all_checks(), 'not registered';
+      assert callable(registry.resolve(n)); assert n in [s.name for s in
+      registry.pre_sequence() if s.kind=='check'], 'absent from --pre'; assert n in [s.name for s
+      in registry.full_sequence() if s.kind=='check'], 'absent from full'; print('registered OK')"
     red_green_expectation: >-
-      red before (the mirror test asserts an Entry that does not yet exist), green after.
+      red before (the check is not registered, so the first assert fires), green after. Note the
+      domain's mirror test tests/checks/ci_guards/test__manifest.py is fully parametrized over
+      _manifest.ENTRIES and is therefore green both before and after -- it cannot serve as this
+      obligation's evidence, which is why the registry-dispatch command is used instead.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Every graduated row whose command depends on the retired key or the retired watched:/excluded:
+      maps is repointed or retired, so no graduated row silently rots across this migration.
+    verification_step: 11
+    command: >-
+      ! git grep -nE '(^|[^_[:alnum:]])workflow_to_tier([^_[:alnum:]]|$)' -- 'scripts/**'
+      'tests/**' 'config/**' 'docs/contracts/**' '.github/**'
+    red_green_expectation: >-
+      red before (the ci-rca-refusal-gate-and-junit-precedence row's command builds
+      {'workflow_to_tier': {}}, and step 11's `config/**` pathspec covers
+      config/agent/verification_registry/registry.yaml), green after it is repointed.
 constraints:
   - >-
     Additive-only for the pre-existing watched set. Moving any of CI, Main Canary,
@@ -396,7 +503,10 @@ constraints:
     Do NOT grow scripts/verify_ci_workflow.py. It measures exactly 500 SLOC and is unregistered in
     config/sloc_budgets.yaml, so any addition breaches the unregistered-file cap; Decision 128 makes
     decomposition the default and forbids defaulting to a budget raise. Its existing floor-only
-    _check_ci_rca_filter is retained deliberately as belt-and-suspenders, not deleted.
+    _check_ci_rca_filter is retained deliberately: it asserts a five-entry FLOOR that must never
+    shrink, which is a different and weaker claim than the new check's set-equality. Keeping it
+    means a regression that neutered the new check would still not silently drop a watched workflow.
+    This is not a second registry -- both read the same single source of truth.
   - >-
     Do NOT import _VALID_OWNERS from scripts/checks/registry.py. A check's `owner` is Decision 104's
     platform/product federation axis; a workflow's `owner` means "who triages this workflow's
@@ -404,8 +514,12 @@ constraints:
     silently constrain the other. Declare the workflow owner vocabulary in the taxonomy file.
   - >-
     resolve_workflow_tier's signature and return contract must not change. Containing the migration
-    behind that seam is what keeps scripts/ci_rca/evidence/_bundle_core.py and the other downstream
-    consumers out of scope.
+    behind that seam is what keeps scripts/ci_rca/evidence/_bundle_core.py, the published bundle key
+    `workflow_to_tier_resolution`, and the other downstream consumers out of scope.
+  - >-
+    Do NOT edit scripts/ci_rca/designed_refusal.py. No designed-refusal declaration is added for
+    deploy-prod-lambdas -- see the context bullet; declaring a job name that does not exist would be
+    inert against a fail-closed predicate and actively misleading.
   - >-
     The new check must stay --pre eligible: pure file-glob + YAML parse, no subprocess, no network,
     sub-100ms (Decision 60), matching its sibling validate_ci_rca_taxonomy.
@@ -428,11 +542,31 @@ context:
     Highest-consequence gap closed here: deploy-prod-lambdas is un-adjudicated while its twin
     deploy-ducklake-lambdas is watched, so a prod Lambda deploy failure currently files nothing.
   - >-
+    deploy-prod-lambdas / Decision 62 / Decision 73 tension, RE-ARGUED after plan critique. The
+    first draft claimed a designed-refusal predicate as the mitigation. That claim was wrong twice
+    over: DESIGNED_REFUSAL_JOBS lives in scripts/ci_rca/designed_refusal.py:38, not in the workflow
+    file the scope row named; and deploy-prod-lambdas has exactly two jobs (deploy, smoke) with no
+    reconcile-gate analogue, so there is no refusal to declare and is_designed_refusal is fail-closed
+    (a bogus job name buys nothing). The correct argument is that NO mitigation is owed: unlike
+    terraform-drift and convergence-health, which sit red ENVIRONMENTALLY and would mint a fresh
+    L5/L6 critical on every push, deploy-prod-lambdas has no standing-red class -- its bootstrap-window
+    path is continue-on-error and yields a GREEN no-op (deployed=false). It reds only on a genuine
+    deploy or smoke failure, which is a real defect that merits the critical lane (Decision 126 point 1
+    makes it the sanctioned prod deploy verb). If it nonetheless proves flappy in practice, rec-2854's
+    alarm-not-gate monitor lane remains the documented fallback, and reverting the single filter line
+    stops the filing immediately.
+  - >-
     Design pivot from the decision-scout gate: the first draft proposed asserting workflow coverage
     against ci-rca-lifecycle.yaml's watched:/excluded: maps. config/ci_rca_taxonomy.yaml's map ALREADY
     enumerates all 19 workflows exhaustively and validate_ci_rca_taxonomy ALREADY fails on any
     absentee, so that draft would have created a second exhaustive enumeration with a second gate --
     the drift-by-design anti-pattern Decision 86 and AGENTS.md forbid. Hence the fold.
+  - >-
+    Blast radius was re-derived from an anchored `git grep` census after plan critique, not from the
+    scope table. The census names ten live consumers; the first draft scoped six of them and missed
+    config/agent/verification_registry/registry.yaml, tests/ci_rca/taxonomy/test_classify_failures_plural.py,
+    tests/ci_rca/evidence/test_fingerprint.py and tests/ci_rca/evidence/test_priority_zero.py -- all four
+    hard-break on the migrated required-keys set. All ten are now in scope.
   - >-
     Decision 132 framing correction: the diff-gated verification-registry row is NOT a defect. VF-06
     admission is diff-scoped by design, so a graduated row not re-executing post-merge is intended.
@@ -444,14 +578,6 @@ context:
     this plan gives that file a real evaluator (validate_ci_rca_adjudication) without adding a
     contract: envelope, so the grandfathered_max ratchet is unaffected.
   - >-
-    deploy-prod-lambdas / Decision 62 tension, accepted deliberately: watching it puts a new
-    AWS-API-dependent workflow onto the priority=critical lane carrying Decision 73's L5 planning
-    hard-block and L6 auto-merge pause. Invisibility is judged the worse failure (Decision 126 point 1
-    makes it the sanctioned prod deploy verb), and the designed-refusal predicate extension in scope
-    is the mitigation that stops a standing refusal minting a fresh critical on every push -- the same
-    treatment its ducklake twin already receives. rec-2854's monitor lane remains the alternative if
-    this proves flappy in practice.
-  - >-
     rec-2736 (planning skill should flag CI-RCA taxonomy registration for new workflow files) is open
     and adjacent: this plan makes that registration machine-enforced rather than skill-prompted, which
     likely supersedes it. Deliberately NOT bundled -- run the Recommendation Relevance Gate on it at
@@ -462,6 +588,11 @@ context:
     corresponding workflow file, surviving because today's coverage gate is one-directional. The
     bidirectional assertion in VP step 1 both removes it and prevents recurrence.
   - >-
+    Pre-existing registry rot found during critique, NOT caused by this plan and deliberately out of
+    scope: the graduated rows `ci-rca-workflow-count-drift-real-dir-selector` and
+    `convergence-taxonomy-fingerprint-distinctness` point at tests/test_ci_rca_taxonomy.py, which no
+    longer exists. File a rec rather than widening this plan.
+  - >-
     Branch was rebased onto origin/main edab65c (PR #883, Decision 169 -- per-domain manifest
     dispatch) before this plan was written. Confirmed zero file overlap between #883 and this plan's
     scope. #883 is why the new check registers via a manifest Entry rather than a validate.py facade
@@ -471,8 +602,9 @@ context:
     Decision 169, Decision 104, Decision 73, Decision 72, Decision 142, Decision 154, Decision 126,
     Decision 165, Decision 132. Flags resolved in-plan: Decision 128 (SLOC -- new module, not growth
     in verify_ci_workflow.py), Decision 154 (additive-only constraint), Decision 86 (the fold),
-    Decision 62 (designed-refusal mitigation), Decision 104 (owner vocabulary decoupled).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+    Decision 62 (deploy-prod-lambdas re-argued on merits, no false mitigation), Decision 104 (owner
+    vocabulary decoupled).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->PROCEED after 2 round(s)"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -487,11 +619,14 @@ pre_implementation_checklist:
   - >-
     The 11 un-adjudicated workflows enumerated and a rationale drafted for each BEFORE editing the
     taxonomy, so no entry lands with placeholder text
+  - >-
+    VP step 11's anchored census re-run at the START of implementation to confirm the ten live
+    consumers are still exactly the ten in the scope table
 execution_steps:
   - >-
-    Run VP step 11's sweep FIRST to enumerate every tracked file naming `workflow_to_tier`. If it
-    names any file outside this plan's scope table, stop and re-scope rather than editing an
-    unscoped file -- the sweep is the authoritative consumer census for this migration.
+    Re-run VP step 11's anchored census FIRST. If it names any file outside the scope table, stop
+    and re-scope rather than editing an unscoped file -- the first draft of this plan under-counted
+    the blast radius by four files precisely because it trusted the scope table over the census.
   - >-
     Draft the 11 missing adjudication rationales and migrate the 8 existing ones verbatim from
     ci-rca-lifecycle.yaml's watched_workflow_set. Record CI RCA's self-exclusion (today only a YAML
@@ -514,21 +649,26 @@ execution_steps:
     scripts/checks/ci_guards/_manifest.py -- add the Entry literal (bare strings, pre=True,
     full_segment="full_after_lint").
   - >-
-    .github/workflows/ci-rca.yml -- add deploy-prod-lambdas to the workflow_run filter and extend the
-    designed-refusal declared_jobs for the prod channel's standing refusal class.
+    .github/workflows/ci-rca.yml -- add deploy-prod-lambdas to the workflow_run filter. This is the
+    only edit to this file.
   - >-
     docs/contracts/ci-rca-lifecycle.yaml -- replace watched:/excluded: with a source-of-truth pointer
     naming the taxonomy file and validate_ci_rca_adjudication as its evaluator; leave designed_refusal,
     closure_dependency and starved_review_observability untouched.
   - >-
-    Write tests/checks/ci_guards/test_validate_ci_rca_adjudication.py and migrate the four fixture
-    files to the nested shape.
+    config/agent/verification_registry/registry.yaml -- repoint ci-rca-lifecycle-records-watched-set
+    and ci-rca-refusal-gate-and-junit-precedence, then add one new row per graduate step (8 rows,
+    check_ids exactly as declared in this plan's graduation_check_id fields).
+  - >-
+    Write tests/checks/ci_guards/test_validate_ci_rca_adjudication.py and migrate the six
+    census-identified test/fixture files to the nested shape.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
     RCA (Decision 55).
   - >-
     Run the Recommendation Relevance Gate on rec-2736 and close it as satisfied/superseded on the
-    evidence if the verdict supports it; otherwise leave it open with a note.
+    evidence if the verdict supports it; otherwise leave it open with a note. File a rec for the
+    pre-existing registry rot named in context.
   - "Report: what was implemented, verification results, and rec-2736's relevance verdict."
 work_areas: []
 rollback: >-
@@ -536,7 +676,8 @@ rollback: >-
   values (including the stale key if exact fidelity is wanted), revert scripts/ci_rca/taxonomy.py and
   validate_ci_rca_taxonomy.py, delete
   scripts/checks/ci_guards/validate_ci_rca_adjudication.py and its Entry from _manifest.py, delete
-  its test file, revert the four fixtures, remove deploy-prod-lambdas from ci-rca.yml's filter, and
-  restore ci-rca-lifecycle.yaml's watched:/excluded: maps. No infrastructure or IAM state to unwind;
-  no data migration. Reverting the ci-rca.yml filter line alone is sufficient to stop prod-deploy
-  failures filing recs if that proves too noisy.
+  its test file, revert the six census-identified test/fixture files and the registry.yaml rows,
+  remove deploy-prod-lambdas from ci-rca.yml's filter, and restore ci-rca-lifecycle.yaml's
+  watched:/excluded: maps. No infrastructure or IAM state to unwind; no data migration. Reverting the
+  single ci-rca.yml filter line alone is sufficient to stop prod-deploy failures filing recs if that
+  proves too noisy, without unwinding anything else.
