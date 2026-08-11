@@ -122,11 +122,11 @@ verification_plan:
     action: >-
       INDEPENDENT EVIDENCE - the check names every omitted surface on a synthetic plan, and returns
       zero findings on a complete one
-    command: >-
+    command: |-
       bin/venv-python -c "import yaml,tempfile,pathlib;from scripts.checks.roadmap.validate_plan_scope_closure import validate_plan_scope_closure as C;d=pathlib.Path(tempfile.mkdtemp());base={'schema_version':4,'plan_type':'IMPLEMENTATION','slug':'fixture-probe','plan_path':'docs/plans/PLAN-fixture-probe.yaml','scope':[{'file':'scripts/checks/roadmap/validate_x.py','action':'Create','purpose':'p'},{'file':'scripts/checks/roadmap/_manifest.py','action':'Modify','purpose':'p'},{'file':'config/ci_rca_taxonomy.yaml','action':'Modify','purpose':'p'},{'file':'tests/checks/roadmap/test_validate_x.py','action':'Create','purpose':'p'}]};good=d/'PLAN-fixture-probe.yaml';good.write_text(yaml.safe_dump(base));f=[];C(f,plan_paths=[good]);assert not f, f'positive control failed: {f}';miss=0
-      \nfor drop in ('scripts/checks/roadmap/_manifest.py','config/ci_rca_taxonomy.yaml','tests/checks/roadmap/test_validate_x.py'):
-      \n    bad=dict(base); bad['scope']=[r for r in base['scope'] if r['file']!=drop]; p=d/'PLAN-fixture-probe.yaml'; p.write_text(yaml.safe_dump(bad)); g=[]; C(g,plan_paths=[p]); assert g and any(drop in str(x) for x in g), f'not flagged: {drop} -> {g}'; miss+=1
-      \nprint(f'independent evidence ok: positive control clean, {miss}/3 omissions named')"
+      for drop in ('scripts/checks/roadmap/_manifest.py','config/ci_rca_taxonomy.yaml','tests/checks/roadmap/test_validate_x.py'):
+          bad=dict(base); bad['scope']=[r for r in base['scope'] if r['file']!=drop]; p=d/'PLAN-fixture-probe.yaml'; p.write_text(yaml.safe_dump(bad)); g=[]; C(g,plan_paths=[p]); assert g and any(drop in str(x) for x in g), f'not flagged: {drop} -> {g}'; miss+=1
+      print(f'independent evidence ok: positive control clean, {miss}/3 omissions named')"
     expected: exit 0, prints independent evidence ok
     fix_if: >-
       positive control failure means the check flags a complete plan; a missing omission means the
