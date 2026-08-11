@@ -641,14 +641,26 @@ context:
     persistent-unavailability-alarm clause, and explicitly NOT a ci_rca watch.
     (c) title carrying "credential inventory contract" -- a durable Decision 127/168-conformant home
     for the repo credential inventory (names, scopes, expiries), replacing the interim workflow
-    comment. Scope it to the FULL inventory confirmed by the operator on 2026-08-11, not just the
+    comment. Model it per-CONSUMER, not as a flat list: the same credential class is reached by
+    different paths (DEV-container agent chain, ADMIN-container agent chain, CI-over-OIDC via
+    Secrets Manager, and GitHub Actions secrets), and a flat inventory cannot express that a value
+    is live on one path while its GitHub-secret copy is orphaned -- which is exactly the confusion
+    this session had to untangle by hand. Scope it to the FULL inventory confirmed by the operator on 2026-08-11, not just the
     two PATs: repository secrets are CLAUDE_CODE_OAUTH_TOKEN, GHAS_PROBE_TOKEN,
     TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID and TF_VAR_PLATFORM_DEV_EXTERNAL_ID. Two anomalies to carry
     into that rec, both established by grep/API this session and NEITHER fixed here: (i) the two
     TF_VAR_PLATFORM_*_EXTERNAL_ID GitHub-secret COPIES appear to have no reader -- state it that
-    precisely, because the looser phrasing is false. ExternalId VALUES are very much in use: an
-    agent in the CC-web container uses one through the ~/.aws/config assume-role chain
-    (agent_static -> agent_platform), and CI uses both -- but CI materialises them by pulling
+    precisely, because the looser phrasing is false. ExternalId VALUES are very much in use, across
+    THREE consumer paths and both containers of the AGENTS.md:176-177 topology. (1) DEV container
+    agents use the dev ExternalId through the ~/.aws/config assume-role chain (agent_static ->
+    agent_platform) -- VERIFIED this session by presence check, value never printed. (2) ADMIN
+    container agents use the admin ExternalId on the rare IAM-role-update path (Decision 35 / CD.35
+    / Decision 77) -- ATTESTED by the operator and by the AGENTS.md topology table, NOT verified
+    here and NOT verifiable here: the authoring container carries only agent_static and
+    agent_platform, with no agent_platform_admin profile, which is the two-container separation
+    working as designed. An implementing session in the DEV container inherits that same blind spot
+    and must not "confirm" the admin path by inspection it cannot perform. (3) CI uses both -- but
+    CI materialises them by pulling
     terraform.personal.tfvars from AWS Secrets Manager (agent-platform-terraform-personal-tfvars)
     over OIDC (terraform-drift.yml:124-131), then consumes them only to REDACT those values out of
     plan output and logs (terraform-apply-sandbox.yml:604-605). Neither path reads the GitHub
