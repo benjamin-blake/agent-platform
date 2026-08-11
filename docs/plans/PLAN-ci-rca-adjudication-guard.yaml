@@ -164,7 +164,8 @@ acceptance_criteria:
   - >-
     Every workflow watched before this plan (CI, Main Canary, terraform-apply-sandbox,
     rec-autoclose, deploy-ducklake-lambdas) is still marked watched -- the adjudication is
-    additive-only, so Decision 154 point 6's reversal condition (b) does not fire.
+    additive-only, so Decision 154's reversal condition (b) -- which guards point 6's
+    anti-masking mechanism -- does not fire.
   - >-
     validate_ci_rca_adjudication is registered in scripts/checks/ci_guards/_manifest.py, carries a
     function_to_category entry in config/ci_rca_taxonomy.yaml (forced by validate_ci_rca_taxonomy's
@@ -248,8 +249,8 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      Confirm the adjudication is additive-only for the pre-existing watched set, so Decision 154
-      point 6's reversal condition (b) -- "Decision 142's chain-lifecycle watch lapses or is
+      Confirm the adjudication is additive-only for the pre-existing watched set, so Decision 154's
+      reversal condition (b), which guards point 6's anti-masking mechanism, -- "Decision 142's chain-lifecycle watch lapses or is
       narrowed" -- does not fire.
     command: >-
       bin/venv-python -c "from scripts.ci_rca.taxonomy import load_taxonomy; w=load_taxonomy()
@@ -325,8 +326,9 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Confirm the migrated taxonomy fixtures did not break the census-identified consumer suites.
-      Selector list is derived from the anchored `workflow_to_tier` census, NOT from the scope
-      table.
+      Selector list is a SUPERSET of the anchored `workflow_to_tier` census: the four census-matching
+      suites plus test_load_and_classify.py, which carries no token but owns the
+      resolve_workflow_tier return-contract assertion guarding the migration seam.
     command: >-
       bin/venv-python -m pytest tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
       tests/ci_rca/taxonomy/test_load_and_classify.py
@@ -705,7 +707,17 @@ context:
     in verify_ci_workflow.py), Decision 154 (additive-only constraint), Decision 86 (the fold),
     Decision 62 (deploy-prod-lambdas re-argued on merits, no false mitigation), Decision 104 (owner
     vocabulary decoupled).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->PROCEED after 2 round(s)"
+  - >-
+    gates: decision-scout=FLAGS_FOUND (122 of 122 triaged); plan-critique=PROCEED after 4 round(s).
+    Rounds 1-3 returned REVISE. The 3-round convergence cap was explicitly lifted by the operator
+    given the scope. Findings converged rather than thrashed -- round 1 architecture and scope
+    (4 census consumers missing, a false designed-refusal mitigation), round 2 logic (VP11's sweep
+    matched its own graduation rows), round 3 mechanics (the plan redded its own PR under
+    validate_handoff_full_tier / Decision 163; a pytest flag collision with the pinned
+    --randomly-seed addopt). Round 4 closed all five round-3 findings with independent execution and
+    found no blocking defects. The approach -- the fold onto config/ci_rca_taxonomy.yaml, the
+    new-module-over-budget-raise call, and the bidirectional-plus-filter-equality shape -- survived
+    all four rounds unchanged.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
