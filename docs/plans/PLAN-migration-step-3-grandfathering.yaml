@@ -163,14 +163,16 @@ acceptance_criteria:
     with a unique `subject`; every file registered in file-router.yaml has `subject` equal to its
     route `topic`.
   - >-
-    Twelve of the 21 files declare a genuinely RESOLVING evaluator (check or agent_surface) under
+    Twelve of the 20 SEEDABLE files declare a genuinely RESOLVING evaluator (check or agent_surface) under
     the gate's own resolve_evaluator; no file declares an evaluator that does not resolve.
   - >-
     Every `none_grandfathered` claim carries a complete enforcement_route (reason, consumer,
     mechanism, blocker, shape); the schema REJECTS an incomplete one, proven by a failing test.
   - >-
-    `validate_contract_drift` fails when `census.grandfathered` exceeds `ratchet.grandfathered_max`
-    -- the pin is bound to reality, not merely direction-guarded.
+    `validate_contract_drift` fails when any of the three pins does NOT EQUAL its live census
+    bucket -- equality, not `>=`: a ceiling lets a landing enforcer leave stale slack behind,
+    whereas equality forces every enforcer landing under rec-3059 to lower the debt pin in the
+    same PR. Safe for all three, because each counted form is closed at birth and can only fall.
   - >-
     `ratchet.grandfathered_max` is 19, `status_active_max` is 16, and
     `evaluator_none_grandfathered_max` is 8, each matching the live census exactly.
@@ -212,10 +214,12 @@ verification_plan:
       slot would go stale on the next contract and force a waiver detour every time.
   - step: 4
     phase: pre-deploy
-    action: The ratchet pin is bound to reality -- an unshaped 22nd file fails against grandfathered_max
+    action: The three pins are bound to reality by equality -- stale slack and an over-census count both fail
     command: bin/venv-python -m pytest tests/checks/contracts/test__ratchet.py tests/checks/contracts/validate_contract_drift/test_ratchet.py -q
-    expected: Pass, including a case where census.grandfathered exceeds the pin and the gate FAILS
-    fix_if: An over-pin census passes -- the ratchet is still decorative and part (c) delivered nothing
+    expected: Pass, including cases where a pin sits ABOVE its census bucket (stale slack) and BELOW it -- both FAIL
+    fix_if: >-
+      Either direction passes -- a `>=` binding lets the debt pin keep stale slack after an enforcer
+      lands, which is a ceiling, not a ratchet, and part (c) delivered nothing
     graduation: graduate
     graduation_check_id: contract-population-pin-bound-to-census
   - step: 5
@@ -240,8 +244,12 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: Contract and code agree on the cap's tier (CFG-06 parity)
-    command: 'grep -A2 "per_entry_size_norm" docs/contracts/decision-entry.yaml | grep -q "cap_bytes: 6144" && grep -q "hard-fail" docs/contracts/decision-entry.yaml'
-    expected: Both present -- the contract states hard-fail, matching validate_decisions_size.py
+    command: bin/venv-python -c "import yaml,sys; t=yaml.safe_load(open('docs/contracts/decision-entry.yaml'))['size_governance']['per_entry_size_norm']['tier']; sys.exit(0 if t.strip().startswith('hard-fail') and 'WARN' not in t else 1)"
+    expected: >-
+      Exit 0. Asserts the PARSED tier value, not text presence -- the earlier grep form exited 0 on
+      the unmodified tree because 'hard-fail' already occurs inside the WARN text itself, so it
+      could not distinguish pre- from post-change and would have graduated a permanently-vacuous
+      check into the registry.
     fix_if: The contract still says WARN -- the field-semantics home contradicts the enforcing code, reproducing the exact drift class this sweep exists to close
     graduation: graduate
     graduation_check_id: decision-entry-tier-matches-validator
@@ -256,8 +264,10 @@ verification_plan:
   - step: 9
     phase: pre-deploy
     action: Structural-size budget bump is loud, not inherited
-    command: grep -q "iam-simulate-fixture.yaml" config/structural_size_budgets.yaml && grep "iam-simulate-fixture" config/structural_size_budgets.yaml | grep -q "dec-168"
-    expected: The entry cites dec-168 with a reason naming this sweep, not the stale dec-166 install-time census text
+    command: grep "iam-simulate-fixture" config/structural_size_budgets.yaml | grep -q "dec-168" && ! grep "iam-simulate-fixture" config/structural_size_budgets.yaml | grep -q "dec-166"
+    expected: >-
+      Exit 0. The entry cites dec-168 AND no longer carries dec-166 -- the negative leg is required
+      so a line carrying both markers cannot pass.
     fix_if: The dec-166 marker is still in place -- per Decision 166 point 6 the marker matches the KEY not the VALUE, so the raise would pass silently (Decision 128 spirit violation)
     graduation: graduate
     graduation_check_id: iam-simulate-budget-marker-recited
@@ -305,7 +315,12 @@ test_obligations:
     behavior: A new-in-diff decision entry over the 6,144-byte cap appends to `failed`; historical entries are still never measured.
     verification_step: 6
     test_selector: tests/checks/decisions/test_validate_decisions_size.py::TestPerEntryCap::test_new_over_cap_entry_fails
-    red_green_expectation: red before (WARN only, `failed` untouched), green after
+    red_green_expectation: >-
+      red before (WARN only, `failed` untouched), green after. REQUIRED INVERSIONS -- two existing
+      tests assert the WARN behaviour and MUST be inverted, not accommodated:
+      TestPerEntryCapThroughRegisteredCheck::test_over_cap_new_entry_prints_warning_and_never_fails
+      (asserts `failed == []`) and ::test_stock_ceiling_breach_and_per_entry_warning_can_coexist.
+      Their going red IS the flip working; do not read them as evidence the flip is wrong.
 constraints:
   - >-
     NO new numbered Decision. Decisions 167 (clause 3) and 168 (reversal (b), which names this
@@ -415,6 +430,23 @@ context:
     33 historical over-cap entries; ZERO new-in-diff entries, so the hard-fail flip breaks nothing
     on landing. Decision 169 (10,499 B, 71% over) is the evidence the WARN tier does not hold.
   - >-
+    STANDING BREACH RATE the flip arms (measured, distinct from the zero new-in-diff landing state):
+    33 of 122 live entries exceed 6,144 bytes, and 7 of the last 15 Decisions breach it -- 155, 160
+    (19,120 B, the worst), 162, 163, 164, 166, 169. Roughly half of recent governance entries would
+    have hard-failed --pre. That is the lever biting as designed, NOT a defect: Decision 167
+    reversal condition (a) is the calibrated valve (more than 2 of the first 10 new entries unable
+    to fit without losing DECISION substance -> retune or abort the norm, never raise it silently
+    to fit one entry). Read the first tripped governance PR against that clause.
+  - >-
+    RAISABILITY ASYMMETRY (state it in contract-population.yaml's raise_mechanism prose rather than
+    leaving it implied): verified via _marker_guard.authorization_failure -- dec-168's body contains
+    `ratchet.grandfathered_max`, so that pin can be raised straight back by any future PR citing
+    dec-168, whereas `status_active_max` and `evaluator_none_grandfathered_max` are 1-segment keys
+    named in no Decision body and are therefore unraisable without a new numbered Decision. This is
+    the same Decision 166 point 6 KEY-not-VALUE weakness this plan calls out for
+    structural_size_budgets.yaml, now applying to the plan's own ratchet. Practical risk is low
+    (both grandfather forms are closed at birth, so the census cannot grow to exploit it).
+  - >-
     Branch was 0 commits behind origin/main at planning time; no Scope file overlaps
     main_files_changed_since_branch. No open ci-rca recs (no HARD BLOCK).
   - >-
@@ -445,7 +477,8 @@ execution_steps:
     scripts/checks/contracts/_ratchet.py (new) -- carry the three RegistrySpecs (grandfathered_max,
     status_active_max, evaluator_none_grandfathered_max), their direction checks (each skipping the
     comparison when the base carries no such entry, mirroring the existing landing-PR behaviour),
-    and a pin-vs-census binding that FAILS when the live count exceeds its pin.
+    and a pin-vs-census binding that FAILS on ANY inequality between a pin and its live census
+    bucket (equality, not `>=` -- see acceptance criterion 4).
   - >-
     scripts/checks/contracts/validate_contract_drift.py -- validate each none_grandfathered route
     in Pass 1; wire the three pins and the census binding into the ratchet leg. Keep the module
@@ -456,8 +489,15 @@ execution_steps:
     delegating to the prompt-compliance loader.
   - >-
     Seed the 20 Class D blocks per the Scope purposes above. subject = the file-router topic for
-    the 8 routed files, the basename stem otherwise; status = ratified + existing ratified_via
-    where the file already declares one, else active; contract_version = the file's existing
+    the 8 routed files, the basename stem otherwise. STATUS RULE (exact -- the loose reading
+    yields different pins and fails VP step 5): contract.status CARRIES OVER the file's own
+    existing top-level `status` where it declares one -- 4 declare `ratified` (build-lambda,
+    inference-provider, instruction-architecture, log-storage) and 4 declare `active`
+    (ci-rca-lifecycle, composite-action-shape, marker-grammar, recommendation-relevance); every
+    file with NO top-level `status` becomes `active`. Do NOT key off `ratified_via`, which 8 files
+    carry -- that reading yields status_active=12 / declared=6 / grandfathered=18 and breaks all
+    three pins. `ratified_via` is carried over for the 4 ratified files only, where
+    ContractMeta._validate_class_d_and_ratified requires it. contract_version = the file's existing
     contract_version where present, else 1. Leave existing top-level keys (version, status,
     projection_id) untouched -- converging those duplicates is out of scope and gets its own rec.
   - >-
@@ -479,8 +519,9 @@ execution_steps:
     measured value, rewriting the reason to name this sweep and re-citing the marker to dec-168.
   - >-
     LAST, gated on every step above being green -- scripts/checks/decisions/validate_decisions_size.py:
-    make _per_entry_cap_warnings append to `failed` instead of printing only, quoting Decision 167
-    clause 3 verbatim in the failure message. Preserve forward-only scope and the Decision 149
+    make the per-entry cap append to `failed` instead of printing only, quoting Decision 167 clause 3
+    verbatim in the failure message, and RENAME `_per_entry_cap_warnings` (its name becomes actively
+    misleading once it fails rather than warns). Preserve forward-only scope and the Decision 149
     compacted-stub exemption.
   - Write the tests named in test_obligations; each must fail before its change and pass after.
   - >-
