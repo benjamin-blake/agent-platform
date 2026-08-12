@@ -31,7 +31,9 @@ scope:
     purpose: >-
       EvaluatorSpec.none_grandfathered becomes a structured EnforcementRoute model (reason,
       consumer, mechanism, blocker, shape) instead of free text -- an unenforced claim cannot be
-      filed without a route. Zero existing instances, so no migration cost.
+      filed without a route. Zero PRODUCTION instances (all 3 existing Class D files use
+      {check: ...}), but TEN bare-string sites across SIX test modules must be retargeted -- see
+      the two test scope rows added for the files that were previously out of scope.
   - file: scripts/checks/contracts/_population.py
     action: Modify
     purpose: >-
@@ -155,6 +157,20 @@ scope:
   - file: tests/test_contracts.py
     action: Modify
     purpose: EvaluatorSpec structured-route schema round-trip and rejection cases.
+  - file: tests/test_contracts_schema.py
+    action: Modify
+    purpose: >-
+      Retarget TestEvaluatorSpec::test_exactly_one_kind_required (line 303) off the bare-string
+      none_grandfathered form onto a complete EnforcementRoute.
+  - file: tests/checks/contracts/validate_contract_drift/test_census_accounting.py
+    action: Modify
+    purpose: >-
+      Retarget the bare-string fixture at line 96 AND preserve what
+      test_new_file_none_grandfathered_rejection_is_the_only_failure actually proves: after the
+      retype, load_contract_meta raises at the SCHEMA layer first, so the gate emits a (schema)
+      failure and the grandfather-at-birth rule is never reached -- the test could keep passing
+      while ceasing to prove its subject. Give the fixture a COMPLETE route so the schema layer
+      passes and the gate's own new-file rejection is what fires.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -166,8 +182,10 @@ acceptance_criteria:
     Twelve of the 20 SEEDABLE files declare a genuinely RESOLVING evaluator (check or agent_surface) under
     the gate's own resolve_evaluator; no file declares an evaluator that does not resolve.
   - >-
-    Every `none_grandfathered` claim carries a complete enforcement_route (reason, consumer,
-    mechanism, blocker, shape); the schema REJECTS an incomplete one, proven by a failing test.
+    Every `none_grandfathered` claim carries a complete enforcement_route. The FOUR required
+    non-empty fields are reason, mechanism, blocker, shape; `consumer` is `str | None` and MAY be
+    null where no consumer module exists (the telemetry-lexicon route is exactly that case). The
+    schema REJECTS a claim missing any of the four, proven by a failing test.
   - >-
     `validate_contract_drift` fails when any of the three pins does NOT EQUAL its live census
     bucket -- equality, not `>=`: a ceiling lets a landing enforcer leave stale slack behind,
@@ -189,7 +207,11 @@ verification_plan:
     phase: pre-deploy
     action: Structured enforcement route is mandatory -- an incomplete none_grandfathered claim is rejected by the schema
     command: bin/venv-python -m pytest tests/test_contracts.py tests/checks/contracts/validate_contract_drift/test_grandfather_only.py -q
-    expected: Tests pass; a none_grandfathered claim missing mechanism/consumer/blocker/shape raises ValidationError
+    expected: >-
+      Tests pass; a none_grandfathered claim missing any of reason/mechanism/blocker/shape raises
+      ValidationError, while a claim with `consumer: null` and the other four present is ACCEPTED
+      (telemetry-lexicon has no consumer module). Do not graduate the stricter reading -- this
+      step's check_id becomes a permanent registry row.
     fix_if: A bare-string or partial route is accepted -- the debt record is optional again, which is the failure this plan exists to prevent
     graduation: graduate
     graduation_check_id: enforcement-route-required-on-none-grandfathered
@@ -231,7 +253,7 @@ verification_plan:
     graduation: waive
     graduation_waiver_reason: >-
       The exact bucket values are this landing's install-time census and legitimately move as
-      contracts are seeded or enforcers land; step 4 graduates the invariant (pin >= census) that
+      contracts are seeded or enforcers land; step 4 graduates the invariant (pin == census) that
       must hold permanently, which is the durable property.
   - step: 6
     phase: pre-deploy
@@ -321,6 +343,11 @@ test_obligations:
       TestPerEntryCapThroughRegisteredCheck::test_over_cap_new_entry_prints_warning_and_never_fails
       (asserts `failed == []`) and ::test_stock_ceiling_breach_and_per_entry_warning_can_coexist.
       Their going red IS the flip working; do not read them as evidence the flip is wrong.
+      FULL BLAST RADIUS: renaming `_per_entry_cap_warnings` breaks the MODULE-LEVEL import at
+      tests/checks/decisions/test_validate_decisions_size.py:16-23, which collection-fails the
+      whole module -- 11 tests, not 2. Of those, 2 INVERT (above) and 9 merely RETARGET onto the
+      new name with their semantics intact (6 in TestPerEntryCapWarningsPureFunction, 3 more in
+      TestPerEntryCapThroughRegisteredCheck). Expect a collection error first, not 2 failures.
 constraints:
   - >-
     NO new numbered Decision. Decisions 167 (clause 3) and 168 (reversal (b), which names this
@@ -363,6 +390,10 @@ context:
   - >-
     Scout flag D128 SPIRIT WARN (resolved in scope): config/structural_size_budgets.yaml:186
     already carries "# raise-approved: dec-166 contracts class grandfather, install-time census".
+    PROVENANCE CAVEAT (state it, do not imply a tightening): dec-168 authorizes this entry only via
+    the 2-segment `docs/contracts` ancestor -- its body never names the file -- whereas dec-166
+    point 5 names the key VERBATIM. The re-citation therefore buys human-readable loudness, not
+    mechanical tightening, and does not narrow future re-raises of that entry.
     Per Decision 166 point 6, authorization_failure matches the entry KEY never its VALUE, so one
     marker permanently authorizes every future bump of that entry -- the iam-simulate-fixture raise
     would otherwise land silently. The marker reason is rewritten and re-cited to dec-168.
