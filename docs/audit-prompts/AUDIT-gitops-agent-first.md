@@ -15,11 +15,11 @@ COMMIT / PR MECHANICS. The ONLY files you create or modify in the repository tre
 deliverables; regenerating gitignored local caches per SETUP is expected and does not breach this
 (never commit them). You draft; the human disposes. Do not implement any change you recommend.
 
-## CANDIDATE OBSERVATIONS vs VERDICTS
+## ADJUDICATION CONTRACT: candidates vs verdicts
 
-This prompt hands you FACTS and CANDIDATE hypotheses. It hands you no verdicts. Every candidate
-in CANDIDATE OBSERVATIONS is a neutral observation that may turn out to be a defect, a deliberate
-trade-off, or a non-issue.
+This prompt hands you FACTS and CANDIDATE hypotheses. It hands you no verdicts. Every entry in
+the CANDIDATE OBSERVATIONS section that follows is a neutral observation that may turn out to be
+a defect, a deliberate trade-off, or a non-issue.
 
 **ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT.**
 
@@ -38,38 +38,94 @@ Adjudicate each candidate to exactly one outcome:
 set, deliberately including observations that are probably fine. Your value is in the
 adjudication and in what you find that is not listed.
 
+## CANDIDATE OBSERVATIONS
+
+C1..C14 are the candidate set the adjudication protocol above operates on. Each is a neutral
+observation, verified on disk at compose time. **None is a defect until you trace it.** Several
+are expected to resolve to `rejected_candidates`. This list is not exhaustive -- findings outside
+it are welcome and are the clearest evidence the run added value.
+
+- **C1** (S1, S3) -- `main` carries exactly one commit per merged PR across the sampled window.
+  Four mechanisms read that shape: `HEAD~1`, a single `git log -1` commit body, `feat({slug})`
+  subject resolution, and a `--grep` over subjects.
+- **C2** (S4) -- the development container's clone is shallow. Two consumers handle this
+  explicitly (`_ensure_ancestry_history` deepens on demand; `count_unapplied_tf_commits` returns
+  0 on error); others do not visibly handle it.
+- **C3** (S2) -- the `feat({slug})` / `plan({slug})` subject convention is parsed by load-bearing
+  checks, and no check validates conformance to it.
+- **C4** (S2) -- of the 50 commit subjects in the sampled window, 49 carry a `prefix(scope)` form
+  and one does not: `audit: decision / contract / change-record content routing and
+  prior-intervention erosion (S1-S5) (#864)` uses a bare `audit:` with no parenthesised slug.
+  Re-derive this; determine whether it is a violation, an unregistered valid form, or immaterial.
+- **C5** (S2, S3) -- three surfaces state where the `Resolves:` trailer belongs, in
+  non-identical terms (AGENTS.md, `implement/SKILL.md`, `.github/pull_request_template.md`).
+- **C6** (S2, S3) -- two open recommendations (rec-2679, rec-2733) describe a trailer loss mode
+  for single-commit PRs. DD-B re-assesses them; do not treat their existence as closing the
+  question.
+- **C7** (S1) -- the merge-method repository settings sit in Terraform's `ignore_changes` list,
+  so the live merge method is not declared in infrastructure-as-code.
+- **C8** (S1) -- `required_linear_history = true` constrains which merge methods are available
+  without a Terraform change; `require_code_owner_review = true` plus `.github/CODEOWNERS`
+  scopes `/terraform/github/` behind code-owner review.
+- **C9** (S3) -- `scripts/executor/branch_lifecycle.py` decides whether a branch is merged via
+  `git merge-base --is-ancestor <branch> main`. Determine what that predicate returns under each
+  candidate merge strategy, and whether the code path is currently reachable given the executor
+  freeze.
+- **C10** (S5) -- `docs/SESSION_LOG.md` names `session_close` / `task_start` /
+  `strategic_review` as its writer and readers; the newest entry predates the sampled commit
+  window. Determine what currently writes it, if anything.
+- **C11** (S6) -- `signal-green` gates on two checks; other `pull_request`-triggered checks exist
+  in the repository. Determine whether a "CI green" comment can precede an omitted check's
+  completion, and what a watching session does with that.
+- **C12** (S6) -- the conflict-signal step carries `continue-on-error: true` while its script
+  exits non-zero on internal failure. Determine whether a failed wake is observable to anyone.
+- **C13** (S6) -- the conflict signal triggers on push to `main`; a PR conflicted at creation
+  time with no subsequent push to `main` is a case to trace.
+- **C14** (S4, S5) -- in a shallow clone, history queries against files older than the clone
+  window return confident, wrong answers (see trap 9). Determine which in-repo consumers are
+  exposed to this and whether any of them would notice.
+
 ## READ FIRST: disambiguation traps
 
 1. **"Squashed history" names two different things in this repository, and conflating them
    destroys the audit.** (a) The squash-merge POLICY: one commit on `main` per merged PR.
    (b) The SHALLOW CLONE: the Claude-Code-on-the-web container clones with limited depth
    (`.git/shallow` is present). `docs/ROADMAP-PLATFORM.yaml:474` and
-   `audits/legacy/wave-1-outputs/A1.yaml:5` both say "squashed clone" where the referent is the
-   shallow clone, not the merge policy. Q3 exists specifically to separate these two causes.
+   `audits/legacy/wave-1-outputs/A1.yaml:5` ("this clone is a single squashed snapshot commit")
+   both use squash wording where the referent is the shallow clone, not the merge policy. Q3 exists specifically to separate these two causes.
    Verify which one you are reasoning about at every step.
-2. **`AGENTS.md` has two sections that look like the same thing.** `## Git-ops procedure`
+2. **Decision 89's TITLE is stale; its clause 4 is not.** Decision 89 is titled "GitHub Branch
+   Protection Not Available", a premise Decision 83 reversed (the `main-protection` ruleset is
+   live). Its clause 4 is nonetheless cited here as squash-policy authority. Do not read the
+   stale title as invalidating the clause, and do not file the stale title as a finding of this
+   audit -- it is out of scope. Judge the clause on its merits.
+3. **`AGENTS.md` has two sections that look like the same thing.** `## Git-ops procedure`
    (`AGENTS.md:169`) is the canonical authority. `## Merge protocol` (`AGENTS.md:242`) opens by
    pointing at it. Audit the former; treat the latter as a pointer surface whose only defect
    class is drift.
-3. **`merge=union` in `.gitattributes` is not a merge-method.** It is a conflict-resolution
+4. **`merge=union` in `.gitattributes` is not a merge-method.** It is a conflict-resolution
    strategy for `*.jsonl` files. It has no bearing on Q1.
-4. **One unit of work is two PRs, not one.** The flow produces a `plan({slug})` commit and then
+5. **One unit of work is two PRs, not one.** The flow produces a `plan({slug})` commit and then
    a separate `feat({slug})` commit on `main`. Any reasoning of the form "one commit per unit of
    work" is wrong; it is one commit per PR, two PRs per unit of work.
-5. **Squash-merge and GitHub-native auto-merge are orthogonal axes.** Auto-merge concerns who
+6. **Squash-merge and GitHub-native auto-merge are orthogonal axes.** Auto-merge concerns who
    presses merge; the merge method concerns what lands. Do not let one answer the other.
-6. **`required_linear_history = true`** (`terraform/github/repo.tf:110`) means merge commits are
+7. **`required_linear_history = true`** (`terraform/github/repo.tf:110`) means merge commits are
    currently forbidden by the ruleset. A merge-commit recommendation therefore carries a
-   Terraform ruleset change as a cost; a rebase-merge recommendation does not.
-7. **A green `pr-conflict-signal` run does not mean a wake was delivered.** The poll step carries
+   Terraform ruleset change as a cost; a rebase-merge recommendation does not. Cost that change fully: `require_code_owner_review = true` (`terraform/github/repo.tf:87`) plus
+   `.github/CODEOWNERS` places `/terraform/github/` behind code-owner review, so the ruleset edit
+   is itself a reviewed, admin-bypass-logged change -- not a free toggle.
+8. **A green `pr-conflict-signal` run does not mean a wake was delivered.** The poll step carries
    `continue-on-error: true`. Reason about the step's internal failure counter, not the run
    conclusion.
-8. **In a shallow clone, the oldest present commit reports every file it touches as newly added.**
-   `git show --stat <boundary-commit> -- <path>` returns a full-file insertion count regardless of
-   the file's real history, because the parent is grafted away. Verify the boundary
-   (`cat .git/shallow`, `git log --reverse`) before drawing any conclusion from a `--stat`,
-   `git log -- <path>`, or "when was this last changed" query. This trap will actively mislead you
-   on S5 file-history questions if you do not guard against it.
+9. **In a shallow clone, the oldest present commit reports every file it touches as newly added.**
+   `.git/shallow` lists the commits whose PARENTS have been grafted away; those commits are
+   themselves PRESENT, and the oldest of them is the oldest commit you can see. Running
+   `git show --stat <that commit> -- <path>` returns a full-file insertion count regardless of the
+   file's real history, because the diff is taken against nothing. Establish the boundary
+   (`cat .git/shallow`, `git log --reverse origin/main`, `git cat-file -t <sha>`) before drawing
+   any conclusion from a `--stat`, a `git log -- <path>`, or a "when was this last changed" query.
+   This trap will actively mislead you on S5 file-history questions if you do not guard against it.
 
 ## SCOPE
 
@@ -78,16 +134,41 @@ the file yourself -- **trust no number quoted in this prompt; re-derive from the
 record any anchor that does not resolve in `meta.stale_anchors`.
 
 - **S1 merge-strategy-and-protection** -- `AGENTS.md:169-241`, `terraform/github/repo.tf`,
-  Decision 76 (`docs/DECISIONS.md:4861`), Decision 89 (`docs/DECISIONS.md:5269`), Decision 83.
+  `.github/CODEOWNERS`, Decision 76 (`docs/DECISIONS.md:4861`),
+  Decision 89 (`docs/DECISIONS.md:5269`), Decision 83.
 - **S2 commit-message-contract** -- the subject-prefix table (`AGENTS.md:190-198`), the
-  `Resolves:` trailer rule (`AGENTS.md:235-241`), `scripts/rec_trailer.py`.
-- **S3 history-shape-consumers** -- `scripts/checks/_common.py` `push_context_base()`,
-  `.github/workflows/rec-autoclose.yml`,
-  `scripts/checks/verification/validate_vp_replay.py`,
-  `scripts/checks/verification/validate_graduation_completeness.py`,
-  `scripts/roadmap/plan_audit.py` `_verify_rec_in_git()`,
-  `scripts/convergence_health/record.py` `count_unapplied_tf_commits()`,
-  `scripts/ops_portal/ci_rca_lifecycle.py` `_ensure_ancestry_history()` / `classify_closed_head()`.
+  `Resolves:` trailer rule (`AGENTS.md:235-241`), `scripts/rec_trailer.py`,
+  `.claude/skills/implement/SKILL.md` (trailer placement step), and
+  `.github/pull_request_template.md` (the template rendered at PR-open time).
+- **S3 history-shape-consumers** -- the inventory below is a STARTING SET, not a closed list.
+  Sweep for further consumers yourself (`git log`, `git diff`, `git show`, `rev-list`,
+  `merge-base`, `HEAD~`, `HEAD^` across `scripts/` and `.github/workflows/`) and add what you
+  find; DD-A's blast radius is only as good as this set.
+  - `scripts/checks/_common.py` `push_context_base()`
+  - `.github/workflows/rec-autoclose.yml` (`git log -1 --format=%B HEAD`)
+  - `scripts/checks/verification/validate_vp_replay.py`
+  - `scripts/checks/verification/validate_graduation_completeness.py`
+  - `scripts/roadmap/plan_audit.py` `_verify_rec_in_git()`
+  - `scripts/convergence_health/record.py` `count_unapplied_tf_commits()`
+  - `scripts/ops_portal/ci_rca_lifecycle.py` `_ensure_ancestry_history()` / `classify_closed_head()`
+  - `scripts/executor/branch_lifecycle.py` -- `git merge-base --is-ancestor <branch> main` as a
+    merged/not-merged predicate (approximately lines 128, 140, 311). **This is the most
+    merge-strategy-sensitive construct in the inventory**; determine what it returns under each
+    Q1 candidate, and separately whether the code path is currently reachable given the executor
+    freeze (a dormant path changes severity, not correctness).
+  - `scripts/ci_rca/vacuous_pass.py` -- `git diff --name-only HEAD^ HEAD`, with a stated
+    `fetch-depth: 2` dependency and an `"undetermined"` return on failure
+  - `scripts/checks/contracts/_shared.py` -- merge-base `git ls-tree` / `git diff` reads
+  - `scripts/checks/decisions/validate_decision_entry_conformance.py` and
+    `scripts/checks/decisions/_baseline.py` -- `git show origin/main:<path>` baseline reads
+  - `scripts/checks/roadmap/validate_fallback_reevaluation.py`,
+    `scripts/checks/roadmap/validate_platform_roadmap.py`
+  - `scripts/session/postflight.py`, `scripts/session/metrics.py`,
+    `scripts/preflight/env_git.py`, `scripts/executor/postflight_gates.py`,
+    `scripts/executor/acceptance_lint.py`
+  Note that a `git show origin/main:<path>` CONTENT read and a `git log`/`merge-base` HISTORY
+  read have different exposure to both merge strategy and clone depth. Classify each consumer by
+  which kind it is before judging its coupling.
 - **S4 clone-and-checkout-depth** -- the container clone's shallow state; `fetch-depth` settings
   across `.github/workflows/`.
 - **S5 parallel-provenance-stores** -- `docs/plans/PLAN-*.yaml`, `docs/DECISIONS.md`,
@@ -106,8 +187,10 @@ AWS write.
 from repository-local state. *Wake signal* = a comment posted to a PR to resume a session that
 ended its turn. *History shape* = the commit topology and per-commit granularity of `main`.
 *Parallel provenance store* = any durable record of change rationale that is not git history.
-*Human-ergonomic residue* = a convention whose justification is human reading habit rather than
-machine consumption.
+*Human-ergonomic convention* = a convention whose justification is human reading habit rather
+than machine consumption. The term is descriptive, NOT pejorative: such a convention may be
+correct to keep (a human reads this repository too -- see Q3b), correct to adapt, or correct to
+drop. Deciding which is the work, and "drop it" is not the default answer.
 
 ## SETUP
 
@@ -123,8 +206,9 @@ DEDUP DISCIPLINE depends on. Both are gitignored caches; never commit them.
 
 **Degraded paths -- never abort, never improvise:**
 
-- IF cache-gen fails (creds or egress down): do NOT abort -- set `meta.degraded_dedup=true`, mark
-  every `roadmap_crossref` `confidence=HYPOTHESIS` and `dedup_hit_count=null`, proceed.
+- IF cache-gen fails (creds or egress down): do NOT abort -- set `meta.degraded_dedup=true`, set every finding's
+  top-level `confidence` to `HYPOTHESIS` and its `roadmap_crossref.dedup_hit_count` to `null`,
+  proceed. (`confidence` is a finding-level field; `roadmap_crossref` has no such key.)
 - IF `git fetch origin main` fails: set `meta.contract_notes` to record it, use local `origin/main`
   as-is, and note in `meta.stale_anchors` that base derivation is unverified.
 - IF an anchor quoted in this prompt does not resolve: record it in `meta.stale_anchors`, locate
@@ -171,10 +255,16 @@ exist. Verdict enum: `git-log-load-bearing` | `partially-load-bearing` | `git-lo
 **Q3 -- Premise tests.** Two premises underlie the request. Test both; report each explicitly.
 - **Q3a**: is the SHALLOW CLONE, rather than the merge strategy, the binding constraint on agent
   log recovery? Verdict enum: `shallow-clone-dominant` | `squash-dominant` | `both-material` |
-  `neither-material`.
+  `neither-material`. **If your verdict is anything other than `neither-material`, you must also
+  assess the obvious remedy**: can the development container deepen its own clone (a session-start
+  `git fetch --unshallow` or a bounded `--deepen`, which `ci_rca_lifecycle.py` already performs on
+  demand), what would that cost per session, and is the cost justified by what it recovers? State
+  this in the Q3a prose; file it as a finding if you judge it a gap. A `shallow-clone-dominant`
+  verdict with no remedy assessed is an incomplete answer.
 - **Q3b**: are agents in fact the sole consumer of this repository's git log? Consider the human
-  who disposes of every PR, and that the repository is PUBLIC with an explicit "market the
-  engineering" posture (Decision 101). Verdict enum: `agents-sole-consumer` |
+  who disposes of every PR, and that the repository is PUBLIC, with a public-content boundary
+  clause in Decision 101 and the phrase "market the engineering, not the alpha" stated at
+  `AGENTS.md:9`. Verdict enum: `agents-sole-consumer` |
   `agents-primary-humans-secondary` | `genuinely-dual-consumer`. This verdict CONSTRAINS Q6: an
   agent-first-only optimisation is only free where the human-reader claim on that surface is
   weak, so state the dependency in your Q6 prose rather than assuming it away.
@@ -204,9 +294,12 @@ available that would be unnatural for humans but efficient for agents?
 
 Assess EVERY practice in the checklist below, one entry each, in the
 `industry_adaptation` field of this question's `question_answers` entry. Pinned per-practice
-enum: `adopt-as-is` | `adapt-for-agents` | `discard-human-ergonomic` | `already-in-place` |
-`n/a`. Each entry states the practice, the enum value, what specifically it would look like in
-an agent-first form, and its evidence. This field is the SOLE source the maturity top tier reads.
+enum: `adopt-as-is` | `adapt-for-agents` | `retain-for-human-reader` | `discard-human-ergonomic`
+| `already-in-place` | `n/a`. `retain-for-human-reader` exists because dropping a practice is not
+automatically the agent-first answer -- keep the option live. Each entry states the practice, the
+enum value, the `surfaces` list it bears on (this is what the maturity rule reads -- an entry
+bearing on no surface takes `surfaces: []`), what it would look like in an agent-first form, and
+its evidence. This field is the SOLE source the maturity top tier reads.
 
 **Checklist**: trunk-based development; linear history; Conventional Commits; commit trailers as
 structured key-value metadata; `git notes` as detachable machine-readable annotation; PR-as-record
@@ -236,7 +329,8 @@ question changes shape. Verdict enum: `git-log-sufficient-substitute` |
 `neither-suitable-replace-both`.
 
 **Q8 -- Questions the requester did not think to ask.**
-Answer AND extend these seeds:
+Answer all five seeds below, then add between 2 and 5 of your own -- no more. Prefer the ones a
+reader would act on:
 - Does the two-PR flow (`plan(` then `feat(`) belong in git at all, or is it an artefact of using
   PRs as the handoff mechanism?
 - What happens to reconstructability if a merged PR's branch is deleted and GitHub's PR record
@@ -263,13 +357,22 @@ Rate every surface S1..S6 on every dimension. Pinned enum: `strong` | `adequate`
   failure, does the surface fail loudly or return a plausible wrong answer?
 - **VD5 Provenance source-of-truth hygiene** (NS2, NS3) -- is the record stored once in the right
   store, or split and duplicated across stores that can drift?
-- **VD6 Human-ergonomic residue** (NS1) -- is this surface's shape justified by agent consumption,
-  or inherited from human convention with no agent-facing justification? `strong` = no
-  unjustified residue.
+- **VD6 Consumer fit** (NS1, and constrained by the Q3b verdict) -- is this surface's shape
+  justified by its ACTUAL consumers? `strong` = the shape is deliberate and matches who reads it,
+  whether that is agents, humans, or both. `weak` = the shape is inherited convention that serves
+  no current consumer. A surface deliberately shaped for a human reader rates `strong` where a
+  human reader genuinely exists; this dimension does not reward machine-optimisation for its own
+  sake.
 
 ## DEEP-DIVES
 
-**DD-A -- End-to-end trace of the four history-shape dependencies.** *(feeds Q1, Q4)*
+**Where deep-dive output goes**: DD-A's per-mechanism breakage matrix is recorded in the Q4
+`question_answers` entry's `prose`, with any mechanism you judge defective ALSO filed as a
+finding. DD-B's outcome is recorded per the instruction in its own text. DD-C's trace is
+recorded in the Q5 `question_answers` entry's `prose`, with defects filed as findings. A
+deep-dive that produces no finding still produces prose -- never leave one silent.
+
+**DD-A -- End-to-end trace of the history-shape dependencies.** *(feeds Q1, Q4)*
 For each of `push_context_base()` (`HEAD~1` plus `fetch-depth: 2`), `rec-autoclose`'s
 `git log -1 --format=%B HEAD`, the `feat({slug})` subject resolution in `validate_vp_replay` and
 `validate_graduation_completeness`, and `plan_audit._verify_rec_in_git`'s
@@ -278,9 +381,13 @@ break is loud or silent, and whether a cheap decoupling exists. This trace is th
 evidence for Q1 -- do not answer Q1 without it.
 
 **DD-B -- The `Resolves:` trailer delivery path.** *(feeds Q1, Q4)*
-`AGENTS.md:236` places the trailer in the squash-merge COMMIT body. `.claude/skills/implement/SKILL.md:547`
-places it in the PR body "which the squash-merge commit body inherits". Two open recommendations
-(rec-2679, rec-2733) describe a loss mode for single-commit PRs. Determine the actual GitHub
+THREE surfaces state where the trailer belongs, in non-identical terms. `AGENTS.md:236` places it
+in the squash-merge COMMIT body. `.claude/skills/implement/SKILL.md:547` places it in the PR body
+"which the squash-merge commit body inherits". `.github/pull_request_template.md` -- the surface
+actually rendered to the author at PR-open time -- places it in the commit body and explicitly
+warns "not just the PR description". Read all three verbatim before analysing; an analysis built
+on two of them is incomplete. Two open recommendations (rec-2679, rec-2733) describe a loss mode
+for single-commit PRs. Determine the actual GitHub
 behaviour, whether the two instructions are equivalent in all cases, whether the existing
 recommendations' remedies are the right fix, and whether a merge-strategy change would obviate,
 worsen, or leave them unchanged. **Explicitly re-assess those two recommendations rather than
@@ -346,8 +453,8 @@ Facts below are stated neutrally and carry no verdict.
 - `scripts/roadmap/plan_audit.py:126` `_verify_rec_in_git()` runs
   `git log --oneline origin/main --grep=<rec-id>`.
 - `scripts/convergence_health/record.py:105` `count_unapplied_tf_commits()` carries the docstring
-  "Returns 0 on any error (record SHA may predate the current clone depth)" and returns 0 inside a
-  bare `except`.
+  "Returns 0 on any error (record SHA may predate the current clone depth)"; the enclosing
+  `try` returns 0 from an `except Exception:  # noqa: BLE001` handler at approximately line 137.
 - `scripts/ops_portal/ci_rca_lifecycle.py:151` `_ensure_ancestry_history()` runs a best-effort
   `git fetch --unshallow origin`; its docstring states that an unresolvable `merge-base
   --is-ancestor` causes `classify_closed_head` to misfile a stale-code rerun as a regression, and
@@ -360,8 +467,9 @@ Facts below are stated neutrally and carry no verdict.
   `git rev-list --count origin/main` returned 50. Re-derive both.
 - All 50 commits carried a `(#NNN)` suffix, spanning PRs #841 to #891 -- one commit per merged PR
   across the whole window.
-- Subject-prefix distribution in that window: 25 `feat(`, 21 `plan(`, 1 each `fix(`, `docs(`,
-  `audit(`.
+- Subject-prefix distribution in that window: 49 of 50 subjects match a `prefix(scope)` form --
+  25 `feat(`, 21 `plan(`, 1 each `fix(`, `docs(`, `audit(`. The 50th uses a bare `audit:` with no
+  parenthesised slug (see C4). Re-derive the whole distribution; do not assume the counts.
 - `fetch-depth` settings across workflows range from `1` (`claude.yml`) through `2` to `0`
   (`ci.yml` PR job, `ci-rca.yml`, `convergence-health.yml`).
 - `docs/ROADMAP-PLATFORM.yaml:474` records an artefact whose "provenance [is] unrecoverable from
@@ -414,8 +522,9 @@ Facts below are stated neutrally and carry no verdict.
   duplicate wake is cheap and a missed wake strands a session.
 - `scripts/checks/ci_guards/validate_pr_conflict_signal.py` enforces structural invariants on the
   workflow, including anchored delegation and per-call-site exit-status capture.
-- At recon, `pr-conflict-signal.yml` had 246 total runs and the 15 most recent all reported
-  `conclusion: success`.
+- The workflow has a substantial run history. Derive the run count and recent conclusions
+  yourself in the EMPIRICAL PASS; if the GitHub API is unavailable, follow the SETUP degraded
+  path and reason from the workflow and script sources alone, which suffice for C12.
 
 **Governing decisions and contracts**: Decision 76 (CC-web workflow, squash policy), Decision 83
 (branch protection live), Decision 89 (CI as merge gate), Decision 101 (public boundary),
@@ -437,6 +546,10 @@ do NOT exceed:**
 - **<= 8** `docs/plans/PLAN-*.yaml` with non-empty `bundled_recommendations`: check whether the
   named recommendations are closed.
 
+"Outrank" is operational: where an observed finding and a static finding of equal severity
+compete for a slot in `top_improvements` or for `highest_leverage_change`, the observed one wins.
+It does not alter severity.
+
 **Counterfactual test, applied per sample**: for any mechanism you judge to be working, ask
 "would this sample still look identical if the mechanism were deleted or silently no-opping?"
 If yes, the sample is not evidence that it works. Apply this specifically to `rec-autoclose`
@@ -446,6 +559,10 @@ delivery).
 
 ## METHOD
 
+- **P0 Base.** Perform SETUP, then immediately derive the base sha and create the branch per
+  COMMIT / PR MECHANICS steps 1-2, BEFORE any analysis. Fixing the base first guarantees the
+  filename sha, `meta.audited_commit`, and the tree you actually read are the same commit even if
+  `main` advances mid-run.
 - **P1 Read.** Every S1..S6 surface. Verify anchors; record stale ones.
 - **P2 Trace.** DD-A and DD-B. Establish the blast radius before forming any Q1 opinion.
 - **P3 Trace.** DD-C.
@@ -527,7 +644,8 @@ audit:
     - {q: Q6, verdict: <one-line thesis>, basis: [], prose: "",
        industry_adaptation:
          - {practice: <checklist entry or newly named structure>,
-            rating: adopt-as-is|adapt-for-agents|discard-human-ergonomic|already-in-place|n/a,
+            rating: adopt-as-is|adapt-for-agents|retain-for-human-reader|discard-human-ergonomic|already-in-place|n/a,
+            surfaces: [S1..S6],
             agent_first_form: "", evidence: ""}}
     - {q: Q7, verdict: git-log-sufficient-substitute|git-log-sufficient-if-commit-contract-changes|complementary-keep-both|neither-suitable-replace-both,
        basis: [], prose: ""}
@@ -563,7 +681,8 @@ audit:
     - {candidate: "", why_dismissed: "", compensating_control: "",
        control_property_match: "", decision_or_item_id: ""}
   summary: {total_findings: 0, novel_count: 0, planned_insufficient_count: 0,
-            planned_unbuilt_count: 0, top_improvements: [], highest_leverage_change: <id>,
+            planned_unbuilt_count: 0, rejected_count: 0,
+            top_improvements: [], highest_leverage_change: <id or null>,
             maturity_S1: <value>, maturity_S2: <value>, maturity_S3: <value>,
             maturity_S4: <value>, maturity_S5: <value>, maturity_S6: <value>}
 ```
@@ -577,7 +696,17 @@ that matter. Do not restate the YAML.
 planned_unbuilt_count`. Fully-covered candidates live in `rejected_candidates`, NOT findings.
 `rubric_ratings`, `question_answers`, and `merge_strategy_decision` are systems-of-record
 referenced FROM findings, never re-counted. `top_improvements` and `highest_leverage_change`
-MUST be finding ids.
+MUST be finding ids; `highest_leverage_change` is `null` when `findings[]` is empty.
+`rejected_count` MUST equal `len(rejected_candidates)` and is deliberately NOT part of the
+`total_findings` sum -- it is a separate cross-check that the candidate set was fully adjudicated.
+
+Cardinality, pinned: `rubric_ratings` carries one row per (surface, dimension) pair -- 6 surfaces
+x 6 dimensions = 36 rows, `n/a` included. `per_surface_assessment` carries exactly 6 rows. The
+single rows shown in the skeleton are format examples, not counts.
+
+Q1 / `merge_strategy_decision` consistency, pinned: exactly ONE block is `recommended`, and it
+must be the one Q1's verdict names (`hybrid-by-pr-class` -> the `hybrid` block). Every other
+block is `viable` or `rejected`.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates (mechanism or `file:line`), and
@@ -603,28 +732,41 @@ dismissal only if it exercises the SAME property AND would FAIL if the defect we
 the counterfactual to the control itself. A control that cannot catch the break neither lowers
 severity nor justifies dismissal.
 
-**Maturity**, computed LAST, per surface, top-down, first match wins:
+**Maturity**, computed LAST, per surface, top-down, first match wins.
 
-- **frontier** = 0 open critical AND 0 open high findings on that surface, AND every entry in
-  Q6's `industry_adaptation` field that bears on that surface is rated `adopt-as-is`,
-  `adapt-for-agents`, `already-in-place`, or `n/a` -- never left unassessed.
+Counting rule, pinned: "critical" and "high" mean findings YOU filed in `findings[]` carrying
+that severity and naming that surface -- regardless of `roadmap_crossref.classification`. A
+`planned-unbuilt` or `planned-insufficient` high counts exactly like a novel high; the gap is
+open either way. `rejected_candidates` never count.
+
+Assessment rule, pinned: an `industry_adaptation` entry "bears on" a surface iff that surface
+appears in the entry's `surfaces` list. Any of the five non-`n/a` ratings counts as ASSESSED --
+including `discard-human-ergonomic` and `retain-for-human-reader`. Only an entry you left out of
+the field entirely, or one bearing on the surface with no rating, is unassessed.
+
+- **frontier** = 0 critical AND 0 high findings on that surface, AND every
+  `industry_adaptation` entry bearing on that surface is assessed per the rule above.
 - **strong** = 0 critical AND <= 1 high.
 - **solid** = <= 1 critical.
 - **nascent** = otherwise.
 
-`frontier` remains reachable where you argued a property-matched compensating control. A
-`discard-human-ergonomic` rating is NOT a maturity penalty -- it is a recommendation, and a
-surface can be frontier while carrying one.
+`frontier` remains reachable where you argued a property-matched compensating control. Neither a
+`discard-human-ergonomic` nor a `retain-for-human-reader` rating is a maturity penalty -- both
+are recommendations, and a surface can be frontier while carrying either.
+
+Precedence, pinned: `summary.maturity_S1..S6` and `per_surface_assessment[].maturity` MUST agree.
+Compute once, write twice; if they disagree the deliverable is invalid.
 
 ## COMMIT / PR MECHANICS
 
-1. Derive the base ONCE:
+1. Derive the base ONCE, at P0, immediately after SETUP:
    ```
-   git fetch origin main
    git rev-parse --short origin/main
    ```
-   This base IS the audited tree. Use that sha in both deliverable filenames, the branch name,
-   and `meta.audited_commit`.
+   (SETUP already ran `git fetch origin main`; do not fetch again -- a second fetch can move the
+   base mid-run and desynchronise the filename sha from the tree you read.) This base IS the
+   audited tree. Use that sha in both deliverable filenames, the branch name, and
+   `meta.audited_commit`.
 2. `git switch -c audit/gitops-agent-first-<sha> origin/main` so the PR diff contains only the
    two deliverables. This is a deliberate, documented exception to the `claude/*` session-branch
    rule: the audit needs a clean two-file diff off the audited base.
