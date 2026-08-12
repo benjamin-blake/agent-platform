@@ -1,0 +1,525 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "critical-lane-triage"
+intent: >-
+  Clear the open-Critical recommendation lane down to genuinely actionable work by closing ten recs
+  whose substrate, branch, or gating decision makes them unworkable (or which are already satisfied),
+  each with a recorded Decision 103 relevance verdict and verified evidence. Restores the Critical
+  lane as a trustworthy triage surface so future /orient and /plan sessions rank real work instead of
+  scrolling past nine years of dead pointers.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-critical-lane-triage.yaml
+phase: >-
+  Platform hygiene -- ad-hoc recommendation triage (soft-warn exception category ad_hoc_rec; names no
+  tier_item, so the Tier Item Freshness Gate is skipped by design). Not a roadmap item: this is queue
+  maintenance under Decision 103's governed relevance lifecycle and Decision 64's bootstrap-cohort
+  ageing-out licence.
+scope:
+  - file: docs/plans/PLAN-critical-lane-triage.yaml
+    action: Create
+    purpose: >-
+      Sole scope row. This plan mutates NO repository file: its entire effect is eleven ops-portal
+      writes (ten --update-rec closures plus one file_rec) against the DuckLake ops_recommendations
+      table via the closed writer boundary. docs/ROADMAP-PLATFORM.yaml was considered as a rehome
+      target for the three executor-defect pointers and deliberately REJECTED at planning time (human
+      decision, Q2): the pointers live solely in the resolution strings, which are durable,
+      warehouse-resident and retrievable via the rec_by_id / rec_history named verbs. Adding a second
+      copy to the roadmap would be a third unsynced surface (Decision 115 / AGENTS.md agent-first
+      anti-pattern). docs/SESSION_LOG.md was likewise rejected for the same reason.
+bundled_recommendations:
+  - rec-027
+  - rec-028
+  - rec-296
+  - rec-423
+  - rec-425
+  - rec-457
+  - rec-468
+  - rec-609
+  - rec-610
+  - rec-613
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    All ten recs (rec-027, rec-028, rec-296, rec-423, rec-425, rec-457, rec-468, rec-609, rec-610,
+    rec-613) carry status=closed in the DuckLake current projection, each with a non-empty resolution
+    string naming its Decision 103 relevance verdict.
+  - >-
+    The open-Critical lane contains exactly rec-2816 and rec-3059 -- the two recs verified at planning
+    time as live work with extant target files and activity inside the last three weeks.
+  - >-
+    rec-457 and rec-613 carry execution_result=already_implemented; the other eight carry
+    execution_result=manual, reflecting triage closure rather than an implemented fix.
+  - >-
+    The resolution strings for rec-027 and rec-028 cite Decision 116 / Decision 117 (with Decision 121
+    as precedent) as the Copilot-SDK retirement authority, and do NOT cite CD.28 / dec-122, which is
+    the Bedrock-to-LiteLLM inference decision and mentions Copilot nowhere.
+  - >-
+    The resolution strings for rec-296, rec-423 and rec-425 each name the still-live defect location,
+    the CD.17 / T4.2 reversal condition, and an explicit re-file instruction, so the diagnosis carries
+    a forward address rather than being discarded at close.
+  - >-
+    A new open recommendation exists against scripts/ops_portal/cli.py recording the governance gap
+    that an agent can close or demote a Critical rec through the raw --update-rec CLI with no machine
+    verification of the stated closure basis and no human-confirmation gate.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Baseline the lane before any write -- confirm the ten targets are all open+Critical and that the
+      open-Critical lane is exactly the expected twelve ids.
+    command: >-
+      bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      crit={r['id'] for r in rows if r.get('priority')=='Critical' and r.get('status')=='open'};
+      tgt={'rec-027','rec-028','rec-296','rec-423','rec-425','rec-457','rec-468','rec-609','rec-610','rec-613'};
+      assert tgt <= crit, f'not open+Critical: {sorted(tgt-crit)}';
+      assert crit-tgt == {'rec-2816','rec-3059'}, f'unexpected lane residue: {sorted(crit-tgt)}';
+      print('baseline ok: 12 open Critical, 10 targets +', sorted(crit-tgt))"
+    expected: >-
+      Prints "baseline ok: 12 open Critical, 10 targets + ['rec-2816', 'rec-3059']" and exits 0.
+    fix_if: >-
+      A target is missing from the open-Critical set means it was closed or re-prioritised since
+      planning -- re-verify that rec individually and drop it from the batch rather than forcing the
+      write. Extra ids in the residue means new Critical recs landed since planning; triage them
+      separately, do NOT silently fold them into this batch.
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step asserts the pre-closure lane state that the plan deliberately destroys -- it is
+      red-by-construction the moment the plan lands, so it cannot serve as a standing regression
+      guard. Its evidentiary value is entirely confined to the implementing session.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Re-run rec-457's own acceptance oracle to establish DETERMINISTIC satisfaction -- the only one of
+      the ten eligible for Decision 103 auto-close.
+    command: >-
+      grep -q "priority-queue-entry" src/data/handlers/findings_processor_handler.py &&
+      bin/venv-python -m pytest tests/test_findings_processor_handler.py -x -q
+    expected: >-
+      grep matches and the suite reports 18 passed. This is rec-457's filed acceptance command with
+      the bare `python` replaced by `bin/venv-python` per AGENTS.md; no other substitution.
+    fix_if: >-
+      grep miss means the priority-queue routing block was reverted -- rec-457 is genuinely open again;
+      abort its closure and re-verify. A test failure means the handler regressed; abort rec-457's
+      closure and file a fresh rec rather than closing a rec whose feature is broken.
+    graduation: waive
+    graduation_waiver_reason: >-
+      tests/test_findings_processor_handler.py already runs in the standing full pytest suite, so the
+      behaviour is guarded today; graduating a second registry copy of the same selector adds coverage
+      of nothing and creates a duplicate maintenance point.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Re-run rec-613's five named tests from their post-decomposition homes to establish satisfaction.
+      rec-613 cites tests/test_execute_recommendation.py, which no longer exists as a module -- it was
+      decomposed into the tests/execute_recommendation/ package, so the oracle must be re-pathed.
+    command: >-
+      bin/venv-python -m pytest tests/execute_recommendation/test_postflight_validation.py
+      tests/execute_recommendation/test_resume.py -q
+      -k 'auto_resume or foreign_checkpoint or doc_only_diff or baseline_failure'
+    expected: >-
+      Exactly 5 passed. The count matters -- rec-613's title claims five failing tests, so five passing
+      selections is the precise refutation of its premise.
+    fix_if: >-
+      Fewer than 5 selected means the -k selector drifted against renamed tests; locate them by name
+      before concluding anything. Any failure means the postmortem-preflight root cause rec-613
+      describes is live again -- do NOT close it; re-file with the current failure output.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The tests/execute_recommendation/ package already runs in the standing full pytest suite. The
+      only session-specific work here is the re-path from the decomposed module name, which is a
+      one-time evidentiary act, not a durable invariant worth a registry slot.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the four physically-absent targets that ground the stale_target verdicts for rec-028,
+      rec-609, rec-468 and rec-613.
+    command: >-
+      for p in .github/copilot/settings.json scripts/sync_ops.py scripts/executor/rescue.py
+      tests/test_execute_recommendation.py; do test ! -e "$p" || { echo "PRESENT: $p"; exit 1; }; done;
+      echo "all four retired targets absent"
+    expected: Prints "all four retired targets absent" and exits 0.
+    fix_if: >-
+      Any path printing PRESENT invalidates that rec's stale_target verdict -- the substrate was
+      restored. Drop that rec from the batch and re-adjudicate it on its merits.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as file_presence (FileAbsentCheck shares that slot), but tautological under
+      the differential admission gate at scripts/verification_checks.py:318 -- all four paths are
+      already absent on origin/main, so the check passes identically before and after this plan and
+      would be rejected as non-admitted rather than registered.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm the two documentary anchors behind the semantic verdicts -- Decision 55's verbatim
+      cancellation of rescue.py (corroborating rec-468) and the absence of validate.py's --ci flag
+      (grounding rec-610's superseded verdict, since its acceptance command invokes that flag).
+    command: >-
+      grep -q 'scripts/executor/rescue.py` (planned but not yet written) is cancelled'
+      docs/DECISIONS.md &&
+      ! bin/venv-python -m scripts.validate --help 2>&1 | grep -q -- '--ci\b' &&
+      echo "decision-55 cancellation present; validate --ci absent"
+    expected: Prints "decision-55 cancellation present; validate --ci absent" and exits 0.
+    fix_if: >-
+      A grep miss on DECISIONS.md means the clause was reworded -- locate the current wording and
+      quote that instead; do not close rec-468 citing text that is not there. If --ci reappears on
+      validate.py, rec-610's acceptance command is runnable again and its superseded verdict is void.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Both halves are already true on origin/main, so like step 4 this is tautological under the
+      differential admission gate and would not be admitted. Pinning a Decision's exact prose in the
+      verification registry would additionally make routine editorial rewording fail CI, which is a
+      false-positive generator rather than a guard.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Pre-handoff full-tier validation. Required on every plan declaring handoff_policy, docs-only
+      plans included (Decision 163 / rec-2965, enforced by validate_handoff_full_tier).
+    command: bin/venv-python -m scripts.validate
+    expected: Exits 0 with the full check suite green.
+    fix_if: >-
+      Any failure blocks commit and PR per handoff_policy.full_validation_required_before_commit. On
+      timeout, treat the run as blocked (timeout_disposition), resume later and rerun the full tier
+      from the start -- never downgrade to --pre to get past it.
+    graduation: not-applicable
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Close the two deterministically-satisfied recs. rec-457 is the single Decision 103
+      auto-close-eligible case (its own acceptance oracle passed unmodified at step 2); rec-613's
+      oracle required only a re-path. Both carry execution_result=already_implemented.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-457 --status closed
+      --execution_result already_implemented --resolution "relevance=satisfied (deterministic,
+      Decision 103). Already implemented at src/data/handlers/findings_processor_handler.py:145-157 --
+      splits type=priority-queue-entry findings out of all_findings and calls
+      overwrite_jsonl('priority-queue/.priority-queue.jsonl', entries) before the comparison step,
+      which is exactly the dispatch this rec requested. Filed acceptance command re-run 2026-08-12
+      (bin/venv-python substituted for bare python): grep matches, tests/test_findings_processor_handler.py
+      18/18 pass. RESIDUAL, NOT THIS REC: the implemented write still transits
+      scripts/s3_log_store.py overwrite_jsonl -> ops.write('ops_priority_queue', ...) on the
+      OpsWriter/Iceberg staging path while all queue readers already serve DuckLake, so curator output
+      lands where nothing reads. That producer repoint is tier_item T2.26's scope (see the AGENTS.md
+      rec-curator caveat), not a defect in this dispatch. Closed by PLAN-critical-lane-triage." &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-613 --status closed
+      --execution_result already_implemented --resolution "relevance=satisfied (Decision 103). The
+      cited module tests/test_execute_recommendation.py no longer exists -- it was decomposed into the
+      tests/execute_recommendation/ package. All five tests this rec names now pass from their current
+      homes (test_postflight_validation.py, test_resume.py); re-pathed oracle run 2026-08-12: 5 passed.
+      The postmortem-preflight root cause it shares with rec-608 is resolved. Its filed acceptance
+      command was doubly unrunnable regardless -- a Windows .venv/Scripts/python.exe path against a
+      module that no longer exists. Closed by PLAN-critical-lane-triage."
+    expected: >-
+      Two confirmation lines, one naming rec-457 and one naming rec-613, each listing the updated
+      fields; exit 0.
+    fix_if: >-
+      A RuntimeError naming an absent rec means the id is not in the current projection -- stop, do not
+      re-file. A credential or transport failure fails loudly at the call site by design (Decision 84
+      I-4); there is no outbox, so restore connectivity and re-run. Never hand-edit
+      logs/.recommendations-log.jsonl to simulate the write -- a read cache is never a write source.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Close the three stale_target and two superseded recs -- the substrate-death cohort. Each cites
+      the deterministic proof established at steps 4 and 5.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-028 --status closed
+      --execution_result manual --resolution "relevance=stale_target (Decision 103; deterministic
+      target-absence, the Decision 121 / rec-146 precedent -- a physically-absent target file is
+      deterministic stale_target, not a bare semantic assertion). Target .github/copilot/settings.json
+      does not exist; no Copilot substrate remains anywhere under .github/ or scripts/. The
+      permissions model this rec would define has no surface to configure. Authority for the
+      retirement is Decision 116 + Decision 117 (the ULF-05 Copilot-SDK retirement session), with
+      Decision 121 recording the deletion of scripts/copilot_wrapper.py. Closed by
+      PLAN-critical-lane-triage." &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-609 --status closed
+      --execution_result manual --resolution "relevance=stale_target (Decision 103, deterministic
+      target-absence). Target scripts/sync_ops.py does not exist; its successor is scripts/sync/ops.py.
+      The defect itself is architecturally void: the ops_recommendations_current Athena view whose
+      string-typed list columns broke Pydantic validation was retired when ops_recommendations cut over
+      to the DuckLake closed reader/writer boundary (Decision 81 cl.7 / Decision 84 I-1, T2.19). There
+      is no Athena path and no rollback flag left to fix. Closed by PLAN-critical-lane-triage." &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-468 --status closed
+      --execution_result manual --resolution "relevance=stale_target (Decision 103, deterministic
+      target-absence), corroborated by explicit cancellation. Target scripts/executor/rescue.py does
+      not exist, and Decision 55 (RCA-First Executor, supersedes Decision 46) states verbatim:
+      'scripts/executor/rescue.py (planned but not yet written) is cancelled.' The rescue-agent layer
+      this rec would build -- RescueOutcome, RescueDispatcher, recursion guard -- is the architecture
+      Decision 55 replaced with the RCA-first model precisely because LLM-judgement recovery automates
+      workarounds instead of fixing root causes. Building it would contradict live governance, not just
+      duplicate dead work. Closed by PLAN-critical-lane-triage." &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-027 --status closed
+      --execution_result manual --resolution "relevance=superseded (Decision 103). The experiment this
+      rec proposes -- can a VS Code subagent invoke copilot -p, can CLI --agent work with custom agents
+      -- has no substrate: no Copilot artefacts remain under .github/ or scripts/ (verified by
+      filesystem sweep), and the CLI-JSON boundary it would characterise is retired. Authority:
+      Decision 116 + Decision 117 (ULF-05 Copilot-SDK retirement); Decision 121 records the deletion of
+      scripts/copilot_wrapper.py and retires the cli-json-output contract. NOT CD.28/dec-122 -- that is
+      the Bedrock-to-LiteLLM inference decision and mentions Copilot nowhere. The live CLI-JSON parser
+      today targets a different vendor schema entirely. Closed by PLAN-critical-lane-triage." &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-610 --status closed
+      --execution_result manual --resolution "relevance=superseded (Decision 103). Dead-branch
+      artifact: this rec records three preexisting blockers observed on branch
+      agent/dq-validate-integration, which no longer exists on origin. Its acceptance command is
+      unrunnable twice over -- a Windows .venv/Scripts/python.exe path, and a --ci flag that
+      scripts/validate.py no longer exposes (the two-tier presubmit model is --pre plus the full tier,
+      Decision 73). All three cited blockers are themselves resolved: rec-607 is closed, rec-608 was
+      closed inline by PLAN-dq-validate-integration, and rec-609 is closed in this same sweep as
+      stale_target. Nothing actionable survives. Closed by PLAN-critical-lane-triage."
+    expected: >-
+      Five confirmation lines, one per rec (rec-028, rec-609, rec-468, rec-027, rec-610); exit 0.
+    fix_if: >-
+      Same failure semantics as step 7. If a resolution string is rejected on length or content, do NOT
+      truncate away the evidence -- the evidence IS the closure proof under Decision 103; shorten the
+      framing prose instead.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Close the three blocked_by_decision executor recs. Each resolution carries the forward address --
+      defect location, reversal condition, and re-file instruction -- because per the planning-time
+      human decision (Q2) the resolution string is the SOLE home for these pointers.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-296 --status closed
+      --execution_result manual --resolution "relevance=blocked_by_decision (Decision 103;
+      close_proposed verdict, closed on explicit human direction in the PLAN-critical-lane-triage
+      planning session). The autonomous executor is frozen: Decision 67's STRATEGIC-plan clause is
+      Active and its reversal is gated on CD.17, which is state=pending in ROADMAP-PLATFORM.yaml.
+      scripts/executor/postflight.py still exists, so the defect is LATENT, NOT FIXED -- merge gating
+      still collapses review_unavailable into review_clean, treating a code-review timeout as a clean
+      review. FORWARD ADDRESS: tier_item T5.6 (Frozen executor decommission / disposition) owns
+      scripts/executor/ and its criterion c1 is the harvest/retire inventory. If that inventory
+      classifies postflight.py as harvest-into-substrate rather than retire, re-file this defect
+      against the harvesting owner. Do not reopen this rec -- file a fresh one. Closed by
+      PLAN-critical-lane-triage." &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-423 --status closed
+      --execution_result manual --resolution "relevance=blocked_by_decision (Decision 103;
+      close_proposed verdict, closed on explicit human direction). Executor frozen per Decision 67 /
+      CD.17 pending. scripts/executor/postflight.py still exists, so the defect is LATENT, NOT FIXED --
+      cleanup_after_merge() still forces git checkout main and performs durable rec-status writeback in
+      that coupled path, so a merge that succeeded remotely can still fail locally when main is checked
+      out in another worktree. FORWARD ADDRESS: same as rec-296 -- T5.6 criterion c1's harvest/retire
+      inventory; if postflight.py is harvested rather than retired, re-file against the harvesting
+      owner as a fresh rec. Closed by PLAN-critical-lane-triage." &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-425 --status closed
+      --execution_result manual --resolution "relevance=blocked_by_decision (Decision 103;
+      close_proposed verdict, closed on explicit human direction). Executor frozen per Decision 67 /
+      CD.17 pending. scripts/executor/plan.py still exists, so the defect is LATENT, NOT FIXED -- there
+      is still no deterministic dependency inventory for executor-core planning, leaving caller and
+      patch-target discovery to critique/review to catch after the fact. FORWARD ADDRESS: same as
+      rec-296 -- T5.6 criterion c1's harvest/retire inventory; if plan.py is harvested rather than
+      retired, re-file against the harvesting owner as a fresh rec. Closed by
+      PLAN-critical-lane-triage."
+    expected: >-
+      Three confirmation lines, one per rec (rec-296, rec-423, rec-425); exit 0.
+    fix_if: Same failure semantics as step 7.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      File the governance-gap recommendation the human raised when reviewing this plan's own premise --
+      that an agent can autonomously close or demote a Critical rec with no machine verification of the
+      stated basis. Call get_rec_write_guidance() first per AGENTS.md Precision Context Injection.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --file-rec --source planning --priority High
+      --effort M --file scripts/ops_portal/cli.py
+      --title "Portal --update-rec closes Critical recs with no machine verification of the closure basis"
+      --context "Decision 103 splits recommendation closure two ways: a deterministically-satisfied rec
+      (acceptance probe passes) may auto-close with recorded proof, while every semantic verdict --
+      superseded, stale_target, contradicted, blocked_by_decision -- must emit a close_proposed command
+      for human confirmation and never close directly. propose_or_close_rec() in scripts/ops_data_portal.py
+      implements that split faithfully, but nothing forces its use. The raw CLI path --update-rec REC
+      --status closed --resolution TEXT threads straight into update_rec() through
+      _UPDATE_REC_FIELD_MAP with no verdict field, no proof requirement, no priority awareness and no
+      human-confirmation token, so an agent can close any rec at any priority with a free-text
+      resolution that is never checked against reality. --priority is equally unguarded, so silent
+      Critical-to-Low demotion is available by the same route. Why now: PLAN-critical-lane-triage just
+      exercised this path ten times against the Critical lane. Every closure there was human-directed
+      and evidence-backed, but the mechanism itself supplied none of that assurance -- the same commands
+      would have executed identically with fabricated evidence. The gap is that the governed helper is
+      advisory while the ungoverned CLI is the ergonomic default."
+      --acceptance "bin/venv-python -m pytest tests/ops_data_portal -q -k closure_gate"
+      --verification-tier V2 --risk medium
+    expected: >-
+      Prints the writer-allocated rec id (Decision 84 I-2 allocates ids in-transaction; never
+      client-side). Record that id in the implementation report.
+    fix_if: >-
+      A context-length rejection means the >=80 stripped-character gate was not met -- expand the
+      problem statement, do not pad. An acceptance-lint rejection means lint_acceptance_command()
+      refused the command; the ban list is python -c one-liners, absolute paths, line-number greps and
+      fenced blocks. The command above was linted clean at planning time.
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Refresh the read cache from the DuckLake reader and assert every one of the ten is closed with a
+      non-empty resolution, and that the open-Critical lane is now exactly the two live recs.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync &&
+      bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      by={r['id']: r for r in rows};
+      tgt=['rec-027','rec-028','rec-296','rec-423','rec-425','rec-457','rec-468','rec-609','rec-610','rec-613'];
+      bad=[i for i in tgt if by.get(i,{}).get('status')!='closed'];
+      assert not bad, f'not closed: {bad}';
+      thin=[i for i in tgt if not (by[i].get('resolution') or '').strip()];
+      assert not thin, f'empty resolution: {thin}';
+      crit={r['id'] for r in rows if r.get('priority')=='Critical' and r.get('status')=='open'};
+      assert crit == {'rec-2816','rec-3059'}, f'lane not clear: {sorted(crit)}';
+      print('all 10 closed with resolutions; open Critical lane =', sorted(crit))"
+    expected: >-
+      Prints "all 10 closed with resolutions; open Critical lane = ['rec-2816', 'rec-3059']" and exits 0.
+    fix_if: >-
+      A rec still open after a reported-successful write means the read cache is stale -- re-run --sync
+      before concluding the write failed. An empty resolution means the --resolution argument was lost
+      to shell quoting; re-issue that single --update-rec with the full string. Never repair drift by
+      editing the local JSONL: it is a derivative projection, downstream of the warehouse and never
+      upstream of it.
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Confirm the governance-gap rec from step 10 landed and is open, resolving it by title rather than
+      by id since the id is writer-allocated at insert time and cannot be predicted at planning time.
+    command: >-
+      bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      hits=[r for r in rows if 'no machine verification of the closure basis' in (r.get('title') or '')
+      and r.get('status')=='open'];
+      assert len(hits)==1, f'expected exactly 1 open gap rec, found {len(hits)}';
+      print('governance-gap rec filed:', hits[0]['id'])"
+    expected: >-
+      Prints a single line confirming the governance-gap rec was filed, naming its writer-allocated
+      id; exits 0.
+    fix_if: >-
+      Zero hits means step 10's file_rec did not land or the cache was not refreshed by step 11 -- re-run
+      --sync first. More than one hit means the rec was filed twice across attempts; close the duplicate
+      as relevance=duplicate rather than leaving both open.
+test_obligations: []
+constraints:
+  - >-
+    Portal-only. This plan modifies NO repository file except its own plan artefact. Any temptation to
+    fix an observed defect inline is out of scope -- out-of-scope bugs become recommendations via the
+    portal, never inline fixes (AGENTS.md).
+  - >-
+    Single Portal Invariant (Decision 84 / Decision 69): every write goes through
+    scripts.ops_data_portal. Never Edit or Write logs/.recommendations-log.jsonl -- validate.py fails
+    CI on direct edits, and a read cache is never a write source.
+  - >-
+    A write that cannot complete FAILS LOUDLY at the call site (Decision 84 I-4). There is no offline
+    outbox; do not stage, do not simulate, do not retry from a local file. Re-file after restoring
+    connectivity.
+  - >-
+    Recommendation ids are allocated BY THE WRITER atomically with the insert (Decision 84 I-2). Step
+    10's rec id cannot be predicted; step 12 resolves it by title.
+  - >-
+    Decision 103 auto-close applies to rec-457 only. The other nine are semantic verdicts whose
+    close_proposed disposition is discharged by explicit human direction recorded in this plan -- not by
+    agent judgement. Do not extend that authorisation to any rec not listed here.
+  - >-
+    Do NOT cite Decision 70 as the closure-proof authority. Decision 103 carries a standing 2026-07-03
+    amendment (repeated by Decision 142 pt 3) correcting exactly that mis-cite; Decision 70 governs
+    physical deletion of bootstrap records. CD.36's own discipline_point propagates the same error.
+  - >-
+    Do NOT cite CD.28 / dec-122 for the Copilot retirement. It is the Bedrock-to-LiteLLM inference
+    decision. The authority is Decision 116 + Decision 117, precedent Decision 121.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids)- FLAGS_FOUND; decisions triaged 122 of
+    122. CITE- Decision 103, Decision 84, Decision 88, Decision 55, Decision 67, Decision 116, Decision
+    117, Decision 121, Decision 64, Decision 163; explicitly NOT Decision 70.
+  - >-
+    "gates- decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Scout flag 1 (NOTE, Decision 103) ACCEPTED- rec-468 pivoted from contradicted to stale_target. The
+    relevance contract defines contradicted narrowly as 'any cited decision has status containing
+    superseded by'; Decision 55 is not superseded (it supersedes 46). Target-absence is the
+    deterministic signal, matching the Decision 121 / rec-146 precedent. The Decision 55 cancellation
+    clause is carried as corroborating evidence, which strengthens the close rather than weakening it.
+  - >-
+    Scout flag 2 (WARN, Decision 115) ACCEPTED- docs/SESSION_LOG.md dropped from scope. The per-rec
+    evidence already has two canonical homes (the warehouse resolution field and this plan YAML); a
+    prose copy would be a third unsynced surface, which AGENTS.md names as drift by design.
+  - >-
+    Scout flag 3 (NOTE, Decision 55 spirit) ACCEPTED IN SUBSTANCE, REDIRECTED IN TARGET, THEN SCOPED
+    OUT BY HUMAN DECISION. The scout proposed rehoming the rec-296/423/425 defect pointers as T4.2 exit
+    criteria. T4.2 was rejected as the wrong target- its files_in_scope is Lambda personas
+    (src/lambdas/plan_agent/ etc.) and excludes scripts/executor/ entirely, so criteria about executor
+    defects would not belong to it. T5.6 (Frozen executor decommission / disposition) owns
+    scripts/executor/ outright and its criterion c1 is a harvest/retire inventory, making it the
+    correct owner. The human then decided (Q2) that a roadmap edit is overengineering for this, so the
+    pointers live SOLELY in the three resolution strings, each naming the T5.6 forward address, the
+    CD.17/T4.2 reversal condition, and a re-file instruction.
+  - >-
+    Decision 163 obligation- validate_handoff_full_tier requires any diff-added plan declaring
+    handoff_policy to carry a VP step matching -m scripts.validate without --pre. Step 6 satisfies it.
+    Docs-only plans are NOT exempt.
+  - >-
+    Verification tier V3 is driven by the portal writes transiting the DuckLake writer Function URL
+    (external system, requires the agent_platform assume-role profile), not by any infrastructure in
+    scope. Reader boundary confirmed reachable at planning time- backend=ducklake,
+    ops_recommendations row_count=1795.
+  - >-
+    Lane census at planning time- 12 open Critical recs. The two NOT in this batch, rec-2816
+    (docs/contracts/deploy-paths.yaml, updated 2026-07-23) and rec-3059
+    (docs/contracts/contract-population.yaml, updated 2026-08-10), were individually checked- both
+    targets exist and both are live work. They stay open by design.
+  - >-
+    Decision 64 (bootstrap cohort anchor 2026-05-01) is the positive licence for the sweep- 'Bootstrap
+    records are not corrupt -- they predate the rules. They age out of the _current view as
+    recommendations are closed or superseded.'
+  - >-
+    Decision 142's CI-RCA status-aware chain (never reopen a closed rec; file a new record) is scoped
+    to source=ci_rca. None of these ten is ci_rca -- sources are cli-migration-analysis,
+    executor-supervision, planning and code-review -- so no chain machinery fires. The never-reopen
+    principle is nonetheless mirrored in the rec-296/423/425 resolution strings.
+  - >-
+    Branch was 0 commits behind origin/main at planning time with no overlapping scope files, so the
+    Main Divergence Assessment is a no-op. ci_rca_unresolved_recs was empty, so the Related-Work check
+    does not fire.
+  - >-
+    Preflight context note- non_automatable_softcap_breached is true (870 of 1006 open recs). Per
+    Decision 73 individual review is suspended, so this is planning context only. This sweep reduces
+    open recs by 10 and adds 1.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness session branch, never an agent/ branch)
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read- Decision 103, 84, 88, 55, 67, 116, 117, 121, 64, 163
+  - AWS agent_platform assume-role chain verified reachable before any portal write
+  - >-
+    Acceptance criteria understood- the deliverable is eleven portal writes and zero repository
+    mutations beyond this plan file
+execution_steps:
+  - >-
+    Run Verification Plan steps 1 through 6 (pre-deploy) IN ORDER before any write. Steps 2 through 5
+    establish the evidence that the resolution strings assert; a failure in any of them invalidates the
+    corresponding rec's verdict and that rec must be dropped from the batch, not forced through.
+  - >-
+    Execute VP steps 7, 8 and 9 -- the ten --update-rec closures, grouped by verdict class. Each is a
+    separate portal call; a failure mid-chain leaves earlier closures landed, which is safe and
+    idempotent to re-run.
+  - >-
+    Execute VP step 10 -- file the governance-gap recommendation. Call get_rec_write_guidance() before
+    file_rec() per AGENTS.md Precision Context Injection. Record the writer-allocated id in the report.
+  - >-
+    Execute VP steps 11 and 12 -- refresh the read cache and assert the terminal state (ten closed with
+    non-empty resolutions, open-Critical lane exactly rec-2816 and rec-3059, gap rec open).
+  - >-
+    Commit the plan artefact only. Include in the squash-merge commit body the trailer
+    'Resolves- rec-027, rec-028, rec-296, rec-423, rec-425, rec-457, rec-468, rec-609, rec-610,
+    rec-613' (with a colon after Resolves) so rec-autoclose.yml provides a durable Layer-2 closure
+    edge. It checks current status before writing, so it is a no-op against recs this plan already
+    closed.
+  - >-
+    'Report- which recs closed with which verdict, the writer-allocated id of the governance-gap rec,
+    and the final open-Critical lane contents.'
+rollback: >-
+  Closure is reversible through the same governed path- bin/venv-python -m scripts.ops_data_portal
+  --update-rec rec-NNNN --status open, which appends a new SCD2 version rather than mutating history.
+  No repository state needs reverting because none is changed. The governance-gap rec from step 10
+  would be closed as relevance=duplicate rather than deleted -- there is no public delete_rec and
+  physical deletion is confined to Decision 70's bootstrap-record scope.
