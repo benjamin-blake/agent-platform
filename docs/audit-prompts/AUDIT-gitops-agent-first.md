@@ -41,7 +41,7 @@ adjudication and in what you find that is not listed.
 
 ## CANDIDATE OBSERVATIONS
 
-C1..C14 are the candidate set the adjudication protocol above operates on. Each is a neutral
+C1..C18 are the candidate set the adjudication protocol above operates on. Each is a neutral
 observation, verified on disk at compose time. **None is a defect until you trace it.** Several
 are expected to resolve to `rejected_candidates`. This list is not exhaustive -- findings outside
 it are welcome and are the clearest evidence the run added value.
@@ -136,9 +136,12 @@ are evidence. If you find the set still leans one way, say so in your Q1 prose.
 8. **A green `pr-conflict-signal` run does not mean a wake was delivered.** The poll step carries
    `continue-on-error: true`. Reason about the step's internal failure counter, not the run
    conclusion.
-9. **In a shallow clone, the oldest present commit reports every file it touches as newly added.**
-   `.git/shallow` lists the commits whose PARENTS have been grafted away; those commits are
-   themselves PRESENT, and the oldest of them is the oldest commit you can see. Running
+9. **In a shallow clone, the oldest commit reachable from a ref reports every file it touches as
+   newly added.** `.git/shallow` lists commits whose PARENTS have been grafted away. Those commits
+   exist as objects, but NOT all of them are reachable from a ref -- at recon `.git/shallow` held
+   two entries and only one was reachable from `origin/main`, so `cat .git/shallow` and
+   `git log --reverse origin/main` name DIFFERENT commits. The one that matters for any history
+   query is the oldest REACHABLE one: what `git log --reverse origin/main | head -1` returns. Running
    `git show --stat <that commit> -- <path>` returns a full-file insertion count regardless of the
    file's real history, because the diff is taken against nothing. Establish the boundary
    (`cat .git/shallow`, `git log --reverse origin/main`, `git cat-file -t <sha>`) before drawing
@@ -181,9 +184,21 @@ record any anchor that does not resolve in `meta.stale_anchors`.
     `scripts/checks/decisions/_baseline.py` -- `git show origin/main:<path>` baseline reads
   - `scripts/checks/roadmap/validate_fallback_reevaluation.py`,
     `scripts/checks/roadmap/validate_platform_roadmap.py`
+  - `scripts/verify_ci_workflow.py` (approximately line 152) -- asserts
+    `main-validate` checkout `fetch-depth == 2`, with the failure message citing "Decision 159:
+    HEAD~1 must resolve for the push-context diff base, squash-merge convention". This is the
+    guard that pins the squash assumption into CI; it is a direct Q1 cost input.
+  - `scripts/checks/contracts/validate_contract_drift.py` (merge-base; advisory SKIP when
+    `origin/main` is unreachable)
+  - `scripts/checks/roadmap/validate_plan_scope_closure.py` and `scripts/roadmap/plan_obligations.py`
+    (net-new plan set derived from a git diff)
+  - `scripts/checks/verification/validate_handoff_full_tier.py` (documented degrade to
+    `git diff HEAD`), `scripts/test_coverage_checker.py`
+  - `scripts/convergence_health/escalate.py`
   - `scripts/session/postflight.py`, `scripts/session/metrics.py`,
     `scripts/preflight/env_git.py`, `scripts/executor/postflight_gates.py`,
-    `scripts/executor/acceptance_lint.py`
+    `scripts/executor/acceptance_lint.py`, and the `scripts/executor/step_commit.py` /
+    `step_runner.py` / `ci_triage.py` / `run_summary.py` / `batch_compound.py` group
   Note that a `git show origin/main:<path>` CONTENT read and a `git log`/`merge-base` HISTORY
   read have different exposure to both merge strategy and clone depth. Classify each consumer by
   which kind it is before judging its coupling.
@@ -199,8 +214,11 @@ record any anchor that does not resolve in `meta.stale_anchors`.
   state: `.claude/hooks/session_start_sync_main.sh` (`git fetch origin main` +
   `git branch -f main origin/main`), `.claude/hooks/fresh_branch_base.py` (side-effecting
   branch-cut guard), `.claude/hooks/never_on_main.py` (block-on-main guard),
-  `.claude/hooks/session_start_commit_signing.py`, and AGENTS.md's rebase-phase distinction
-  (`AGENTS.md:210-218`). This is the only surface on which a clone-depth remedy could be
+  `.claude/hooks/session_start_commit_signing.py`, `.claude/hooks/edit_scope_guard.py`,
+  `.claude/hooks/session_start_precommit.sh` plus the `.pre-commit-config.yaml` chain it installs
+  (note `no-commit-to-branch --branch main` there against `never_on_main.py` -- two guards over
+  one property is a VD5 question, not automatically a defect), and AGENTS.md's rebase-phase distinction
+  (`AGENTS.md:210-212`) and its local-main-sync subsection (`AGENTS.md:214-217`). This is the only surface on which a clone-depth remedy could be
   implemented, which is why it is in scope.
 
 **Out of scope, one line each.** Terraform apply model and deploy channels (own contracts).
@@ -248,6 +266,14 @@ DEDUP DISCIPLINE depends on. Both are gitignored caches; never commit them.
   `meta.contract_notes` and proceed. **Never fix it** -- that breaches the write boundary.
 - IF the GitHub API is unavailable for the EMPIRICAL PASS: set `meta.contract_notes` accordingly,
   mark affected findings `evidence_kind: static`, proceed.
+- IF the pre-commit chain rewrites your deliverables on commit (it installs hooks including
+  `end-of-file-fixer` and `trailing-whitespace`): that is expected and harmless -- `git add` the
+  rewritten files and re-commit. If `detect-secrets` or the sensitive-identifier hook BLOCKS the
+  commit, do NOT disable the hook: remove the offending content from your deliverable (you are
+  writing an audit, not a secret), note it in `meta.contract_notes`, and re-commit.
+- IF `git push` or PR creation fails: retry up to 3 times. If it still fails, leave the work
+  committed locally, report the failure plainly in your final message, and STOP -- do not
+  improvise an alternative delivery route.
 
 ## NORTH STAR
 
@@ -285,12 +311,15 @@ exist. Verdict enum: `git-log-load-bearing` | `partially-load-bearing` | `git-lo
 **Q3 -- Premise tests.** Two premises underlie the request. Test both; report each explicitly.
 - **Q3a**: is the SHALLOW CLONE, rather than the merge strategy, the binding constraint on agent
   log recovery? Verdict enum: `shallow-clone-dominant` | `squash-dominant` | `both-material` |
-  `neither-material`. **If your verdict is anything other than `neither-material`, you must also
-  assess the obvious remedy**: can the development container deepen its own clone (a session-start
+  `neither-material`. **If your verdict is `shallow-clone-dominant` or `both-material`, you must also
+  assess the obvious remedy** (under `squash-dominant` or `neither-material` the remedy is not the
+  relevant lever -- say so in one line and move on): can the development container deepen its own clone (a session-start
   `git fetch --unshallow` or a bounded `--deepen`, which `ci_rca_lifecycle.py` already performs on
-  demand), what would that cost per session, and is the cost justified by what it recovers? State
-  this in the Q3a prose; file it as a finding if you judge it a gap. A `shallow-clone-dominant`
-  verdict with no remedy assessed is an incomplete answer.
+  demand), what would that cost per session, and is the cost justified by what it recovers? Assess this STATICALLY -- read
+  `ci_rca_lifecycle.py` and the S7 hooks and reason about cost. **Do NOT actually run
+  `git fetch --unshallow`**: it would destroy the shallow-boundary evidence trap 9 depends on and
+  can move your base mid-run. State the assessment in the Q3a prose; file it as a finding if you
+  judge it a gap. A `shallow-clone-dominant` verdict with no remedy assessed is incomplete.
 - **Q3b**: are agents in fact the sole consumer of this repository's git log? Consider the human
   who disposes of every PR, and that the repository is PUBLIC, with a public-content boundary
   clause in Decision 101 and the phrase "market the engineering, not the alpha" stated at
@@ -303,9 +332,12 @@ exist. Verdict enum: `git-log-load-bearing` | `partially-load-bearing` | `git-lo
 contract enforced?**
 For each S3 mechanism, determine whether it needs the current history shape or merely assumes it,
 and what it does when the assumption breaks. Separately assess whether the S2 contract is
-adequately enforced for something load-bearing code parses. Verdict enum for the question:
-`sufficient` | `partial` | `insufficient`. Record per-mechanism coupling as findings or in the
-rubric.
+adequately enforced for something load-bearing code parses. **This question carries TWO verdicts**
+-- record both in its `question_answers` entry: `verdict_coupling`:
+`mostly-essential` | `mixed` | `mostly-accidental`, rating the S3 set as a whole; and
+`verdict_enforcement`: `sufficient` | `partial` | `insufficient`, rating the S2 contract. The
+per-mechanism detail lives in the prose per the deep-dive routing above; a mechanism you judge
+defective is also a finding.
 
 **Q5 -- Is the wake-signal machinery reliable, and does the Q1 answer change its design?**
 The requester reports `pr-conflict-signal` as unreliable in practice. Trace the delivery path
@@ -335,6 +367,8 @@ enum value, the `surfaces` list it bears on (this is what the maturity rule read
 bearing on no surface takes `surfaces: []` AND must justify that in its `evidence` field -- an
 empty list is a claim about the repository, not a default), what it would look like in an agent-first form, and
 its evidence. This field is the SOLE source the maturity top tier reads.
+This question's `verdict` is NOT an enum: it is a one-sentence thesis (<= 40 words) stating what
+an agent-first repository should take, adapt, keep, drop, and invent.
 
 **Checklist**: trunk-based development; linear history; Conventional Commits; commit trailers as
 structured key-value metadata; `git notes` as detachable machine-readable annotation; PR-as-record
@@ -416,8 +450,10 @@ not `absent`.
 ## DEEP-DIVES
 
 **Where deep-dive output goes**: DD-A's per-mechanism breakage matrix is recorded in the Q4
-`question_answers` entry's `prose`, with any mechanism you judge defective ALSO filed as a
-finding. DD-B's outcome is recorded per the instruction in its own text. DD-C's trace is
+`question_answers` entry's `prose`, AND its bottom line -- what changing the strategy would cost
+-- is summarised in the Q1 prose beside DD-D's. Q1's answer must narrate BOTH sides of the
+ledger; a Q1 prose that carries DD-D's cost-of-keeping without DD-A's cost-of-changing (or the
+reverse) is a one-sided answer. Any mechanism you judge defective is ALSO filed as a finding. DD-B's outcome is recorded per the instruction in its own text. DD-C's trace is
 recorded in the Q5 `question_answers` entry's `prose`, with defects filed as findings. DD-D's
 status-quo cost trace is recorded in the Q1 `question_answers` entry's `prose` (alongside DD-B's
 drift summary), with any loss you judge material filed as a finding. A
@@ -456,6 +492,12 @@ session concludes from a comment that arrives before an omitted check finishes. 
 loss is observable given the step's `continue-on-error: true` and the script's internal failure
 counter and exit code. Include the case of a PR that is already conflicted at creation time,
 when no subsequent push to `main` occurs.
+
+Scope ruling for this deep-dive: enumerating PR-triggered checks may surface workflows belonging
+to the deploy/apply model, which SCOPE excludes. You MAY name such a workflow as evidence that
+`signal-green`'s gate list is incomplete -- that is a wake-signal finding. You may NOT assess or
+recommend changes to the deploy/apply model itself. If the only available remedy would change
+that model, file the finding against S6 and say so in `sequencing.note`.
 
 **DD-D -- The cost of the STATUS QUO.** *(feeds Q1, Q2, Q7 -- mandatory, same standing as DD-A)*
 DD-A traces what would BREAK if the merge strategy changed. This deep-dive traces the opposite
@@ -601,15 +643,21 @@ Decision 55/72/129 (forward-fix), `docs/contracts/instruction-architecture.yaml`
 Sample real artefacts; observed findings outrank static ones at equal severity. **Hard bounds --
 do NOT exceed:**
 
-- **<= 40** most recent `origin/main` commits: check subject-prefix conformance, `(#NNN)` presence,
-  and `Resolves:` trailer presence and well-formedness. Tag `evidence_kind: observed`.
+- **<= 50** most recent `origin/main` commits -- deliberately set to cover the ENTIRE shallow-clone
+  window, because the subject-prefix distribution and the single non-conforming subject in C4 can
+  only be adjudicated over the whole set. Check subject-prefix conformance, `(#NNN)` presence, and
+  `Resolves:` trailer presence and well-formedness. Tag `evidence_kind: observed`. If the clone
+  holds more than 50 commits, sample the 50 most recent and say so in `meta.contract_notes`.
 - **<= 15** most recent `pr-conflict-signal.yml` runs and **<= 15** most recent `ci.yml` runs, via
   the GitHub API. For the conflict signal, determine whether any run's step summary or log carries
   a `[PR-CONFLICT-SIGNAL] FAILURE` marker while the run conclusion is `success`.
 - **<= 10** merged PRs: check whether the PR body's `Resolves:` trailer reached the `main` commit
   body, and record the PR's commit count (this is the discriminator for the DD-B loss mode).
 - **<= 8** `docs/plans/PLAN-*.yaml` with non-empty `bundled_recommendations`: check whether the
-  named recommendations are closed.
+  named recommendations are closed. This is the efficacy sample for the `Resolves:` trailer path
+  -- it feeds DD-B and the Q4 `verdict_enforcement`. An unclosed rec is NOT automatically a defect:
+  distinguish trailer-never-emitted, trailer-emitted-but-unparsed, closed-by-manual-portal-call,
+  and plan-not-yet-implemented before concluding anything. Record the breakdown in the Q4 prose.
 
 "Outrank" is operational: where an observed finding and a static finding of equal severity
 compete for a slot in `top_improvements` or for `highest_leverage_change`, the observed one wins.
@@ -699,6 +747,10 @@ audit:
          methodology_version: 1,
          scope_surfaces: [S1, S2, S3, S4, S5, S6, S7],
          degraded_dedup: false, contract_notes: "", stale_anchors: []}
+  # contract_notes: a single string; when several degraded paths fire, join their notes with
+  #   "; " in the order they occurred. Never drop one to make room for another.
+  # stale_anchors: a list of objects, {anchor: "<as cited in the prompt>", found: "<what is
+  #   actually there, or 'absent'>"}. Anchors only -- non-anchor notes go in contract_notes.
   question_answers:
     - {q: Q1, verdict: keep-squash|switch-to-rebase-merge|switch-to-merge-commit|hybrid-by-pr-class,
        basis: [<finding ids>], prose: ""}
@@ -708,18 +760,25 @@ audit:
        basis: [], prose: ""}
     - {q: Q3b, verdict: agents-sole-consumer|agents-primary-humans-secondary|genuinely-dual-consumer,
        basis: [], prose: ""}
-    - {q: Q4, verdict: sufficient|partial|insufficient, basis: [], prose: ""}
+    - {q: Q4, verdict_coupling: mostly-essential|mixed|mostly-accidental,
+       verdict_enforcement: sufficient|partial|insufficient, basis: [], prose: ""}
     - {q: Q5, verdict: reliable|reliable-but-unobservable|unreliable-bounded|unreliable-unbounded,
        basis: [], prose: ""}
-    - {q: Q6, verdict: <one-line thesis>, basis: [], prose: "",
-       industry_adaptation:
-         - {practice: <checklist entry or newly named structure>,
-            rating: adopt-as-is|adapt-for-agents|retain-for-human-reader|discard-human-ergonomic|invent-novel-structure|already-in-place|n/a,
-            surfaces: [S1..S7],
-            agent_first_form: "", evidence: ""}}
+    - q: Q6                      # NOTE: block style is REQUIRED here -- a flow mapping cannot
+      verdict: ""                #       contain a block sequence, and industry_adaptation is one.
+      basis: []                  #       verdict: a one-sentence thesis, <= 40 words, not an enum.
+      prose: ""
+      industry_adaptation:
+        - practice: <checklist entry or newly named structure>
+          rating: adopt-as-is|adapt-for-agents|retain-for-human-reader|discard-human-ergonomic|invent-novel-structure|already-in-place|n/a
+          surfaces: [S1, S3]     # surfaces this practice bears on; [] requires justification
+          agent_first_form: ""
+          evidence: ""
     - {q: Q7, verdict: git-log-sufficient-substitute|git-log-sufficient-if-commit-contract-changes|complementary-keep-both|neither-suitable-replace-both,
        basis: [], prose: ""}
-    - {q: Q8, answers: [{question: "", answer: "", basis: []}]}
+    - q: Q8                      # block style for the same reason
+      answers:
+        - {question: "", answer: "", basis: []}
   merge_strategy_decision:
     squash: {verdict: recommended|viable|rejected, mechanism: "", what_changes: "", cost: "",
              rationale: "", confidence: CONFIRMED|HYPOTHESIS}
@@ -735,19 +794,32 @@ audit:
     - {surface: S1, dimension: VD1, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
   findings:
-    - {id: GITOPS-01, candidate_id: C1..C18|null, surface: [S1..S7]|shared,
-       question: [Q1|Q2|Q3a|Q3b|Q4|Q5|Q6|Q7|Q8], dimension: [VD1..VD6],
-       title: "", evidence: "file:line|item-id", evidence_kind: static|observed,
-       current_behavior: "", ideal_behavior: "", gap: "",
-       compensating_controls_considered: "",
-       change_type: add|rescope|enforce|unify|persist|clarify|retune_gate|switch_mechanism,
-       proposed_change: "", acceptance: "",
-       severity: critical|high|medium|low, severity_rationale: "",
-       confidence: CONFIRMED|HYPOTHESIS,
-       roadmap_crossref: {classification: novel|planned-insufficient|planned-unbuilt,
-                          item_ids: [], dedup_search_terms: [], dedup_hit_count: 0, note: ""},
-       effort: XS|S|M|L, depends_on: [],
-       sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}}
+    - id: GITOPS-01              # block style; the list-valued fields below need it
+      candidate_id: C1           # one of C1..C18, or null if you discovered this yourself
+      surface: [S2, S3]          # LIST. one or more of S1..S7, or exactly [shared]
+      question: [Q1, Q4]         # LIST. from Q1,Q2,Q3a,Q3b,Q4,Q5,Q6,Q7,Q8 -- never a bare Q3
+      dimension: [VD2]           # LIST. one or more of VD1..VD6
+      title: ""
+      evidence: ""               # "file:line", an item-id, or for evidence_kind: observed a
+                                 # commit sha / workflow run id / PR number -- any of these
+      evidence_kind: static|observed
+      current_behavior: ""
+      ideal_behavior: ""
+      gap: ""
+      compensating_controls_considered: ""
+      change_type: add|rescope|enforce|unify|persist|clarify|retune_gate|switch_mechanism
+      proposed_change: ""
+      acceptance: ""
+      severity: critical|high|medium|low
+      severity_rationale: ""
+      confidence: CONFIRMED|HYPOTHESIS
+      roadmap_crossref: {classification: novel|planned-insufficient|planned-unbuilt,
+                         item_ids: [], dedup_search_terms: [], dedup_hit_count: 0, note: ""}
+      effort: XS|S|M|L           # XS <1h, S <halfday, M <2d, L >2d -- of the FIX, not the audit
+      depends_on: []
+      sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}
+                                 # safe_to_queue_now: false iff this fix must wait on another
+                                 # finding or roadmap item named in blocked_behind
   rejected_candidates:
     - {candidate_id: C1..C18|null, candidate: "", why_dismissed: "",
        compensating_control: "", control_property_match: "", decision_or_item_id: ""}
@@ -793,8 +865,11 @@ state why the control would FAIL if the defect were real.
 Anything less is `HYPOTHESIS`.
 
 Field shapes, pinned: `surface`, `question`, and `dimension` on a finding are LISTS -- a finding
-may legitimately span several (C5 spans S2 and S3; DD-B feeds Q1 and Q4). Use the literal string
-`shared` as the sole element of `surface` for a cross-surface finding. Legal `question` values are
+may legitimately span several (C5 spans S2 and S3; DD-B feeds Q1 and Q4). A finding that bears on several surfaces lists
+them all (`surface: [S2, S3]`) and counts toward EACH listed surface's maturity tally. Reserve
+the literal `[shared]` for a finding that genuinely belongs to no single surface; a `[shared]`
+finding counts toward no surface's maturity, so do not use it as a shortcut for a multi-surface
+finding. Legal `question` values are
 `Q1, Q2, Q3a, Q3b, Q4, Q5, Q6, Q7, Q8` -- note `Q3a`/`Q3b`, never a bare `Q3`.
 `candidate_id` names the CANDIDATE OBSERVATIONS entry a finding or rejection came from, or `null`
 for anything you discovered yourself. Every one of C1..C18 MUST appear exactly once across
@@ -831,7 +906,12 @@ including `discard-human-ergonomic` and `retain-for-human-reader`. Only an entry
 the field entirely, or one bearing on the surface with no rating, is unassessed.
 
 - **frontier** = 0 critical AND 0 high findings on that surface, AND every
-  `industry_adaptation` entry bearing on that surface is assessed per the rule above.
+  `industry_adaptation` entry bearing on that surface is assessed per the rule above, AND that
+  surface appears in the `surfaces` list of at least THREE `industry_adaptation` entries. The
+  three-entry floor exists because you author the `surfaces` lists yourself: without it, a surface
+  reaches the top tier by being assigned to nothing. If a surface genuinely bears on fewer than
+  three practices, it cannot be `frontier` -- cap it at `strong` and say why in
+  `per_surface_assessment[].strengths`.
 - **strong** = 0 critical AND <= 1 high.
 - **solid** = <= 1 critical AND <= 3 high.
 - **nascent** = otherwise.
@@ -869,12 +949,19 @@ Compute once, write twice; if they disagree the deliverable is invalid.
    audit(gitops-agent-first): git-ops agent-first audit deliverables
    ```
    Then `git push -u origin HEAD`.
-5. Open the PR via `mcp__github__create_pull_request` (base `main`, ready for review, NOT a
-   draft), title:
+5. Open the PR via `mcp__github__create_pull_request` with `owner` and `repo` taken from the
+   `origin` remote (`git remote get-url origin`), `base: main`, `head`: your branch, ready for
+   review, NOT a draft. Title:
    `audit(gitops-agent-first): git-ops procedures for an agent-first repo`
    Body: a 2-3 sentence lede plus the `summary` block in a yaml fence.
 6. **END THE TURN.** Do not poll, do not merge, do not subscribe, do not self-approve. The human
    disposes of the PR.
+
+**Precedence.** This section OVERRIDES the repository's ambient git-ops instructions wherever the
+two differ -- specifically the `claude/*` session-branch rule and the subscribe-then-wait-for-CI
+flow. Those exist for change PRs that must merge; this is a read-only audit deliverable the human
+disposes of. Follow this section, not the ambient one, and do not treat the difference as a
+finding.
 
 ## GUARDRAILS
 
