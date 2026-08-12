@@ -138,7 +138,11 @@ scope:
     purpose: Path-shaped matcher acceptance + the whitespace-prose rejection regression.
   - file: tests/checks/contracts/test__ratchet.py
     action: Create
-    purpose: Decision 131 mirror test for the new _ratchet.py module -- pins, direction, census binding.
+    purpose: >-
+      Decision 131 mirror test for the new _ratchet.py module -- pins, direction, census binding.
+      MIGRATE TestRatchetSpecAndCensus here from test__population.py alongside the source move (the
+      mirror rule wants the test beside its module, and leaving it in place while adding the new
+      matcher tests would put test__population.py near 473/500).
   - file: tests/checks/contracts/validate_contract_drift/test_evaluator_resolution.py
     action: Modify
     purpose: Resolution of the newly-declarable {check:} evaluators; enforcement-route validation paths.
@@ -319,7 +323,10 @@ test_obligations:
     test_selector: tests/checks/contracts/test__population.py::TestModuleContainsLiteral::test_prose_literal_with_whitespace_is_rejected
     red_green_expectation: red before (no path-shaped support at all), green after
   - source: scripts/checks/contracts/_ratchet.py
-    behavior: The gate fails when census.grandfathered exceeds ratchet.grandfathered_max, and the two new counter pins guard their own direction.
+    behavior: >-
+      The gate fails on ANY inequality between a pin and its live census bucket -- BOTH directions:
+      pin above census (stale slack left behind by a landed enforcer) and pin below census. All
+      three pins are bound this way. Equality, never `>=`.
     verification_step: 4
     test_selector: tests/checks/contracts/test__ratchet.py::TestPinBinding::test_census_over_pin_fails
     red_green_expectation: red before (module absent; pin never compared to census), green after
@@ -344,10 +351,15 @@ test_obligations:
       (asserts `failed == []`) and ::test_stock_ceiling_breach_and_per_entry_warning_can_coexist.
       Their going red IS the flip working; do not read them as evidence the flip is wrong.
       FULL BLAST RADIUS: renaming `_per_entry_cap_warnings` breaks the MODULE-LEVEL import at
-      tests/checks/decisions/test_validate_decisions_size.py:16-23, which collection-fails the
-      whole module -- 11 tests, not 2. Of those, 2 INVERT (above) and 9 merely RETARGET onto the
-      new name with their semantics intact (6 in TestPerEntryCapWarningsPureFunction, 3 more in
-      TestPerEntryCapThroughRegisteredCheck). Expect a collection error first, not 2 failures.
+      tests/checks/decisions/test_validate_decisions_size.py:16-23, which collection-fails ALL 37
+      tests the module collects -- expect a collection error first, not 2 failures. The repair is
+      one import line. The EDIT SURFACE is 11 cap-related tests in three distinct kinds: 2 INVERT
+      (above); 6 in TestPerEntryCapWarningsPureFunction merely RETARGET onto the new name with
+      semantics intact; and 3 more -- test_over_cap_historical_entry_produces_no_per_entry_output,
+      test_boundary_at_exactly_cap_is_silent, test_unreachable_baseline_advisory_skips_per_entry_cap
+      -- assert on the "WARN" output token or `failed == []` and would keep passing VACUOUSLY after
+      the flip. Re-anchor those three on the new failure surface; that is the same schema-shadowing
+      failure mode caught for test_census_accounting.py, not a simple rename.
 constraints:
   - >-
     NO new numbered Decision. Decisions 167 (clause 3) and 168 (reversal (b), which names this
@@ -380,7 +392,7 @@ context:
     "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND (122 of 122 triaged,
     no BLOCK). CITE: Decision 168, Decision 167, Decision 165, Decision 166, Decision 150,
     Decision 86, Decision 118, Decision 169, Decision 163, Decision 48.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)"
   - >-
     Scout flag D168 WARN (resolved in scope): 5 router-registered files have topics that differ
     from their basename -- inference-provider -> model-routing-config, instruction-architecture ->
@@ -539,9 +551,13 @@ execution_steps:
     docs/contracts/contract-population.yaml -- amend evaluator_kinds.check (path-shaped literals),
     agent_surface (Layer-1 ambient instruction files admitted), none_grandfathered (the route
     grammar, now required), grandfather_only_forms.counters_open_at_zero (superseded by the three
-    pins), the ratchet block (grandfathered_max 21 -> 19 plus the two new pins and the
-    census-binding rule), and the exit-criteria-ledger exception. Add the amendment_log entry Pass 2
-    requires -- the parsed dict changes, so an omitted entry FAILS the gate.
+    pins), the ratchet block (grandfathered_max 21 -> 19, the two new pins, the census-binding
+    rule, and the RAISABILITY ASYMMETRY note in `raise_mechanism` prose -- see the context entry),
+    and the exit-criteria-ledger exception. While in the ratchet block, also correct its stale
+    header comment (lines 151-152): it reads "37 depth-1 *.yaml files ... = 16 ritual + 21
+    non-ritual"; the tree is now 40 = 16 ritual + 3 declared + 21 grandfathered, and becomes
+    40 = 16 + 5 + 19 after this sweep. Add the amendment_log entry Pass 2 requires -- the parsed
+    dict changes, so an omitted entry FAILS the gate.
   - >-
     docs/contracts/decision-entry.yaml -- flip size_governance.per_entry_size_norm.tier to hard-fail
     and cite Decision 167 clause 3 as the authorizing pre-commitment.
