@@ -64,15 +64,23 @@ acceptance_criteria:
     acknowledging the dead-by-guard residue (.github/agents/schedule.yaml provider entries, retained
     by Decision 116 as T4.3-owned).
   - >-
-    Every FILESYSTEM- OR PROJECTION-CHECKABLE clause in a durable resolution string is machine-verified
-    by a Verification Plan step -- specifically: the four absent targets (step 4); the Decision 55
-    cancellation text, the absent --ci flag, the absent dq-validate-integration branch, the three
-    Copilot entry points, the RetiredProviderError guard, rec-607's closed status and rec-608's
-    recorded absence (step 5); the two live executor defect sites in postflight_gates.py and
-    postflight_gitops.py (step 6); and both satisfied-verdict oracles (steps 2 and 3). Clauses that
-    are interpretive rather than checkable -- the T4.3/T5.6 forward addresses, decision attributions,
-    and architectural framing -- are NOT claimed to be machine-verified; they were verified by reading
-    the cited decisions and roadmap items at planning time.
+    These resolution-string clauses are MACHINE-VERIFIED by a Verification Plan step: the four absent
+    targets (step 4); the Decision 55 cancellation text, the absent --ci flag, the absent
+    dq-validate-integration branch, the three Copilot entry points, the RetiredProviderError guard,
+    rec-607's closed status and rec-608's recorded absence (step 5); BOTH live review-gate returns in
+    postflight_gates.py plus cleanup_after_merge's git checkout main in postflight_gitops.py and
+    plan.py's intact surface (step 6); and both satisfied-verdict oracles (steps 2 and 3).
+  - >-
+    Three further classes are explicitly NOT claimed as machine-verified, and the plan does not
+    pretend otherwise. (a) INTERPRETIVE clauses -- the T4.3 / T5.6 forward addresses, decision
+    attributions, architectural framing -- verified by reading the cited decisions and roadmap items
+    at planning time. (b) CHECKABLE BUT DELIBERATELY UNCHECKED -- rec-028's six schedule.yaml
+    provider entries and the COPILOT_MODEL_* routing under scripts/llm/, rec-027's commit-6a2f7c0
+    provenance, rec-609's scripts/sync/ops.py successor path, and rec-457's overwrite_jsonl call
+    site; each was verified by inspection at planning time, and each is colour on an already-grounded
+    verdict rather than load-bearing proof. (c) The commit-6a2f7c0 provenance specifically is NOT
+    independently verifiable here -- this is a shallow clone (50 commits) -- so it is asserted on
+    Decision 121's authority, not on a git probe of this session's making.
   - >-
     After the rec-autoclose.yml run for the squash-merge commit reports status=completed (not merely
     after the merge lands), all ten resolution strings still contain their relevance= verdict -- i.e.
@@ -232,7 +240,7 @@ verification_plan:
     command: >-
       grep -q 'Code review timed out (300s) -- treating as passed'
       scripts/executor/postflight_gates.py &&
-      grep -q 'treating as passed' scripts/executor/postflight_gates.py &&
+      grep -q 'Code review call failed or returned empty' scripts/executor/postflight_gates.py &&
       grep -q 'def cleanup_after_merge' scripts/executor/postflight_gitops.py &&
       grep -A12 'def cleanup_after_merge' scripts/executor/postflight_gitops.py
       | grep -q '"checkout", "main"' &&
@@ -375,7 +383,7 @@ verification_plan:
     expected: >-
       Five confirmation lines, one per rec (rec-028, rec-609, rec-468, rec-027, rec-610); exit 0.
     fix_if: >-
-      Same failure semantics as step 7. If a resolution string is rejected on length or content, do NOT
+      Same failure semantics as step 8. If a resolution string is rejected on length or content, do NOT
       truncate away the evidence -- the evidence IS the closure proof under Decision 103; shorten the
       framing prose instead.
   - step: 10
@@ -425,7 +433,7 @@ verification_plan:
       PLAN-critical-lane-triage."
     expected: >-
       Three confirmation lines, one per rec (rec-296, rec-423, rec-425); exit 0.
-    fix_if: Same failure semantics as step 7.
+    fix_if: Same failure semantics as step 8.
   - step: 11
     phase: post-deploy
     action: >-
@@ -547,9 +555,11 @@ verification_plan:
     fix_if: >-
       If the rec-autoclose run for the merge SHA is still queued or in_progress, this step is NOT
       ready -- wait for completion rather than recording a pass, since a pre-clobber sample is
-      indistinguishable from a genuine survival. If the workflow never appears for that SHA (no
-      trailer parsed, or the workflow was skipped), record that and treat the step as satisfied: no
-      run means no clobber.
+      indistinguishable from a genuine survival. "No run listed for that SHA" is NOT by itself a pass:
+      rec-autoclose triggers on every push to main and this plan does emit the trailer, so absence
+      almost always means the run has not started yet, not that it will never run. Re-query. Only
+      conclude "no run means no clobber" after the push is confirmed on main AND no run has appeared
+      for a sustained interval -- and record that reasoning explicitly rather than defaulting to it.
       Any id in the clobbered list means rec-autoclose overwrote that rec's proof text. Recovery is
       simple and lossless -- re-issue that rec's exact --update-rec command from step 8, 9 or 10. The
       write appends a new SCD2 version, so the boilerplate becomes history rather than being erased.
@@ -572,7 +582,7 @@ constraints:
     connectivity.
   - >-
     Recommendation ids are allocated BY THE WRITER atomically with the insert (Decision 84 I-2). Step
-    10's rec id cannot be predicted; step 12 resolves it by title.
+    11's rec id cannot be predicted; step 13 resolves it by title.
   - >-
     Decision 103 auto-close applies to rec-457 only. The other nine are semantic verdicts whose
     close_proposed disposition is discharged by explicit human direction recorded in this plan -- not by
@@ -618,6 +628,18 @@ context:
     update_rec call. The ordering requirement now lives in the step's action and fix_if, keyed on the
     GitHub MCP run status, because the gh CLI is unavailable in this environment and a bash sleep-poll
     is harness-forbidden.
+  - >-
+    Dropping the Resolves- trailer entirely was weighed as the alternative to guarding it, and
+    REJECTED. It is the one fix that removes the race outright rather than detecting it, and its cost
+    here is genuinely near-zero -- steps 8-10 already close all ten with curated proof, so the
+    trailer's only mechanical outcomes are a no-op or the clobber. It is retained anyway because
+    AGENTS.md states the convention unconditionally for a non-empty bundled_recommendations list, and
+    a plan is the wrong instrument for a silent, unilateral exception to a stated repo convention.
+    The honest framing- this is a convention-versus-mechanism tension, not a free choice, and the
+    durable fix belongs in rec-autoclose.yml (whose idempotency guard reads a gitignored cache that is
+    always absent on a cold runner). Step 14's fix_if already directs filing that rec on any clobber;
+    if the operator would rather cut the race than guard it, dropping the trailer is a one-line edit
+    to execution_steps and costs this plan nothing.
   - >-
     KNOWN GAP, deliberately not fixed here (out of the human's stated portal-only scope, surfaced for
     a follow-on rec)- validate_handoff_full_tier's matcher splits a VP command on &&/||/;/newline and
@@ -742,7 +764,7 @@ execution_steps:
     mandatory- acceptance criterion 7 is not satisfiable before the squash-merge exists.
   - >-
     'Report- which recs closed with which verdict, the writer-allocated id of the governance-gap rec,
-    the final open-Critical lane contents, and the step-13 post-merge resolution-survival result.'
+    the final open-Critical lane contents, and the step-14 post-merge resolution-survival result.'
 rollback: >-
   Closure is reversible through the same governed path- bin/venv-python -m scripts.ops_data_portal
   --update-rec rec-NNNN --status open, which appends a new SCD2 version rather than mutating history.
