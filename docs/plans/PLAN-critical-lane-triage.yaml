@@ -62,15 +62,27 @@ acceptance_criteria:
     No resolution string asserts that Copilot content is absent from the tree. Both Copilot closures
     are grounded on the three verified-absent executable entry points and carry an explicit scope note
     acknowledging the dead-by-guard residue (.github/agents/schedule.yaml provider entries, retained
-    by Decision 116 as T4.3-owned). Every other clause asserted in a durable resolution string is
-    machine-verified by a Verification Plan step.
+    by Decision 116 as T4.3-owned).
   - >-
-    After the squash-merge lands, all ten resolution strings still contain their relevance= verdict --
-    i.e. rec-autoclose.yml did not overwrite the curated proof text with its boilerplate.
+    Every FILESYSTEM- OR PROJECTION-CHECKABLE clause in a durable resolution string is machine-verified
+    by a Verification Plan step -- specifically: the four absent targets (step 4); the Decision 55
+    cancellation text, the absent --ci flag, the absent dq-validate-integration branch, the three
+    Copilot entry points, the RetiredProviderError guard, rec-607's closed status and rec-608's
+    recorded absence (step 5); the two live executor defect sites in postflight_gates.py and
+    postflight_gitops.py (step 6); and both satisfied-verdict oracles (steps 2 and 3). Clauses that
+    are interpretive rather than checkable -- the T4.3/T5.6 forward addresses, decision attributions,
+    and architectural framing -- are NOT claimed to be machine-verified; they were verified by reading
+    the cited decisions and roadmap items at planning time.
   - >-
-    The resolution strings for rec-296, rec-423 and rec-425 each name the still-live defect location,
-    the CD.17 / T4.2 reversal condition, and an explicit re-file instruction, so the diagnosis carries
-    a forward address rather than being discarded at close.
+    After the rec-autoclose.yml run for the squash-merge commit reports status=completed (not merely
+    after the merge lands), all ten resolution strings still contain their relevance= verdict -- i.e.
+    the workflow did not overwrite the curated proof text with its boilerplate.
+  - >-
+    The resolution strings for rec-296, rec-423 and rec-425 each name the CURRENT defect location
+    (postflight_gates.py's review-gate returns and postflight_gitops.py:cleanup_after_merge for
+    rec-296 and rec-423 respectively, plan.py for rec-425 -- NOT the decomposed postflight.py facade,
+    which now defines only finalize()), the CD.17 / T4.2 reversal condition, and an explicit re-file
+    instruction, so the diagnosis carries a forward address rather than being discarded at close.
   - >-
     A new open recommendation exists against scripts/ops_portal/cli.py recording the governance gap
     that an agent can close or demote a Critical rec through the raw --update-rec CLI with no machine
@@ -188,7 +200,8 @@ verification_plan:
       pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
       by={r['id']: r for r in rows};
       assert by.get('rec-607',{}).get('status')=='closed', 'rec-607 not closed';
-      print('rec-607 closed')" &&
+      assert 'rec-608' not in by, 'rec-608 present -- Decision 70 records it as deleted';
+      print('rec-607 closed; rec-608 absent as Decision 70 records')" &&
       echo "all resolution-string assertions verified"
     expected: >-
       Prints "rec-607 closed" then "all resolution-string assertions verified", exit 0.
@@ -204,11 +217,43 @@ verification_plan:
       left in place as T4.3-owned.
     graduation: waive
     graduation_waiver_reason: >-
-      Both halves are already true on origin/main, so like step 4 this is tautological under the
-      differential admission gate and would not be admitted. Pinning a Decision's exact prose in the
-      verification registry would additionally make routine editorial rewording fail CI, which is a
-      false-positive generator rather than a guard.
+      All seven assertions in this chain are already true on origin/main, so like step 4 the step is
+      tautological under the differential admission gate and would not be admitted. Pinning a
+      Decision's exact prose in the verification registry would additionally make routine editorial
+      rewording fail CI, which is a false-positive generator rather than a guard.
   - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the two executor defects rec-296 and rec-423 describe are STILL LIVE at the addresses
+      their resolution strings name. This step exists because the original strings asserted only that
+      postflight.py exists -- but postflight.py was decomposed and now defines just finalize(), so
+      facade existence no longer implies the defect survives. Closing a rec as latent-but-real
+      requires evidence the defect is real, not that its former file still has the same name.
+    command: >-
+      grep -q 'Code review timed out (300s) -- treating as passed'
+      scripts/executor/postflight_gates.py &&
+      grep -q 'treating as passed' scripts/executor/postflight_gates.py &&
+      grep -q 'def cleanup_after_merge' scripts/executor/postflight_gitops.py &&
+      grep -A12 'def cleanup_after_merge' scripts/executor/postflight_gitops.py
+      | grep -q '"checkout", "main"' &&
+      grep -q 'def get_latest_plan' scripts/executor/plan.py &&
+      echo "rec-296 / rec-423 defect sites live; rec-425 target intact"
+    expected: >-
+      Prints "rec-296 / rec-423 defect sites live; rec-425 target intact" and exits 0.
+    fix_if: >-
+      A miss on the postflight_gates.py messages means the review-gate collapse was fixed or moved --
+      re-locate it before closing rec-296, and if it is genuinely fixed the verdict becomes satisfied,
+      not blocked_by_decision. A miss on cleanup_after_merge's checkout means rec-423's coupling was
+      fixed -- same re-adjudication. A miss on plan.py means it was decomposed like postflight.py;
+      re-locate rec-425's surface and update its resolution before writing.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as grep_count, but tautological under the differential admission gate for the
+      same reason as steps 4 and 5 -- all five assertions already hold on origin/main and this plan
+      changes no code, so the check passes identically before and after. It would also be an actively
+      harmful standing guard: it asserts that two known defects REMAIN, so it would fail the day
+      someone fixes them, penalising the repair.
+  - step: 7
     phase: pre-deploy
     action: >-
       Pre-handoff full-tier validation. Required on every plan declaring handoff_policy, docs-only
@@ -220,7 +265,7 @@ verification_plan:
       timeout, treat the run as blocked (timeout_disposition), resume later and rerun the full tier
       from the start -- never downgrade to --pre to get past it.
     graduation: not-applicable
-  - step: 7
+  - step: 8
     phase: post-deploy
     action: >-
       Close the two deterministically-satisfied recs. rec-457 is the single Decision 103
@@ -237,8 +282,15 @@ verification_plan:
       18/18 pass. RESIDUAL, NOT THIS REC: the implemented write still transits
       scripts/s3_log_store.py overwrite_jsonl -> ops.write('ops_priority_queue', ...) on the
       OpsWriter/Iceberg staging path while all queue readers already serve DuckLake, so curator output
-      lands where nothing reads. That producer repoint is tier_item T2.26's scope (see the AGENTS.md
-      rec-curator caveat), not a defect in this dispatch. Closed by PLAN-critical-lane-triage." &&
+      lands where nothing reads. That producer repoint is owned by tier_item T4.3 (Priority-queue
+      producer repoint onto the DuckLake boundary), whose files_in_scope names scripts/s3_log_store.py
+      and whose open criterion c1 is precisely 'no OpsWriter/Iceberg staging write survives on the
+      producer path'. T2.26 is the ADJACENT item -- it migrated the ops_priority_queue table itself to
+      DuckLake, which is what created the producer/reader split; it does not own the producer repoint.
+      Note that AGENTS.md's rec-curator caveat still attributes the repoint to T2.26; that line
+      predates the RMAP-07 split and is stale (PROJECT_CONTEXT.md records the correct chain, 'T2.26
+      migrated ops queue substrate -> T4.3 priority-queue producer repoint to DuckLake'). Closed by
+      PLAN-critical-lane-triage." &&
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-613 --status closed
       --execution_result already_implemented --resolution "relevance=satisfied (Decision 103). The
       cited module tests/test_execute_recommendation.py no longer exists -- it was decomposed into the
@@ -255,7 +307,7 @@ verification_plan:
       re-file. A credential or transport failure fails loudly at the call site by design (Decision 84
       I-4); there is no outbox, so restore connectivity and re-run. Never hand-edit
       logs/.recommendations-log.jsonl to simulate the write -- a read cache is never a write source.
-  - step: 8
+  - step: 9
     phase: post-deploy
     action: >-
       Close the three stale_target and two superseded recs -- the substrate-death cohort. Each cites
@@ -282,8 +334,10 @@ verification_plan:
       target-absence). Target scripts/sync_ops.py does not exist; its successor is scripts/sync/ops.py.
       The defect itself is architecturally void: the ops_recommendations_current Athena view whose
       string-typed list columns broke Pydantic validation was retired when ops_recommendations cut over
-      to the DuckLake closed reader/writer boundary (Decision 81 cl.7 / Decision 84 I-1, T2.19). There
-      is no Athena path and no rollback flag left to fix. Closed by PLAN-critical-lane-triage." &&
+      to the DuckLake closed reader/writer boundary (Decision 84 I-1 -- ops_recommendations is
+      DuckLake-sole with no Athena path and no rollback flag, the OPS_STORAGE_BACKEND flag having been
+      retired). There is nothing left to fix on the surface this rec describes. Closed by
+      PLAN-critical-lane-triage." &&
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-468 --status closed
       --execution_result manual --resolution "relevance=stale_target (Decision 103, deterministic
       target-absence), corroborated by explicit cancellation. Target scripts/executor/rescue.py does
@@ -301,9 +355,8 @@ verification_plan:
       copilot-sdk provider and deleted the client plus its dispatch branch; Decision 117 dropped the
       copilot_wrapper boundary rows as dead; Decision 121 records the copilot_wrapper.py deletion
       (commit 6a2f7c0, 'retire Copilot-SDK residue') and retires the cli-json-output contract that
-      documented the very CLI-JSON boundary this experiment would characterise. The live CLI-JSON
-      parser today targets a different vendor schema entirely, so even a re-run would characterise
-      something other than what was asked. SCOPE NOTE: this is NOT a claim that the string 'copilot'
+      documented the very CLI-JSON boundary this experiment would characterise. SCOPE NOTE: this is
+      NOT a claim that the string 'copilot'
       is absent from the tree -- dead-by-guard residue remains (see rec-028's resolution); the claim
       is that the three executable entry points the experiment needs are gone. NOT CD.28/dec-122 --
       that is the Bedrock-to-LiteLLM inference decision and mentions Copilot nowhere. Closed by
@@ -314,20 +367,18 @@ verification_plan:
       agent/dq-validate-integration, which no longer exists on origin. Its acceptance command is
       unrunnable twice over -- a Windows .venv/Scripts/python.exe path, and a --ci flag that
       scripts/validate.py no longer exposes (the two-tier presubmit model is --pre plus the full tier,
-      Decision 73). Of its three cited blockers: rec-607 is verified closed in the current projection,
-      and rec-609 is closed in this same sweep as stale_target. The third, rec-608, is ABSENT from the
-      current projection entirely -- rec-613's context asserts it was closed inline by
-      PLAN-dq-validate-integration, but that is second-hand and the warehouse cannot corroborate it,
-      so it is recorded here as unverified rather than claimed as resolved. That does not change the
-      disposition: this rec's own acceptance command is unrunnable and its branch is gone, so nothing
-      actionable survives regardless of rec-608's fate. Closed by PLAN-critical-lane-triage."
+      Decision 73). All three cited blockers are accounted for: rec-607 is verified closed in the
+      current projection; rec-609 is closed in this same sweep as stale_target; and rec-608 is ABSENT
+      from the projection by design -- Decision 70 names it as one of five hollow bootstrap records
+      physically deleted from the Iceberg table on 2026-05-09, so its absence is a recorded deletion,
+      not missing data. Nothing actionable survives. Closed by PLAN-critical-lane-triage."
     expected: >-
       Five confirmation lines, one per rec (rec-028, rec-609, rec-468, rec-027, rec-610); exit 0.
     fix_if: >-
       Same failure semantics as step 7. If a resolution string is rejected on length or content, do NOT
       truncate away the evidence -- the evidence IS the closure proof under Decision 103; shorten the
       framing prose instead.
-  - step: 9
+  - step: 10
     phase: post-deploy
     action: >-
       Close the three blocked_by_decision executor recs. Each resolution carries the forward address --
@@ -339,20 +390,28 @@ verification_plan:
       close_proposed verdict, closed on explicit human direction in the PLAN-critical-lane-triage
       planning session). The autonomous executor is frozen: Decision 67's STRATEGIC-plan clause is
       Active and its reversal is gated on CD.17, which is state=pending in ROADMAP-PLATFORM.yaml.
-      scripts/executor/postflight.py still exists, so the defect is LATENT, NOT FIXED -- merge gating
-      still collapses review_unavailable into review_clean, treating a code-review timeout as a clean
-      review. FORWARD ADDRESS: tier_item T5.6 (Frozen executor decommission / disposition) owns
-      scripts/executor/ and its criterion c1 is the harvest/retire inventory. If that inventory
-      classifies postflight.py as harvest-into-substrate rather than retire, re-file this defect
-      against the harvesting owner. Do not reopen this rec -- file a fresh one. Closed by
-      PLAN-critical-lane-triage." &&
+      DEFECT IS LATENT, NOT FIXED, and it has MOVED since this rec was filed: postflight.py was
+      decomposed and now defines only finalize(). The review gate now lives in
+      scripts/executor/postflight_gates.py, which returns the tuple (True, 0.0, []) on
+      subprocess.TimeoutExpired ('[REVIEW] Code review timed out (300s) -- treating as passed') and
+      returns (True, cost, []) again when the review call fails or comes back empty. Both are the same
+      passed-with-no-findings shape a genuinely clean review returns, so the caller still cannot
+      distinguish review_unavailable from review_clean -- exactly the collapse this rec describes, at
+      a new address. Locate by the logged message, not by line number. FORWARD ADDRESS: tier_item T5.6
+      (Frozen executor decommission / disposition) owns scripts/executor/ and its criterion c1 is the
+      harvest/retire inventory. If that inventory classifies postflight_gates.py as
+      harvest-into-substrate rather than retire, re-file this defect against the harvesting owner. Do
+      not reopen this rec -- file a fresh one. Closed by PLAN-critical-lane-triage." &&
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-423 --status closed
       --execution_result manual --resolution "relevance=blocked_by_decision (Decision 103;
       close_proposed verdict, closed on explicit human direction). Executor frozen per Decision 67 /
-      CD.17 pending. scripts/executor/postflight.py still exists, so the defect is LATENT, NOT FIXED --
-      cleanup_after_merge() still forces git checkout main and performs durable rec-status writeback in
-      that coupled path, so a merge that succeeded remotely can still fail locally when main is checked
-      out in another worktree. FORWARD ADDRESS: same as rec-296 -- T5.6 criterion c1's harvest/retire
+      CD.17 pending. DEFECT IS LATENT, NOT FIXED, and it has MOVED since this rec was filed:
+      postflight.py was decomposed, and cleanup_after_merge() now lives at
+      scripts/executor/postflight_gitops.py:219, where it still runs git checkout main as its first
+      action. So a merge that succeeded remotely can still fail locally when main is already checked
+      out in another worktree -- exactly the coupling this rec describes, at a new address. (Line
+      number is a 2026-08-12 anchor; locate by function name, not by line.) FORWARD ADDRESS: same as
+      rec-296 -- T5.6 criterion c1's harvest/retire
       inventory; if postflight.py is harvested rather than retired, re-file against the harvesting
       owner as a fresh rec. Closed by PLAN-critical-lane-triage." &&
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-425 --status closed
@@ -367,7 +426,7 @@ verification_plan:
     expected: >-
       Three confirmation lines, one per rec (rec-296, rec-423, rec-425); exit 0.
     fix_if: Same failure semantics as step 7.
-  - step: 10
+  - step: 11
     phase: post-deploy
     action: >-
       File the governance-gap recommendation the human raised when reviewing this plan's own premise --
@@ -401,7 +460,7 @@ verification_plan:
       problem statement, do not pad. An acceptance-lint rejection means lint_acceptance_command()
       refused the command; the ban list is python -c one-liners, absolute paths, line-number greps and
       fenced blocks. The command above was linted clean at planning time.
-  - step: 11
+  - step: 12
     phase: post-deploy
     action: >-
       Refresh the read cache from the DuckLake reader and assert every one of the ten is closed with a
@@ -431,10 +490,10 @@ verification_plan:
       That is not a failure of this plan: triage the newcomer separately and re-run this step with it
       added to the expected set. Never repair drift by editing the local JSONL: it is a derivative
       projection, downstream of the warehouse and never upstream of it.
-  - step: 12
+  - step: 13
     phase: post-deploy
     action: >-
-      Confirm the governance-gap rec from step 10 landed and is open, resolving it by title rather than
+      Confirm the governance-gap rec from step 11 landed and is open, resolving it by title rather than
       by id since the id is writer-allocated at insert time and cannot be predicted at planning time.
     command: >-
       bin/venv-python -c "import json,pathlib;
@@ -448,10 +507,10 @@ verification_plan:
       Prints a single line confirming the governance-gap rec was filed, naming its writer-allocated
       id; exits 0.
     fix_if: >-
-      Zero hits means step 10's file_rec did not land or the cache was not refreshed by step 11 -- re-run
+      Zero hits means step 11's file_rec did not land or the cache was not refreshed by step 12 -- re-run
       --sync first. More than one hit means the rec was filed twice across attempts; close the duplicate
       as relevance=duplicate rather than leaving both open.
-  - step: 13
+  - step: 14
     phase: post-deploy
     action: >-
       AFTER the squash-merge lands on main, confirm rec-autoclose.yml did not clobber the curated
@@ -464,6 +523,14 @@ verification_plan:
       REPLACING the Decision 103 proof text in the current projection. SCD2 history preserves the
       original via rec_history, but every routine reader sees current -- and per the Q2 decision the
       rec-296/423/425 forward addresses live SOLELY in these strings.
+      ORDERING IS LOAD-BEARING AND IS NOT ENFORCED BY THE COMMAND. Before running it, the agent MUST
+      confirm via mcp__github__actions_list (or actions_get) that the rec-autoclose.yml run for the
+      squash-merge SHA has status=completed. Running the command the instant merge_pull_request
+      returns samples a PRE-clobber projection and passes spuriously, because rec-autoclose still has
+      to run checkout, setup-python, pip install and OIDC before reaching its update_rec call. Do NOT
+      substitute a `gh run list` shell poll -- the gh CLI is unavailable in this environment (GitHub
+      access is via the MCP server) -- and do NOT substitute a bash sleep loop, which the harness
+      forbids. Wait on the MCP status, then run the command.
     command: >-
       bin/venv-python -m scripts.ops_data_portal --sync &&
       bin/venv-python -c "import json,pathlib;
@@ -474,10 +541,17 @@ verification_plan:
       clobbered=[i for i in tgt if 'relevance=' not in (by.get(i,{}).get('resolution') or '')];
       assert not clobbered, f'resolution clobbered by autoclose: {clobbered}';
       print('all 10 curated resolutions survived the merge')"
-    expected: Prints "all 10 curated resolutions survived the merge" and exits 0.
+    expected: >-
+      Prints "all 10 curated resolutions survived the merge" and exits 0 -- run only AFTER the
+      rec-autoclose run for the merge SHA reports status=completed via the GitHub MCP tool.
     fix_if: >-
+      If the rec-autoclose run for the merge SHA is still queued or in_progress, this step is NOT
+      ready -- wait for completion rather than recording a pass, since a pre-clobber sample is
+      indistinguishable from a genuine survival. If the workflow never appears for that SHA (no
+      trailer parsed, or the workflow was skipped), record that and treat the step as satisfied: no
+      run means no clobber.
       Any id in the clobbered list means rec-autoclose overwrote that rec's proof text. Recovery is
-      simple and lossless -- re-issue that rec's exact --update-rec command from step 7, 8 or 9. The
+      simple and lossless -- re-issue that rec's exact --update-rec command from step 8, 9 or 10. The
       write appends a new SCD2 version, so the boilerplate becomes history rather than being erased.
       Then file a rec against .github/workflows/rec-autoclose.yml noting that its idempotency guard
       silently degrades to "close everything with boilerplate" whenever its internal sync() fails,
@@ -517,13 +591,47 @@ context:
     122. CITE- Decision 103, Decision 84, Decision 88, Decision 55, Decision 67, Decision 116, Decision
     117, Decision 121, Decision 64, Decision 163; explicitly NOT Decision 70.
   - >-
-    "gates- decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+    "gates- decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)"
+  - >-
+    Plan-critique round 2 returned REVISE with five changes, all independently re-probed before being
+    actioned. The most consequential- rec-296 and rec-423 pointed at scripts/executor/postflight.py,
+    which has since been DECOMPOSED and now defines only finalize(). The defects moved- the review-gate
+    collapse is in postflight_gates.py (two returns of the passed-with-no-findings tuple, on
+    TimeoutExpired and on empty/failed review) and cleanup_after_merge is at postflight_gitops.py:219,
+    still running git checkout main first. Both verified STILL LIVE. The old strings were asserting
+    facade existence, which no longer implies the defect survives -- new VP step 6 greps the real
+    sites, converting the plan's weakest inference into evidence.
+  - >-
+    Round 2 also corrected rec-457's forward address from T2.26 to T4.3, and rec-610's rec-608 clause
+    from "unverified" to the Decision 70 recorded-deletion fact (Decision 70 names rec-608 as one of
+    five hollow bootstrap records physically deleted 2026-05-09, so its absence is documented, not
+    missing data). Dropped rec-027's "live CLI-JSON parser" clause- it was inherited from Decision 121
+    and points at scripts/llm_client.py, which does not exist (the package path is scripts/llm/client.py).
+    Dropped rec-609's "Decision 81 cl.7" citation as outside the plan's verified read set, keeping the
+    Decision 84 I-1 grounding. Scoped acceptance criterion 6's universal to filesystem- and
+    projection-checkable clauses, since interpretive clauses cannot be machine-verified and claiming
+    otherwise was the same overclaim pattern round 1 caught.
+  - >-
+    Step 14's ordering hazard, also from round 2- the guard raced the workflow it guards. A --sync run
+    the instant merge_pull_request returns samples a PRE-clobber projection and passes spuriously,
+    because rec-autoclose must still run checkout, setup-python, pip install and OIDC before its
+    update_rec call. The ordering requirement now lives in the step's action and fix_if, keyed on the
+    GitHub MCP run status, because the gh CLI is unavailable in this environment and a bash sleep-poll
+    is harness-forbidden.
+  - >-
+    KNOWN GAP, deliberately not fixed here (out of the human's stated portal-only scope, surfaced for
+    a follow-on rec)- validate_handoff_full_tier's matcher splits a VP command on &&/||/;/newline and
+    accepts any segment matching `-m scripts.validate` without `--pre`, so the Decision 163 gate can
+    be satisfied by a `--help` invocation that validates nothing. This plan is genuinely compliant
+    (step 7 is a real full-tier run), but step 5 contains a `--help` segment that would satisfy the
+    matcher on its own. Second known gap- AGENTS.md's rec-curator caveat still attributes the
+    priority-queue producer repoint to T2.26; that predates the RMAP-07 split and should say T4.3.
   - >-
     Plan-critique round 1 returned REVISE with three defects, all confirmed by independent re-probe
     before being actioned rather than accepted on the critic's word. (1) rec-autoclose.yml can
     overwrite all ten curated resolution strings- logs/.recommendations-log.jsonl is untracked
     (git ls-files returns nothing), the workflow's sync() is warn-only, and an empty cache makes
-    `existing` None so the idempotency guard cannot fire. Fixed by adding post-merge VP step 13 plus
+    `existing` None so the idempotency guard cannot fire. Fixed by adding post-merge VP step 14 plus
     an execution_steps warning; the trailer is retained per AGENTS.md convention rather than dropped.
     (2) Two resolution strings claimed no Copilot substrate remained under .github/ or scripts/ --
     FALSE- `rg -il copilot .github/ scripts/` matches 15 files including six live provider- copilot-sdk
@@ -567,7 +675,7 @@ context:
     CD.17/T4.2 reversal condition, and a re-file instruction.
   - >-
     Decision 163 obligation- validate_handoff_full_tier requires any diff-added plan declaring
-    handoff_policy to carry a VP step matching -m scripts.validate without --pre. Step 6 satisfies it.
+    handoff_policy to carry a VP step matching -m scripts.validate without --pre. Step 7 satisfies it.
     Docs-only plans are NOT exempt.
   - >-
     Verification tier V3 is driven by the portal writes transiting the DuckLake writer Function URL
@@ -607,18 +715,18 @@ pre_implementation_checklist:
     mutations beyond this plan file
 execution_steps:
   - >-
-    Run Verification Plan steps 1 through 6 (pre-deploy) IN ORDER before any write. Steps 2 through 5
+    Run Verification Plan steps 1 through 7 (pre-deploy) IN ORDER before any write. Steps 2 through 6
     establish the evidence that the resolution strings assert; a failure in any of them invalidates the
     corresponding rec's verdict and that rec must be dropped from the batch, not forced through.
   - >-
-    Execute VP steps 7, 8 and 9 -- the ten --update-rec closures, grouped by verdict class. Each is a
+    Execute VP steps 8, 9 and 10 -- the ten --update-rec closures, grouped by verdict class. Each is a
     separate portal call; a failure mid-chain leaves earlier closures landed, which is safe and
     idempotent to re-run.
   - >-
-    Execute VP step 10 -- file the governance-gap recommendation. Call get_rec_write_guidance() before
+    Execute VP step 11 -- file the governance-gap recommendation. Call get_rec_write_guidance() before
     file_rec() per AGENTS.md Precision Context Injection. Record the writer-allocated id in the report.
   - >-
-    Execute VP steps 11 and 12 -- refresh the read cache and assert the terminal state (ten closed with
+    Execute VP steps 12 and 13 -- refresh the read cache and assert the terminal state (ten closed with
     non-empty resolutions, open-Critical lane exactly rec-2816 and rec-3059, gap rec open).
   - >-
     Commit the plan artefact only. Include in the squash-merge commit body the trailer
@@ -628,16 +736,16 @@ execution_steps:
     Its "already closed -- skipping" guard reads logs/.recommendations-log.jsonl, which is gitignored
     and therefore ABSENT on a cold CI runner; the workflow's own sync() is wrapped in a warn-only
     try/except, so a single sync failure collapses the guard and overwrites all ten curated
-    resolutions with boilerplate. VP step 13 exists precisely to detect and repair that.
+    resolutions with boilerplate. VP step 14 exists precisely to detect and repair that.
   - >-
-    AFTER the merge lands, run VP step 13. This is the only step that runs post-merge, and it is
-    mandatory- acceptance criterion 9 is not satisfiable before the squash-merge exists.
+    AFTER the merge lands, run VP step 14. This is the only step that runs post-merge, and it is
+    mandatory- acceptance criterion 7 is not satisfiable before the squash-merge exists.
   - >-
     'Report- which recs closed with which verdict, the writer-allocated id of the governance-gap rec,
     the final open-Critical lane contents, and the step-13 post-merge resolution-survival result.'
 rollback: >-
   Closure is reversible through the same governed path- bin/venv-python -m scripts.ops_data_portal
   --update-rec rec-NNNN --status open, which appends a new SCD2 version rather than mutating history.
-  No repository state needs reverting because none is changed. The governance-gap rec from step 10
+  No repository state needs reverting because none is changed. The governance-gap rec from step 11
   would be closed as relevance=duplicate rather than deleted -- there is no public delete_rec and
   physical deletion is confined to Decision 70's bootstrap-record scope.
