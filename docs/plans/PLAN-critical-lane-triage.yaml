@@ -53,9 +53,20 @@ acceptance_criteria:
     rec-457 and rec-613 carry execution_result=already_implemented; the other eight carry
     execution_result=manual, reflecting triage closure rather than an implemented fix.
   - >-
-    The resolution strings for rec-027 and rec-028 cite Decision 116 / Decision 117 (with Decision 121
-    as precedent) as the Copilot-SDK retirement authority, and do NOT cite CD.28 / dec-122, which is
-    the Bedrock-to-LiteLLM inference decision and mentions Copilot nowhere.
+    The resolution strings for rec-027 and rec-028 attribute the Copilot retirement precisely --
+    Decision 116 retires the copilot-sdk provider and deletes scripts/copilot_sdk_client.py, Decision
+    117 drops the copilot_wrapper boundary rows, Decision 121 records the scripts/copilot_wrapper.py
+    deletion and retires the cli-json-output contract -- and do NOT cite CD.28 / dec-122, which is the
+    Bedrock-to-LiteLLM inference decision and mentions Copilot nowhere.
+  - >-
+    No resolution string asserts that Copilot content is absent from the tree. Both Copilot closures
+    are grounded on the three verified-absent executable entry points and carry an explicit scope note
+    acknowledging the dead-by-guard residue (.github/agents/schedule.yaml provider entries, retained
+    by Decision 116 as T4.3-owned). Every other clause asserted in a durable resolution string is
+    machine-verified by a Verification Plan step.
+  - >-
+    After the squash-merge lands, all ten resolution strings still contain their relevance= verdict --
+    i.e. rec-autoclose.yml did not overwrite the curated proof text with its boilerplate.
   - >-
     The resolution strings for rec-296, rec-423 and rec-425 each name the still-live defect location,
     the CD.17 / T4.2 reversal condition, and an explicit re-file instruction, so the diagnosis carries
@@ -136,8 +147,10 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      Confirm the four physically-absent targets that ground the stale_target verdicts for rec-028,
-      rec-609, rec-468 and rec-613.
+      Confirm the four physically-absent targets. Absence GROUNDS the stale_target verdicts for
+      rec-028, rec-609 and rec-468. For rec-613 it is CORROBORATING only -- its verdict is satisfied,
+      established by the re-pathed oracle at step 3; the absent path merely explains why its filed
+      acceptance command could never run.
     command: >-
       for p in .github/copilot/settings.json scripts/sync_ops.py scripts/executor/rescue.py
       tests/test_execute_recommendation.py; do test ! -e "$p" || { echo "PRESENT: $p"; exit 1; }; done;
@@ -155,19 +168,40 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Confirm the two documentary anchors behind the semantic verdicts -- Decision 55's verbatim
-      cancellation of rescue.py (corroborating rec-468) and the absence of validate.py's --ci flag
-      (grounding rec-610's superseded verdict, since its acceptance command invokes that flag).
+      Confirm every remaining assertion the resolution strings make that is not already covered by
+      steps 2-4: Decision 55's verbatim cancellation of rescue.py (corroborating rec-468); the absence
+      of validate.py's --ci flag and of branch agent/dq-validate-integration (both grounding rec-610);
+      the three retired Copilot paths (grounding rec-027 and rec-028); and rec-607's closed status
+      (one of rec-610's cited blockers). Every clause asserted in a durable resolution string must be
+      machine-verified here -- an unverified clause is exactly the free-text-never-checked-against-
+      reality failure this plan's own step-10 rec describes.
     command: >-
       grep -q 'scripts/executor/rescue.py` (planned but not yet written) is cancelled'
       docs/DECISIONS.md &&
       ! bin/venv-python -m scripts.validate --help 2>&1 | grep -q -- '--ci\b' &&
-      echo "decision-55 cancellation present; validate --ci absent"
-    expected: Prints "decision-55 cancellation present; validate --ci absent" and exits 0.
+      ! git ls-remote --heads origin agent/dq-validate-integration | grep -q . &&
+      test ! -e .github/copilot && test ! -e scripts/copilot_wrapper.py &&
+      test ! -e scripts/copilot_sdk_client.py &&
+      grep -q 'RetiredProviderError' src/data/handlers/scheduled_agent_handler.py &&
+      bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      by={r['id']: r for r in rows};
+      assert by.get('rec-607',{}).get('status')=='closed', 'rec-607 not closed';
+      print('rec-607 closed')" &&
+      echo "all resolution-string assertions verified"
+    expected: >-
+      Prints "rec-607 closed" then "all resolution-string assertions verified", exit 0.
     fix_if: >-
-      A grep miss on DECISIONS.md means the clause was reworded -- locate the current wording and
-      quote that instead; do not close rec-468 citing text that is not there. If --ci reappears on
-      validate.py, rec-610's acceptance command is runnable again and its superseded verdict is void.
+      A grep miss on DECISIONS.md means the clause was reworded -- quote the current wording instead;
+      never close rec-468 citing text that is not there. If --ci reappears on validate.py, or the
+      branch reappears on origin, rec-610's superseded verdict is void. If any Copilot path is
+      restored, rec-027/rec-028 lose their grounding -- drop them from the batch. If rec-607 is not
+      closed, strike that clause from rec-610's resolution rather than asserting it. Do NOT broaden
+      any of these into a claim that no Copilot content remains under .github/ or scripts/ -- that is
+      false: `rg -il copilot .github/ scripts/` matches 15 files, including six live
+      `provider: copilot-sdk` entries in .github/agents/schedule.yaml which Decision 116 deliberately
+      left in place as T4.3-owned.
     graduation: waive
     graduation_waiver_reason: >-
       Both halves are already true on origin/main, so like step 4 this is tautological under the
@@ -231,11 +265,18 @@ verification_plan:
       --execution_result manual --resolution "relevance=stale_target (Decision 103; deterministic
       target-absence, the Decision 121 / rec-146 precedent -- a physically-absent target file is
       deterministic stale_target, not a bare semantic assertion). Target .github/copilot/settings.json
-      does not exist; no Copilot substrate remains anywhere under .github/ or scripts/. The
-      permissions model this rec would define has no surface to configure. Authority for the
-      retirement is Decision 116 + Decision 117 (the ULF-05 Copilot-SDK retirement session), with
-      Decision 121 recording the deletion of scripts/copilot_wrapper.py. Closed by
-      PLAN-critical-lane-triage." &&
+      does not exist, nor does the .github/copilot/ directory. The permissions model this rec would
+      define has no settings surface to configure and no live provider to gate: Decision 116 retired
+      the copilot-sdk provider outright, deleting scripts/copilot_sdk_client.py and the
+      _invoke_copilot_sdk dispatch branch, so any agent still declaring that provider now raises
+      RetiredProviderError (src/data/handlers/scheduled_agent_handler.py) rather than executing.
+      SCOPE NOTE, deliberately not overclaimed: Copilot STRINGS do remain under .github/ and scripts/
+      -- notably six provider: copilot-sdk entries in .github/agents/schedule.yaml, which Decision 116
+      explicitly left unchanged as T4.3-owned, plus COPILOT_MODEL_* env routing under scripts/llm/.
+      Those are dead-by-guard residue, not a live substrate this rec could configure. Authority:
+      Decision 116 (retires the provider), Decision 117 (drops the copilot_wrapper boundary rows),
+      Decision 121 (records the scripts/copilot_wrapper.py deletion and retires the cli-json-output
+      contract). Closed by PLAN-critical-lane-triage." &&
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-609 --status closed
       --execution_result manual --resolution "relevance=stale_target (Decision 103, deterministic
       target-absence). Target scripts/sync_ops.py does not exist; its successor is scripts/sync/ops.py.
@@ -255,21 +296,31 @@ verification_plan:
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-027 --status closed
       --execution_result manual --resolution "relevance=superseded (Decision 103). The experiment this
       rec proposes -- can a VS Code subagent invoke copilot -p, can CLI --agent work with custom agents
-      -- has no substrate: no Copilot artefacts remain under .github/ or scripts/ (verified by
-      filesystem sweep), and the CLI-JSON boundary it would characterise is retired. Authority:
-      Decision 116 + Decision 117 (ULF-05 Copilot-SDK retirement); Decision 121 records the deletion of
-      scripts/copilot_wrapper.py and retires the cli-json-output contract. NOT CD.28/dec-122 -- that is
-      the Bedrock-to-LiteLLM inference decision and mentions Copilot nowhere. The live CLI-JSON parser
-      today targets a different vendor schema entirely. Closed by PLAN-critical-lane-triage." &&
+      -- has no executable substrate left to run against. Verified absent: scripts/copilot_wrapper.py,
+      scripts/copilot_sdk_client.py, and the .github/copilot/ directory. Decision 116 retired the
+      copilot-sdk provider and deleted the client plus its dispatch branch; Decision 117 dropped the
+      copilot_wrapper boundary rows as dead; Decision 121 records the copilot_wrapper.py deletion
+      (commit 6a2f7c0, 'retire Copilot-SDK residue') and retires the cli-json-output contract that
+      documented the very CLI-JSON boundary this experiment would characterise. The live CLI-JSON
+      parser today targets a different vendor schema entirely, so even a re-run would characterise
+      something other than what was asked. SCOPE NOTE: this is NOT a claim that the string 'copilot'
+      is absent from the tree -- dead-by-guard residue remains (see rec-028's resolution); the claim
+      is that the three executable entry points the experiment needs are gone. NOT CD.28/dec-122 --
+      that is the Bedrock-to-LiteLLM inference decision and mentions Copilot nowhere. Closed by
+      PLAN-critical-lane-triage." &&
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-610 --status closed
       --execution_result manual --resolution "relevance=superseded (Decision 103). Dead-branch
       artifact: this rec records three preexisting blockers observed on branch
       agent/dq-validate-integration, which no longer exists on origin. Its acceptance command is
       unrunnable twice over -- a Windows .venv/Scripts/python.exe path, and a --ci flag that
       scripts/validate.py no longer exposes (the two-tier presubmit model is --pre plus the full tier,
-      Decision 73). All three cited blockers are themselves resolved: rec-607 is closed, rec-608 was
-      closed inline by PLAN-dq-validate-integration, and rec-609 is closed in this same sweep as
-      stale_target. Nothing actionable survives. Closed by PLAN-critical-lane-triage."
+      Decision 73). Of its three cited blockers: rec-607 is verified closed in the current projection,
+      and rec-609 is closed in this same sweep as stale_target. The third, rec-608, is ABSENT from the
+      current projection entirely -- rec-613's context asserts it was closed inline by
+      PLAN-dq-validate-integration, but that is second-hand and the warehouse cannot corroborate it,
+      so it is recorded here as unverified rather than claimed as resolved. That does not change the
+      disposition: this rec's own acceptance command is unrunnable and its branch is gone, so nothing
+      actionable survives regardless of rec-608's fate. Closed by PLAN-critical-lane-triage."
     expected: >-
       Five confirmation lines, one per rec (rec-028, rec-609, rec-468, rec-027, rec-610); exit 0.
     fix_if: >-
@@ -374,9 +425,12 @@ verification_plan:
     fix_if: >-
       A rec still open after a reported-successful write means the read cache is stale -- re-run --sync
       before concluding the write failed. An empty resolution means the --resolution argument was lost
-      to shell quoting; re-issue that single --update-rec with the full string. Never repair drift by
-      editing the local JSONL: it is a derivative projection, downstream of the warehouse and never
-      upstream of it.
+      to shell quoting; re-issue that single --update-rec with the full string. If the lane assertion
+      trips on an id other than rec-2816/rec-3059, a NEW Critical rec landed after step 1 -- most
+      plausibly a source=ci_rca rec from a red CI run on this very PR, since ci_rca files at Critical.
+      That is not a failure of this plan: triage the newcomer separately and re-run this step with it
+      added to the expected set. Never repair drift by editing the local JSONL: it is a derivative
+      projection, downstream of the warehouse and never upstream of it.
   - step: 12
     phase: post-deploy
     action: >-
@@ -397,6 +451,37 @@ verification_plan:
       Zero hits means step 10's file_rec did not land or the cache was not refreshed by step 11 -- re-run
       --sync first. More than one hit means the rec was filed twice across attempts; close the duplicate
       as relevance=duplicate rather than leaving both open.
+  - step: 13
+    phase: post-deploy
+    action: >-
+      AFTER the squash-merge lands on main, confirm rec-autoclose.yml did not clobber the curated
+      resolution strings. This guards a real, mechanically-traced hazard rather than a hypothetical
+      one: logs/.recommendations-log.jsonl is NOT git-tracked, so a fresh CI checkout has no read
+      cache; rec-autoclose.yml wraps its sync() in a try/except that only WARNS on failure; if that
+      sync raises, cache_path.exists() is False, recs_cache is empty, `existing` is None, and the
+      "already closed -- skipping" idempotency guard cannot fire. update_rec then merges
+      {status: closed, resolution: "Auto-closed by rec-autoclose workflow: ..."} over each rec,
+      REPLACING the Decision 103 proof text in the current projection. SCD2 history preserves the
+      original via rec_history, but every routine reader sees current -- and per the Q2 decision the
+      rec-296/423/425 forward addresses live SOLELY in these strings.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync &&
+      bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      by={r['id']: r for r in rows};
+      tgt=['rec-027','rec-028','rec-296','rec-423','rec-425','rec-457','rec-468','rec-609','rec-610','rec-613'];
+      clobbered=[i for i in tgt if 'relevance=' not in (by.get(i,{}).get('resolution') or '')];
+      assert not clobbered, f'resolution clobbered by autoclose: {clobbered}';
+      print('all 10 curated resolutions survived the merge')"
+    expected: Prints "all 10 curated resolutions survived the merge" and exits 0.
+    fix_if: >-
+      Any id in the clobbered list means rec-autoclose overwrote that rec's proof text. Recovery is
+      simple and lossless -- re-issue that rec's exact --update-rec command from step 7, 8 or 9. The
+      write appends a new SCD2 version, so the boilerplate becomes history rather than being erased.
+      Then file a rec against .github/workflows/rec-autoclose.yml noting that its idempotency guard
+      silently degrades to "close everything with boilerplate" whenever its internal sync() fails,
+      because the cache it reads is gitignored and therefore always absent on a cold runner.
 test_obligations: []
 constraints:
   - >-
@@ -432,7 +517,34 @@ context:
     122. CITE- Decision 103, Decision 84, Decision 88, Decision 55, Decision 67, Decision 116, Decision
     117, Decision 121, Decision 64, Decision 163; explicitly NOT Decision 70.
   - >-
-    "gates- decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+    "gates- decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+  - >-
+    Plan-critique round 1 returned REVISE with three defects, all confirmed by independent re-probe
+    before being actioned rather than accepted on the critic's word. (1) rec-autoclose.yml can
+    overwrite all ten curated resolution strings- logs/.recommendations-log.jsonl is untracked
+    (git ls-files returns nothing), the workflow's sync() is warn-only, and an empty cache makes
+    `existing` None so the idempotency guard cannot fire. Fixed by adding post-merge VP step 13 plus
+    an execution_steps warning; the trailer is retained per AGENTS.md convention rather than dropped.
+    (2) Two resolution strings claimed no Copilot substrate remained under .github/ or scripts/ --
+    FALSE- `rg -il copilot .github/ scripts/` matches 15 files including six live provider- copilot-sdk
+    entries in .github/agents/schedule.yaml. Rewritten to the three verified-absent executable entry
+    points with an explicit dead-by-guard scope note. (3) Three assertions had no VP evidence; step 5
+    now verifies all of them. Nits on step 4's verdict wording and step 11's fix_if also applied.
+  - >-
+    Citation weighting corrected in round 2 after reading Decisions 116 and 117 directly, because the
+    decision-scout and the plan-critic disagreed. The critic proposed demoting 116/117 to corroborating
+    and promoting 121 to primary. That overcorrects- Decision 116 states in its own body that "the
+    copilot-sdk and gemini providers are RETIRED from the scheduled-agent provider set effective this
+    session", deleting scripts/copilot_sdk_client.py and the dispatch branches, and it is what makes a
+    lingering provider declaration raise RetiredProviderError. So 116 IS a primary retirement
+    authority. The resolution strings now attribute each decision to what it actually did rather than
+    lumping them, which is the substance of what the critic was right about.
+  - >-
+    Decision 116 also supplies the reason the Copilot residue is legitimate rather than an oversight-
+    it left .github/agents/schedule.yaml's provider fields "unchanged (T4.3-owned)" by explicit
+    decision. That turns the critic's finding from a problem for the closures into stronger evidence
+    FOR them- the provider is dead-by-guard, so there is no live permissions surface for rec-028 to
+    define.
   - >-
     Scout flag 1 (NOTE, Decision 103) ACCEPTED- rec-468 pivoted from contradicted to stale_target. The
     relevance contract defines contradicted narrowly as 'any cited decision has status containing
@@ -511,12 +623,18 @@ execution_steps:
   - >-
     Commit the plan artefact only. Include in the squash-merge commit body the trailer
     'Resolves- rec-027, rec-028, rec-296, rec-423, rec-425, rec-457, rec-468, rec-609, rec-610,
-    rec-613' (with a colon after Resolves) so rec-autoclose.yml provides a durable Layer-2 closure
-    edge. It checks current status before writing, so it is a no-op against recs this plan already
-    closed.
+    rec-613' (with a colon after Resolves) per the AGENTS.md convention for a non-empty
+    bundled_recommendations list. IMPORTANT- do NOT rely on rec-autoclose.yml being a harmless no-op.
+    Its "already closed -- skipping" guard reads logs/.recommendations-log.jsonl, which is gitignored
+    and therefore ABSENT on a cold CI runner; the workflow's own sync() is wrapped in a warn-only
+    try/except, so a single sync failure collapses the guard and overwrites all ten curated
+    resolutions with boilerplate. VP step 13 exists precisely to detect and repair that.
+  - >-
+    AFTER the merge lands, run VP step 13. This is the only step that runs post-merge, and it is
+    mandatory- acceptance criterion 9 is not satisfiable before the squash-merge exists.
   - >-
     'Report- which recs closed with which verdict, the writer-allocated id of the governance-gap rec,
-    and the final open-Critical lane contents.'
+    the final open-Critical lane contents, and the step-13 post-merge resolution-survival result.'
 rollback: >-
   Closure is reversible through the same governed path- bin/venv-python -m scripts.ops_data_portal
   --update-rec rec-NNNN --status open, which appends a new SCD2 version rather than mutating history.
