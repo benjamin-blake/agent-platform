@@ -5,10 +5,11 @@
 Audit this repository's git-ops procedures for fitness in an agent-first repository, and answer
 one decisive question: should `main` remain squash-merged? The requester's working hypothesis is
 that squash-merge is a human convenience that may be a barrier to efficient log recovery for
-agents; treat that as a hypothesis to test, not a conclusion to confirm. Six surfaces are in
+agents; treat that as a hypothesis to test, not a conclusion to confirm. Seven surfaces are in
 scope: the merge-strategy and branch-protection policy, the commit-message contract, the
 mechanisms that consume git history, clone and checkout depth, the parallel provenance stores,
-and the PR wake-signal machinery. Answer Q1..Q8 below, rate every surface against VD1..VD6,
+the PR wake-signal machinery, and the session/branch-lifecycle hooks. Answer Q1..Q8 below, rate
+every surface against VD1..VD6,
 and file findings. Deliverables: exactly two files, `audits/gitops-agent-first-<sha>.yaml` and
 `audits/gitops-agent-first-<sha>.md`, where `<sha>` is the short SHA of `origin/main` derived in
 COMMIT / PR MECHANICS. The ONLY files you create or modify in the repository tree are those two
@@ -84,6 +85,20 @@ it are welcome and are the clearest evidence the run added value.
 - **C14** (S4, S5) -- in a shallow clone, history queries against files older than the clone
   window return confident, wrong answers (see trap 9). Determine which in-repo consumers are
   exposed to this and whether any of them would notice.
+- **C15** (S1, S5) -- the ordered sequence of commits an implementing session made within a PR is
+  not present on `main`; `main` carries their squashed result. Determine where, if anywhere, that
+  sequence survives, what an agent loses by not having it locally, and whether anything needs it.
+- **C16** (S1) -- resolving a `main` commit to its full PR record (all commits, reviews, CI runs)
+  requires a GitHub API round-trip. Determine whether that indirection is adequate provenance or
+  a per-item cost an agent pays repeatedly (NS6).
+- **C17** (S1, S7) -- merged branches may be deleted after merge. Determine whether the pre-merge
+  commits remain reachable afterwards, for how long, and whether anything here depends on them.
+- **C18** (S3) -- a bisect over `main` localises to one PR, not to a step within it. Determine
+  whether anything in this repository bisects, and what resolution any such consumer needs.
+
+The candidate set is deliberately balanced: C1/C2/C7/C8/C14 bear on the cost of CHANGING the
+current strategy, C15/C16/C17/C18 on the cost of KEEPING it. Neither group is the answer; both
+are evidence. If you find the set still leans one way, say so in your Q1 prose.
 
 ## READ FIRST: disambiguation traps
 
@@ -104,7 +119,10 @@ it are welcome and are the clearest evidence the run added value.
    pointing at it. Audit the former; treat the latter as a pointer surface whose only defect
    class is drift.
 4. **`merge=union` in `.gitattributes` is not a merge-method.** It is a conflict-resolution
-   strategy for `*.jsonl` files. It has no bearing on Q1.
+   strategy for `*.jsonl` files, and is not itself a Q1 option. One narrow exception: a strategy
+   that replays commits individually (rebase-merge) applies the union driver once per commit
+   rather than once per PR, so union-merge behaviour IS a legitimate cost input to Q1. Weigh it
+   there; do not audit the union strategy itself.
 5. **One unit of work is two PRs, not one.** The flow produces a `plan({slug})` commit and then
    a separate `feat({slug})` commit on `main`. Any reasoning of the form "one commit per unit of
    work" is wrong; it is one commit per PR, two PRs per unit of work.
@@ -129,7 +147,7 @@ it are welcome and are the clearest evidence the run added value.
 
 ## SCOPE
 
-Six surfaces, all BUILT unless marked otherwise. Obtain every file, line, and count by reading
+Seven surfaces, all BUILT unless marked otherwise. Obtain every file, line, and count by reading
 the file yourself -- **trust no number quoted in this prompt; re-derive from the repository** and
 record any anchor that does not resolve in `meta.stale_anchors`.
 
@@ -142,8 +160,8 @@ record any anchor that does not resolve in `meta.stale_anchors`.
   `.github/pull_request_template.md` (the template rendered at PR-open time).
 - **S3 history-shape-consumers** -- the inventory below is a STARTING SET, not a closed list.
   Sweep for further consumers yourself (`git log`, `git diff`, `git show`, `rev-list`,
-  `merge-base`, `HEAD~`, `HEAD^` across `scripts/` and `.github/workflows/`) and add what you
-  find; DD-A's blast radius is only as good as this set.
+  `merge-base`, `HEAD~`, `HEAD^` across `scripts/`, `.github/workflows/`, AND `.claude/hooks/`)
+  and add what you find; DD-A's blast radius is only as good as this set.
   - `scripts/checks/_common.py` `push_context_base()`
   - `.github/workflows/rec-autoclose.yml` (`git log -1 --format=%B HEAD`)
   - `scripts/checks/verification/validate_vp_replay.py`
@@ -152,7 +170,7 @@ record any anchor that does not resolve in `meta.stale_anchors`.
   - `scripts/convergence_health/record.py` `count_unapplied_tf_commits()`
   - `scripts/ops_portal/ci_rca_lifecycle.py` `_ensure_ancestry_history()` / `classify_closed_head()`
   - `scripts/executor/branch_lifecycle.py` -- `git merge-base --is-ancestor <branch> main` as a
-    merged/not-merged predicate (approximately lines 128, 140, 311). **This is the most
+    merged/not-merged predicate (two call sites, approximately lines 140 and 311). **This is the most
     merge-strategy-sensitive construct in the inventory**; determine what it returns under each
     Q1 candidate, and separately whether the code path is currently reachable given the executor
     freeze (a dormant path changes severity, not correctness).
@@ -177,6 +195,13 @@ record any anchor that does not resolve in `meta.stale_anchors`.
 - **S6 wake-signal-machinery** -- `ci.yml`'s `signal-green` job,
   `.github/workflows/pr-conflict-signal.yml`, `scripts/ci/pr_conflict_signal.sh`,
   `scripts/checks/ci_guards/validate_pr_conflict_signal.py`.
+- **S7 session-and-branch-lifecycle git-ops** -- the agent-side surface that actually MUTATES git
+  state: `.claude/hooks/session_start_sync_main.sh` (`git fetch origin main` +
+  `git branch -f main origin/main`), `.claude/hooks/fresh_branch_base.py` (side-effecting
+  branch-cut guard), `.claude/hooks/never_on_main.py` (block-on-main guard),
+  `.claude/hooks/session_start_commit_signing.py`, and AGENTS.md's rebase-phase distinction
+  (`AGENTS.md:210-218`). This is the only surface on which a clone-depth remedy could be
+  implemented, which is why it is in scope.
 
 **Out of scope, one line each.** Terraform apply model and deploy channels (own contracts).
 The recommendation/decision portal's internal write semantics. The executor freeze (Decision 67).
@@ -206,9 +231,14 @@ DEDUP DISCIPLINE depends on. Both are gitignored caches; never commit them.
 
 **Degraded paths -- never abort, never improvise:**
 
-- IF cache-gen fails (creds or egress down): do NOT abort -- set `meta.degraded_dedup=true`, set every finding's
+- IF cache-gen fails for ANY reason (creds down, egress blocked, import error, schema failure --
+  the cause does not matter): do NOT abort -- set `meta.degraded_dedup=true`, set every finding's
   top-level `confidence` to `HYPOTHESIS` and its `roadmap_crossref.dedup_hit_count` to `null`,
-  proceed. (`confidence` is a finding-level field; `roadmap_crossref` has no such key.)
+  proceed. (`confidence` is a finding-level field; `roadmap_crossref` has no such key.) Downgrade
+  every `merge_strategy_decision` block's `confidence` to `HYPOTHESIS` too. `meta.degraded_dedup`
+  is read by the human disposing of this audit as the signal that no `roadmap_crossref`
+  classification is trustworthy -- state that consequence in one line of `meta.contract_notes`
+  as well, so it is legible without cross-referencing the flag.
 - IF `git fetch origin main` fails: set `meta.contract_notes` to record it, use local `origin/main`
   as-is, and note in `meta.stale_anchors` that base derivation is unverified.
 - IF an anchor quoted in this prompt does not resolve: record it in `meta.stale_anchors`, locate
@@ -287,18 +317,23 @@ and whether any Q1 outcome changes what these signals must do. Verdict enum: `re
 deliberately discard or invent?** *(headline question)*
 This is NOT "what is industry best practice?" Many viable git-ops practices exist, and most
 carry design pressure from human readers -- review ergonomics, `git log` scanability, bisect
-workflows performed by a person. The question is: given the Q3b answer, which industry
-conventions are substrate-level requirements that survive any consumer, which are
-human-ergonomic residue an agent-first repository should discard, and which structures become
-available that would be unnatural for humans but efficient for agents?
+workflows. Whether any given one of those pressures is in fact human-ONLY is for you to determine
+rather than assume: an agent bisects too. The question is: given the Q3b answer, which industry
+conventions are substrate-level requirements that survive any consumer, which are human-ergonomic
+conventions an agent-first repository should drop or keep deliberately, and which structures
+become available that would be unnatural for humans but efficient for agents?
 
 Assess EVERY practice in the checklist below, one entry each, in the
 `industry_adaptation` field of this question's `question_answers` entry. Pinned per-practice
 enum: `adopt-as-is` | `adapt-for-agents` | `retain-for-human-reader` | `discard-human-ergonomic`
-| `already-in-place` | `n/a`. `retain-for-human-reader` exists because dropping a practice is not
+| `invent-novel-structure` | `already-in-place` | `n/a`. Use `invent-novel-structure` for the
+requester's explicitly-requested third category: a structure that is NOT an industry practice at
+all, which becomes available only because the reader is a machine. Do not mislabel an invention
+as an adapted practice. `retain-for-human-reader` exists because dropping a practice is not
 automatically the agent-first answer -- keep the option live. Each entry states the practice, the
-enum value, the `surfaces` list it bears on (this is what the maturity rule reads -- an entry
-bearing on no surface takes `surfaces: []`), what it would look like in an agent-first form, and
+enum value, the `surfaces` list it bears on (this is what the maturity rule reads; an entry
+bearing on no surface takes `surfaces: []` AND must justify that in its `evidence` field -- an
+empty list is a claim about the repository, not a default), what it would look like in an agent-first form, and
 its evidence. This field is the SOLE source the maturity top tier reads.
 
 **Checklist**: trunk-based development; linear history; Conventional Commits; commit trailers as
@@ -330,7 +365,9 @@ question changes shape. Verdict enum: `git-log-sufficient-substitute` |
 
 **Q8 -- Questions the requester did not think to ask.**
 Answer all five seeds below, then add between 2 and 5 of your own -- no more. Prefer the ones a
-reader would act on:
+reader would act on. **Any defect a Q8 answer surfaces is filed as a finding like any other** --
+an answer slot is not a substitute for `findings[]`, and a defect that stops at Q8 escapes
+severity, dedup, and the counting invariant:
 - Does the two-PR flow (`plan(` then `feat(`) belong in git at all, or is it an artefact of using
   PRs as the handoff mechanism?
 - What happens to reconstructability if a merged PR's branch is deleted and GitHub's PR record
@@ -343,20 +380,32 @@ reader would act on:
 
 ## RUBRIC
 
-Rate every surface S1..S6 on every dimension. Pinned enum: `strong` | `adequate` | `weak` |
+Rate every surface S1..S7 on every dimension. Pinned enum: `strong` | `adequate` | `weak` |
 `absent` | `n/a`. **`n/a` is correct and costless where a dimension does not structurally apply
 -- never manufacture a rating or a finding to fill a cell.**
 
+Polarity, pinned for every dimension: `strong` always means the surface is in GOOD shape on that
+dimension, `weak` means poor shape, `absent` means the property is entirely missing where it
+should exist, `n/a` means the dimension does not structurally apply. Never read a dimension's
+phrasing as inverting this -- a surface with NO coupling to history shape rates `strong` on VD3,
+not `absent`.
+
 - **VD1 Machine-recoverability** (NS1, NS6) -- can an agent reconstruct what changed and why from
-  repository-local state, without a network round-trip per item?
+  repository-local state, without a network round-trip per item? `strong` = yes, locally and
+  cheaply.
 - **VD2 Contract enforcement** (NS5) -- is the machine-readable shape this surface relies on
-  validated by a gate, or left to convention?
+  validated by a gate, or left to convention? `strong` = a gate enforces it; `absent` = the
+  surface relies on a shape nothing checks.
 - **VD3 Coupling essentiality** (NS1) -- does this surface depend on the current history shape by
-  necessity, or by unexamined assumption?
+  necessity, or by unexamined assumption? `strong` = no coupling, or coupling that is necessary
+  and documented; `weak` = coupling by unexamined assumption; `absent` = coupling that is both
+  unnecessary and undocumented.
 - **VD4 Degradation behaviour** (NS4) -- under a shallow clone, a missing commit, or a masked
-  failure, does the surface fail loudly or return a plausible wrong answer?
+  failure, does the surface fail loudly or return a plausible wrong answer? `strong` = fails
+  loudly and visibly; `absent` = degrades silently to a wrong-but-trusted result.
 - **VD5 Provenance source-of-truth hygiene** (NS2, NS3) -- is the record stored once in the right
-  store, or split and duplicated across stores that can drift?
+  store, or split and duplicated across stores that can drift? `strong` = one authoritative
+  store; `weak` = duplicated with a live drift surface.
 - **VD6 Consumer fit** (NS1, and constrained by the Q3b verdict) -- is this surface's shape
   justified by its ACTUAL consumers? `strong` = the shape is deliberate and matches who reads it,
   whether that is agents, humans, or both. `weak` = the shape is inherited convention that serves
@@ -369,7 +418,9 @@ Rate every surface S1..S6 on every dimension. Pinned enum: `strong` | `adequate`
 **Where deep-dive output goes**: DD-A's per-mechanism breakage matrix is recorded in the Q4
 `question_answers` entry's `prose`, with any mechanism you judge defective ALSO filed as a
 finding. DD-B's outcome is recorded per the instruction in its own text. DD-C's trace is
-recorded in the Q5 `question_answers` entry's `prose`, with defects filed as findings. A
+recorded in the Q5 `question_answers` entry's `prose`, with defects filed as findings. DD-D's
+status-quo cost trace is recorded in the Q1 `question_answers` entry's `prose` (alongside DD-B's
+drift summary), with any loss you judge material filed as a finding. A
 deep-dive that produces no finding still produces prose -- never leave one silent.
 
 **DD-A -- End-to-end trace of the history-shape dependencies.** *(feeds Q1, Q4)*
@@ -392,8 +443,10 @@ behaviour, whether the two instructions are equivalent in all cases, whether the
 recommendations' remedies are the right fix, and whether a merge-strategy change would obviate,
 worsen, or leave them unchanged. **Explicitly re-assess those two recommendations rather than
 dismissing them as owned territory** -- the requester wants to know whether their proposed
-remedies still make sense with the merge-strategy question open. Record the re-assessment
-outcome in `rejected_candidates` or as a `planned-insufficient` finding, as your trace warrants.
+remedies still make sense with the merge-strategy question open. Record the re-assessment outcome using the full
+adjudication contract -- `rejected_candidates`, or a finding classified `planned-insufficient` or
+`planned-unbuilt`, whichever your trace warrants -- and summarise the three-surface drift analysis
+in the Q1 `question_answers` prose.
 
 **DD-C -- Wake-signal delivery paths.** *(feeds Q5)*
 Trace both signals from trigger to delivered comment. For `signal-green`: which checks gate it
@@ -403,6 +456,17 @@ session concludes from a comment that arrives before an omitted check finishes. 
 loss is observable given the step's `continue-on-error: true` and the script's internal failure
 counter and exit code. Include the case of a PR that is already conflicted at creation time,
 when no subsequent push to `main` occurs.
+
+**DD-D -- The cost of the STATUS QUO.** *(feeds Q1, Q2, Q7 -- mandatory, same standing as DD-A)*
+DD-A traces what would BREAK if the merge strategy changed. This deep-dive traces the opposite
+and is equally required: what is unrecoverable TODAY, for an agent, precisely BECAUSE `main`
+carries one squashed commit per PR? Trace at least: intra-PR commit granularity (the ordered
+steps an implementing session actually took, and where they now live, if anywhere); bisect
+resolution (what a bisect over `main` can and cannot localise at one-commit-per-PR granularity,
+and whether anything in this repository bisects); per-step attribution and review-fix history;
+and whether the `(#NNN)` indirection to the PR record is a sufficient substitute given it costs a
+network round-trip (NS6) and depends on GitHub retaining refs for deleted branches. Answering Q1
+without BOTH DD-A and DD-D is answering it on one-sided evidence.
 
 ## GROUNDING MAP
 
@@ -452,7 +516,7 @@ Facts below are stated neutrally and carry no verdict.
   `scripts/checks/verification/validate_graduation_completeness.py:21` uses the same resolution.
 - `scripts/roadmap/plan_audit.py:126` `_verify_rec_in_git()` runs
   `git log --oneline origin/main --grep=<rec-id>`.
-- `scripts/convergence_health/record.py:105` `count_unapplied_tf_commits()` carries the docstring
+- `scripts/convergence_health/record.py:101` `count_unapplied_tf_commits()` carries the docstring line (at :107)
   "Returns 0 on any error (record SHA may predate the current clone depth)"; the enclosing
   `try` returns 0 from an `except Exception:  # noqa: BLE001` handler at approximately line 137.
 - `scripts/ops_portal/ci_rca_lifecycle.py:151` `_ensure_ancestry_history()` runs a best-effort
@@ -474,9 +538,10 @@ Facts below are stated neutrally and carry no verdict.
   (`ci.yml` PR job, `ci-rca.yml`, `convergence-health.yml`).
 - `docs/ROADMAP-PLATFORM.yaml:474` records an artefact whose "provenance [is] unrecoverable from
   the squashed clone".
-- `cat .git/shallow` returns the grafted boundary; the oldest commit PRESENT is its child. At
-  recon, `git show --stat <oldest-present-commit> -- docs/SESSION_LOG.md` reported 666 insertions
-  for a file that predates the clone window. This is the trap in READ FIRST item 8; it is also a
+- The `.git/shallow` entries ARE the oldest present commits (their PARENTS are grafted away), so
+  `<oldest-present>^` does not resolve. At recon,
+  `git show --stat <oldest-present-commit> -- docs/SESSION_LOG.md` reported 666 insertions for a
+  file that long predates the clone window. This is the trap in READ FIRST item 9; it is also a
   concrete instance to weigh under VD4 for S4.
 
 **S5 parallel-provenance-stores**
@@ -563,13 +628,13 @@ delivery).
   COMMIT / PR MECHANICS steps 1-2, BEFORE any analysis. Fixing the base first guarantees the
   filename sha, `meta.audited_commit`, and the tree you actually read are the same commit even if
   `main` advances mid-run.
-- **P1 Read.** Every S1..S6 surface. Verify anchors; record stale ones.
-- **P2 Trace.** DD-A and DD-B. Establish the blast radius before forming any Q1 opinion.
+- **P1 Read.** Every S1..S7 surface. Verify anchors; record stale ones.
+- **P2 Trace.** DD-A, DD-B, and DD-D -- DD-A gives the cost of changing, DD-D the cost of keeping. Establish BOTH before forming any Q1 opinion.
 - **P3 Trace.** DD-C.
 - **P4 Premise test.** Q3a and Q3b. Both premises must be settled before Q6, because Q3b
   constrains what Q6 may recommend.
 - **P5 Empirical.** The sampling above, within bounds.
-- **P6 Rate.** VD1..VD6 across S1..S6.
+- **P6 Rate.** VD1..VD6 across S1..S7.
 - **P7 Dedup.** Per DEDUP DISCIPLINE, before any finding is filed.
 - **P8 Synthesize.** Answer Q1..Q8, populate `merge_strategy_decision`, then compute maturity
   LAST.
@@ -609,12 +674,17 @@ existence is NOT a reason to skip that trace.
   `strict_required_status_checks_policy = false`, `required_approving_review_count = 0`, and the
   explicit absence of `required_signatures` (Decision 83; the code comment states "do not add").
 - Forward-fix, never auto-revert (Decision 55/72/129).
-- The harness-assigned `claude/*` session branch model -- not repository-changeable.
-- The `send_later` / trigger backstop retirement (AGENTS.md) and the CC-web permission gotcha.
+- The harness-assigned `claude/*` session branch model (Decision 76 clause 2) -- not
+  repository-changeable from within this repository.
+- The `send_later` / trigger backstop retirement and the CC-web permission gotcha, both recorded
+  in AGENTS.md `## Git-ops procedure` step 4 under Decision 76/83. These carry no separate
+  decision id; AGENTS.md is the authority.
 - The executor freeze and IMPLEMENTATION-only planning (Decision 67).
 - The public-repository content boundary (Decision 101).
 - `continue-on-error: true` on wake-signal steps as a design intent (a wake must never red a
-  build). Its OBSERVABILITY consequences are in scope; its existence is not a defect.
+  build) -- stated as an invariant in `pr-conflict-signal.yml`'s header comment under Decision
+  55/76/83. Its OBSERVABILITY consequences are squarely in scope (see C12); its existence is not
+  a defect.
 
 ## OUTPUT
 
@@ -627,7 +697,7 @@ audit:
   meta: {audited_commit: <origin/main short sha>, base_branch: main,
          model: <your self-reported model name, free text>,
          methodology_version: 1,
-         scope_surfaces: [S1, S2, S3, S4, S5, S6],
+         scope_surfaces: [S1, S2, S3, S4, S5, S6, S7],
          degraded_dedup: false, contract_notes: "", stale_anchors: []}
   question_answers:
     - {q: Q1, verdict: keep-squash|switch-to-rebase-merge|switch-to-merge-commit|hybrid-by-pr-class,
@@ -644,8 +714,8 @@ audit:
     - {q: Q6, verdict: <one-line thesis>, basis: [], prose: "",
        industry_adaptation:
          - {practice: <checklist entry or newly named structure>,
-            rating: adopt-as-is|adapt-for-agents|retain-for-human-reader|discard-human-ergonomic|already-in-place|n/a,
-            surfaces: [S1..S6],
+            rating: adopt-as-is|adapt-for-agents|retain-for-human-reader|discard-human-ergonomic|invent-novel-structure|already-in-place|n/a,
+            surfaces: [S1..S7],
             agent_first_form: "", evidence: ""}}
     - {q: Q7, verdict: git-log-sufficient-substitute|git-log-sufficient-if-commit-contract-changes|complementary-keep-both|neither-suitable-replace-both,
        basis: [], prose: ""}
@@ -665,11 +735,12 @@ audit:
     - {surface: S1, dimension: VD1, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
   findings:
-    - {id: GITOPS-01, surface: S1..S6|shared, question: Q1..Q8, dimension: VD1..VD6,
+    - {id: GITOPS-01, candidate_id: C1..C18|null, surface: [S1..S7]|shared,
+       question: [Q1|Q2|Q3a|Q3b|Q4|Q5|Q6|Q7|Q8], dimension: [VD1..VD6],
        title: "", evidence: "file:line|item-id", evidence_kind: static|observed,
        current_behavior: "", ideal_behavior: "", gap: "",
        compensating_controls_considered: "",
-       change_type: add|rescope|enforce|unify|persist|clarify|retune_gate,
+       change_type: add|rescope|enforce|unify|persist|clarify|retune_gate|switch_mechanism,
        proposed_change: "", acceptance: "",
        severity: critical|high|medium|low, severity_rationale: "",
        confidence: CONFIRMED|HYPOTHESIS,
@@ -678,13 +749,14 @@ audit:
        effort: XS|S|M|L, depends_on: [],
        sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}}
   rejected_candidates:
-    - {candidate: "", why_dismissed: "", compensating_control: "",
-       control_property_match: "", decision_or_item_id: ""}
+    - {candidate_id: C1..C18|null, candidate: "", why_dismissed: "",
+       compensating_control: "", control_property_match: "", decision_or_item_id: ""}
   summary: {total_findings: 0, novel_count: 0, planned_insufficient_count: 0,
             planned_unbuilt_count: 0, rejected_count: 0,
             top_improvements: [], highest_leverage_change: <id or null>,
             maturity_S1: <value>, maturity_S2: <value>, maturity_S3: <value>,
-            maturity_S4: <value>, maturity_S5: <value>, maturity_S6: <value>}
+            maturity_S4: <value>, maturity_S5: <value>, maturity_S6: <value>,
+            maturity_S7: <value>}
 ```
 
 `audits/gitops-agent-first-<sha>.md`: prose companion, **<= 1500 words**, the executive layer a
@@ -695,18 +767,23 @@ that matter. Do not restate the YAML.
 `total_findings = len(findings) = novel_count + planned_insufficient_count +
 planned_unbuilt_count`. Fully-covered candidates live in `rejected_candidates`, NOT findings.
 `rubric_ratings`, `question_answers`, and `merge_strategy_decision` are systems-of-record
-referenced FROM findings, never re-counted. `top_improvements` and `highest_leverage_change`
-MUST be finding ids; `highest_leverage_change` is `null` when `findings[]` is empty.
+referenced FROM findings, never re-counted. `top_improvements` holds 3 to 5 finding ids (fewer only if `findings[]` is
+smaller). `top_improvements` and `highest_leverage_change` MUST be finding ids;
+`highest_leverage_change` is `null` when `findings[]` is empty.
 `rejected_count` MUST equal `len(rejected_candidates)` and is deliberately NOT part of the
 `total_findings` sum -- it is a separate cross-check that the candidate set was fully adjudicated.
 
-Cardinality, pinned: `rubric_ratings` carries one row per (surface, dimension) pair -- 6 surfaces
-x 6 dimensions = 36 rows, `n/a` included. `per_surface_assessment` carries exactly 6 rows. The
-single rows shown in the skeleton are format examples, not counts.
+Cardinality, pinned: `rubric_ratings` carries one row per (surface, dimension) pair -- 7 surfaces
+x 6 dimensions = 42 rows, `n/a` included. `per_surface_assessment` carries exactly 7 rows. The
+single rows shown in the skeleton are format examples, not counts. On an `n/a` row set
+`evidence: ""` and put the one-line reason the dimension does not structurally apply in `note`.
 
 Q1 / `merge_strategy_decision` consistency, pinned: exactly ONE block is `recommended`, and it
 must be the one Q1's verdict names (`hybrid-by-pr-class` -> the `hybrid` block). Every other
 block is `viable` or `rejected`.
+
+`change_type: switch_mechanism` is the value for replacing one mechanism with a different one --
+use it for any merge-strategy change recommendation; no other value fits that class.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates (mechanism or `file:line`), and
@@ -714,6 +791,15 @@ state why the control would FAIL if the defect were real.
 
 `CONFIRMED` requires the behaviour traced to a `file:line` or an observed sampled artefact.
 Anything less is `HYPOTHESIS`.
+
+Field shapes, pinned: `surface`, `question`, and `dimension` on a finding are LISTS -- a finding
+may legitimately span several (C5 spans S2 and S3; DD-B feeds Q1 and Q4). Use the literal string
+`shared` as the sole element of `surface` for a cross-surface finding. Legal `question` values are
+`Q1, Q2, Q3a, Q3b, Q4, Q5, Q6, Q7, Q8` -- note `Q3a`/`Q3b`, never a bare `Q3`.
+`candidate_id` names the CANDIDATE OBSERVATIONS entry a finding or rejection came from, or `null`
+for anything you discovered yourself. Every one of C1..C18 MUST appear exactly once across
+`findings[].candidate_id` and `rejected_candidates[].candidate_id`; that is what makes
+`rejected_count` a real adjudication cross-check rather than a bare tally.
 
 ## SEVERITY AND MATURITY
 
@@ -747,14 +833,14 @@ the field entirely, or one bearing on the surface with no rating, is unassessed.
 - **frontier** = 0 critical AND 0 high findings on that surface, AND every
   `industry_adaptation` entry bearing on that surface is assessed per the rule above.
 - **strong** = 0 critical AND <= 1 high.
-- **solid** = <= 1 critical.
+- **solid** = <= 1 critical AND <= 3 high.
 - **nascent** = otherwise.
 
 `frontier` remains reachable where you argued a property-matched compensating control. Neither a
 `discard-human-ergonomic` nor a `retain-for-human-reader` rating is a maturity penalty -- both
 are recommendations, and a surface can be frontier while carrying either.
 
-Precedence, pinned: `summary.maturity_S1..S6` and `per_surface_assessment[].maturity` MUST agree.
+Precedence, pinned: `summary.maturity_S1..S7` and `per_surface_assessment[].maturity` MUST agree.
 Compute once, write twice; if they disagree the deliverable is invalid.
 
 ## COMMIT / PR MECHANICS
@@ -776,11 +862,16 @@ Compute once, write twice; if they disagree the deliverable is invalid.
    bin/venv-python -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" audits/gitops-agent-first-<sha>.yaml
    ```
    An unrelated `validate --pre` failure is recorded in `meta.contract_notes`, never fixed.
-4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`. Then
-   `git push -u origin HEAD`.
+4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, using this subject
+   verbatim (it follows the repository's `prefix(scope):` convention -- the same convention C4
+   asks you to adjudicate, so do not author a bare `audit:` subject here):
+   ```
+   audit(gitops-agent-first): git-ops agent-first audit deliverables
+   ```
+   Then `git push -u origin HEAD`.
 5. Open the PR via `mcp__github__create_pull_request` (base `main`, ready for review, NOT a
    draft), title:
-   `audit: git-ops procedures for an agent-first repo (merge strategy, commit contract, history consumers, clone depth, provenance stores, wake signals)`
+   `audit(gitops-agent-first): git-ops procedures for an agent-first repo`
    Body: a 2-3 sentence lede plus the `summary` block in a yaml fence.
 6. **END THE TURN.** Do not poll, do not merge, do not subscribe, do not self-approve. The human
    disposes of the PR.
@@ -794,9 +885,12 @@ Compute once, write twice; if they disagree the deliverable is invalid.
 - **Precision over volume.** Fewer than ~8 surviving findings is a valid result -- state it
   plainly and do not pad. A thin findings list with a well-argued Q1 and Q6 is a better outcome
   than a padded one.
-- **Do not confirm the frame.** The requester believes squash-merge may be harming agents. If the
-  evidence does not support that, say so directly and explain what the evidence does support.
-  A well-evidenced `keep-squash` verdict is a full success.
+- **Do not confirm the frame, and do not over-correct against it.** The requester believes
+  squash-merge may be harming agents. If the evidence does not support that, say so directly and
+  explain what the evidence does support. A well-evidenced `keep-squash` verdict is a full
+  success; so is a well-evidenced `switch-to-rebase-merge`, `switch-to-merge-commit`, or
+  `hybrid-by-pr-class` verdict. What is NOT a success is a verdict that follows the weight of the
+  candidate list rather than the weight of the evidence you gathered in DD-A and DD-D.
 - Every rating and verdict must trace to evidence you read in this session. Where you could not
   verify, say `HYPOTHESIS` and explain what would settle it.
 - No emojis. Plain ASCII, ASCII hyphens only.
