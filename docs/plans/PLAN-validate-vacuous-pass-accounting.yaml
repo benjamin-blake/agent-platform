@@ -45,7 +45,7 @@ scope:
       ensure_fresh_dq_results() records its creds-absent early return as a declared skip
       (rec-3085 half 1). Requires TWO edits, not one: a
       registry.outcome_scope("ensure_fresh_dq", kind="scaffold") wrapper, AND narrowing the blanket
-      `except Exception:` at lines 204-210 via a named module-level classifier, because a skip
+      `except Exception:` at :205 (its try: opens at :198) via a named module-level classifier, because a skip
       attached to the blanket handler would launder real bugs into accounted skips. See constraint 5
       -- the earlier "wrapper only, no logic here" framing was unsatisfiable against the live code
       and is retracted. THIS INSTALLS A NEW FAIL-CLOSED BEHAVIOUR (constraint 5a): today the handler
@@ -69,8 +69,10 @@ scope:
     action: Modify
     purpose: >-
       Declare examined counts (the count already exists -- the check prints "N source files
-      checked" to stdout with no structured channel) and declare its recursion-guard and
-      checker-absent early returns as skips. Also pay the measured 72%/16-statement pre-existing
+      checked" to stdout with no structured channel). Per constraint 5b all THREE early returns are
+      classified, not two: the recursion guard (:40) and the checker-absent return (:45) are unmet
+      preconditions -> skipped, while the no-source-file-changes return (:50) is an empty domain ->
+      examined(0)/vacuous. Also pay the measured 72%/16-statement pre-existing
       coverage debt (lines 11-27, the whole _load_coverage_checker body, plus 41-42) -- the worst
       coverage gap in scope.
   - file: scripts/checks/misc/validate_scheduled_agent_logs.py
@@ -194,9 +196,15 @@ scope:
     purpose: >-
       A TestBaseDerivation class carrying both halves of VP step 9's red-green (changed-file base
       AND old-content ref), the rec-3085 dq_unavailable case named by that rec's acceptance, and the
-      8 pre-existing uncovered statements. The existing `_make_run` helper at line 104 must have its
-      old-content branch re-keyed: it currently matches on `"show" in joined and "HEAD:" in joined`,
-      which stops matching once the read is repointed and silently returns "" instead.
+      8 pre-existing uncovered statements. TWO `_make_run` helpers must have their old-content
+      branch re-keyed, not one -- line 104 (TestGraduationGuard) AND line 278
+      (TestGraduationGuardUnavailableCarveout, stale keying at :287). Both match on
+      `"show" in joined and "HEAD:" in joined`, which stops matching once the read is repointed to
+      `git show <base>:...` and silently falls through to stdout "". The second is the dangerous
+      one: its two tests (:296, :314) still PASS with an emptied old_map, because
+      old_map.get(key, False) is already False so the flip is still detected -- so the UNAVAILABLE
+      carve-out silently stops being tested against a populated old_map, and neither VP step 4 nor
+      step 5's coverage gate notices (line 95 stays covered via the first helper).
   - file: tests/checks/misc/test_validate_test_coverage.py
     action: Modify
     purpose: Declared-examined/skip tests plus the 16 pre-existing uncovered statements.
@@ -281,8 +289,11 @@ verification_plan:
     expected: >-
       Passes. Cases assert examined(0)+no-append => "vacuous", examined(3)+no-append => "enforced",
       skipped(reason) => "skipped", no declaration => "undeclared", and any append to `failed` =>
-      "failed" regardless of what was declared. The accumulator is reset between dispatches so runs
-      never cross-contaminate.
+      "failed" regardless of what was declared. Lifecycle, stated precisely because the sloppy form
+      contradicts VP step 10: the per-dispatch DECLARATION SLOT resets on each outcome_scope entry,
+      while the ROW ACCUMULATOR resets per RUN via validation_result.clear() -- mirroring the
+      existing _ATTRIBUTIONS contract at validation_result.py:14-17. Resetting the row list per
+      dispatch would leave exactly one row in the evidence file and fail step 10's len(o)>=97.
     fix_if: >-
       A state collapses into another (most likely vacuous into enforced when count==0 is treated as
       falsy rather than as a declared zero), or accumulator state leaks between dispatches.
@@ -435,6 +446,10 @@ verification_plan:
       matches `git diff HEAD ... -- config/agent/data_quality/`, and (ii) the `git show` argument's
       ref equals the base the diff used, not the literal "HEAD". Pinned as a node id rather than a
       -k selector, per tests/CLAUDE.md and because the graduation registry row needs a node_id.
+      Note _common.get_changed_files() does NOT expose the base it used (it computes
+      `push_context_base() or "origin/main"` internally, with its own returncode-0 fallback to
+      "HEAD"), so assertion (ii) is only satisfiable if the guard re-derives the base itself with
+      that same default -- see the execution step.
     fix_if: >-
       Assertion (a) passes on pre-fix code -- the fixture left the DQ change in the working tree, so
       both bases agree and the discrimination is destroyed; commit it instead. Assertion (b) is the
@@ -442,8 +457,10 @@ verification_plan:
       `"show" in joined and "HEAD:" in joined`, so once the read is repointed that branch stops
       matching, stdout falls through to "", old_map becomes {} and EVERY enforced:true reads as a
       flip -- silent over-blocking that no existing test catches, because
-      test_blocks_new_enforced_true_when_fail already exercises the empty-old_map case. Update
-      _make_run's keying as part of this step.
+      test_blocks_new_enforced_true_when_fail already exercises the empty-old_map case. Update BOTH
+      _make_run helpers' keying as part of this step -- line 104 and line 278; the second is in
+      TestGraduationGuardUnavailableCarveout and its tests keep passing while silently losing their
+      populated-old_map coverage.
     hermetic: true
     graduation: graduate
     graduation_check_id: graduation-guard-committed-base-derivation
@@ -520,7 +537,9 @@ verification_plan:
 test_obligations:
   - source: scripts/checks/registry.py
     behavior: >-
-      The five outcome states stay distinguishable, and the accumulator resets between dispatches.
+      The five outcome states stay distinguishable; the per-dispatch declaration slot resets on each
+      outcome_scope entry while the row accumulator resets per RUN via clear(), so runs never
+      cross-contaminate and a full run still yields one row per dispatched check.
     verification_step: 1
     test_selector: tests/checks/registry/test_accounting.py
     red_green_expectation: >-
@@ -542,7 +561,7 @@ test_obligations:
     verification_step: 4
     test_selector: tests/validate/test_scaffold_gates.py
     red_green_expectation: >-
-      red before (the blanket except at lines 204-210 returns with no record of any kind and no
+      red before (the blanket except at :205 returns with no record of any kind and no
       classifier exists to distinguish causes), green after. Note this file's existing tests at
       :158 and :175 go red BY DESIGN under the new behaviour and are reworked as part of the same
       change -- a red-green on the non-matching-exception path is only meaningful once they stop
@@ -636,7 +655,7 @@ constraints:
   - >-
     (5) The skip declaration in ensure_fresh_dq_results must attach to a NAMED deterministic
     classifier (Decision 155's reader_transient.py two-tier shape), not to the blanket
-    `except Exception:` currently at lines 204-210 -- that handler spans the boto3 import, profile
+    `except Exception:` currently at :205 (its try: opens at :198) -- that handler spans the boto3 import, profile
     resolution, Session construction and the STS call, so a skip on it would launder real bugs into
     accounted skips. Discrimination basis must be explicit about its own limits: botocore types are
     NOT reliably importable at classify time (tests/validate/test_scaffold_gates.py:83-90 stubs
@@ -718,10 +737,21 @@ context:
     old_map would equal new_map and no false->true flip could ever be detected.
   - >-
     GRAIN DECLARATION for check_outcomes (AGENTS.md data-modeling default: name the grain before
-    designing the record). ONE ROW PER DISPATCHED FULL-TIER STEP, not per check -- because the
-    ensure_fresh_dq scaffold shares the collection, a check-only grain would be mixed the moment
-    rec-3085's half lands. Each row therefore carries `kind` ("check" | "scaffold") alongside the
-    step name and status. Write mode is append-within-run then whole-file replace: the evidence
+    designing the record). ONE ROW PER DISPATCHED CHECK, PLUS ANY SCAFFOLD THAT OPENS AN
+    outcome_scope -- because the ensure_fresh_dq scaffold shares the collection, a check-only grain
+    would be mixed the moment rec-3085's half lands. Each row therefore carries `kind`
+    ("check" | "scaffold") alongside the step name and status. KNOWN GAP, constraint-1-imposed:
+    full_sequence() dispatches 103 steps (97 checks + 6 scaffolds -- lint, unit_tests,
+    terraform_checks, dependency_health, ensure_fresh_dq, precommit_all_files) but only
+    ensure_fresh_dq is wrapped here, because the other five closures live in scripts/validate.py
+    lines 112-140 which constraint 1 forbids editing. Achievable row count is therefore 98, not 103.
+    Do NOT state the wider "one row per dispatched step" form in the contract -- Decision 168 makes
+    the contract derive-and-assert authoritative, so an unachievable grain there would ship exactly
+    the false-authoritative-statement defect that rule exists to prevent. Separately,
+    ensure_fresh_dq_results' fresh-cache early return (_scaffolding.py:189-193) declares nothing and
+    will read `undeclared`; declare it as a skip (the runner was not needed) rather than leaving the
+    plan's own new scaffold row undeclared on the common path.
+    Write mode is append-within-run then whole-file replace: the evidence
     file is regenerated every full run and never read as history, so this is not an SCD2 or
     event-journal table and needs no merge key, identity or partitioning -- it is a run artifact.
     That distinction is worth stating because the natural successor home for this stream at T2.36
@@ -846,14 +876,17 @@ execution_steps:
   - >-
     scripts/checks/_scaffolding.py -- wrap ensure_fresh_dq_results' body in
     registry.outcome_scope("ensure_fresh_dq", kind="scaffold"), AND replace the blanket
-    `except Exception:` at lines 204-210 with a named module-level classifier so only
+    `except Exception:` at :205 (its try: opens at :198) with a named module-level classifier so only
     credential-unavailability records a skip while everything else appends to `failed`. Both edits
     are required; the wrapper alone lands the shape constraint 5 forbids. Rework the two colliding
     tests named in constraint 5a in the same commit -- they assert the behaviour being replaced.
   - >-
     scripts/checks/roadmap/check_graduation_guard.py -- repoint BOTH the changed-file derivation
     (off `git diff HEAD`) and the paired `git show HEAD:{path}` old-content read onto
-    _common.get_changed_files()'s push-aware base, filtered to config/agent/data_quality/*.yaml.
+    the SAME committed base, filtered to config/agent/data_quality/*.yaml. The guard must re-derive
+    that base itself as `push_context_base() or "origin/main"`, because get_changed_files() does not
+    expose the base it used and carries its own returncode-0 fallback to "HEAD" -- without an
+    explicit re-derivation VP step 9's assertion (ii) is not satisfiable.
     Then declare examined counts and convert the three dq-latest.json degradation returns into
     declared skips.
   - >-
@@ -910,4 +943,9 @@ rollback: >-
   regenerated every full run and is never read as history. The one piece with independent blast
   radius is the graduation-guard base fix: if it blocks a legitimate PR, revert THAT hunk alone
   (the guard returns to its inert `git diff HEAD` behaviour, which is the status quo ante) and file
-  the finding rather than weakening the guard's verdict logic.
+  the finding rather than weakening the guard's verdict logic. The constraint-5a classifier hunk in
+  _scaffolding.py gets the SAME independent-revert treatment for the same reason -- it is the second
+  live behaviour change in this plan, and an incomplete classifier (one missing NoCredentialsError,
+  ClientError(ExpiredToken), UnauthorizedSSOTokenError or TokenRetrievalError) reddens the post-merge
+  full tier on main and spawns a critical ci_rca rec. Reverting that hunk alone restores the
+  swallow-everything behaviour, which is the status quo ante.
