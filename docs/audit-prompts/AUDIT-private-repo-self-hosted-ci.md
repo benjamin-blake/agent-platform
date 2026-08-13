@@ -133,11 +133,17 @@ Additionally: the `audits/` directory already contains outputs of PRIOR, unrelat
   `tf-gated-apply` Environment.
 - **Wake substrate**: the mechanisms that return control to a watching agent session when CI
   finishes or a PR becomes conflicted. See `AGENTS.md` "Push -> PR -> CI -> merge flow", step 4.
-- **Convergence record**: `s3://.../convergence/personal/sandbox.json`; a red record hard-blocks apply.
+- **Convergence record**: a durable JSON object at the S3 key `convergence/personal/sandbox.json` in
+  the platform data-lake bucket; a red record hard-blocks apply. (The bucket name is deliberately not
+  reproduced here and you do not need to read the object -- the term appears only so the apply-gating
+  mechanism is legible when you encounter it in workflow files.)
 
 ### Out of scope -- do not audit, do not opine
 
-- The DuckLake/Neon + S3 warehouse and its migration status. Stays in AWS. Out of scope.
+- The DuckLake/Neon + S3 warehouse's DESIGN, schema, and migration status. It stays in AWS and this
+  migration does not touch it. **Narrow exclusion:** you MAY and SHOULD reason about the warehouse
+  data as an ASSET when locating what has value and what a visibility flip does or does not protect
+  (Q1 requires exactly this). What is excluded is auditing how the warehouse is built or migrated.
 - Trading strategy, alpha, or any hosted-product domain logic.
 - The Decision 67 executor freeze and the STRATEGIC-plan suspension. Ambient constraints.
 - Whether `validate.py`'s individual checks are correct. Its role as a portability boundary IS in
@@ -290,14 +296,18 @@ Channels you must consider, at minimum:
 - Direct repository read while public.
 - Republication or mirroring by third parties.
 - **Transmission to third-party model providers.** This repository's contents are continuously sent
-  to external model APIs by design (see the roadmap cost model's inference line items, F40). A
+  to external model APIs by design (see the roadmap's `cost_projection` inference line items, F40). A
   visibility flip does not touch this channel. Assess what it means for the protection claim.
 - Anything the platform publishes or exposes that remains legible after the flip.
 
 Treat the residual-leak floor as a BOUNDED INPUT, not the verdict, and reason about it analytically
--- **do not attempt to actually perform a reconstruction**. Assume the public history is effectively
-redactable (0 forks; 1 star, which is the owner's own). Reason about what must stay legible after
-migration and whether that floor erodes the forward protections you enumerated.
+-- **do not attempt to actually perform a reconstruction**.
+
+**On the public history:** for Q1's purposes only, take as a working assumption that the already-published
+history is effectively redactable, and reason forward from there. This is a scoping device to keep Q1
+focused on FUTURE commits -- it is NOT a finding, and it is NOT binding on Q9, which independently
+tests whether that assumption actually holds. If Q9 concludes the history is not meaningfully
+redactable, say so there and note the consequence for Q1 rather than silently revising Q1.
 
 Address (a) and (b) from REQUESTER CONTEXT explicitly.
 
@@ -344,9 +354,22 @@ and is assigned to you: propose the strongest design you can, then rate it hones
 rate `met` on all ten while having hand-waved the hard parts is a failed answer; the adversarial
 review phase will be looking for exactly that.
 
-**EXTERNAL CHECKLIST.** Assess property-by-property, rating each `met | partial | missed` with
+**EXTERNAL CHECKLIST.** Assess property-by-property, rating each `met | partial | missed | n/a` with
 evidence. `partial` requires an argued, property-matched compensating control. This field is the
 SOLE source the maturity top tier reads for S-RUNNER.
+
+`n/a` is a CORRECT and COSTLESS rating, and it does NOT bar the top maturity tier -- it is treated
+exactly like `met` for that gate. Use it where the practice does not structurally apply to this
+deployment. Property 8 (fork-PR workload separation) is a live candidate for `n/a` on a
+single-owner private repository with no outside collaborators, since there may be no untrusted
+workload to separate -- but establish that rather than assuming it, and say what would change the
+answer. Do not use `n/a` to dodge a property that does apply; the adversarial reviewer is
+instructed to look for exactly that.
+
+**Verdict-to-checklist mapping (pinned, so the two cannot silently disagree):** `insufficient` if
+any property is `missed`; `partial` if none are `missed` and at least one is `partial`;
+`sufficient` if every property is `met` or `n/a`. If your holistic judgment disagrees with what
+this rule produces, follow the rule for the `verdict` field and argue the disagreement in `prose`.
 
 | # | External practice |
 |---|---|
@@ -405,8 +428,12 @@ Named dependencies to trace: the `tf-gated-apply` Environment (declared as a job
 and the server-side half of the never-commit-on-main rule (the client-side half is the
 `.claude/hooks/never_on_main.py` PreToolUse hook).
 
-Price the alternatives against GitHub Pro. Cost is weighted CO-EQUAL with IP protection in this
-audit -- do not dismiss a price difference as immaterial without argument, and do not inflate one.
+**Pinned plan set** -- assess exactly these three and no others: GitHub **Free**, **Pro**, and
+**Team**. Enterprise tiers are out of scope for a single-owner project. Every cost table in this
+audit uses this same three-plan axis.
+
+Cost is weighted CO-EQUAL with IP protection in this audit -- do not dismiss a price difference as
+immaterial without argument, and do not inflate one.
 
 Verdict enum: `no-loss | loss-mitigable | loss-blocking`
 
@@ -521,10 +548,18 @@ Seeded candidates below. Answer each AND extend the list from your own analysis.
 1. The proposal reverses two ratified decisions and invalidates a completed tier item's exit
    criteria (see DEDUP DISCIPLINE). What is the process obligation for reversing a ratified decision
    in this repository, and does this audit satisfy it?
-2. `AGENTS.md` and `docs/PROJECT_CONTEXT.md` state the platform end-state is "a public, agent-first
-   automation platform". Does going private contradict a stated end-state, and if so, which artifacts
-   must change?
+2. `docs/PROJECT_CONTEXT.md:20` states "The platform end-state is a public, agent-first automation
+   platform". Does going private contradict that stated end-state, and if so, which artifacts must
+   change? (Note: this sentence is in `PROJECT_CONTEXT.md` only -- `AGENTS.md` states a
+   confidential-data boundary, not an end-state. Do not conflate them.)
 3. What happens to the `claude.yml` workflow and the Claude Code OAuth token path on a private repo?
+3a. **What happens to the AGENT DEVELOPMENT SURFACE itself?** Claude Code on the web reaches this
+   repository through harness-configured GitHub access, and the repo's own `.mcp.json` configures a
+   `github-full` MCP server alongside the harness `github` server; `GHAS_PROBE_TOKEN` is a
+   fine-grained PAT scoped to this repository. Assess whether a visibility flip changes what any of
+   these can reach, whether any token or app installation needs re-scoping or re-authorising, and
+   whether there is a window in which the development surface itself stops working. A failure here
+   is day-one stop-work, not a slow degradation -- weight it accordingly.
 4. Does a single-owner private repository change the meaning of the sole-developer compensating
    controls (`prevent_self_review = false`, `required_approving_review_count = 0`, admin bypass)?
 5. Is there a middle option neither the requester nor this prompt named -- private repo with
@@ -567,20 +602,36 @@ reach.
 
 Establish the true current cost of CI, then the true post-migration cost. Derive every figure.
 
-**Start from the repository's own cost model** -- `docs/ROADMAP-PLATFORM.yaml`, the `cost_model`
-block (near lines 279-300). It carries a headline `total_per_month_usd`, an enumerated `breakdown`,
-a `headline_basis` with an explicit unenumerated add-on, and a `line_items_not_enumerated` list.
-Two entries are directly on point: `ec2_runner_24_7` records the retired self-hosted runner's
-historical cost, and `line_items_not_enumerated` explicitly folds "GH-hosted runner minutes" into
-the add-on. This is a LIVE system of record. A cost finding filed as `novel` without searching it
-is a dedup failure.
+**Start from the repository's own cost projection** -- `docs/ROADMAP-PLATFORM.yaml`, the top-level
+key **`cost_projection`** at line 268. Note the exact key name: there is NO key called `cost_model`
+in this repository, and grepping for one returns nothing.
+
+Within it, `current_scale` (line 278) carries `total_per_month_usd` (279), an enumerated `breakdown`
+(281-290), a `headline_basis` with an explicit unenumerated add-on (292-299), and
+`line_items_not_enumerated` (300). Three entries are directly on point: `ec2_runner_24_7` records
+the retired self-hosted runner's historical cost, `line_items_not_enumerated` explicitly folds
+"GH-hosted runner minutes" into the add-on, and `substrate_reevaluation_triggers` (near 348-352)
+lists "Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)" as a
+recorded trigger that invalidates the projection.
+
+That last entry means the repository has ALREADY anticipated, in its own system of record, that a
+private flip removes a free-minutes term. Engage with it; do not re-derive it as a novel discovery.
+
+**Disambiguation:** `cost_projection` contains a SECOND scale block, `projected_100tb_scale` (line
+353), whose `total_per_month_usd` is "910-1880". That is a hypothetical future-scale projection,
+NOT the current bill. Use `current_scale` for anything describing today.
+
+This is a LIVE system of record. A cost finding filed as `novel` without searching it is a dedup
+failure.
 
 Trace end to end: what the repository is billed today; what changes at the moment of the visibility
-flip; the applicable free allowance on each candidate plan; actual monthly usage; and the residual
-bill under each option (stay public / private + hosted runners / private + self-hosted / hybrid).
-Include the self-hosted option's non-Actions costs: electricity, hardware amortisation, and human
-maintenance time. Several of these inputs are UNSTATED -- follow the unstated-input rule and give
-ranges.
+flip; the applicable free allowance on each of the three pinned plans (Free / Pro / Team); actual
+monthly usage; and the residual bill under each option (stay public / private + hosted runners /
+private + self-hosted / hybrid). Include the self-hosted option's non-Actions costs: electricity,
+hardware amortisation against the ~GBP 1,390 capital cost, and human maintenance time. Several
+inputs are UNSTATED -- follow the unstated-input rule and give ranges.
+
+Record the resulting matrix in the `cost_analysis` output block, not only in prose.
 
 Counterfactual: **if the self-hosted runner were removed from the plan and the repository simply
 went private on a paid GitHub plan, what would actually change?** Answer in money and in
@@ -729,17 +780,32 @@ before relying on it** -- re-read the file, confirm the line, and record any non
   is retired, on the reasoning that both events `subscribe_pr_activity` cannot deliver natively are
   now covered by event-driven comments and no dropped-signal gap remains.
 - F37. `LICENSE` is the Apache License, Version 2.0.
-- F38. `terraform/CLAUDE.md` and `terraform/github/CLAUDE.md` state that `terraform/github/**` is
-  excluded from `terraform-apply-sandbox.yml`'s path filter and must never be added to any auto-apply
-  workflow; `terraform/github/CLAUDE.md` documents a "Lockout recovery" procedure.
-- F39. `docs/ROADMAP-PLATFORM.yaml` `cost_model.current_scale` records
-  `total_per_month_usd: "22-59"`, a `breakdown` whose `ec2_runner_24_7` entry reads
-  `"$0 (retired 2026-05-28 per CD.21; ~$35/mo historical, line retained as baseline)"`, a
-  `headline_basis` with `add_on_usd: "10-30"`, and a `line_items_not_enumerated` list that includes
-  "GH-hosted runner minutes".
-- F40. The same `cost_model` breakdown includes `deepseek_executor_inference` and
+- F38. `terraform/github/CLAUDE.md` states (lines 11-15 and 73-75) that `terraform/github/**` is
+  excluded from `terraform-apply-sandbox.yml`'s path filter (`terraform/personal/**`) and must never
+  be added to any auto-apply workflow, and documents a "Lockout recovery" procedure at line 79.
+  `terraform/CLAUDE.md` does NOT contain that statement; its only `terraform/github` reference is a
+  break-glass routing-table row at line 87.
+- F39. `docs/ROADMAP-PLATFORM.yaml` top-level key `cost_projection` (line 268), sub-key
+  `current_scale` (line 278), records `total_per_month_usd: "22-59"` (279); a `breakdown` (281-290)
+  whose `ec2_runner_24_7` entry reads `"$0 (retired 2026-05-28 per CD.21; ~$35/mo historical, line
+  retained as baseline)"`; a `headline_basis` with `add_on_usd: "10-30"` (292-299); and a
+  `line_items_not_enumerated` list (300) that includes "GH-hosted runner minutes". **There is no key
+  named `cost_model` in this file.**
+- F40. The same `breakdown` includes `deepseek_executor_inference` and
   `anthropic_escape_hatch_spillover` line items, describing recurring inference spend through
   external model-provider APIs.
+- F43. `cost_projection.substrate_reevaluation_triggers` (near lines 348-352) lists four triggers
+  that invalidate the projection. One reads: "Repo-visibility change (a private flip removes
+  hosted_cli_runner's free-minutes term)".
+- F44. `cost_projection` contains a second scale block, `projected_100tb_scale` (line 353), with
+  `total_per_month_usd: "910-1880"`. It is a hypothetical future-scale projection, not a current
+  figure.
+- F45. `docs/PROJECT_CONTEXT.md:20` reads "The platform end-state is a public, agent-first automation
+  platform with:". `AGENTS.md` contains no "end-state" statement.
+- F46. F9, F10, F11, and F12 were obtained by the composer from the live GitHub Actions API at
+  compose time. They have NO backing repository artifact and cannot be verified from the tree. Re-derive
+  them under the EMPIRICAL PASS caps, or mark dependent findings `HYPOTHESIS` if the API is
+  unreachable.
 - F41. `docs/ROADMAP-PLATFORM.yaml` tier item T2.10, "GitHub OIDC federation + hosted-runner
   migration; mark self-hosted runner deprecated", has `status: complete`,
   `completed_at: "2026-05-28"`, `related_candidate_decisions: [CD.21]`, and exit criteria including
@@ -823,10 +889,18 @@ self-hosted-runner guidance, and any pricing announcement relevant to premise P1
 the repository, and all of it changes over time.
 
 **Use `WebFetch` and/or `WebSearch`** to consult primary sources -- prefer `docs.github.com` and
-official GitHub changelog/blog posts over third-party summaries. Cap: 8 fetches total.
+official GitHub changelog/blog posts over third-party summaries.
 
-Record every external claim as a finding or answer with `evidence_kind: external` and an
-`evidence` value of the form `<publisher> | <page title or doc path> | <URL> | retrieved <date>`.
+**Budget: 8 `WebFetch` calls total. `WebSearch` calls are UNCAPPED** -- search to locate the right
+page, then spend a fetch on it. The cap exists to bound page retrieval, not discovery.
+
+Record every external claim with `evidence_kind: external` and an `evidence` value of this form,
+using ` :: ` as the field delimiter (NOT a pipe -- the pipe is an alternation separator elsewhere in
+this schema):
+
+```
+<publisher> :: <page title or doc path> :: <URL> :: retrieved <YYYY-MM-DD>
+```
 
 **Degraded path -- if web access is unavailable or a fetch fails:** do NOT abort and do NOT answer
 from training knowledge as though it were verified. Set `meta.degraded_external = true`, mark every
@@ -854,7 +928,10 @@ Execute in order. Synthesis and maturity are always LAST.
 Before finalising, subject your own findings to adversarial review and iterate until convergence.
 You are structurally the wrong judge of your own reasoning; this phase corrects for that.
 
-**Dispatch.** Spawn a subagent as an adversarial reviewer, with repository read access. Give it the
+**Dispatch.** Use the `Agent` tool (`subagent_type: "general-purpose"`) to spawn an adversarial
+reviewer; it inherits repository read access. A dispatch has FAILED only if the tool call itself
+errors or the subagent returns no parseable verdict list -- a reviewer that returns findings you
+disagree with has succeeded. Give it the
 finding set (id, title, evidence, severity, confidence, reasoning), the `migration_benefits[]`
 entries, the question verdicts, and this instruction -- and NOTHING about which items you are
 confident in or worried about, as that biases the read:
@@ -882,19 +959,21 @@ revision that fixes one item can introduce another, and a reviewer that has alre
 reasoning is no longer adversarial.
 
 **Convergence criterion.** Converged when a round returns zero `refuted` and zero `overstated`
-verdicts AND raises no bias finding. **Round cap: 3.** If not converged after 3 rounds, stop, keep
-the surviving items, mark each unconverged item `confidence: HYPOTHESIS` and
-`adversarial_verdict: unconverged`, and record the unresolved disagreement in
-`meta.unconverged_items` with one line each.
+verdicts AND raises no bias finding. **Round cap: 3.**
 
-**Record.** Set `meta.adversarial_rounds` to the number of rounds actually dispatched, and
-`meta.adversarial_refuted_count` to the total refuted across all rounds.
+**Record.** Set `meta.adversarial_rounds` to the number of rounds actually dispatched,
+`meta.adversarial_refuted_count` to the total refuted across all rounds, and
+`meta.adversarial_status` to exactly one of these three values -- there are no others:
 
-**If dispatch fails:** retry once. If it fails again, set `meta.adversarial_rounds: 0`,
-`meta.adversarial_status: "dispatch-failed"`, mark every finding `adversarial_verdict: not-reviewed`,
-downgrade every `CONFIRMED` finding to `HYPOTHESIS`, and note it in `meta.contract_notes`. This is a
-DEGRADED but shippable run -- the `.md` report must say so in its opening paragraph. Do not silently
-skip the phase and do not abort.
+| Value | Set it when |
+|---|---|
+| `converged` | The convergence criterion above was met within 3 rounds. This is the clean, non-degraded outcome. |
+| `round-capped` | 3 rounds ran without meeting the criterion. Keep the surviving items, mark each unconverged item `confidence: HYPOTHESIS` and `adversarial_verdict: unconverged`, and record each disagreement in `meta.unconverged_items`. |
+| `dispatch-failed` | Dispatch failed, was retried once, and failed again. Set `adversarial_rounds: 0`, mark every finding and benefit `adversarial_verdict: not-reviewed`, downgrade every `CONFIRMED` item to `HYPOTHESIS`, and note it in `meta.contract_notes`. |
+
+`round-capped` and `dispatch-failed` are DEGRADED but shippable outcomes and the `.md` must say so
+in its opening paragraph. `converged` is not degraded and requires no such disclaimer. Do not
+silently skip this phase and do not abort.
 
 **Anti-pattern.** Do not tell the reviewer which items you consider strong. Do not reuse a
 reviewer's context across rounds. Do not treat silence as agreement.
@@ -907,7 +986,8 @@ search is a `HYPOTHESIS`, not a `CONFIRMED` defect.
 **Ownership surfaces to search -- all five:**
 1. `docs/ROADMAP-PLATFORM.yaml` -- `tier_items[]` and `candidate_decisions[]`. Use a
    `bin/venv-python -c` `yaml.safe_load` projection; do NOT read the file whole.
-2. `docs/ROADMAP-PLATFORM.yaml` -- the `cost_model` block, for any cost finding (see DD-A).
+2. `docs/ROADMAP-PLATFORM.yaml` -- the `cost_projection` block (top-level key at line 268), for any
+   cost finding (see DD-A). Search for `cost_projection`; `cost_model` does not exist here.
 3. `docs/DECISIONS.md` -- grep `^## Decision` headers, then read only matching entries.
 4. **`docs/DECISIONS_ARCHIVE.md`** -- same grep. Superseded decisions live ONLY here; Decision 68 is
    one of them (F42). Omitting this surface produces false negatives.
@@ -957,17 +1037,20 @@ audit:
     degraded_dedup: false
     degraded_empirical: false
     degraded_external: false
-    access_limitations: []          # endpoints that refused or were unauthorized
+    access_limitations:             # endpoints that refused or were unauthorized
+      - {endpoint: "", failure: "", what_it_blocked: ""}
     assumed_inputs:                 # every unstated input you had to assume
       - {input: "", assumed_value: "", why: "", sensitivity: ""}
     adversarial_rounds: 0
-    adversarial_status: completed|converged|round-capped|dispatch-failed
+    adversarial_status: converged|round-capped|dispatch-failed
     adversarial_refuted_count: 0
-    unconverged_items: []
+    unconverged_items:
+      - {id: "<finding or benefit id>", disagreement: "<one line>"}
     premises_tested:                # P1, P2 from REQUESTER CONTEXT
       - {id: P1, holds: true|false|unverified, evidence: "", effect_on_answers: ""}
-    contract_notes: ""              # read by the human reviewing the PR; also surfaced in the .md
-    stale_anchors: []
+    contract_notes: ""              # surfaced verbatim in the .md when non-empty
+    stale_anchors:
+      - {anchor: "<as cited in this prompt>", found_instead: "", affects: [<question ids>]}
   question_answers:
     # GENERIC shape -- Q2, Q4, Q5, Q6, Q7, Q8, Q10, Q11:
     - {q: Q2, verdict: <that question's pinned enum>, basis: [<finding ids>], prose: ""}
@@ -998,18 +1081,51 @@ audit:
     # Q12 shape (answers list, NO verdict):
     - {q: Q12, answers: [{question: "", answer: "", basis: [<finding ids>]}]}
   intent_dependencies:
+    # ONLY questions whose conclusion actually FLIPS across I-A..I-D. A question that lands the
+    # same way under all four intents does NOT get an entry. Q1 is expected here; others only if
+    # they genuinely flip.
+    # PRECEDENCE: for Q1, question_answers Q1.per_intent is the system of record for the
+    # per-intent verdicts; this block explains the DEPENDENCY and must not contradict it.
     - {question: Q1..Q12, flips_on: [I-A, I-B, I-C, I-D], conclusion_under_each: "",
        what_the_requester_must_decide: ""}
+  cost_analysis:
+    # DD-A's structured output. Neutral -- neither a finding nor a benefit.
+    current_billed_monthly_usd: ""      # what the repo is billed TODAY, with basis
+    monthly_usage_minutes: ""
+    options:
+      - {option: stay-public|private-hosted-runners|private-self-hosted|hybrid,
+         plan: Free|Pro|Team,
+         actions_cost_usd_per_month: "",
+         plan_cost_usd_per_month: "",
+         non_actions_cost_usd_per_month: "",   # electricity, amortisation, maintenance
+         total_usd_per_month: "",
+         assumptions: [<keys into meta.assumed_inputs>],
+         confidence: CONFIRMED|HYPOTHESIS}
+    counterfactual_no_self_hosting: ""  # DD-A's "private on a paid plan instead" answer
+    dedup_note: ""                      # what cost_projection already owns
   migration_benefits:
-    # REQUIRED block. Evidence the migration IMPROVES something. Same rigor as findings.
-    # If genuinely empty, write [] and say why in summary.benefits_note -- do not omit the key.
+    # REQUIRED block. Evidence the migration IMPROVES something. SAME RIGOR AS FINDINGS --
+    # a benefit is dedup-searched, magnitude-stated, and adversarially reviewed exactly as a
+    # finding is. If genuinely empty, write [] and say why in summary.benefits_note.
     - id: BEN-01
-      surface: <surface|shared>
+      surface: S-VIS|S-RUNNER|S-CI|S-WAKE|S-GOV|S-SEC|S-CRED|shared
+      question: Q1..Q12                 # the question this benefit bears on
       title: ""
       claim: ""
-      evidence: "file:line|item-id|external-citation"
+      evidence: "file:line | item-id | external citation"
       evidence_kind: static|observed|external
-      magnitude: "<what it is worth, in money, time, or capability>"
+      current_behavior: ""
+      improved_behavior: ""
+      magnitude: XS|S|M|L               # XS trivial; S noticeable; M materially changes a
+                                        # workflow or a cost line; L changes the decision
+      magnitude_rationale: ""
+      compensating_alternatives_considered: ""  # can this benefit be had WITHOUT the migration?
+      roadmap_crossref:
+        classification: novel|planned-insufficient|planned-unbuilt
+        item_ids: []
+        dedup_search_terms: []
+        dedup_hit_count: 0
+        note: ""
       confidence: CONFIRMED|HYPOTHESIS
       adversarial_verdict: stands|overstated-and-revised|unconverged|not-reviewed
   per_surface_assessment:
@@ -1029,9 +1145,10 @@ audit:
       surface: S-VIS|S-RUNNER|S-CI|S-WAKE|S-GOV|S-SEC|S-CRED|shared
       question: Q1..Q12             # the PRIMARY question this serves
       also_serves: []               # any additional question ids
-      dimension: VD1..VD7
+      dimension: VD1..VD7           # the PRIMARY dimension
+      also_dimensions: []           # any additional dimension ids
       title: ""
-      evidence: "file:line|item-id|external-citation"
+      evidence: "<file:line, or item-id, or an external citation in the ' :: ' form>"
       evidence_kind: static|observed|external
       current_behavior: ""
       ideal_behavior: ""
@@ -1062,7 +1179,8 @@ audit:
     planned_insufficient_count: 0
     planned_unbuilt_count: 0
     total_benefits: 0
-    benefits_note: ""
+    benefits_note: ""               # required when migration_benefits is empty or near-empty
+    top_benefits: []                # benefit ids, highest magnitude first
     top_improvements: []            # finding ids; [] is legal when findings is empty
     highest_leverage_change: ""     # a finding id, or "" when findings is empty
     go_no_go: recommend-private|recommend-public|recommend-conditional
@@ -1088,11 +1206,13 @@ audit:
 
 **COUNTING INVARIANT.** `findings[]` is the SOLE enumerated list of PROBLEMS.
 `total_findings = len(findings) = novel_count + planned_insufficient_count + planned_unbuilt_count`.
-`migration_benefits[]` is separately counted as `total_benefits` and is NEVER added to
-`total_findings`. Fully-covered or refuted candidates live in `rejected_candidates[]`.
-`rubric_ratings`, `question_answers`, `migration_plan`, `intent_dependencies`, and
-`per_surface_assessment` are systems-of-record referenced FROM findings, never re-counted.
-`top_improvements` and `highest_leverage_change` MUST be finding ids when findings exist.
+`migration_benefits[]` is the SOLE enumerated list of BENEFITS, counted separately as
+`total_benefits = len(migration_benefits)` and NEVER added to `total_findings`. Fully-covered or
+refuted candidates from either list live in `rejected_candidates[]`. `rubric_ratings`,
+`question_answers`, `migration_plan`, `intent_dependencies`, `cost_analysis`, and
+`per_surface_assessment` are systems-of-record referenced FROM findings and benefits, never
+re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids when findings
+exist.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why the control would
@@ -1126,16 +1246,29 @@ if it exercises the SAME property AND would FAIL if the defect were real. Apply 
 to the control itself. A control that cannot catch the break neither lowers severity nor justifies
 dismissal -- say so explicitly rather than silently discounting it.
 
-**Maturity.** Compute LAST, per surface, top-down, first match wins. "Open" means present in the
-final `findings[]` for that surface; items in `rejected_candidates[]` do not count. A
-`HYPOTHESIS`-confidence finding DOES count toward its severity tier -- uncertainty is not an
-exemption; if that drives a rating you consider unfair, say so in the `note`.
+**Maturity.** Compute LAST, per surface, top-down, first match wins.
 
-- **frontier** -- 0 open critical and 0 open high findings on that surface, AND (S-RUNNER only)
-  every property in Q3's `external_checklist` rated `met` or `partial`, never `missed`.
-- **strong** -- 0 critical and <= 1 high.
-- **solid** -- <= 1 critical.
-- **nascent** -- otherwise.
+Counting rules, so the ladder is unambiguous:
+
+- "Open" means present in the final `findings[]`; items in `rejected_candidates[]` do not count.
+- A finding counts toward a surface if that surface is its `surface` value. **A finding with
+  `surface: shared` counts toward EVERY surface named in its `evidence` or its `also_serves`
+  reasoning -- at minimum, toward every surface it materially describes.** A `shared` finding must
+  never vanish from maturity entirely; if you cannot attribute it to at least one surface, it is
+  not `shared`, it belongs to a specific surface.
+- A `HYPOTHESIS`-confidence finding DOES count toward its severity tier. Uncertainty is not an
+  exemption; if that drives a rating you consider unfair, say so in the `note`.
+- `migration_benefits[]` do NOT enter maturity. Maturity measures risk, not net desirability; the
+  go/no-go lives in Q1, which weighs both.
+
+Ladder:
+
+- **frontier** -- 0 open critical AND 0 open high on that surface, AND (S-RUNNER only) every
+  property in Q3's `external_checklist` rated `met`, `partial`, or `n/a` -- never `missed`.
+- **strong** -- 0 critical AND <= 1 high.
+- **solid** -- <= 1 critical AND <= 4 high.
+- **nascent** -- otherwise (including 0 critical with 5 or more high -- an unbounded pile of high
+  findings must not rest at `solid`).
 
 The top rating remains reachable where you argued a property-matched compensating control. Nothing
 in this prompt's framing forecloses it.
@@ -1155,8 +1288,10 @@ DEDUP DISCIPLINE depends on. These are gitignored caches; never commit them.
 
 **Degraded paths -- never abort, never improvise:**
 
-- IF cache-gen fails (credentials or egress down): set `meta.degraded_dedup = true`, mark every
-  `roadmap_crossref` `confidence: HYPOTHESIS` and `dedup_hit_count: null`, proceed.
+- IF cache-gen fails (credentials or egress down): set `meta.degraded_dedup = true`, set every
+  affected item's top-level `confidence` to `HYPOTHESIS` and its `roadmap_crossref.dedup_hit_count`
+  to `null`, and proceed. (`roadmap_crossref` has no `confidence` key of its own -- `confidence` is
+  the finding-level field.)
   `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, and `docs/DECISIONS_ARCHIVE.md` are on disk and
   remain searchable regardless.
 - IF the GitHub Actions API is unavailable: `meta.degraded_empirical = true`, downgrade affected
@@ -1211,6 +1346,10 @@ recommend.
 
 - **Fewer than ~8 surviving findings is a valid result. State it plainly and do not pad.** A short,
   correct audit is worth more than a long one padded to look thorough.
+- **The same floor applies to benefits: an empty or near-empty `migration_benefits[]` is a valid
+  result, and so is a long one. Do not pad benefits to manufacture balance, and do not suppress
+  them to look rigorous.** A benefit you would not defend under adversarial review does not belong
+  in the list; one you would defend belongs there even if it is the only entry.
 - **Precision over volume.** One traced, adversarially-survived finding outranks five plausible ones.
 - **A run that merely confirms this prompt's candidates has failed.** The candidate list is a
   starting set, and several entries may be wrong.
