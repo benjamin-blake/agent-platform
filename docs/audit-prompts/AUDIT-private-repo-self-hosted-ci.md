@@ -179,10 +179,16 @@ purchase record (April 2025):
 Three properties of this specification are load-bearing and easy to miss:
 
 - **The memory is single-channel.** One 32 GB module populates one channel on a board that supports
-  two. Memory bandwidth is roughly half what a matched 2x16GB pair would deliver on the same board,
-  and a 32-thread CPU saturating a single channel is a plausible bottleneck for parallel workloads.
-  Free DIMM slots exist, so this is remediable for the price of RAM -- factor that into any
-  recommendation rather than treating it as fixed.
+  two. Memory bandwidth is roughly half what a matched dual-channel configuration would deliver on
+  the same board, and a 32-thread CPU saturating a single channel is a plausible bottleneck for
+  parallel workloads. Free DIMM slots exist, so this is remediable -- but **NOT cheaply**. The
+  module cost roughly GBP 73 in April 2025; the requester reports the current price of an equivalent
+  stick at approximately **GBP 260** (DDR5 pricing has risen sharply since purchase). Treat a second
+  module as a material capital line item in DD-A, not a rounding error, and do NOT assume commodity
+  RAM pricing from general knowledge -- use the requester-supplied current figure and mark it
+  `evidence_kind: static` sourced to this prompt. If your analysis concludes the memory channel IS
+  the binding constraint, say so plainly and price the upgrade; if it is not, say that too, because
+  it saves the requester GBP 260.
 - **32 GB total across up to 32 concurrent workers** is roughly 1 GB per worker before accounting
   for the OS, the container runtime, and any co-resident workload.
 - **The GPU is a low-profile RTX 3050 (6 GB)** -- adequate for display output, not a compute asset.
@@ -247,12 +253,15 @@ flagged where it appears. Verify each against primary sources before building an
 if a premise proves false, say so and re-frame the affected question rather than answering the
 false version.
 
-- **P1** (feeds Q10): that GitHub announced a per-minute platform charge for self-hosted runners
+(Label note: these premises are `PR-1` and `PR-2`. The METHOD section separately uses `P1..P8` for
+execution phases -- different namespace, no relation.)
+
+- **PR-1** (feeds Q10): that GitHub announced a per-minute platform charge for self-hosted runners
   effective 2026-03-01, and that it was postponed rather than cancelled. No repository artifact
   records this. If you cannot corroborate it, treat Q10 as the general question "how portable is
   this CI if self-hosted execution stops being free or stops being available", which does not
-  depend on P1.
-- **P2** (feeds TASK, Q1): that GitHub requires or restricts self-hosted runners to private
+  depend on PR-1.
+- **PR-2** (feeds TASK, Q1): that GitHub requires or restricts self-hosted runners to private
   repositories. GitHub's published guidance on this has historically been a RECOMMENDATION about
   fork-PR risk rather than an enforced restriction. Establish the current, actual wording; the
   strength of the coupling between the two decisions depends on it, and if the coupling is weaker
@@ -360,29 +369,29 @@ SOLE source the maturity top tier reads for S-RUNNER.
 
 `n/a` is a CORRECT and COSTLESS rating, and it does NOT bar the top maturity tier -- it is treated
 exactly like `met` for that gate. Use it where the practice does not structurally apply to this
-deployment. Property 8 (fork-PR workload separation) is a live candidate for `n/a` on a
-single-owner private repository with no outside collaborators, since there may be no untrusted
-workload to separate -- but establish that rather than assuming it, and say what would change the
-answer. Do not use `n/a` to dodge a property that does apply; the adversarial reviewer is
-instructed to look for exactly that.
+deployment. RP8 (fork-PR workload separation) is a live candidate for `n/a` on a single-owner
+private repository with no outside collaborators, since there may be no untrusted workload to
+separate -- but establish that rather than assuming it, and say what would change the answer. Do
+not use `n/a` to dodge a property that does apply; the adversarial reviewer is instructed to look
+for exactly that.
 
 **Verdict-to-checklist mapping (pinned, so the two cannot silently disagree):** `insufficient` if
 any property is `missed`; `partial` if none are `missed` and at least one is `partial`;
 `sufficient` if every property is `met` or `n/a`. If your holistic judgment disagrees with what
 this rule produces, follow the rule for the `verdict` field and argue the disagreement in `prose`.
 
-| # | External practice |
+| ID | External practice |
 |---|---|
-| 1 | Ephemeral (single-job) runners rather than persistent, per GitHub's hardened-runner guidance |
-| 2 | Just-in-time / short-lived registration tokens rather than a long-lived registration secret |
-| 3 | Job-level container isolation to approximate `ubuntu-latest` image parity |
-| 4 | Runner process executes as a non-root, least-privilege service account |
-| 5 | Restricted outbound network egress from the runner host |
-| 6 | Defined runner-version upgrade and pinning policy |
-| 7 | Host-level liveness monitoring and alerting on runner availability |
-| 8 | Separation of untrusted (fork PR) workloads from privileged workloads, by runner group or label |
-| 9 | Secrets never persisted to the runner filesystem across jobs |
-| 10 | Workspace and build-cache cleanup between jobs (no state bleed) |
+| RP1 | Ephemeral (single-job) runners rather than persistent, per GitHub's hardened-runner guidance |
+| RP2 | Just-in-time / short-lived registration tokens rather than a long-lived registration secret |
+| RP3 | Job-level container isolation to approximate `ubuntu-latest` image parity |
+| RP4 | Runner process executes as a non-root, least-privilege service account |
+| RP5 | Restricted outbound network egress from the runner host |
+| RP6 | Defined runner-version upgrade and pinning policy |
+| RP7 | Host-level liveness monitoring and alerting on runner availability |
+| RP8 | Separation of untrusted (fork PR) workloads from privileged workloads, by runner group or label |
+| RP9 | Secrets never persisted to the runner filesystem across jobs |
+| RP10 | Workspace and build-cache cleanup between jobs (no state bleed) |
 
 Verdict enum: `sufficient | partial | insufficient`
 
@@ -431,6 +440,17 @@ and the server-side half of the never-commit-on-main rule (the client-side half 
 **Pinned plan set** -- assess exactly these three and no others: GitHub **Free**, **Pro**, and
 **Team**. Enterprise tiers are out of scope for a single-owner project. Every cost table in this
 audit uses this same three-plan axis.
+
+**Team carries a precondition you must examine, not assume.** This repository is owned by a personal
+account. Verify whether Team is reachable at all without first creating an organisation and
+TRANSFERRING the repository into it. If a transfer is required, it is a substantial change in its own
+right and you must assess its consequences before costing Team as an option: the OIDC trust conditions
+are pinned to `repo:<owner>/<repo>` subject claims (F28) and a transfer changes the owner segment;
+every PAT and app installation is scoped to the current path; and `.github/CODEOWNERS` semantics
+change once an organisation with teams exists. Treat "adopt Team" as "adopt Team AND transfer the
+repository to an org", price it that way, and if the transfer's consequences are severe enough to
+disqualify the option, say so and drop Team from the recommendation rather than carrying a
+precondition-laden row through the cost table.
 
 Cost is weighted CO-EQUAL with IP protection in this audit -- do not dismiss a price difference as
 immaterial without argument, and do not inflate one.
@@ -510,7 +530,7 @@ Plus a license recommendation: `keep-apache-2.0 | change-to-<named-license> | du
 
 ### Q10 -- Escape hatch
 
-**Premise P1 applies here and is uncorroborated -- verify it first** (see REQUESTER CONTEXT). If P1
+**Premise PR-1 applies here and is uncorroborated -- verify it first** (see REQUESTER CONTEXT). If PR-1
 does not hold, answer the premise-independent form: how portable is this CI if self-hosted execution
 stops being free, stops being available, or must be abandoned for any reason?
 
@@ -553,13 +573,6 @@ Seeded candidates below. Answer each AND extend the list from your own analysis.
    change? (Note: this sentence is in `PROJECT_CONTEXT.md` only -- `AGENTS.md` states a
    confidential-data boundary, not an end-state. Do not conflate them.)
 3. What happens to the `claude.yml` workflow and the Claude Code OAuth token path on a private repo?
-3a. **What happens to the AGENT DEVELOPMENT SURFACE itself?** Claude Code on the web reaches this
-   repository through harness-configured GitHub access, and the repo's own `.mcp.json` configures a
-   `github-full` MCP server alongside the harness `github` server; `GHAS_PROBE_TOKEN` is a
-   fine-grained PAT scoped to this repository. Assess whether a visibility flip changes what any of
-   these can reach, whether any token or app installation needs re-scoping or re-authorising, and
-   whether there is a window in which the development surface itself stops working. A failure here
-   is day-one stop-work, not a slow degradation -- weight it accordingly.
 4. Does a single-owner private repository change the meaning of the sole-developer compensating
    controls (`prevent_self_review = false`, `required_approving_review_count = 0`, admin bypass)?
 5. Is there a middle option neither the requester nor this prompt named -- private repo with
@@ -578,9 +591,16 @@ Rate every dimension for every surface. Pinned enum: `strong | adequate | weak |
 `n/a` is a CORRECT and COSTLESS rating where a dimension does not structurally apply. Never
 manufacture a rating or a finding to fill a cell.
 
+**Emit EXACTLY 49 `rubric_ratings` entries** -- seven surfaces x seven dimensions, no omissions.
+Use `n/a` where a dimension does not apply; do not drop the row.
+
 Rate the POST-MIGRATION state as proposed -- this is a forward-looking assessment, not a review of
 the status quo. Where the current state is materially better or worse on a dimension, say so in the
 `note` field.
+
+Note that S-RUNNER is the one surface where you are rating a design YOU authored (in Q3). Hold it to
+the same standard as the six you did not author; the adversarial reviewer is instructed to check
+whether you graded your own work more generously.
 
 | ID | Dimension | Asks |
 |---|---|---|
@@ -607,15 +627,16 @@ key **`cost_projection`** at line 268. Note the exact key name: there is NO key 
 in this repository, and grepping for one returns nothing.
 
 Within it, `current_scale` (line 278) carries `total_per_month_usd` (279), an enumerated `breakdown`
-(281-290), a `headline_basis` with an explicit unenumerated add-on (292-299), and
-`line_items_not_enumerated` (300). Three entries are directly on point: `ec2_runner_24_7` records
-the retired self-hosted runner's historical cost, `line_items_not_enumerated` explicitly folds
-"GH-hosted runner minutes" into the add-on, and `substrate_reevaluation_triggers` (near 348-352)
-lists "Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)" as a
-recorded trigger that invalidates the projection.
+(281-291), a `headline_basis` with an explicit unenumerated add-on (292-299), and
+`line_items_not_enumerated` (300). Two entries there are directly on point: `ec2_runner_24_7`
+records the retired self-hosted runner's historical cost, and `line_items_not_enumerated` explicitly
+folds "GH-hosted runner minutes" into the add-on.
 
-That last entry means the repository has ALREADY anticipated, in its own system of record, that a
-private flip removes a free-minutes term. Engage with it; do not re-derive it as a novel discovery.
+**Then read BOTH trigger lists -- see F43 for their exact paths, which are easy to confuse.** One
+records "Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)";
+the other records "Self-hosted runner cost becomes >2x scheduled-runner alternative". Between them,
+the repository has ALREADY anticipated, in its own system of record, both halves of this migration's
+cost question. Engage with them; do not re-derive either as a novel discovery.
 
 **Disambiguation:** `cost_projection` contains a SECOND scale block, `projected_100tb_scale` (line
 353), whose `total_per_month_usd` is "910-1880". That is a hypothetical future-scale projection,
@@ -786,7 +807,7 @@ before relying on it** -- re-read the file, confirm the line, and record any non
   `terraform/CLAUDE.md` does NOT contain that statement; its only `terraform/github` reference is a
   break-glass routing-table row at line 87.
 - F39. `docs/ROADMAP-PLATFORM.yaml` top-level key `cost_projection` (line 268), sub-key
-  `current_scale` (line 278), records `total_per_month_usd: "22-59"` (279); a `breakdown` (281-290)
+  `current_scale` (line 278), records `total_per_month_usd: "22-59"` (279); a `breakdown` (281-291)
   whose `ec2_runner_24_7` entry reads `"$0 (retired 2026-05-28 per CD.21; ~$35/mo historical, line
   retained as baseline)"`; a `headline_basis` with `add_on_usd: "10-30"` (292-299); and a
   `line_items_not_enumerated` list (300) that includes "GH-hosted runner minutes". **There is no key
@@ -794,9 +815,20 @@ before relying on it** -- re-read the file, confirm the line, and record any non
 - F40. The same `breakdown` includes `deepseek_executor_inference` and
   `anthropic_escape_hatch_spillover` line items, describing recurring inference spend through
   external model-provider APIs.
-- F43. `cost_projection.substrate_reevaluation_triggers` (near lines 348-352) lists four triggers
-  that invalidate the projection. One reads: "Repo-visibility change (a private flip removes
-  hosted_cli_runner's free-minutes term)".
+- F43. **`cost_projection` contains TWO DIFFERENT trigger lists. Both are relevant; do not confuse
+  them.**
+  (a) `cost_projection.executor_substrate_billing.substrate_reevaluation_triggers` (lines 348-352,
+  nested under `executor_substrate_billing:` at 301) lists four triggers, one of which reads
+  "Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)".
+  (b) `cost_projection.reevaluation_triggers` (a sibling key directly under `cost_projection`,
+  NOT the same list) has five entries, one of which reads "Self-hosted runner cost becomes >2x
+  scheduled-runner alternative".
+  A `yaml.safe_load` projection addressing `cost_projection['substrate_reevaluation_triggers']`
+  raises `KeyError`; addressing `cost_projection['reevaluation_triggers']` returns list (b), not
+  (a). Read both.
+- F47. `cost_projection` top-level keys are exactly: `notes`, `current_scale`,
+  `executor_substrate_billing`, `projected_100tb_scale`, `alternative_architectures_considered`,
+  `reevaluation_triggers`.
 - F44. `cost_projection` contains a second scale block, `projected_100tb_scale` (line 353), with
   `total_per_month_usd: "910-1880"`. It is a hypothetical future-scale projection, not a current
   figure.
@@ -885,7 +917,7 @@ proceed. Never abort.
 
 Q5, Q6, Q10, and DD-A depend on GitHub's CURRENT published documentation -- plan feature matrices,
 Actions pricing and included-minutes allowances, GHAS availability on private repositories,
-self-hosted-runner guidance, and any pricing announcement relevant to premise P1. None of this is in
+self-hosted-runner guidance, and any pricing announcement relevant to premise PR-1. None of this is in
 the repository, and all of it changes over time.
 
 **Use `WebFetch` and/or `WebSearch`** to consult primary sources -- prefer `docs.github.com` and
@@ -921,7 +953,13 @@ Execute in order. Synthesis and maturity are always LAST.
 - **P5 Rate.** Fill the rubric, every dimension for every surface. Populate `migration_benefits[]`.
 - **P6 Dedup.** Apply DEDUP DISCIPLINE to every candidate finding before it is filed.
 - **P7 Adversarial review to convergence.** See below. Mandatory.
-- **P8 Synthesize.** Answer Q1..Q12, compute severity, then compute maturity last.
+- **P8 Synthesize.** Answer the questions, compute severity, then compute maturity last.
+  **Ordering constraint inside P8:** answer **Q9 BEFORE finalising Q1's headline**. Q1 is told to
+  work from the assumption that the published history is effectively redactable; Q9 independently
+  tests whether that holds. Composing Q1's headline first would bake in an untested premise that is
+  also the requester's own claim. If Q9 concludes the history is NOT meaningfully redactable, return
+  to Q1, revise the ranking and headline accordingly, and note in Q1's `prose` that the assumption
+  did not survive. Everything else may be answered in any order.
 
 ## ADVERSARIAL REVIEW (MANDATORY -- P7)
 
@@ -1018,6 +1056,13 @@ Each is a decided position. Flag one only if the MIGRATION specifically breaks i
 - The retirement of the `send_later` backstop (`AGENTS.md` "Push -> PR -> CI -> merge flow" step 4,
   resting on Decision 76/83's event-driven wake design). Q4 explicitly REOPENS this as a question, so
   assessing it there is in scope; flagging its original retirement is not.
+- **The agent development surface's own repository access is NOT at risk and is not a question.**
+  `.mcp.json` runs the `github-full` MCP server with `GITHUB_PERSONAL_ACCESS_TOKEN` sourced from a
+  local token file, and the Claude Code on the web harness reaches the repository through
+  token-based access, not anonymous public access. A visibility flip does not sever it. Do not file
+  a finding asserting that going private breaks agent access to the repository, and do not spend
+  effort investigating it. (Token SCOPE questions that arise naturally inside Q6 -- e.g. what
+  `GHAS_PROBE_TOKEN` can still probe once GHAS features change -- remain in scope there.)
 
 ## OUTPUT
 
@@ -1040,14 +1085,16 @@ audit:
     access_limitations:             # endpoints that refused or were unauthorized
       - {endpoint: "", failure: "", what_it_blocked: ""}
     assumed_inputs:                 # every unstated input you had to assume
-      - {input: "", assumed_value: "", why: "", sensitivity: ""}
+      - {id: "AI-01", input: "", assumed_value: "", why: "", sensitivity: ""}
+                                    # `id` is what cost_analysis.options.assumptions references
     adversarial_rounds: 0
     adversarial_status: converged|round-capped|dispatch-failed
     adversarial_refuted_count: 0
     unconverged_items:
-      - {id: "<finding or benefit id>", disagreement: "<one line>"}
-    premises_tested:                # P1, P2 from REQUESTER CONTEXT
-      - {id: P1, holds: true|false|unverified, evidence: "", effect_on_answers: ""}
+      - {id: "<finding id, benefit id, or the literal BIAS-A / BIAS-B for an unresolved
+              reviewer bias observation>", disagreement: "<one line>"}
+    premises_tested:                # PR-1, PR-2 from REQUESTER CONTEXT
+      - {id: PR-1, holds: true|false|unverified, evidence: "", effect_on_answers: ""}
     contract_notes: ""              # surfaced verbatim in the .md when non-empty
     stale_anchors:
       - {anchor: "<as cited in this prompt>", found_instead: "", affects: [<question ids>]}
@@ -1070,8 +1117,9 @@ audit:
     - q: Q3
       verdict: sufficient|partial|insufficient
       external_checklist:
-        - {property: "<one of the 10 named practices>", rating: met|partial|missed, evidence: ""}
-        # exactly ten entries
+        - {property: "RP1".."RP10", rating: met|partial|missed|n/a, evidence: ""}
+        # EXACTLY ten entries, one per runner practice, referenced by the RP-numbers in Q3's table.
+        # `n/a` is legal and is treated as `met` by the frontier maturity gate.
       basis: [<finding ids>]
       prose: ""
     # Q9 shape (verdict PLUS a license recommendation):
@@ -1090,16 +1138,32 @@ audit:
        what_the_requester_must_decide: ""}
   cost_analysis:
     # DD-A's structured output. Neutral -- neither a finding nor a benefit.
-    current_billed_monthly_usd: ""      # what the repo is billed TODAY, with basis
+    # CURRENCY: report every figure in GBP. The capital cost is GBP-denominated; GitHub prices
+    # are USD-denominated. State the FX rate you used and its date in `fx_basis`, and give
+    # converted figures as ranges if the rate materially moves the answer.
+    # AMORTISATION: amortise the ~GBP 1,390 capital cost over 36 months unless you argue a
+    # different horizon; state whichever you use in `amortisation_basis`.
+    fx_basis: ""
+    amortisation_basis: ""
+    current_billed_monthly_gbp: ""      # what the repo is billed TODAY, with basis
     monthly_usage_minutes: ""
     options:
+      # REQUIRED ROWS: exactly five, not the full option x plan cross-product.
+      #   1. stay-public          x Free   (the status quo baseline)
+      #   2. private-hosted-runners x Free
+      #   3. private-hosted-runners x Pro
+      #   4. private-self-hosted  x Free
+      #   5. private-self-hosted  x Pro
+      # Add a Team row ONLY if Q5's org-transfer precondition analysis concludes Team is a
+      # live option; add a `hybrid` row only if Q4 concludes hybrid is viable. Say in
+      # `dedup_note` which optional rows you added or omitted, and why.
       - {option: stay-public|private-hosted-runners|private-self-hosted|hybrid,
          plan: Free|Pro|Team,
-         actions_cost_usd_per_month: "",
-         plan_cost_usd_per_month: "",
-         non_actions_cost_usd_per_month: "",   # electricity, amortisation, maintenance
-         total_usd_per_month: "",
-         assumptions: [<keys into meta.assumed_inputs>],
+         actions_cost_gbp_per_month: "",
+         plan_cost_gbp_per_month: "",
+         non_actions_cost_gbp_per_month: "",   # electricity, amortisation, maintenance
+         total_gbp_per_month: "",
+         assumptions: [<AI-NN ids from meta.assumed_inputs>],
          confidence: CONFIRMED|HYPOTHESIS}
     counterfactual_no_self_hosting: ""  # DD-A's "private on a paid plan instead" answer
     dedup_note: ""                      # what cost_projection already owns
@@ -1112,16 +1176,28 @@ audit:
       question: Q1..Q12                 # the question this benefit bears on
       title: ""
       claim: ""
-      evidence: "file:line | item-id | external citation"
+      evidence: "<file:line, or item-id, or an external citation in the ' :: ' form>"
       evidence_kind: static|observed|external
       current_behavior: ""
       improved_behavior: ""
-      magnitude: XS|S|M|L               # XS trivial; S noticeable; M materially changes a
-                                        # workflow or a cost line; L changes the decision
+      magnitude: XS|S|M|L
+      # XS -- real but negligible; nobody would act on it alone.
+      # S  -- a noticeable improvement to one workflow, with no cost-line or decision impact.
+      # M  -- materially changes a recurring cost line, a recurring time cost, or a capability
+      #       the platform does not currently have.
+      # L  -- large enough that it alone could justify the migration.
       magnitude_rationale: ""
-      compensating_alternatives_considered: ""  # can this benefit be had WITHOUT the migration?
+      alternative_route: ""             # REQUIRED. Can this benefit be obtained WITHOUT the
+                                        # migration -- and if so, at what cost? A benefit
+                                        # obtainable more cheaply another way is NOT a reason to
+                                        # migrate; say so. This is the benefit-side analogue of
+                                        # control_property_match and is held to the same standard.
       roadmap_crossref:
-        classification: novel|planned-insufficient|planned-unbuilt
+        classification: novel|already-recorded|contradicts-recorded
+        # novel -- no roadmap item or decision records this benefit.
+        # already-recorded -- an item or decision already claims it; you are assessing whether
+        #   the claim holds, not discovering it.
+        # contradicts-recorded -- a ratified item or decision asserts the opposite.
         item_ids: []
         dedup_search_terms: []
         dedup_hit_count: 0
@@ -1143,6 +1219,8 @@ audit:
                                     # contiguous in the FINAL set (renumber after adversarial
                                     # review so there are no gaps from refuted items)
       surface: S-VIS|S-RUNNER|S-CI|S-WAKE|S-GOV|S-SEC|S-CRED|shared
+      affects_surfaces: []          # REQUIRED and non-empty when surface == shared; the surface
+                                    # ids maturity counts this finding toward. Omit otherwise.
       question: Q1..Q12             # the PRIMARY question this serves
       also_serves: []               # any additional question ids
       dimension: VD1..VD7           # the PRIMARY dimension
@@ -1171,20 +1249,37 @@ audit:
       sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}
       adversarial_verdict: stands|overstated-and-revised|unconverged|not-reviewed
   rejected_candidates:
-    - {candidate: "", why_dismissed: "", compensating_control: "",
-       control_property_match: "", decision_or_item_id: ""}
+    - candidate: ""
+      origin: prompt-candidate|own-analysis|adversarial-refutation
+      why_dismissed: ""
+      compensating_control: ""          # "" when dismissal was not control-based
+      control_property_match: ""        # REQUIRED iff compensating_control is non-empty
+      refutation: ""                    # REQUIRED iff origin == adversarial-refutation:
+                                        # what the reviewer showed, and in which round
+      decision_or_item_id: ""
   summary:
     total_findings: 0
     novel_count: 0
     planned_insufficient_count: 0
     planned_unbuilt_count: 0
     total_benefits: 0
-    benefits_note: ""               # required when migration_benefits is empty or near-empty
-    top_benefits: []                # benefit ids, highest magnitude first
-    top_improvements: []            # finding ids; [] is legal when findings is empty
+    benefits_note: ""               # REQUIRED when total_benefits <= 2 (including 0)
+    top_benefits: []                # up to 5 benefit ids, highest magnitude first
+    top_improvements: []            # up to 5 finding ids, most severe first (ties broken by
+                                    # effort, lower first); [] is legal when findings is empty
     highest_leverage_change: ""     # a finding id, or "" when findings is empty
+    # TWO INDEPENDENT HEADLINE VERDICTS. The two decisions are coupled only as strongly as
+    # premise PR-2 turns out to hold; if the coupling is weaker than assumed, they must be
+    # answerable separately. "Go private, do not self-host" is a legal and plausible outcome
+    # and MUST be expressible here.
     go_no_go: recommend-private|recommend-public|recommend-conditional
-                                    # MUST equal question_answers Q1 headline.verdict
+                                    # VISIBILITY only. MUST equal question_answers Q1 headline.verdict
+    self_hosting_verdict: recommend-self-hosted|recommend-hosted-runners|recommend-hybrid|recommend-conditional
+                                    # RUNNER only. Grounded in Q2, Q3, Q4, Q7 and DD-A.
+    verdicts_coupled: true|false    # true iff PR-2 held and the two cannot be decided separately
+    headline_sentence: ""           # one sentence stating BOTH verdicts plainly, e.g.
+                                    # "Go private on Pro; keep GitHub-hosted runners." This is
+                                    # the sentence the .md opens with.
     maturity_S_VIS: ""              # MUST equal per_surface_assessment
     maturity_S_RUNNER: ""
     maturity_S_CI: ""
@@ -1223,10 +1318,14 @@ external source. Anything less is `HYPOTHESIS`.
 
 ### `audits/private-repo-self-hosted-ci-<sha>.md`
 
-Prose companion, <= ~1500 words. Lead with the Q1 go/no-go and the intent dependency. Then the
-ranked findings with severity and effort, the benefits, the cost picture from DD-A, and the
-migration sequence. If any `meta` degraded flag is set or `adversarial_status` is not `converged`,
-say so in the opening paragraph. Reference finding ids; no YAML dump.
+Prose companion, <= ~1500 words. Open with `summary.headline_sentence` -- BOTH verdicts, plainly --
+followed by the intent dependency. Then the ranked findings with severity and effort, the benefits,
+the cost picture from DD-A, and the migration sequence. Reference finding ids; no YAML dump.
+
+**Must be surfaced in the opening paragraph if present:** any `meta` degraded flag set to true; an
+`adversarial_status` other than `converged`; a non-empty `meta.contract_notes`; a non-empty
+`meta.access_limitations`; and any `meta.stale_anchors` entry that affected an answer. These are the
+readers for those fields -- a flag written and never surfaced is a flag the human never sees.
 
 ## SEVERITY + MATURITY
 
@@ -1252,10 +1351,11 @@ Counting rules, so the ladder is unambiguous:
 
 - "Open" means present in the final `findings[]`; items in `rejected_candidates[]` do not count.
 - A finding counts toward a surface if that surface is its `surface` value. **A finding with
-  `surface: shared` counts toward EVERY surface named in its `evidence` or its `also_serves`
-  reasoning -- at minimum, toward every surface it materially describes.** A `shared` finding must
-  never vanish from maturity entirely; if you cannot attribute it to at least one surface, it is
-  not `shared`, it belongs to a specific surface.
+  `surface: shared` MUST populate `affects_surfaces: [...]` with every surface it materially
+  describes, and it counts toward each of them.** `affects_surfaces` is the only field maturity
+  reads for this; do not infer surfaces from `evidence` or `also_serves` (the latter holds question
+  ids, not surface ids). A `shared` finding with an empty `affects_surfaces` is malformed -- if you
+  cannot name at least one surface, it is not `shared` and belongs to a specific surface.
 - A `HYPOTHESIS`-confidence finding DOES count toward its severity tier. Uncertainty is not an
   exemption; if that drives a rating you consider unfair, say so in the `note`.
 - `migration_benefits[]` do NOT enter maturity. Maturity measures risk, not net desirability; the
