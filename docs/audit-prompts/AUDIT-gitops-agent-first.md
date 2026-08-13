@@ -8,8 +8,9 @@ that squash-merge is a human convenience that may be a barrier to efficient log 
 agents; treat that as a hypothesis to test, not a conclusion to confirm. Seven surfaces are in
 scope: the merge-strategy and branch-protection policy, the commit-message contract, the
 mechanisms that consume git history, clone and checkout depth, the parallel provenance stores,
-the PR wake-signal machinery, and the session/branch-lifecycle hooks. Answer Q1..Q8 below (nine questions -- Q6b sits between Q6
-and Q7), rate every surface against VD1..VD6,
+the PR wake-signal machinery, and the session/branch-lifecycle hooks. Answer all ten questions below (Q1, Q2, Q3a, Q3b, Q4, Q5, Q6,
+Q6b, Q7, Q8 -- Q3 is split into two, and Q6b sits between Q6 and Q7), rate every surface against
+VD1..VD6,
 and file findings. Deliverables: exactly two files, `audits/gitops-agent-first-<sha>.yaml` and
 `audits/gitops-agent-first-<sha>.md`, where `<sha>` is the short SHA of `origin/main` derived in
 COMMIT / PR MECHANICS. The ONLY files you create or modify in the repository tree are those two
@@ -70,10 +71,14 @@ it are welcome and are the clearest evidence the run added value.
 - **C8** (S1) -- `required_linear_history = true` constrains which merge methods are available
   without a Terraform change; `require_code_owner_review = true` plus `.github/CODEOWNERS`
   scopes `/terraform/github/` behind code-owner review.
-- **C9** (S3) -- `scripts/executor/branch_lifecycle.py` decides whether a branch is merged via
-  `git merge-base --is-ancestor <branch> main`. Determine what that predicate returns under each
-  candidate merge strategy, and whether the code path is currently reachable given the executor
-  freeze.
+- **C9** (S3, and a COST-OF-KEEPING candidate -- see the balance note below) --
+  `scripts/executor/branch_lifecycle.py` decides whether a branch is merged via
+  `git merge-base --is-ancestor <branch> main`. Squash-merge creates a NEW commit that the branch
+  is not an ancestor of. Determine what that predicate therefore returns for an already-merged
+  branch TODAY, what the `git branch -d` cleanup behind it does as a result, and what each
+  alternative strategy would return. Also determine whether the code path is currently reachable
+  given the executor freeze (a dormant path changes severity, not correctness). Cross-check
+  against the remote branch count in DD-D's anchors.
 - **C10** (S5) -- `docs/SESSION_LOG.md` names `session_close` / `task_start` /
   `strategic_review` as its writer and readers; the newest entry predates the sampled commit
   window. Determine what currently writes it, if anything.
@@ -99,7 +104,7 @@ it are welcome and are the clearest evidence the run added value.
   whether anything in this repository bisects, and what resolution any such consumer needs.
 
 The candidate set is deliberately balanced: C1/C2/C7/C8/C14 bear on the cost of CHANGING the
-current strategy, C15/C16/C17/C18 on the cost of KEEPING it. Neither group is the answer; both
+current strategy, C9/C15/C16/C17/C18 on the cost of KEEPING it. Neither group is the answer; both
 are evidence. If you find the set still leans one way, say so in your Q1 prose.
 
 ## READ FIRST: disambiguation traps
@@ -387,7 +392,7 @@ branch hygiene and post-merge branch deletion; CI checkout-depth strategy (shall
 on-demand deepening); merge queues; auto-merge; signed commits; monorepo change-scoping
 conventions.
 
-Beyond the checklist, name any structure the checklist does not cover that becomes available once
+Beyond the checklist, name between 0 and 4 structures (no more) that the checklist does not cover that becomes available once
 the primary reader is a machine -- for example, machine-readable commit bodies, structured
 trailers carrying plan/rec/decision ids, or annotation stores decoupled from commit messages.
 Argue the cost as well as the benefit; a structure that is efficient for agents but unrecoverable
@@ -477,7 +482,10 @@ ledger; a Q1 prose that carries DD-D's cost-of-keeping without DD-A's cost-of-ch
 reverse) is a one-sided answer. Any mechanism you judge defective is ALSO filed as a finding. DD-B's outcome is recorded per the instruction in its own text. DD-C's trace is
 recorded in the Q5 `question_answers` entry's `prose`, with defects filed as findings. DD-D's
 status-quo cost trace is recorded in the Q1 `question_answers` entry's `prose` (alongside DD-B's
-drift summary), with any loss you judge material filed as a finding. A
+drift summary), with any loss you judge material filed as a finding. Where DD-D bears on what the
+parallel provenance stores must carry, carry that into the Q2 prose; where it bears on the
+session-log substitution, carry it into Q7. Those are pointers, not duplication -- one sentence
+each naming the DD-D result the answer depends on. A
 deep-dive that produces no finding still produces prose -- never leave one silent.
 
 **DD-A -- End-to-end trace of the history-shape dependencies.** *(feeds Q1, Q4)*
@@ -501,8 +509,9 @@ recommendations' remedies are the right fix, and whether a merge-strategy change
 worsen, or leave them unchanged. **Explicitly re-assess those two recommendations rather than
 dismissing them as owned territory** -- the requester wants to know whether their proposed
 remedies still make sense with the merge-strategy question open. Record the re-assessment outcome using the full
-adjudication contract -- `rejected_candidates`, or a finding classified `planned-insufficient` or
-`planned-unbuilt`, whichever your trace warrants -- and summarise the three-surface drift analysis
+adjudication contract -- `rejected_candidates`, or a finding classified `novel`,
+`planned-insufficient`, or `planned-unbuilt`, whichever your trace warrants (a trailer defect the
+two recommendations do not own at all IS `novel`) -- and summarise the three-surface drift analysis
 in the Q1 `question_answers` prose.
 
 **DD-C -- Wake-signal delivery paths.** *(feeds Q5)*
@@ -523,6 +532,16 @@ that model, file the finding against S6 and say so in `sequencing.note`.
 **DD-D -- The cost of the STATUS QUO.** *(feeds Q1, Q2, Q7 -- mandatory, same standing as DD-A)*
 Starting anchors, handed over so this trace begins on the same footing as DD-A's consumer
 inventory -- verify each, and extend:
+  - **Fetch guard, read first:** fetching a PR ref IS permitted (Q3a's prohibition is on
+    `--unshallow` specifically, not on this). But a `git fetch origin refs/pull/<N>/head` into a
+    shallow clone can add `.git/shallow` entries and, for a PR whose base predates the boundary,
+    can change what `git log --reverse origin/main | head -1` returns -- the exact evidence trap 9
+    and the S5 `--stat` example rest on. So: record the boundary FIRST
+    (`git log --reverse origin/main --format=%h | head -1` and `cat .git/shallow`), fetch, then
+    re-check it. If it moved, say so in `meta.contract_notes` and treat the S4 `--stat` example as
+    recon-time evidence rather than something you reproduced. If a `merge-base..head` count will
+    not resolve for a given PR, skip that PR, note it, and sample another -- never `--unshallow`
+    to force it.
   - `git ls-remote origin 'refs/pull/*/head' | wc -l` returned 893 at recon: the PRE-MERGE commit
     sequence of merged PRs is retained on the remote and is fetchable via
     `git fetch origin refs/pull/<N>/head`. Confirm this, and establish what it costs (network? per
@@ -546,6 +565,17 @@ and whether anything in this repository bisects); per-step attribution and revie
 and whether the `(#NNN)` indirection to the PR record is a sufficient substitute given it costs a
 network round-trip (NS6) and depends on GitHub retaining refs for deleted branches. Answering Q1
 without BOTH DD-A and DD-D is answering it on one-sided evidence.
+
+**Interpreting a negative answer -- read this before you trace.** Several DD-D questions are
+existence questions ("does anything here bisect?", "does anything fetch a PR ref?") whose answer
+may well be "nothing". A bare "nothing" is NOT evidence of no cost. Distinguish two cases every
+time, and say which you concluded: (a) ABSENCE OF NEED -- the capability is available and nothing
+needs it, which genuinely is no cost; (b) ABSENCE OF CAPABILITY -- the capability was never
+practically available under the current strategy, so nothing was ever built to use it, and its
+absence is evidence about the constraint rather than about the need. Note the structural
+asymmetry you are working against: DD-A traces an inventory of ~25 existing consumers and will
+naturally yield a concrete breakage list, while DD-D asks what does not exist and will naturally
+yield silence. Do not mistake that asymmetry of EVIDENCE SHAPE for an asymmetry of COST.
 
 ## GROUNDING MAP
 
@@ -730,7 +760,7 @@ delivery).
 - **P5 Empirical.** The sampling above, within bounds.
 - **P6 Rate.** VD1..VD6 across S1..S7.
 - **P7 Dedup.** Per DEDUP DISCIPLINE, before any finding is filed.
-- **P8 Synthesize.** Answer all nine questions Q1..Q8 (including Q6b), populate `merge_strategy_decision`, then compute maturity
+- **P8 Synthesize.** Answer all ten questions (Q1..Q8, with Q3 split into Q3a/Q3b, plus Q6b), populate `merge_strategy_decision`, then compute maturity
   LAST.
 
 ## DEDUP DISCIPLINE
@@ -929,8 +959,8 @@ rec-2733, which DD-B re-assesses individually).
 
 Coverage rule (this is the real cross-check): every one of C1..C18 MUST appear AT LEAST ONCE
 across `findings[].candidate_ids` and `rejected_candidates[].candidate_ids`. None may be silently
-dropped. `summary.candidates_unadjudicated` lists any you could not resolve, with a one-line
-reason each; an empty list is the expected result.
+dropped. `summary.candidates_unadjudicated` lists any you could not resolve, as objects
+`{candidate_id: "C7", reason: "<one line>"}`; an empty list is the expected result.
 
 ## SEVERITY AND MATURITY
 
