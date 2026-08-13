@@ -651,7 +651,186 @@ verification_plan:
       If still open, the trailer did not fire; close it manually with `bin/venv-python -m
       scripts.ops_data_portal --update-rec rec-2751 --status closed --resolution "..."` per
       Decision 70.
+  - step: 18
+    phase: pre-deploy
+    action: >-
+      FINAL GATE before commit: run the full validation tier (not --pre). handoff_policy declares
+      full_validation_required_before_commit, so the commit waits for a completed exit 0; on
+      timeout the disposition is `blocked` -- resume later and rerun full from the start.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 with no failed checks.
+    fix_if: >-
+      Fix each reported failure and rerun from the start -- a partial rerun does not satisfy the
+      handoff policy. Expect the plan-document and handoff-full-tier checks to be the sensitive
+      ones for this change's own artifact.
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step invokes the entire presubmit suite; graduating it as a single registry row would
+      assert "all checks pass" as one kernel primitive, which is neither a discrete property nor
+      differentially meaningful -- every constituent check is already independently registered and
+      sequenced.
+    hermetic: false
 test_obligations:
+  - source: docs/contracts/environment-taxonomy.yaml
+    behavior: >-
+      The converted contract loads as a valid Class D envelope whose declared evaluator resolves by
+      evidence-of-reading -- the property Decision 168 exists to enforce.
+    verification_step: 3
+    command: _population.resolve_evaluator
+    red_green_expectation: >-
+      Red before: the file does not exist, so load_contract_meta raises and the command exits
+      non-zero. Green after: resolve_evaluator returns True naming validate_environment_taxonomy's
+      module as containing the basename in executable context.
+  - source: docs/contracts/contract-population.yaml
+    behavior: >-
+      The gate contract's extension_and_depth clause stops asserting that environment-taxonomy.md
+      is a live grandfathered member, and the edit carries the amendment_log entry its own
+      change_detection rule requires.
+    verification_step: 1
+    command: validate_contract_drift(f)
+    red_green_expectation: >-
+      Red before: editing the clause without an amendment_log entry fails with "(amendment): parsed
+      content changed but no new amendment_log[] entry was added". Green after: the entry is present
+      and the gate passes.
+  - source: docs/contracts/file-router.yaml
+    behavior: The prose allowlist no longer advertises permission for a file the population gate revokes.
+    verification_step: 6
+    command: docs/contracts/file-router.yaml
+    red_green_expectation: >-
+      Red before: the allowlist still names environment-taxonomy.md, so step 6's grep -q succeeds
+      and the negation fails the command. Green after: the entry is gone and the step prints CLEAN.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: >-
+      T-1.19 carries structured id/text/status criteria, a re-grounded report path under
+      docs/plans/reports/, and stays deferred_post_mvp.
+    verification_step: 8
+    command: validate_platform_roadmap
+    red_green_expectation: >-
+      Red before: the criteria are bare strings and files_in_scope still names a docs/-root
+      docs/REPORT- path, so step 8's isinstance and path assertions both fail. Green after: both
+      assertions hold and the roadmap still validates.
+  - source: docs/decisions-index.json
+    behavior: The generated index stays consistent with DECISIONS.md after the two append-only annotations.
+    verification_step: 10
+    command: validate_decisions_index_freshness
+    red_green_expectation: >-
+      Red before: annotating Decisions 77 and 125 without regenerating leaves the index stale and
+      the freshness check fails. Green after: the index is regenerated and current.
+  - source: docs/contracts/build-lambda.yaml
+    behavior: No behavior change -- an anchor citation re-expressed as a YAML key path, plus its amendment_log entry.
+    verification_step: 14
+    command: environment-taxonomy[^ \"]*#
+    waiver_reason: >-
+      The edit replaces a markdown anchor with a key path in a `see:` pointer field; no consumer
+      parses that value. VP step 14 proves no dangling anchor survives and VP step 1 proves the
+      required amendment_log entry landed -- together they are the evidence, and a behavioral test
+      would assert nothing this change altered.
+  - source: docs/contracts/deploy-paths.yaml
+    behavior: No behavior change -- three blocks_ref anchors re-expressed, a stale Lambda count corrected, plus its amendment_log entry.
+    verification_step: 14
+    command: environment-taxonomy[^ \"]*#
+    waiver_reason: >-
+      blocks_ref is a wayfinding pointer this repo never parses (deploy-paths.yaml is explicitly a
+      navigation index that points at, and never restates, the taxonomy). VP step 14 proves no
+      dangling anchor survives and VP step 1 proves the amendment_log entry landed.
+  - source: docs/contracts/credential-routing.yaml
+    behavior: No behavior change -- a bare-name citation updated.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      Class C contract whose citation sits under allowed_values.unmapped_phases_note, outside the
+      fields check_amendment_for_diff covers, so it needs no amendment entry and changes no parsed
+      obligation. VP step 5's sweep is the evidence.
+  - source: docs/intent-migration/MANIFEST.yaml
+    behavior: No behavior change -- a bare-name reference in a migration manifest.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      The reference is to the lint's allowlist SET rather than to the contract path and may need no
+      edit at all (confirm before touching it -- the file is also at 521/521 effective lines with
+      zero headroom). VP step 5's sweep settles whether an edit was required.
+  - source: docs/ROADMAP-PRODUCT.yaml
+    behavior: No behavior change -- one citation updated in an operator-frozen file.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      An in-line path swap in a roadmap entry's prose. The file is frozen at 4707 effective lines,
+      so the only real risk is line count, which VP step 18's structural-size check covers; there is
+      no behavioral surface to test.
+  - source: EVALUATION-PROMPTS.yaml
+    behavior: No behavior change -- one citation updated in an evaluation-prompt corpus.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      A path string inside prompt text, not an executable reference; nothing loads this file during
+      validation. VP step 5's sweep is the evidence.
+  - source: .github/actions/write-convergence-record/action.yml
+    behavior: No behavior change -- a citation inside a composite-action comment/description.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      The composite-action manifest and shell-body guards already gate this file's structure and
+      run in the full tier (VP step 18); the citation itself drives no action logic.
+  - source: .github/workflows/reconcile.yml
+    behavior: No behavior change -- a citation on a comment line.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      The citation sits on a '#' comment line, so it changes no workflow step and does not move the
+      file's effective-line count (it is pinned at 536/536 with zero headroom -- do not add a
+      non-comment line). The ci-workflow guards gate in VP step 18 covers the file's structure.
+  - source: .github/workflows/terraform-apply-sandbox.yml
+    behavior: No behavior change -- a citation on a comment line.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      Same shape as reconcile.yml: a '#' comment line, pinned at 529/529 effective lines with zero
+      headroom. The ci-workflow guards gate in VP step 18 covers the file's structure.
+  - source: terraform/personal/ducklake_catalog_dr.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 22).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only: VP step 9 asserts the entire terraform/ diff contains no added or removed
+      non-comment line, which is a stronger guarantee than a per-file test, and CI's
+      speculative-plan job (VP step 16) independently proves zero resource changes.
+  - source: terraform/personal/ducklake_lambdas.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 21).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16).
+  - source: terraform/personal/ducklake_maintenance.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 28).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16).
+  - source: terraform/personal/ducklake_maintenance_smoke.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 29).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16). Note this file hosts the FIFTH DuckLake function whose
+      existence rec-2751 turns on -- read its resource before restating any conformance claim.
+  - source: terraform/personal/prod_lambdas.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA DECOUPLING comment block (line 21).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16).
+  - source: terraform/personal/backend-sandbox.hcl
+    behavior: No behavior change -- a citation inside a comment (line 5, a section 4 reference).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only backend config; covered by VP step 9's whole-diff non-comment-line assertion.
+      Backend HCL is not part of the speculative plan's resource graph, so step 9 is the operative
+      evidence here.
   - source: scripts/checks/ops_governance/validate_deploy_channel_conformance.py
     behavior: >-
       Conformance status is read from the contract's typed conformance field for both the ducklake
