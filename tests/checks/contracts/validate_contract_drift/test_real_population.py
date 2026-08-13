@@ -8,7 +8,35 @@ from pathlib import Path
 
 from .conftest import validate_contract_drift
 
-_REAL_CONTRACTS_DIR = Path(__file__).resolve().parents[4] / "docs" / "contracts"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REAL_CONTRACTS_DIR = _REPO_ROOT / "docs" / "contracts"
+
+# The 20 seedable free-form files this plan (migration-step-3-grandfathering) sweeps -- see
+# docs/plans/PLAN-migration-step-3-grandfathering.yaml scope. exit-criteria-ledger.yaml is the
+# single named non-seedable exception (genuinely Class-A-field-shaped) and is deliberately
+# excluded from this roster.
+_SEEDED_CONTRACT_FILES = [
+    "_joins.yaml",
+    "build-lambda.yaml",
+    "candidate-decision-ratification.yaml",
+    "ci-rca-lifecycle.yaml",
+    "composite-action-shape.yaml",
+    "data-modeling-standard.yaml",
+    "decision-entry.yaml",
+    "deploy-paths.yaml",
+    "file-router.yaml",
+    "github-actions-evidence.yaml",
+    "iam-simulate-fixture.yaml",
+    "inference-provider.yaml",
+    "instruction-architecture.yaml",
+    "log-storage.yaml",
+    "marker-grammar.yaml",
+    "overseer-dispatch.yaml",
+    "read-engine.yaml",
+    "recommendation-relevance.yaml",
+    "storage-substrate.yaml",
+    "telemetry-lexicon.yaml",
+]
 
 
 class TestRealPopulationRegression:
@@ -27,6 +55,35 @@ class TestRealPopulationRegression:
         assert int(counts["ritual"]) > 0
         assert int(counts["skipped"]) == 0
         assert failed == []
+
+    def test_every_seeded_contract_declares_resolving_or_routed_evaluator(self) -> None:
+        """Each of the 20 seeded files (migration-step-3-grandfathering) declares a valid Class D
+        envelope with a unique subject and an evaluator that either genuinely RESOLVES (check /
+        agent_surface) or carries a complete routed none_grandfathered debt record -- the shared
+        guard the per-file test_obligations rows are all proven by. red before (each file was
+        free-form, so the gate's own real-tree pass above would have found no Class D envelope
+        for it and this loop would KeyError/AttributeError on a missing contract block); green
+        after."""
+        from scripts.checks.contracts import _population
+        from scripts.contracts import load_contract_meta
+
+        for name in _SEEDED_CONTRACT_FILES:
+            path = _REAL_CONTRACTS_DIR / name
+            assert path.is_file(), f"{name}: not found under {_REAL_CONTRACTS_DIR}"
+            meta = load_contract_meta(path)  # raises ContractValidationError if malformed
+            assert meta.class_.value == "D", f"{name}: contract.class is not D"
+            assert meta.subject, f"{name}: subject is empty"
+            assert meta.evaluator is not None, f"{name}: evaluator is absent"
+
+            if meta.evaluator.none_grandfathered is not None:
+                route = meta.evaluator.none_grandfathered
+                assert route.reason.strip(), f"{name}: none_grandfathered.reason is empty"
+                assert route.mechanism.strip(), f"{name}: none_grandfathered.mechanism is empty"
+                assert route.blocker.strip(), f"{name}: none_grandfathered.blocker is empty"
+                assert route.shape in ("check", "agent_surface"), f"{name}: none_grandfathered.shape invalid"
+            else:
+                resolves, detail = _population.resolve_evaluator(name, meta.evaluator, root=_REPO_ROOT)
+                assert resolves, f"{name}: evaluator does not resolve -- {detail}"
 
 
 class TestContractPopulationSelfHosting:

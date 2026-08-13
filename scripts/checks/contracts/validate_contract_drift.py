@@ -363,13 +363,25 @@ def validate_contract_drift(
         else:
             print("  advisory-SKIP: Pass 2 (diff-aware) checks skipped -- origin/main unreachable.")
 
-        # ---- ratchet (contract-population.yaml's own grandfathered_max pin) ----
-        pin_value, pin_errors = _population.validate_ratchet_pin(target_dir)
+        # ---- ratchet (contract-population.yaml's three pins: grandfathered_max,
+        # status_active_max, evaluator_none_grandfathered_max) ----
+        pins, pin_errors = _population.validate_ratchet_pins(target_dir)
         for err in pin_errors:
             failed.append(f"Contract drift (ratchet): {err}")
-        if pin_value is not None and baseline_available:
-            for err in _population.check_ratchet_direction(target_dir, pin_value, base_reader=_base_reader):
-                failed.append(f"Contract drift (ratchet): {err}")
+        if baseline_available:
+            for key in pins:
+                for err in _population.check_pin_direction(key, target_dir, pins[key], base_reader=_base_reader):
+                    failed.append(f"Contract drift (ratchet): {err}")
+
+        # ---- pin-vs-census equality binding: every pin must EQUAL its live census bucket,
+        # never merely be >= it (acceptance criterion 4) ----
+        census_values = {
+            "grandfathered_max": census.grandfathered,
+            "status_active_max": census.status_active,
+            "evaluator_none_grandfathered_max": census.evaluator_none_grandfathered,
+        }
+        for err in _population.check_pins_bound_to_census(pins, census_values):
+            failed.append(f"Contract drift (ratchet): {err}")
 
         # ---- census (every run) ----
         print(f"  Census: {census.render()}")

@@ -5439,3 +5439,79 @@ entries:
         ids={c.id for c in s.conditions}
         assert {'probe-token-expiry','probe-monitor-blind'} <= ids, ids
         print('stanza armed:', sorted(ids))
+  - check_id: enforcement-route-required-on-none-grandfathered
+    primitive_slot: test_selector
+    guard_target: scripts/contracts_schema.py
+    guard_symbol: EnforcementRoute
+    plan_slug: migration-step-3-grandfathering
+    graduated_at: '2026-08-13'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_contracts.py::TestEvaluatorSpec::test_none_grandfathered_requires_complete_enforcement_route
+  - check_id: evaluator-matcher-rejects-prose-literal
+    primitive_slot: test_selector
+    guard_target: scripts/checks/contracts/_population.py
+    guard_symbol: module_contains_literal
+    plan_slug: migration-step-3-grandfathering
+    graduated_at: '2026-08-13'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/contracts/test__population.py::TestModuleContainsLiteral::test_prose_literal_with_whitespace_is_rejected
+  - check_id: contract-population-pin-bound-to-census
+    primitive_slot: test_selector
+    guard_target: scripts/checks/contracts/_ratchet.py
+    guard_symbol: check_pins_bound_to_census
+    plan_slug: migration-step-3-grandfathering
+    graduated_at: '2026-08-13'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/contracts/test__ratchet.py::TestPinBinding::test_census_over_pin_fails
+  - check_id: decisions-per-entry-cap-hard-fails
+    primitive_slot: test_selector
+    guard_target: scripts/checks/decisions/validate_decisions_size.py
+    guard_symbol: _per_entry_cap_failures
+    plan_slug: migration-step-3-grandfathering
+    graduated_at: '2026-08-13'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/decisions/test_validate_decisions_size.py::TestPerEntryCap::test_new_over_cap_entry_fails
+  - check_id: decision-entry-tier-matches-validator
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/decision-entry.yaml
+    guard_symbol: size_governance.per_entry_size_norm.tier
+    plan_slug: migration-step-3-grandfathering
+    graduated_at: '2026-08-13'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import yaml,sys
+
+        t=yaml.safe_load(open(''docs/contracts/decision-entry.yaml''))[''size_governance''][''per_entry_size_norm''][''tier'']
+
+        sys.exit(0 if t.strip().startswith(''hard-fail'') and ''WARN'' not in t else 1)
+
+        '
+  - check_id: instruction-architecture-contract-presence-required
+    primitive_slot: test_selector
+    guard_target: scripts/checks/contracts/validate_instruction_architecture_layers.py
+    guard_symbol: validate_instruction_architecture_layers
+    plan_slug: migration-step-3-grandfathering
+    graduated_at: '2026-08-13'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/contracts/test_validate_instruction_architecture_layers.py::TestContractPresence::test_missing_contract_fails
+  - check_id: iam-simulate-budget-marker-recited
+    primitive_slot: command_exit_zero
+    guard_target: config/structural_size_budgets.yaml
+    guard_symbol: docs/contracts/iam-simulate-fixture.yaml
+    plan_slug: migration-step-3-grandfathering
+    graduated_at: '2026-08-13'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - grep "iam-simulate-fixture" config/structural_size_budgets.yaml | grep -q "dec-168" && ! grep "iam-simulate-fixture"
+        config/structural_size_budgets.yaml | grep -q "dec-166"

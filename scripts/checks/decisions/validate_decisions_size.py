@@ -10,15 +10,17 @@ decision-scout gate's `M`, Decision 134) and a live+archive combined byte ceilin
 backstops docs/DECISIONS.md's size on its own (Decision 151 consequence). Both are cheap,
 structural, and independent of how the decision-scout gate reads the corpus.
 
-PLAN-decision-entry-flow-governance / Decision 167 adds a third, WARN-tier ceiling: a forward-only
-per-NEW-entry authoring size norm (docs/contracts/decision-entry.yaml size_governance
-.per_entry_size_norm, rec-2934). It prints and never appends to `failed` -- the hard-fail flip is
-owned by a later migration step (destination readiness), not this one. Historical entries are
-never measured (forward-only, mirrors validate_decision_entry_conformance's own new-vs-baseline
-scope). Since this check is registered UNGATED in the --pre tier (unlike the glob-gated
-conformance check), the per-entry sub-check's own (git-cost) baseline read is skipped whenever a
-non-default `root` is injected for testing -- production calls (the default root) always pay it,
-since the two stock ceilings below already read both files on every --pre run regardless.
+PLAN-decision-entry-flow-governance / Decision 167 adds a third ceiling: a forward-only per-NEW-entry
+authoring size norm (docs/contracts/decision-entry.yaml size_governance.per_entry_size_norm,
+rec-2934). Decision 167 clause 3 explicitly dated this as a WARN-tier pre-commitment, staged
+behind migration step 3 (destination readiness) -- migration-step-3-grandfathering IS that
+migration step, so this norm now HARD-FAILS: a new-in-diff entry over the cap appends to `failed`.
+Historical entries are still never measured (forward-only, mirrors
+validate_decision_entry_conformance's own new-vs-baseline scope). Since this check is registered
+UNGATED in the --pre tier (unlike the glob-gated conformance check), the per-entry sub-check's own
+(git-cost) baseline read is skipped whenever a non-default `root` is injected for testing --
+production calls (the default root) always pay it, since the two stock ceilings below already
+read both files on every --pre run regardless.
 """
 
 from __future__ import annotations
@@ -71,11 +73,22 @@ def _decisions_size_issues(
     return issues
 
 
-def _per_entry_cap_warnings(root, baseline_numbers: set[int]) -> list[str]:
-    """WARN (never FAIL) for each NEW entry (absent from baseline_numbers) over the per-entry
-    authoring cap. Historical entries are never measured -- forward-only, mirrors
-    validate_decision_entry_conformance's own new-vs-baseline scope."""
-    warnings: list[str] = []
+_PER_ENTRY_CAP_HARD_FAIL_CITATION = (
+    'Decision 167 clause 3: "A new entry over 6,144 bytes ... triggers a named WARN from '
+    "validate_decisions_size, never a --pre failure -- a DATED pre-commitment ... this clause "
+    "explicitly disclaims that the lever is installed until migration step 3 (destination "
+    'readiness) flips it to hard-fail." migration-step-3-grandfathering IS that migration step.'
+)
+
+
+def _per_entry_cap_failures(root, baseline_numbers: set[int]) -> list[str]:
+    """HARD-FAIL (Decision 167 clause 3's dated pre-commitment, fired by migration step 3) for
+    each NEW entry (absent from baseline_numbers) over the per-entry authoring cap. Historical
+    entries are still never measured -- forward-only, mirrors
+    validate_decision_entry_conformance's own new-vs-baseline scope. Renamed from
+    `_per_entry_cap_warnings` (WARN-tier): the old name is actively misleading once this appends
+    to `failed` instead of only printing."""
+    failures: list[str] = []
     for rel in ("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"):
         path = root / rel
         if not path.exists():
@@ -87,12 +100,12 @@ def _per_entry_cap_warnings(root, baseline_numbers: set[int]) -> list[str]:
                 continue
             size = len(block.encode("utf-8"))
             if size > _PER_ENTRY_CAP_BYTES:
-                warnings.append(
-                    f"  WARN: Decision {n} ({rel}) is {size} bytes, exceeding the {_PER_ENTRY_CAP_BYTES}-byte "
-                    "per-entry authoring cap (docs/contracts/decision-entry.yaml "
-                    "size_governance.per_entry_size_norm) -- WARN-tier, does not fail --pre."
+                failures.append(
+                    f"  FAIL: Decision {n} ({rel}) is {size} bytes, exceeding the {_PER_ENTRY_CAP_BYTES}-byte "
+                    f"per-entry authoring cap (docs/contracts/decision-entry.yaml "
+                    f"size_governance.per_entry_size_norm) -- {_PER_ENTRY_CAP_HARD_FAIL_CITATION}"
                 )
-    return warnings
+    return failures
 
 
 @registry.register("validate_decisions_size", owner="platform")
@@ -115,8 +128,9 @@ def validate_decisions_size(
     is actionable, not just a stop sign.
 
     root / baseline_reader are test injection seams (mirrors validate_decision_entry_conformance)
-    for the WARN-tier per-entry cap sub-check below. A non-default root always exercises that
-    sub-check (deterministic for tests); the default (production) root skips it whenever this
+    for the hard-fail per-entry cap sub-check below (Decision 167 clause 3, fired by migration
+    step 3). A non-default root always exercises that sub-check (deterministic for tests); the
+    default (production) root skips it whenever this
     check's own root equals _common.ROOT AND neither DECISIONS file changed in this diff, since
     this check runs UNGATED on every --pre invocation and the git baseline read is not free.
     """
@@ -157,5 +171,8 @@ def validate_decisions_size(
     if baseline_numbers is None:
         print("  (per-entry cap: SKIP, origin/main unreachable.)")
         return
-    for warning in _per_entry_cap_warnings(root, baseline_numbers):
-        print(warning)
+    per_entry_failures = _per_entry_cap_failures(root, baseline_numbers)
+    for failure in per_entry_failures:
+        print(failure)
+    if per_entry_failures:
+        failed.append("DECISIONS size governance")

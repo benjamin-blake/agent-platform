@@ -89,16 +89,34 @@ class TestCensusAccountingOnEveryRejectionPath:
     def test_new_file_none_grandfathered_rejection_is_the_only_failure(
         self, tmp_path, install_fake_git, write_contract, FakeGit, class_d_yaml
     ) -> None:
+        # migration-step-3-grandfathering: the fixture MUST carry a COMPLETE EnforcementRoute so
+        # the SCHEMA layer (Pass 1's load_contract_meta call) passes cleanly -- otherwise
+        # load_contract_meta would raise on the incomplete/bare-string route first, and this test
+        # would keep passing (failed[0] still contains the substring "none_grandfathered" inside
+        # the pydantic error text) while silently ceasing to prove its actual subject: the gate's
+        # OWN new-file grandfather-at-birth rejection (the "a NEW Class D file may not declare
+        # evaluator.none_grandfathered" check), never reached if schema validation fails first.
         install_fake_git(FakeGit(merge_base_rc=0, merge_base="BASE0000", ls_tree=[]))
         write_contract(
             tmp_path,
             "ng.yaml",
-            class_d_yaml(evaluator={"none_grandfathered": "pending"}),
+            class_d_yaml(
+                evaluator={
+                    "none_grandfathered": {
+                        "reason": "pending",
+                        "consumer": "scripts/some_consumer.py",
+                        "mechanism": "assert some_field matches reality",
+                        "blocker": "no check reads it yet",
+                        "shape": "check",
+                    }
+                }
+            ),
         )
         failed: list[str] = []
         validate_contract_drift(failed, contracts_dir=tmp_path)
         assert len(failed) == 1, failed
-        assert "none_grandfathered" in failed[0]
+        assert "schema" not in failed[0], "schema validation must pass -- the route is complete"
+        assert "grandfather" in failed[0] and "none_grandfathered" in failed[0]
 
     def test_evaluator_does_not_resolve_rejection_is_the_only_failure(
         self, tmp_path, install_fake_git, write_contract, FakeGit, class_d_yaml

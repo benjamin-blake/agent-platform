@@ -62,17 +62,11 @@ def _check_standard_contract(failed: list[str], path: Path) -> None:
     if not isinstance(data, dict):
         failed.append(f"Data-model standard: {path} is not a YAML mapping")
         return
-    if "contract" in data or "class" in data:
-        failed.append(
-            f"Data-model standard: {path} carries a top-level contract:/class: key -- "
-            "must stay non-ritual so the CD.25 drift gate keeps skipping it"
-        )
-        return
     missing = [section for section in _REQUIRED_STANDARD_SECTIONS if section not in data]
     if missing:
         failed.append(f"Data-model standard: {path} missing required section(s): {missing}")
         return
-    print("  PASS: data-modeling-standard.yaml -- non-ritual, all required sections present.")
+    print("  PASS: data-modeling-standard.yaml -- all required sections present.")
 
 
 @registry.register("validate_data_model_standard", owner="platform")
