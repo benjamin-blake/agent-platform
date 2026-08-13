@@ -1,0 +1,712 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "git-checkpoint-persistence"
+intent: >-
+  Move git persistence off the model and onto the substrate: a Stop hook that commits and pushes
+  checkpoint work at every turn boundary, the structural marker guard that keeps the checkpoint
+  commits from silently disabling the VP-replay gates, and the AGENTS.md invariant + Decision that
+  bind both. Contributes to the North Star by making durable state a property of the harness rather
+  than of model diligence -- a prerequisite for unattended executor operation.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-git-checkpoint-persistence.yaml
+phase: >-
+  Platform engineering -- git-ops substrate correctness. Audit-anchored on
+  audits/gitops-agent-first-ddfb9cc.yaml (Q6 industry_adaptation, S7 assessment); ad-hoc,
+  user-initiated (soft-warn category user_explicit_out_of_scope), naming no carrier tier_item --
+  mirrors the PLAN-vp-replay-hermetic-traps precedent. Prerequisite for the gitops-audit
+  remediation series (the later GITOPS-02 subject-conformance gate extends this plan's registry).
+  Touches tier_item T4.1 for a record-only progress_note annotation; no product-roadmap phase.
+scope:
+  - file: .claude/hooks/stop_checkpoint_push.py
+    action: Create
+    purpose: >-
+      Stop hook: commit and push checkpoint work at every turn boundary. Fail-open on every path
+      (exit 0 always), never --no-verify, never on main, no-op mid-rebase/merge/cherry-pick.
+  - file: .claude/settings.json
+    action: Modify
+    purpose: >-
+      Register the hook under a new Stop block (Stop supports no matcher field) with an explicit
+      bounded timeout so a hung git operation cannot stall the turn end for the 600s default.
+  - file: tests/hooks/test_stop_checkpoint_push.py
+    action: Create
+    purpose: >-
+      Unit + real-git integration coverage for every hook path, mirroring never_on_main.py's
+      CLAUDE_HOOK_BRANCH_OVERRIDE seam and tests/hooks/test_fresh_branch_base.py's importlib-from-path
+      loader.
+  - file: scripts/checks/verification/validate_commit_markers.py
+    action: Create
+    purpose: >-
+      Structural marker guard: fail when origin/main..HEAD carries checkpoint commits but no
+      registered marker-prefix commit. Parses AGENTS.md's commit-message conventions table as its
+      prefix registry, giving that table a real reader.
+  - file: scripts/checks/verification/_manifest.py
+    action: Modify
+    purpose: Register the marker guard as a verification-domain Entry (Decision 169 manifest dispatch).
+  - file: tests/checks/verification/test_validate_commit_markers.py
+    action: Create
+    purpose: >-
+      Mirror test (Decision 131) covering the marker-seam behaviour, the AGENTS.md table parse, and
+      the origin/main-unreachable advisory skip.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      function_to_category row for the new check (registry-coverage constraint); code_regression,
+      matching its verification-domain siblings.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add the substrate-owned-persistence invariant to '## Git-ops procedure', add the wip({branch})
+      row to the commit-message conventions table, and remove the duplicated validate.py SSOT
+      sentence (rec-2362) as the byte offset.
+  - file: config/prose_budgets.yaml
+    action: Modify
+    purpose: >-
+      Decision-170-authorized raises for root_ambient_load_set and .claude/skills/implement/SKILL.md,
+      each carrying a '# raise-approved: dec-170' marker (Decision 165 authorization-by-body).
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      IMPLEMENTATION Commit Flow: --allow-empty on the feat({slug}) marker commit, plus a note that
+      checkpoint commits exist on the branch and collapse at squash-merge.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      --allow-empty on the Step-10 revision commit, absorbed at zero net bytes (the surface has 6
+      bytes of headroom).
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: --allow-empty on the Step 8 and Step 11 plan({slug}) marker commits.
+  - file: .claude/commands/audit.md
+    action: Modify
+    purpose: --allow-empty on the audit({slug}) marker commit.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Record-only: dated progress_note bullet on T4.1 capturing the step-wrapper contract as a
+      CD.43 design input. No executor code (Decision 67).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: Author Decision 170 (substrate-owned git persistence) per the draft in context below.
+bundled_recommendations:
+  - rec-2362
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    .claude/hooks/stop_checkpoint_push.py exists and is registered under a Stop block in
+    .claude/settings.json with an explicit timeout; the block declares no matcher field.
+  - >-
+    On a dirty working tree on a non-main branch the hook creates exactly one commit with subject
+    'wip({branch}): turn checkpoint' and the remote branch ref advances to it.
+  - >-
+    On a clean tree with local commits ahead of the upstream (or no upstream and ahead of
+    origin/main) the hook pushes without creating a commit; on a clean tree with nothing ahead it
+    does nothing and creates no remote branch.
+  - >-
+    The hook is a silent no-op when git is unavailable, HEAD is detached, the branch is main, or the
+    repository is mid-rebase/merge/cherry-pick (unmerged paths present).
+  - >-
+    The hook exits 0 on every path, never emits continue:false, and the string '--no-verify' does
+    not appear in its source.
+  - >-
+    A pre-commit rejection leaves the work uncommitted, emits a systemMessage warning on stdout, and
+    restores the pre-hook index when the index was clean before the hook ran.
+  - >-
+    A push failure (network, auth, timeout, or a failed --force-with-lease) leaves the local commit
+    in place, emits a systemMessage warning naming the branch, and exits 0.
+  - >-
+    validate_commit_markers fails a branch whose origin/main..HEAD carries at least one checkpoint
+    commit and no registered marker-prefix commit, and passes once a marker commit exists; it
+    advisory-skips when origin/main is unreachable.
+  - >-
+    validate_commit_markers is registered in the verification domain manifest, resolves via
+    scripts.checks.registry, runs in the --pre tier, and has a config/ci_rca_taxonomy.yaml row.
+  - >-
+    All five named marker-commit invocations across the four flow surfaces carry --allow-empty.
+  - >-
+    AGENTS.md '## Git-ops procedure' states the substrate-owned-persistence invariant and its
+    commit-message conventions table carries a wip({branch}) row; the duplicated validate.py SSOT
+    sentence appears exactly once in the file (rec-2362).
+  - >-
+    Both raised prose-budget entries carry a '# raise-approved: dec-170' marker and Decision 170's
+    body names both entries by path; every prose surface is at or under its budget.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml validates against the RoadmapDocument schema and T4.1's progress_note
+    records the step-wrapper contract explicitly as a CD.43 design input, not a store selection.
+  - >-
+    Decision 170 exists in docs/DECISIONS.md with the Decision 167 yaml envelope
+    (significance.value == numbered_decision) and is present in the decisions cache after backfill.
+  - rec-2362 is closed in the warehouse after merge.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise every hook path -- refusals (main, detached, clean tree, mid-rebase), commit+push on a
+      dirty tree against a local bare remote, clean-tree-but-unpushed push, pre-commit rejection with
+      index restore, non-fast-forward -> --force-with-lease, and push-failure fail-open.
+    command: bin/venv-python -m pytest tests/hooks/test_stop_checkpoint_push.py -q
+    expected: "All tests pass; output reports `passed` and no failures."
+    fix_if: >-
+      A refusal path commits anything, a failure path returns non-zero, the checkpoint subject does
+      not match 'wip({branch}): turn checkpoint', or the bare remote ref does not advance.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: stop-checkpoint-push-hook-tests
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the security gate is never bypassed -- the hook source contains no --no-verify under any
+      path. This is the standing guard for the pre-commit chain (detect-secrets, the shape-based
+      never-commit hook, ruff) that gates every checkpoint.
+    command: test "$(grep -c -- '--no-verify' .claude/hooks/stop_checkpoint_push.py || true)" = "0"
+    expected: Exit 0 (zero occurrences).
+    fix_if: >-
+      Non-zero exit means --no-verify was introduced; remove it and leave the work uncommitted with a
+      loud warning instead.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: checkpoint-hook-never-no-verify
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the hook is actually wired: settings.json declares a Stop block invoking the hook, with a
+      bounded timeout and no matcher field.
+    command: bin/venv-python -m pytest tests/hooks/test_stop_checkpoint_push.py::TestSettingsRegistration -q
+    expected: "Tests pass; output reports `passed`."
+    fix_if: >-
+      The Stop key is absent, the command does not name stop_checkpoint_push.py, no timeout is set, or
+      a matcher field is present (unsupported for Stop and silently ignored).
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: stop-hook-registered-with-timeout
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Exercise the marker guard, including the seam it exists to close: a branch carrying only
+      checkpoint commits fails; the same branch passes once a marker commit exists; an unreachable
+      origin/main advisory-skips rather than failing.
+    command: bin/venv-python -m pytest tests/checks/verification/test_validate_commit_markers.py -q
+    expected: "All tests pass; output reports `passed` and no failures."
+    fix_if: >-
+      The guard passes a marker-less branch (the seam is open), fails a branch with a marker (false
+      positive), or hard-fails when origin/main is unreachable.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: validate-commit-markers-tests
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove the guard is registered and dispatchable -- the verification domain's parametrized mirror
+      test resolves every Entry, including the new one, through scripts.checks.registry.
+    command: bin/venv-python -m pytest tests/checks/verification/test__manifest.py -q
+    expected: "All tests pass; output reports `passed`."
+    fix_if: >-
+      The Entry is missing, uses a combined 'module:attr' string instead of two bare literals, or does
+      not resolve to a callable of its own name.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The domain's existing parametrized mirror test is already the standing guard for every Entry in
+      this manifest and covers the new row automatically; a separate registry slot would duplicate an
+      guard that already grows with the manifest.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Prove the marker-commit remedy landed on every surface that carries a literal named commit --
+      one each in implement/SKILL.md, planning/SKILL.md and audit.md, two in plan.md.
+    command: test "$(grep -c -- '--allow-empty' .claude/skills/implement/SKILL.md)" = "1" && test "$(grep -c -- '--allow-empty' .claude/skills/planning/SKILL.md)" = "1" && test "$(grep -c -- '--allow-empty' .claude/commands/plan.md)" = "2" && test "$(grep -c -- '--allow-empty' .claude/commands/audit.md)" = "1"
+    expected: Exit 0 (per-file counts all match; an aggregate count would pass if one file held all five).
+    fix_if: >-
+      A count below 5 means a marker commit can still fail with 'nothing to commit' once checkpointing
+      is live, silently stripping its subject from origin/main..HEAD.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: marker-commits-allow-empty
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Prove the invariant and the checkpoint prefix are registered on the canonical git-ops surface --
+      the same table validate_commit_markers parses.
+    command: test "$(grep -c 'wip({branch})' AGENTS.md)" = "1" && grep -q 'substrate' AGENTS.md
+    expected: Exit 0 (the conventions table carries exactly one wip({branch}) row).
+    fix_if: >-
+      A zero count means the guard's registry has no checkpoint prefix and every checkpoint commit
+      would be unregistered; a count above 1 means the table has a duplicate row.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: agents-md-wip-row-registered
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Verify the bundled rec-2362 fix -- the validate.py SSOT sentence appears exactly once in
+      AGENTS.md (case-insensitively; the rec's own acceptance grep is case-sensitive and misses the
+      capital-N copy at AGENTS.md:246).
+    command: test "$(grep -ciE 'never add a check to' AGENTS.md)" = "1"
+    expected: Exit 0 (exactly one occurrence).
+    fix_if: >-
+      A count of 2 means the duplicate survives and the byte offset for the prose raise was not taken;
+      a count of 0 means the rule was deleted rather than de-duplicated.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: agents-md-validate-ssot-single
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Prove both prose-budget raises are authorized by Decision 170 by body, not merely marked
+      (Decision 165), and that Decision 170 names both entries by path.
+    command: "test \"$(grep -c 'raise-approved: dec-170' config/prose_budgets.yaml)\" = \"2\" && grep -q 'root_ambient_load_set' docs/DECISIONS.md && grep -q 'implement/SKILL.md' docs/DECISIONS.md"
+    expected: Exit 0 (two markers present and both entry keys named in the Decision body).
+    fix_if: >-
+      A missing marker fails validate_prose_budget_raises; a marker whose Decision body does not name
+      the entry fails Decision 165 authorization even though the marker exists.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_prose_budget_raises is the authoritative standing enforcement for this property and
+      already runs in the --pre tier; this step is a plan-time pre-check of a one-time raise, so a
+      registry slot would shadow an existing check rather than add coverage.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Prove the T4.1 annotation landed without breaking the roadmap schema, and that it records the
+      step-wrapper contract as a CD.43 design input rather than pre-empting CD.43's W1-W8 store
+      selection.
+    command: bin/venv-python -m scripts.roadmap.platform_roadmap && grep -q 'CD.43' docs/ROADMAP-PLATFORM.yaml
+    expected: "Output contains `PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.` and exit 0."
+    fix_if: >-
+      A schema failure means the progress_note broke the tier_item shape; a note asserting the remote
+      branch IS the state medium (rather than proposing it for W1-W8 evaluation) pre-empts CD.43 and
+      must be reworded.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Roadmap schema validity is already enforced by validate_platform_roadmap in both tiers, and the
+      CD.43-wording half is a one-time content assertion about this specific annotation that will not
+      generalize into a standing regression guard.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Prove Decision 170 exists with the Decision 167 typed envelope and clears the significance bar
+      it claims.
+    command: "test \"$(grep -c '^## Decision 170:' docs/DECISIONS.md)\" = \"1\" && grep -q 'value: numbered_decision' docs/DECISIONS.md"
+    expected: Exit 0 (exactly one Decision 170 header, envelope present).
+    fix_if: >-
+      A missing header or envelope fails validate_decision_entry_conformance; if a concurrent PR
+      claimed 170, shift to the next free number and update every reference in this plan's scope
+      (prose_budgets markers included).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_decision_entry_conformance already forward-enforces the envelope on every new entry;
+      this step guards a single one-time authoring act whose number may legitimately shift at
+      execution time, so a pinned registry check would be wrong the moment it shifts.
+  - step: 12
+    phase: pre-deploy
+    action: ETL Decision 170 into the warehouse and confirm it landed in the decisions cache.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && grep -q 'dec-170' logs/.decisions-index.jsonl
+    expected: Backfill exits 0 and dec-170 appears in the local decisions cache.
+    fix_if: >-
+      A portal failure means the assume-role chain is unavailable -- confirm with aws sts
+      get-caller-identity --profile agent_platform and re-run; never hand-edit the cache.
+    hermetic: false
+    graduation: not-applicable
+  - step: 13
+    phase: pre-deploy
+    action: Run the full local gate before handoff.
+    command: bin/venv-python -m scripts.validate
+    expected: "Exit 0 with a final `Validation Summary (scope: all)` PASS and no failures."
+    fix_if: >-
+      Any failure blocks handoff; fix and re-run the full tier from the start (a --pre pass is not a
+      substitute).
+    hermetic: false
+    graduation: not-applicable
+  - step: 14
+    phase: post-deploy
+    action: >-
+      Confirm the bundled recommendation closed after the squash-merge (Resolves: trailer ->
+      rec-autoclose).
+    command: bin/venv-python -m scripts.ops_data_portal --sync && grep 'rec-2362' logs/.recommendations-log.jsonl
+    expected: rec-2362 shows status closed.
+    fix_if: >-
+      Still open after ~5 min -- close directly via ops_data_portal --update-rec rec-2362 --status
+      closed --resolution "..." per the implement skill's post-merge closeout fallback.
+test_obligations:
+  - source: .claude/hooks/stop_checkpoint_push.py
+    behavior: >-
+      Refuses on main/detached/clean-tree/mid-rebase; commits with the registered checkpoint subject
+      and pushes on a dirty tree; pushes unpushed commits on a clean tree; never uses --no-verify;
+      exits 0 on every failure path.
+    verification_step: 1
+    test_selector: tests/hooks/test_stop_checkpoint_push.py
+    red_green_expectation: >-
+      red before (the module does not exist), green after; each refusal and failure path fails
+      individually if its guard is removed.
+  - source: .claude/settings.json
+    behavior: The Stop block registers the hook with a bounded timeout and declares no matcher field.
+    verification_step: 3
+    test_selector: tests/hooks/test_stop_checkpoint_push.py::TestSettingsRegistration
+    red_green_expectation: red before (no Stop key in hooks), green after.
+  - source: scripts/checks/verification/validate_commit_markers.py
+    behavior: >-
+      Fails a branch with checkpoint commits and no marker commit; passes once a marker exists;
+      advisory-skips on unreachable origin/main; reads its prefix registry from AGENTS.md's table.
+    verification_step: 4
+    test_selector: tests/checks/verification/test_validate_commit_markers.py
+    red_green_expectation: red before (the module does not exist), green after.
+  - source: scripts/checks/verification/_manifest.py
+    behavior: The new Entry resolves through scripts.checks.registry to a callable of its own name.
+    verification_step: 5
+    test_selector: tests/checks/verification/test__manifest.py
+    red_green_expectation: >-
+      red before (registry.resolve raises for an unregistered name), green after the Entry lands.
+  - source: AGENTS.md
+    behavior: >-
+      The commit-message conventions table remains parseable by validate_commit_markers and yields a
+      prefix set containing exactly one checkpoint-role row (the rec-2362 de-duplication is verified
+      separately at VP step 8).
+    verification_step: 4
+    test_selector: tests/checks/verification/test_validate_commit_markers.py::TestAgentsMdRegistryParse
+    red_green_expectation: >-
+      red before (the table has no checkpoint prefix, so the guard cannot classify wip commits),
+      green after.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: Every registered check has a failure-category row; the new check maps to code_regression.
+    verification_step: 13
+    command: bin/venv-python -m scripts.validate
+    red_green_expectation: >-
+      red before (validate_ci_rca_taxonomy fails on a registered check with no category row), green
+      after.
+  - source: config/prose_budgets.yaml
+    behavior: Both raised entries carry a dec-170 marker whose Decision body names them by path.
+    verification_step: 9
+    command: "test \"$(grep -c 'raise-approved: dec-170' config/prose_budgets.yaml)\" = \"2\""
+    red_green_expectation: red before (no dec-170 markers), green after.
+  - source: .claude/skills/implement/SKILL.md
+    behavior: The feat({slug}) marker commit carries --allow-empty.
+    verification_step: 6
+    command: test "$(grep -c -- '--allow-empty' .claude/skills/implement/SKILL.md)" = "1"
+    red_green_expectation: red before (0 occurrences), green after.
+  - source: .claude/skills/planning/SKILL.md
+    behavior: The Step-10 revision commit carries --allow-empty, at zero net byte cost.
+    verification_step: 6
+    command: test "$(grep -c -- '--allow-empty' .claude/skills/planning/SKILL.md)" = "1"
+    red_green_expectation: red before (0 occurrences), green after.
+  - source: .claude/commands/plan.md
+    behavior: Both plan({slug}) marker commits carry --allow-empty.
+    verification_step: 6
+    command: test "$(grep -c -- '--allow-empty' .claude/commands/plan.md)" = "2"
+    red_green_expectation: red before (0 occurrences), green after.
+  - source: .claude/commands/audit.md
+    behavior: The audit({slug}) marker commit carries --allow-empty.
+    verification_step: 6
+    command: test "$(grep -c -- '--allow-empty' .claude/commands/audit.md)" = "1"
+    red_green_expectation: red before (0 occurrences), green after.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: T4.1 carries the step-wrapper annotation and the file still validates against the schema.
+    verification_step: 10
+    command: bin/venv-python -m scripts.roadmap.platform_roadmap
+    red_green_expectation: >-
+      green before and after on schema validity; the annotation's presence is the added assertion in
+      step 10's grep leg.
+  - source: docs/DECISIONS.md
+    behavior: Decision 170 exists with the Decision 167 typed envelope and names both budget entries.
+    verification_step: 11
+    command: test "$(grep -c '^## Decision 170:' docs/DECISIONS.md)" = "1"
+    red_green_expectation: red before (no such header), green after.
+constraints:
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable failure, stop and RCA.
+  - >-
+    Decision 67 executor freeze -- the T4.1 annotation is RECORD-ONLY. Write no executor code, no
+    src/lambdas/ persona or glue module, no terraform. The progress_note is the entire deliverable
+    for that half.
+  - >-
+    CD.43 non-pre-emption -- the T4.1 annotation must present the remote-branch-as-state-medium
+    property as a CANDIDATE design input to be evaluated against CD.43's W1-W8 criteria, never as a
+    selection. CD.43 is pending and states it selects NO store; T4.1's own exit criterion says the
+    backing store is 'not implied by prepare_workspace's implementation'. Wording that asserts the
+    selection makes CD.43's criteria decorative, which CD.43's detail explicitly forbids.
+  - >-
+    Never --no-verify, under any path, in the hook or in any flow surface. The pre-commit chain
+    (detect-secrets, the shape-based never-commit pygrep hook, ruff) is the security gate and must
+    keep gating every checkpoint. A rejected checkpoint leaves work uncommitted and warns loudly.
+  - >-
+    The hook must never block the turn: exit 0 on every path, never exit 2, never emit
+    continue:false. Stop-hook exit-0 stderr goes to the debug log only, so every warning must be a
+    {"systemMessage": ...} JSON object on stdout.
+  - >-
+    Never bare --force. The divergence path uses --force-with-lease with NO preceding fetch of the
+    branch -- fetching first refreshes the remote-tracking ref and defeats the lease. On lease
+    failure, warn and leave the commit local.
+  - >-
+    Respect the never_on_main.py hard rule on every path. The hook invokes git directly and so
+    bypasses the PreToolUse guard entirely; it must implement its own main refusal as a third layer
+    behind never_on_main.py and pre-commit's no-commit-to-branch (Decision 138 authorizes the
+    layering).
+  - >-
+    Do NOT push when the branch has no commits ahead of origin/main. Minting an empty remote head at
+    the first turn end of every read-only session is the stale-branch debris GITOPS-04 flags.
+  - >-
+    Checkpoint commits inherit the session signing config unchanged -- never pass
+    -c commit.gpgsign=false, -c user.email=..., or any identity/signing override. The harness Stop
+    hook exits 2 on any local commit lacking a gpgsig header or whose committer email is not
+    noreply@anthropic.com, so a suppressed-signing checkpoint would wedge every turn end. Never
+    remediate that leg with --amend --reset-author (AGENTS.md commit-signing subsection).
+  - >-
+    Decision 128 -- both new source files and both new test files stay under 500 SLOC. Decompose
+    rather than register a budget entry.
+  - >-
+    Decision 127 prose ceilings are binding and near-zero: measure each edited surface after editing
+    and set its budget to the exact measured byte count. Do not seed slack.
+  - >-
+    Single Portal Invariant -- Decision 170 reaches the warehouse only via ops_data_portal
+    --backfill-decisions-md. Never hand-edit logs/.decisions-index.jsonl.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (122 of 122 triaged).
+    CITE: Decision 39, Decision 48, Decision 67, Decision 76, Decision 86, Decision 90, Decision 138,
+    Decision 148, Decision 150, Decision 167. FLAGS: Decision 127 [WARN] prose ceilings, Decision 132
+    [WARN] convention-vs-enforcement, Decision 163 [WARN] universal-invariant honesty, Decision 165
+    [NOTE] raise-marker authorization, Decision 168 [NOTE] registry-without-reader. RELATED: Decision
+    128, Decision 130, Decision 131, Decision 159, Decision 164, Decision 73, Decision 83. Roadmap
+    refs (not in DECISIONS.md): T4.1, T4.2, CD.27, CD.43, GITOPS-02, GITOPS-04."
+  - >-
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Decision-scout flag resolutions, all human-confirmed at Step 6b. D127: bundle rec-2362 as the
+    AGENTS.md byte offset, absorb planning/SKILL.md at zero net bytes, take minimal
+    Decision-170-authorized raises for S1 and implement/SKILL.md only. D132: build the structural
+    marker guard IN THIS PLAN rather than relying on a skill instruction -- Decision 132's own
+    reversal condition says to revisit the resolution mechanism when the feat({slug}) false negative
+    proves material, and this hook makes it material by construction. D163: keep fail-open, but word
+    the AGENTS.md invariant honestly -- the POLICY is absolute (unpushed work never existed), the
+    MECHANISM is best-effort and loud. D165: Decision 170's body names both budget entries by path.
+    D168: closed by the guard reading AGENTS.md's table directly.
+  - >-
+    REJECTED ALTERNATIVE (design change made during authoring, after Step 6b): a separate
+    docs/contracts/commit-grammar.yaml holding the prefix registry. Dropped for two reasons. (1)
+    docs/contracts/contract-population.yaml pins status_active_max: 16 bound to the live census BY
+    EQUALITY -- validate_contract_drift fails in either direction -- so a new active Class D contract
+    needs a pin raise, and that pin's raise_mechanism requires a NEW numbered Decision naming the key,
+    stacking a third budget-raise authorization onto Decision 170. (2) A YAML copy of AGENTS.md's
+    conventions table is precisely the two-surfaces-to-sync anti-pattern AGENTS.md's Agent-First
+    section forbids ("One file is better than two files covering the same subject"). Having the guard
+    parse the AGENTS.md table directly closes the Decision 168 flag more convincingly -- the registry
+    gains a real reader instead of a second copy.
+  - >-
+    REJECTED ALTERNATIVE: detecting unpushed work by counting commits ahead of a fallback upstream.
+    Observed live during this planning session -- the harness Stop hook (below) reported "2 unpushed
+    commit(s)" on a branch whose HEAD was exactly origin/main. Mechanism, read from its source: when
+    origin/$current_branch does not resolve it falls back to upstream="origin/HEAD" and counts
+    `git rev-list origin/HEAD..HEAD`, so a freshly-rebased branch with no remote head yet counts the
+    commits the rebase pulled in -- commits already on main. This hook must key the dirty-tree trigger
+    on `git status --porcelain`, and the unpushed-commit trigger on an explicit upstream comparison
+    that treats a MISSING upstream as "nothing unpushed unless ahead of origin/main" -- never on an
+    ahead-count against a substituted ref.
+  - >-
+    HARNESS STOP HOOK INTERACTION (load-bearing -- read before writing this hook). The CC-web
+    container ships its own Stop hook at ~/.claude/stop-hook-git-check.sh, registered in
+    ~/.claude/launcher-settings.json (there is no ~/.claude/settings.json). It is CCR
+    infrastructure, root-owned, re-provisioned per container, NOT repo-tracked and NOT removable
+    from this repo. It EXITS 2 -- blocking the turn end and handing the message back to the model --
+    on (a) uncommitted changes, (b) untracked files, (c) unpushed commits, and (d) local commits
+    whose committer email is not noreply@anthropic.com or that carry no gpgsig header. Consequences
+    for this plan: (1) it is the incumbent model-owns-persistence enforcement this invariant
+    replaces, and its exit-2 blocking is the churn this plan removes; (2) both Stop hooks run and
+    cross-source ordering is not guaranteed -- if this repo's hook runs first the harness hook then
+    sees a clean tree, a resolved upstream and zero unpushed commits and exits 0 silently; if it runs
+    first there is one blocked boundary and silence from the first checkpoint onward. Either order
+    converges, which is why fail-open is safe here; (3) checkpoint commits MUST inherit the session
+    signing config (commit.gpgsign=true, user.email=noreply@anthropic.com) -- never pass
+    -c commit.gpgsign=false or otherwise suppress signing, or every checkpoint trips the harness
+    hook's signing leg. Do NOT chase that leg with --amend --reset-author (AGENTS.md commit-signing
+    subsection forbids it).
+  - >-
+    THE SEAM THIS PLAN EXISTS TO PROTECT: scripts/checks/_common.py:208 feat_commit_slugs() resolves
+    plans from feat({slug}) subjects on `git log origin/main..HEAD`. Consumers:
+    validate_vp_replay.py:150,174 and validate_graduation_completeness.py:186. Once every turn
+    boundary checkpoints, `git add -A && git commit -m "feat({slug}): ..."` finds nothing staged,
+    fails with "nothing to commit", and leaves no marker -- both gates silently take their
+    plan-only/DEFER leg. Decision 132 disclosed this as an incidental false negative; this hook makes
+    it systematic. --allow-empty is the mechanism; validate_commit_markers is the enforcement.
+  - >-
+    Stop-hook harness semantics, verified against the live Claude Code hooks documentation: the Stop
+    event supports NO matcher field; input carries session_id, cwd, stop_hook_active and
+    last_assistant_message; exit 0 sends stderr to the DEBUG LOG ONLY (Claude never sees it), exit 2
+    blocks stopping, and the supported JSON output fields are continue/stopReason, systemMessage and
+    terminalSequence (decision/reason are NOT used for Stop). The default hook timeout is 600s, which
+    is why this plan sets an explicit shorter one.
+  - >-
+    Probed and confirmed in a scratch repo during planning: a pre-commit rejection exits 1 and leaves
+    files STAGED, and a plain `git reset` cleanly restores the unstaged state with all work intact --
+    this is why the hook captures index-cleanliness before staging and only restores when the index
+    was clean beforehand (restoring unconditionally would unstage what the agent had staged). Push to
+    a local bare remote uses no sockets, so the integration tests are hermetic under the repo's
+    --disable-socket addopts.
+  - >-
+    Test-environment gotcha: the container sets commit.gpgsign=true globally with an SSH signer.
+    Scratch repos created by the tests must set user.email, user.name AND commit.gpgsign=false
+    locally, or every test commit attempts to sign and fails. The hook itself inherits the session's
+    signing config, so real checkpoint commits are signed like any other (AGENTS.md commit-signing
+    subsection needs no change).
+  - >-
+    CI cost is bounded and was checked: ci.yml fires only on pull_request to main and push to main,
+    so a checkpoint push to a claude/* branch with no open PR triggers no workflow at all; with an
+    open PR it fires pr-validate, whose concurrency group pr-validate-${{ github.ref }} sets
+    cancel-in-progress: true. Residual disclosed risk: a checkpoint push while a PR is open replaces
+    the PR head with a WIP state, so the implement flow's existing "confirm check runs before
+    merging" step is what prevents merging an unvalidated checkpoint.
+  - >-
+    T4.1 Freshness Gate result (run at planning time): NOT silently complete (no src/lambdas/pick_rec/,
+    no terraform/personal/executor_*.tf); no stale references requiring re-grounding -- the
+    agent/{slug} branch naming in prepare_workspace is executor-substrate-scoped and is NOT the
+    CC-web "never create an agent/ branch" rule, so it stands; no supersession (T4.1 owns the
+    substrate and glue, T4.2 the personas, per T4.1's own intent); gating CD.43 is pending and
+    constrains this annotation's wording (see constraints).
+  - >-
+    Branch was 2 commits behind origin/main at planning time; overlapping scope files: none (the two
+    commits were unrelated plan documents). Rebased onto origin/main at f4c4f39 during planning at
+    the human's direction, before the plan was written.
+  - >-
+    DRAFTED DECISION 170 (authored at /implement time, NOT during planning -- Decision 105 reserves
+    execution for /implement). Re-check the current max '## Decision NNN:' header first; a concurrent
+    PR may have claimed 170, and shifting to the next free number at execution time is safe (the
+    referential guard catches header mismatches). If the number shifts, update the two
+    config/prose_budgets.yaml markers, VP steps 9 and 11, and this plan's references in the same
+    commit. Header - "## Decision 170: Substrate-owned git persistence -- the orchestrating layer,
+    never the model, commits and pushes at every unit-of-work boundary (Decided)". Envelope - yaml
+    block with number 170, status Decided, decided_date, significance.value numbered_decision and a
+    justification naming the durable commitment. Problem - git persistence has been a model
+    responsibility on every substrate this platform runs; on CC-web the container hibernates between
+    turns and is reclaimed after inactivity, so any turn ending with uncommitted or unpushed work is
+    one reclamation from losing it, and the loss is silent and model-tier-correlated (a lower-tier
+    model that forgets to push loses work a higher-tier model keeps, making durability a function of
+    model choice rather than of the platform). Decision - no model, of any tier, on any substrate, is
+    responsible for git persistence; the orchestrating layer owns it at every unit-of-work boundary
+    (CC-web - the Stop hook; executor - the step wrapper, T4.1, offered to CD.43 as a design input
+    and not a store selection); unpushed work is treated as never having existed; persistence is
+    fail-open but never gate-bypassing (the pre-commit chain gates every checkpoint, --no-verify is
+    never used, the on-main prohibition holds on every path); checkpoint commits are registered
+    grammar (wip({branch})) that collapse at squash-merge, and named marker commits use --allow-empty
+    so their subjects survive for the grammar consumers. Budget-authorization clause (REQUIRED by
+    Decision 165) - this Decision authorizes raising config/prose_budgets.yaml entries
+    root_ambient_load_set and .claude/skills/implement/SKILL.md by exactly the bytes this Decision's
+    invariant and marker-commit rule add to those two surfaces, offset first by the rec-2362
+    de-duplication; no other entry is authorized. Reversal conditions - (a) if turn-boundary
+    checkpointing measurably degrades the interactive loop (turn-end latency or CI churn), narrow the
+    trigger, never move persistence back onto the model; (b) if fail-open proves to hide real losses,
+    add a detection path (a session-start stranded-branch check), never convert the hook to exit 2 and
+    wedge turn ends; (c) if CD.43 selects a workspace backing store incompatible with
+    remote-branch-as-state-medium, the executor half of this invariant re-expresses itself in terms of
+    that store -- the model-never-owns-persistence clause survives regardless. Rationale - persistence
+    is a substrate property; making it a model responsibility makes durability a function of model
+    diligence, which is exactly the class of thing the platform exists to remove from the model's
+    plate. Significance - clears the Decision 150 bar - durable architectural commitment,
+    reversal-relevant, and no cd_state_flip/operational_fact/field_semantics row owns it. Related -
+    Decision 76 (hibernating container, the premise), Decision 138 (layered on-main guards), Decision
+    148 and Decision 132 (the VP-replay legs this plan's marker guard protects), Decision 163
+    (universal obligations enforced structurally -- the honesty wording), Decision 165 (the
+    authorization mechanism this entry's budget clause satisfies), Decision 167 (envelope), Decision
+    39 and Decision 67 (Step Functions substrate; executor freeze), Decision 86 (forward intent to
+    tier_items - the T4.1 note). Roadmap refs - T4.1, CD.43, audits/gitops-agent-first-ddfb9cc.yaml.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Re-read the live Claude Code Stop-hook contract before writing the hook (matcher support, exit
+    codes, JSON output fields) -- the harness surface is not repo-editable and may have moved.
+  - >-
+    Re-check the current max '## Decision NNN:' header in docs/DECISIONS.md before authoring
+    Decision 170.
+execution_steps:
+  - >-
+    ORDER MATTERS -- land the marker guarantee before anything emits checkpoint commits, so no window
+    exists in which checkpoints can strip a marker subject. Steps run in the order below; all of it
+    ships in ONE PR so there is no cross-PR window either.
+  - >-
+    Add --allow-empty to all five named marker-commit invocations - .claude/skills/implement/SKILL.md
+    (feat({slug}), plus the checkpoint-commit note), .claude/commands/plan.md (both plan({slug})
+    commits at Steps 8 and 11; adjust Step 11's "this commit may be empty -- skip it" caveat, which
+    --allow-empty makes obsolete), .claude/commands/audit.md (audit({slug})), and
+    .claude/skills/planning/SKILL.md Step 10 (reword to absorb the 14 added bytes at zero net cost --
+    the surface has 6 bytes of headroom; dropping " on the branch" is exactly -14).
+  - >-
+    AGENTS.md - remove the duplicated validate.py SSOT sentence (rec-2362; keep ONE of the two at
+    lines ~188 and ~246), add the wip({branch}) row to the commit-message conventions table, and add
+    the substrate-owned-persistence invariant to '## Git-ops procedure'. Word the invariant per the
+    Decision 163 resolution - the policy is absolute, the mechanism is best-effort and loud. Note the
+    existing precedent that .claude/commands/plan.md Step 8 already mandates push-on-commit.
+  - >-
+    Create scripts/checks/verification/validate_commit_markers.py - parse AGENTS.md's commit-message
+    conventions table into the registered prefix set with each row's role (marker vs checkpoint);
+    read `git log origin/main..HEAD --format=%s`; fail when >=1 checkpoint-prefix subject is present
+    and 0 marker-prefix subjects are; advisory-SKIP (never fail) when origin/main is unreachable,
+    mirroring validate_vp_replay's disclosed limitation. Never raise at import (AGENTS.md Safety).
+    Failure message must name --allow-empty as the remedy.
+  - >-
+    Register it - one Entry in scripts/checks/verification/_manifest.py with bare string literals for
+    module and attr (never a combined "module:attr"), pre=True with pre_globs=None so it runs
+    unconditionally in the --pre tier, full_segment="full_after_lint"; and one
+    config/ci_rca_taxonomy.yaml function_to_category row mapping it to code_regression (matching its
+    verification-domain siblings validate_vp_replay and validate_graduation_completeness).
+  - >-
+    Write tests/checks/verification/test_validate_commit_markers.py - the marker seam (checkpoint-only
+    branch fails; passes once a marker exists), the AGENTS.md table parse, and the unreachable-origin
+    advisory skip. Use scratch git repos, not the live repo.
+  - >-
+    Create .claude/hooks/stop_checkpoint_push.py. Read the Stop payload from stdin, fail-open on
+    malformed JSON. Resolve the repo root from __file__. Branch via CLAUDE_HOOK_BRANCH_OVERRIDE or
+    `git branch --show-current`, mirroring never_on_main.py's seam. Refuse silently on - git
+    unavailable, detached HEAD, branch == main, or mid-rebase/merge/cherry-pick (unmerged paths, or
+    .git/rebase-merge, .git/rebase-apply, MERGE_HEAD, CHERRY_PICK_HEAD present). Then - if the tree is
+    dirty, capture index cleanliness, `git add -A`, `git commit -m "wip({branch}): turn checkpoint"`
+    (pre-commit chain runs; NEVER --no-verify); on rejection restore the index if it was clean, emit a
+    systemMessage warning, exit 0. Push whenever there is anything unpushed (a fresh checkpoint, OR a
+    clean tree with commits ahead of the upstream, OR no upstream and ahead of origin/main) via `git
+    push -u origin HEAD`; on non-fast-forward rejection retry `--force-with-lease` with NO preceding
+    fetch; on any push failure emit a systemMessage warning naming the branch and exit 0. Bound every
+    subprocess with a timeout. Exit 0 on every path.
+  - >-
+    Register the hook in .claude/settings.json under a new "Stop" key using the same group form the
+    existing SessionStart block uses, with an explicit timeout well under the 600s default. Do NOT
+    add a matcher field -- Stop does not support one.
+  - >-
+    Write tests/hooks/test_stop_checkpoint_push.py - load the module via importlib from path
+    (tests/hooks/test_fresh_branch_base.py pattern). Cover every refusal, the dirty-tree
+    commit-and-push against a local bare remote, the clean-tree-but-unpushed push, the
+    no-push-when-not-ahead case, pre-commit rejection with index restore (install a synthetic failing
+    .git/hooks/pre-commit in the scratch repo), non-fast-forward -> --force-with-lease, push-failure
+    fail-open, the never---no-verify assertion, and the settings.json registration. Set user.email,
+    user.name and commit.gpgsign=false in every scratch repo.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml - append a dated progress_note bullet to T4.1 naming this plan,
+    recording the step-wrapper contract - each state-machine step fetches the branch at the SHA handed
+    to it by Step Functions, does its work, commits and pushes via wrapper code (the step_commit.py
+    pattern; push is part of the step because Lambda has no durable filesystem), and returns the new
+    SHA as step output, with retried steps idempotent against remote state by SHA comparison. State
+    EXPLICITLY that remote-branch-as-state-medium is offered as a CANDIDATE input to CD.43's W1-W8
+    evaluation and selects no store. Record-only - no executor code.
+  - >-
+    Author Decision 170 in docs/DECISIONS.md from the draft in context, including the
+    budget-authorization clause naming both prose_budgets entries by path. Re-check the max header
+    number first and shift if raced.
+  - >-
+    Measure the edited prose surfaces and set config/prose_budgets.yaml to the EXACT post-edit byte
+    counts - root_ambient_load_set = wc -c CLAUDE.md + wc -c AGENTS.md, and
+    .claude/skills/implement/SKILL.md = its own wc -c. Add '# raise-approved: dec-170 <reason>' to
+    each raised entry. Seed no slack. Confirm planning/SKILL.md still fits without a raise.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
+    RCA (Decision 55).
+  - >-
+    Report - what was implemented, verification results, and the exact byte deltas taken on each
+    raised prose budget.
+rollback: >-
+  Single-PR revert. The hook is inert once its settings.json Stop block is removed, so a partial
+  rollback (drop the Stop registration, keep the marker guard and --allow-empty edits) is safe and
+  is the preferred first response if checkpointing proves disruptive -- the marker guard is a no-op
+  on branches that carry no checkpoint commits, and --allow-empty is harmless without it.
