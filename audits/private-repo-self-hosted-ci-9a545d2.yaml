@@ -1,0 +1,602 @@
+audit:
+  meta:
+    audited_commit: 9a545d2
+    base_branch: main
+    model: "Claude (Anthropic); exact model identifier withheld per execution-environment policy"
+    methodology_version: 1
+    scope_surfaces: [S-VIS, S-RUNNER, S-CI, S-WAKE, S-GOV, S-SEC, S-CRED]
+    degraded_dedup: false
+    degraded_empirical: false
+    degraded_external: false
+    access_limitations:
+      - {endpoint: "GET /repos/{owner}/{repo}/actions/... billing (Actions billing usage endpoint)",
+         failure: "not exposed by the session's GitHub MCP toolset; 0 of the 2 allowed settings/billing calls could target it",
+         what_it_blocked: "direct confirmation of the account's billed-minutes ledger; derived instead from get_workflow_run_usage samples (billable=0 on 4 runs) plus the documented public-repo free-minutes rule"}
+    assumed_inputs:
+      - {id: "AI-01", input: "USD->GBP FX rate", assumed_value: "0.74 (2026-08 mid-market)",
+         why: "GitHub prices are USD; deliverable currency is GBP", sensitivity: "low; +/-5% does not move any conclusion"}
+      - {id: "AI-02", input: "electricity tariff", assumed_value: "GBP 0.22-0.30/kWh (UK domestic 2026)",
+         why: "unstated; needed for self-hosted running cost", sensitivity: "low-medium; spans GBP 4-32/mo depending on duty cycle"}
+      - {id: "AI-03", input: "runner host power draw and duty cycle", assumed_value: "60-90W idle, 200-250W load; CI busy ~6-10h/day",
+         why: "unstated; derived from 9950X TDP class and observed CI volume", sensitivity: "medium; drives the electricity range"}
+      - {id: "AI-04", input: "PySR duty cycle on the shared box", assumed_value: "0-100% (unknown)",
+         why: "explicitly unstated by the requester", sensitivity: "HIGH; flips Q2 between material-speedup and regression"}
+      - {id: "AI-05", input: "monthly Actions job-minutes at current velocity", assumed_value: "14,000-21,000 (point 17,500)",
+         why: "extrapolated from 3 sampled run lists + per-job rounding rules; the billing ledger is not directly readable", sensitivity: "medium; +/-30% moves the private-hosted bill GBP +/-20/mo but not its order of magnitude"}
+      - {id: "AI-06", input: "runner maintenance burden", assumed_value: "2-6 h/mo steady-state plus incident tail",
+         why: "unstated; industry-typical for a single hardened ephemeral runner host", sensitivity: "medium; at any personal-time valuation it rivals the entire hosted bill"}
+      - {id: "AI-07", input: "capital-cost share attributable to CI", assumed_value: "0-50% of GBP 1,390 over 36 months (GBP 0-19/mo)",
+         why: "machine was purchased for PySR; CI is a co-tenant", sensitivity: "low; even 50% does not change the self-hosted-vs-hosted ordering"}
+      - {id: "AI-08", input: "hosted-runner core count baseline", assumed_value: "public-repo standard runners 4-core/16GB; private-repo standard 2-core/7GB",
+         why: "GitHub upgraded public-repo standard runners; could not be doc-fetched within the external cap", sensitivity: "medium; if true, private-hosted full tier runs SLOWER than today and bills MORE minutes than AI-05 projects (marked HYPOTHESIS where used)"}
+    adversarial_rounds: 3
+    adversarial_status: round-capped
+    adversarial_refuted_count: 0
+    unconverged_items:
+      - {id: "Q11", disagreement: "Each round found a new defect in Q11's lockout analysis (round 1: phantom full-tier wedge; round 2: USD-0 spending-limit stall; round 3: flip-apply error on the pinned security_and_analysis block + admin-bypass survives 'every merge blocks'). All three corrections are applied in the final text, but the corrected Q11 was never itself re-reviewed by a fresh round -- its verdict (sequenced-plan-with-rollback) was not disputed in any round; the lockout-completeness claim is the unconverged part and should be read as HYPOTHESIS: further stalls of the same class may exist."}
+    premises_tested:
+      - {id: PR-1, holds: true,
+         evidence: "GitHub :: Update to GitHub Actions pricing (changelog) :: https://github.blog/changelog/2025-12-16-coming-soon-simpler-pricing-and-a-better-experience-for-github-actions/ :: retrieved 2026-08-13 -- USD 0.002/min platform charge for self-hosted runners in private repos announced 2025-12-16 effective 2026-03-01, then postponed ('to take time to re-evaluate our approach'), not cancelled; hosted price cuts (up to 39%) proceeded 2026-01-01",
+         effect_on_answers: "Q10 answered in its premise-holding form; self-hosted-on-private carries a live repricing risk of ~GBP 23/mo at current volume if reinstated as announced"}
+      - {id: PR-2, holds: false,
+         evidence: "GitHub Docs :: Adding self-hosted runners / managing access :: https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners :: retrieved 2026-08-13 -- 'We recommend that you only use self-hosted runners with private repositories' (fork-PR code-execution risk); a recommendation, not an enforced restriction",
+         effect_on_answers: "the two decisions decouple: private does NOT require self-hosting; self-hosting on a PUBLIC repo is strongly discouraged (one-directional advisory coupling). summary.verdicts_coupled=false; visibility and runner verdicts are answered independently"}
+    contract_notes: "EXTERNAL EVIDENCE fetch cap overrun: 9 WebFetch calls were made against the cap of 8 (the Actions usage-limits page had moved and its fetch returned no data; the queue-cancellation limit was then sourced from docs.github.com search snippets rather than a further fetch). All other caps respected: 3 run-list calls, 4 of 5 usage calls, 1 of 2 settings calls (repo metadata for fork/star counts), no log downloads."
+    stale_anchors: []
+  question_answers:
+    - q: Q1
+      per_intent:
+        - {intent: I-A, verdict: recommend-public, preconditions: [],
+           rationale: "Solo instrument: no adversary monetises against you, the valuable asset (DuckLake operational data) is in AWS and never in the repo (Decision 101 boundary), so a flip protects nothing load-bearing while costing governance (PRIV-01/02) and security controls (PRIV-03)."}
+        - {intent: I-B, verdict: recommend-conditional,
+           preconditions: ["either split-repo per CD.32 (sensitive future work in a new private repo; this repo stays public) or full flip only after: Pro plan active pre-flip, tf-gated-apply replacement gate landed and tested (PRIV-01), ghas-probe/validate.py re-scoped (PRIV-03), and the dec-111/dec-112 reversal ratified (PRIV-07)", "license posture for future commits decided (Q9)"],
+           rationale: "Commercial product: future commits progressively encode operational learning (thread b), so the protected delta grows; enclosure has real value but the CD.32 split captures most of it at a fraction of the governance cost."}
+        - {intent: I-C, verdict: recommend-public, preconditions: [],
+           rationale: "Portfolio: the public engineering surface IS the asset (EVALUATION-PROMPTS.yaml, curated portal per dec-111, README); a flip destroys the asset to protect a lesser one."}
+        - {intent: I-D, verdict: recommend-public, preconditions: [],
+           rationale: "Open-core: the intended topology already exists -- platform public, data plane private in AWS; CD.32 records the discipline that the repo axis and the data axis are orthogonal. Flipping the platform repo contradicts the model."}
+      headline: {verdict: recommend-public, assumed_intent: I-C,
+                 intent_inference_evidence: "inference, not fact: docs/PROJECT_CONTEXT.md:20 ratifies a 'public, agent-first automation platform' end-state; dec-111 ratified the curated-portal commitment; EVALUATION-PROMPTS.yaml was authored specifically for external evaluators; AGENTS.md's boundary is 'market the engineering, not the alpha'. CIRCULARITY DISCLOSURE (adversarial round 1, bias check a): this inference rests partly on the very artifacts the proposal would reverse -- it is a prior drawn from the record, not evidence against changing the record. The requester's brief signals drift toward I-B; a pinned I-B intent overrides this inference and moves the headline to I-B's conditional path (see intent_dependencies)",
+                 preconditions: []}
+      adversary_model:
+        adversaries: ["competing quant developers/firms scraping public code for strategy signal", "platform-engineering copycats monetising the harness as a product", "bulk scrapers/LLM training corpora", "targeted attackers doing reconnaissance for AWS entry (security, not IP)"]
+        assets: ["DuckLake operational data (the requester-located crown jewel; lives in AWS, never in the repo)", "platform engineering patterns (code, contracts, skills, prompts) -- public by design", "trading alpha (never committed, Decision 101)", "the growing operational-learning residue encoded in prompts/contracts/config (thread b)"]
+        channels: ["direct repository read while public", "third-party mirroring/archives (Software Heritage, GH Archive, clones)", "continuous transmission of repo contents to external model providers (F40: deepseek_executor_inference, anthropic_escape_hatch_spillover)", "attack-surface reconnaissance from published workflow/infra detail"]
+        channels_closed_by_flip: ["direct repository read (future commits)", "new third-party mirroring (future commits)", "reconnaissance on future commits"]
+        channels_not_closed: ["already-published history in mirrors/archives/crawls (bounded: 0 forks, 1 star, ~2.5-month window -- see Q9)", "model-provider transmission (continues by design; contractual counterparties under API terms, a different threat class from public adversaries -- this bounds but does not void the protection claim)"]
+      basis: [PRIV-07, BEN-01, BEN-04]
+      prose: "Thread (a), link by link: (1) 'private was unaffordable' -- TRUE at the time (Decision 68's problem statement: '2000 min/month free tier exhausted at current PR velocity') and TRUE again today for hosted runners: the current bill is GBP 0 only because the repo is public; flipping onto hosted runners would cost ~GBP 53-86/mo at observed volume (cost_analysis), against a whole-platform baseline of USD 22-59/mo. (2) 'self-hosting makes private affordable' -- TRUE for Actions minutes (GBP 0 today, ~GBP 23/mo if the postponed PR-1 charge returns) but it converts money into availability risk (PRIV-04), governance loss it does not fix (PRIV-01/02/03), and 2-6 h/mo of maintenance. (3) 'therefore go private' -- non sequitur: affordability is necessary, not sufficient; the plan-tier and security losses are the real price and are unpriced in the requester's chain. Thread (b): operational-data value does flow into prompts, contracts and config, so the code increasingly encodes the asset -- this RAISES the future value of enclosure (supports I-B) but also means the cheapest protection is to fence the DELTA (CD.32 split-repo for sensitive future work), not to enclose the already-public whole. Q9 was answered before this headline was finalised: the redactability working assumption substantially HOLDS (0 forks, 1 star, short window), so the headline was not revised on that account; note the Apache-2.0 grants on published commits are irrevocable regardless."
+    - {q: Q2, verdict: marginal-speedup, basis: [PRIV-06, BEN-02],
+       prose: "The suite is already parallelised: pytest -n auto via pytest-xdist (scripts/checks/_scaffolding.py:147-148, requirements-dev.txt:11), 501 test files. Full tier on today's hosted runner: median 23.8 min wall (30-run sample). Uncontended model on 16C/32T with persistent caches: setup ~4 min collapses to <1 min (warm venv), the pytest phase (est. 12-16 min at hosted width) scales to ~2-4 min at 16-24 workers, mypy/lint gain little (limited internal parallelism) -- plausible full tier 6-9 min, a 2.5-4x MATERIAL speedup. Contended model (PySR saturating the box): CI degrades to hosted-parity or worse and PySR loses throughput symmetrically; with PySR duty cycle unstated (AI-04) the decision-relevant figure is the contended one, hence the verdict. Utility check: the full tier is POST-MERGE (ci.yml:85-86) and main-canary is scheduled; the PR edit loop runs the fast tier at ~2 min observed -- so even the uncontended speedup buys little where latency actually matters. Memory: 32 GB across up to 32 workers is ~1 GB/worker before OS+PySR; capacity, not the single memory channel, binds first -- cap CI at 8-12 workers when PySR is active. On the requester's GBP 260 question: the second DIMM is NOT justified by CI (bandwidth is a 10-30% effect at capped widths); if bought at all it should be for PySR capacity, decided on PySR evidence. Shared-box theorisation (bounded, hypothesis): one 9950X can carry both roles only with explicit partitioning -- cgroup-capped ephemeral CI containers (e.g. 12 threads / 10 GB) with PySR niced below them, accepting that a saturated box makes CI latency unpredictable exactly when Q4's availability expectations assume minutes; temporal separation (pause PySR during CI) is workable for post-merge tiers but couples the trading workload's schedule to CI cadence, and the contention falls mainly on CI (bursty, deadline-shaped) rather than PySR (throughput-shaped)."}
+    - q: Q3
+      verdict: partial
+      external_checklist:
+        - {property: RP1, rating: met, evidence: "design: actions/runner --ephemeral, one job per registration, fresh container per job; orchestrator re-registers after each job"}
+        - {property: RP2, rating: met, evidence: "design: JIT config via POST /repos/{o}/{r}/actions/runners/generate-jitconfig from a host-local orchestrator holding a fine-grained PAT scoped to runner administration only; no long-lived registration token on disk"}
+        - {property: RP3, rating: met, evidence: "design: jobs execute inside rootless Podman containers built from a pinned ubuntu-24.04 image mirroring ubuntu-latest toolchain; image rebuilt weekly; NOT bare-metal execution"}
+        - {property: RP4, rating: met, evidence: "design: dedicated non-root 'ghrunner' user, no sudo, systemd service with NoNewPrivileges, user-namespace-isolated containers"}
+        - {property: RP5, rating: partial, evidence: "design: nftables egress allowlist (github.com, api.github.com, *.actions.githubusercontent.com, AWS endpoints, PyPI, Terraform registry) -- partial because PyPI/registry wildcards leave a broad exfil channel; property-matched compensating control: the Decision 120 terraform provider filesystem_mirror and a local pip cache shrink the needed allowlist over time, and OIDC credentials are short-lived so the exfil window per job is bounded"}
+        - {property: RP6, rating: met, evidence: "design: runner version pinned in the image; auto-update disabled; weekly image rebuild bumps the pin; GitHub's minimum-version requirement tracked in the rebuild job"}
+        - {property: RP7, rating: met, evidence: "design: OFF-BOX liveness -- a scheduled hosted-runner workflow checks GET /actions/runners for online status and a dead-man switch (e.g. healthchecks.io ping from the host) alerts the operator; addresses PRIV-04's GitHub-side silence"}
+        - {property: RP8, rating: "n/a", evidence: "established, not assumed: private repository, sole collaborator (benjamin-blake), forks_count=0 confirmed via API 2026-08-13; private-repo forks are impossible without collaborators, so no untrusted fork workload exists. CHANGES IF: the repo regains collaborators or returns public -- then RP8 must be re-rated and a runner group/label separation built BEFORE that change lands"}
+        - {property: RP9, rating: met, evidence: "design: secrets injected per-job into the ephemeral container environment only; workdir on tmpfs; container destroyed at job end; host filesystem never receives job secrets"}
+        - {property: RP10, rating: met, evidence: "design: workspace is container-scoped and destroyed per job (RP1/RP3); named build caches (pip, venv) are mounted read-mostly from a curated host volume refreshed by the weekly image rebuild, not writable by jobs"}
+      basis: [PRIV-05, PRIV-04]
+      prose: "Architecture: persistent HOST, ephemeral RUNNERS -- a host-local orchestrator (systemd) mints JIT configs and launches one single-job containerised runner at a time, capped by cgroups (12 threads / 10 GB) to bound PySR contention; concurrency 1-2 runners maximum on this box, not 32. Registration: JIT per job (RP2). Upgrades: pinned version, weekly image rebuild (RP6). Monitoring: off-box dead-man switch plus a hosted-runner poller (RP7) -- this is also the compensating control Q4 requires. Verdict by the pinned mapping: no property missed, RP5 partial, rest met/n-a => partial. Honest hard parts: the JIT-minting PAT is itself a standing credential on the host (narrow admin scope, but real); egress allowlisting against PyPI is porous (RP5); and the design's parity with ubuntu-latest is approximate -- toolchain drift between the weekly image and GitHub's image is a new failure class the hosted arrangement did not have."
+    - {q: Q4, verdict: reopened-gap, basis: [PRIV-04, PRIV-06],
+       prose: "All three wake mechanisms are completion-triggered, and under the proposal the jobs they depend on run on the same box that may be offline: signal-green is a JOB inside the CI run (needs pr-validate+terraform-validate; ci.yml:293-304) -- a queued run posts nothing; pr-conflict-signal.yml itself runs on push to main -- if its job targets the offline runner it queues too, so the conflict wake dies with the runner; subscribe_pr_activity delivers comments and CI FAILURES -- a queued-never-started job emits neither. Timeline for a watching session: T+1h silence, T+6h silence, T+24h GitHub cancels the queued job (documented self-hosted queue limit) and the run completes CANCELLED -- which ci-rca's gate ignores (conclusion=='failure' required, ci-rca.yml:59) and whose relay to the watching session as a wake is UNVERIFIED (hypothesis), so the floor is a 24h stall and the ceiling is an indefinite one. AGENTS.md retired the send_later backstop on the reasoning that no dropped-signal gap remained (F36); an offline runner reopens exactly that gap, so the retirement's premise does not survive the migration as proposed. Scheduled workflows: main-canary (3-hourly) piles up queued runs; terraform-drift (hourly) likewise; codeql is MOOT on a personal private repo (PRIV-03); ci-rca fires only on default-branch FAILURES -- queued-then-cancelled runs never reach it, so the failure-recording pipeline is blind exactly when the substrate is broken. CD.38 (pending) would make this availability load-bearing for the whole autonomous loop (PRIV-06). HYBRID changes the answer to partially-closed: pin signal-green, pr-conflict-signal, ci-rca and other sub-minute jobs to ubuntu-latest (~4,000-5,000 min/mo, ~GBP 7-12/mo on Pro -- and note the hosted leg requires a funded, non-zero Actions spending limit, the Q11 round-2 stall condition) and add RP7's off-box liveness alarm; the residual gap is then bounded by the alarm's detection latency rather than by GitHub's 24h queue cancellation."}
+    - {q: Q5, verdict: loss-mitigable, basis: [PRIV-01, PRIV-02],
+       prose: "Against current docs (all quotes retrieved 2026-08-13): GitHub Free (personal) private repos get NO protected branches/rulesets, NO CODEOWNERS enforcement, NO environment secrets, and 'required reviewers are only available for public repositories' on Free, Pro AND Team -- deployment protection rules on private repos are Enterprise-only. Pro (USD 4/mo) restores protected branches/rulesets, CODEOWNERS, environments/secrets/deployment branches -- but NOT required reviewers. Dependencies traced: (1) tf-gated-apply Environment (reconcile.yml:647, terraform-apply-sandbox.yml:750, tf-gated-apply-prototype.yml:35) loses its human-approval property on EVERY pinned plan => PRIV-01, the sharpest loss; mitigation exists (workflow_dispatch-gated apply, same human-approval property, fail-closed -- job cannot run unless a human dispatches) but must be BUILT and landed pre-flip. (2) main-protection ruleset (repo.tf:62-119) incl. required checks pr-validate/terraform-validate, require_code_owner_review, required_linear_history: dead on Free -- this re-imposes Decision 89's exact constraint, whose 'permanently unavailable' premise Decision 83 reversed only BECAUSE the repo went public; survives on Pro. (3) CODEOWNERS (DEP-05/Decision 144 deploy-gate surface): dead on Free, survives on Pro. (4) Server-side half of never-commit-on-main: same ruleset dependency; the client-side hook survives regardless. Team examined per the precondition: Team requires an organisation and therefore TRANSFERRING the repo -- which breaks every OIDC sub claim pinned to repo:benjamin-blake/agent-platform (oidc.tf:405,603,790), every PAT/app scope, and changes CODEOWNERS semantics -- and buys nothing Pro does not, because required reviewers are still public-only on Team; its sole unique unlock is purchasability of the paid security products (Q6). Team is DROPPED from the recommendation and from cost_analysis (see dedup_note). Verdict: loss-mitigable, strictly conditional on Pro-before-flip plus the PRIV-01 gate redesign; on Free alone it would be loss-blocking."}
+    - {q: Q6, verdict: partially-replaced, basis: [PRIV-03],
+       prose: "On a personal-account private repo without paid products, against current docs: CodeQL/code scanning -- LOST; 'You must be on a GitHub Team or GitHub Enterprise plan in order to purchase GitHub Code Security or GitHub Secret Protection', so it is not purchasable at ANY price without an org transfer; replacement: none built; nearest substitute is an open-source SAST (e.g. semgrep/bandit) wired into validate.py -- real but weaker than CodeQL. Secret scanning -- LOST (public-repo feature; paid product org-only). Push protection -- LOST server-side; the pre-commit never-commit hook (shape-pattern) survives but is CLIENT-side only: it exercises the same property (block secret-shaped content pre-publication) yet fails where push protection succeeds -- any push bypassing local hooks (new clone, --no-verify, CI-authored commits), so it lowers severity without dismissing the gap. Dependency graph + Dependabot alerts/updates -- RETAINED ('included in all plans'); dependabot.yml (pip + github-actions, weekly) keeps working. ghas-probe/ULF-01 fate: the probe has two deliberately different callers (validate_ghas_probe.py:7-15) -- the registered validate.py check is SKIP-when-unscoped (no token in CI, so the full tier and merge loop are UNAFFECTED by the flip), while the weekly workflow's loud-fail runner correctly goes standing-red; but ghas-probe is absent from ci-rca's watched list (ci-rca.yml:24-31), so the red alarm reaches nobody -- the Decision 83 blind-window precedent (2026-07..08, six failed runs unactioned) replayed permanently. The AGENTS.md T2.12 assertion ('live-verified 2026-08-11') and Decision 83's evidence stanza outlive the reality they describe from the flip instant -- the exact ULF-01 defect class -- unless amended in the SAME change as the flip. (Revised in adversarial round 1: the draft wrongly claimed the full tier also turns red.) Q7 interaction: Dependabot alerts survive, but its UPDATE PRs would now execute install steps on the privileged host -- losing alerts was the feared regression; the actual regression is losing CodeQL/push-protection while GAINING a privileged execution venue for dependency code (PRIV-05)."}
+    - {q: Q7, verdict: acceptable-with-controls, basis: [PRIV-05, PRIV-04],
+       prose: "Assets on the trust boundary: OIDC-federated AWS authority (github-ci-branch/pr/apply roles -- IAM-capable within the guard's budget), the DuckLake/warehouse credentials CI touches, the PySR workload and any trading data co-resident on the box, the home network behind it, and repo write via the runner's job token. Adversaries/entry points: malicious or compromised pip/npm/action dependencies executing in jobs (incl. Dependabot update PRs -- Q6 interaction); a compromised workflow step exfiltrating OIDC tokens; container escape to host; lateral movement host->LAN; physical access (unstated, AI-class assumption). Properties LOST versus GitHub-hosted (not merely changed): (1) per-job disposable VM -- the clean-slate guarantee that makes persistence attacks structurally worthless; (2) GitHub-managed patching/hardening of the execution image; (3) datacenter-grade physical and network isolation -- the runner moves inside the same blast radius as the trading workload, which is the single worst property of the proposal; (4) an execution venue whose compromise does NOT touch personal data. Q3's controls, property-matched: ephemeral containers restore most of (1) short of kernel escape; weekly pinned image rebuild partially restores (2); egress allowlist (RP5, partial) bounds exfiltration; cgroup+user-namespace isolation and no host secrets (RP9) bound blast radius; the off-box monitor (RP7) restores detection. Residual acceptance: OIDC short-lived tokens mean host compromise yields bounded-window AWS authority rather than standing keys -- the strongest existing mitigation, and it survives the migration (Q8). Verdict: acceptable-with-controls; REQUIRED controls: RP1+RP3 ephemeral containerisation, RP4 non-root, RP5 egress allowlist, RP7 off-box liveness+alert, RP9/RP10 no persisted secrets/state, cgroup caps isolating PySR, and network segmentation (VLAN or equivalent) between the runner and personal devices. Without these -- a naive persistent bare-metal runner -- the verdict would be unacceptable."}
+    - {q: Q8, verdict: survives, basis: [],
+       prose: "(a) Visibility: no trust condition in terraform/personal/oidc.tf derives from repository visibility -- conditions key on aud=sts.amazonaws.com and sub=repo:benjamin-blake/agent-platform:{ref|pull_request} (oidc.tf:401-406, 593-604, 786-815). A private repo presents identical claims; OIDC survives the flip unchanged. (b) Self-hosting: the token issuer is GitHub's service (token.actions.githubusercontent.com) regardless of where the runner executes; id-token:write works identically on self-hosted runners; all 16 workflows survive. Branch-prefix trap resolved: the trusted refs/heads/agent/* (oidc.tf:406) matches ZERO live branches (0 agent/*, 8 claude/* on origin, checked 2026-08-13), and claude/* sessions authenticate via the pull_request sub on PR events -- ci.yml fires only on pull_request and push-to-main, so nothing live depends on the agent/* entry; it is dormant trust scope, not a break (rejected candidate C9). The one migration variant that DOES break trust is the Team org-transfer: sub claims pin the owner segment, so a transfer invalidates every role trust until oidc.tf is re-applied -- one more reason Q5 drops Team. Forward-looking half: if CI leaves GitHub Actions, the issuer disappears; options against NS1: (1) new OIDC issuer from the replacement CI (parity, preferred; cost = new provider + trust rewrite); (2) long-lived static AWS keys on the runner host -- rejected as standing authority on the most exposed host in the design (violates NS1, inflates Q7 blast radius); (3) short-lived keys brokered by an off-box vault -- workable middle, adds an infrastructure dependency the platform does not currently run."}
+    - {q: Q9, verdict: worth-doing,
+       license_recommendation: keep-apache-2.0,
+       license_rationale: "Under the headline (stay public, I-C/I-D): Apache-2.0's patent grant and recognisability are portfolio-positive and churn on the license would cost credibility for zero enclosure (published grants are irrevocable anyway). Under I-B (flip): switch FUTURE commits to a source-available license (e.g. BUSL-1.1) or simply proprietary-by-default inside a private repo; recorded as the intent-dependent alternative, not the recommendation.",
+       basis: [], prose: "Tested against what is actually recoverable: forks 0, stargazers 1 (API, 2026-08-13), public window 2026-05-30 to date (~2.5 months; repo created 2026-05-28 -- the two dates differ, F11). Recoverable after a flip: Software Heritage crawls of public GitHub (takedown is case-by-case, not guaranteed), GH Archive event metadata (commit SHAs/messages persist; full trees generally not), search caches (decay in weeks), any private clones (unknowable but improbable at 0 forks/1 star), and LLM training crawls during the window (irretrievable in principle, invisible in practice). The requester's 'effectively redactable' assessment substantially HOLDS for this repo's reach -- the practical leak floor is low but NOT zero, and the Apache-2.0 grants on every published commit are irrevocable, so the worst case must be priced as 'the 2.5-month history is licensed-out forever'. Verdict worth-doing, scoped: retraction costs nothing beyond the flip itself (the flip IS the retraction) and buys real reach reduction IF the flip proceeds for other reasons; as a STANDALONE motive it would not justify the migration. Consequence for Q1: the working assumption survived, headline unrevised."}
+    - {q: Q10, verdict: portable-with-cost, basis: [PRIV-08],
+       prose: "PR-1 verified TRUE (postponed, not cancelled -- see premises_tested), so both forms answered. Premise-holding form: if the USD 0.002/min charge returns as announced, self-hosted-on-private costs ~GBP 23/mo at observed volume (15,500 over-quota min x 0.002 x 0.74) -- annoying, not existential; the sharper risk is that a postponed-and-reworked pricing model is UNKNOWN, and the repo's own reevaluation trigger ('Self-hosted runner cost becomes >2x scheduled-runner alternative') correctly owns re-checking it. General form: scripts/validate.py is a genuinely portable verdict engine (428 lines, --pre/full tiers) but only 3 of 19 workflows route through it (ci.yml, main-canary.yml, ci-rca.yml -- F4 verified); the other 16 are GitHub-native orchestration. Migration costs by feature: terraform-apply-sandbox.yml -- OIDC (id-token), the tf-gated-apply Environment, concurrency groups, gh CLI => on another CI needs a new OIDC issuer + a replacement approval gate + queue semantics (M-L effort); reconcile.yml -- same set plus artifacts (M-L); deploy-ducklake-lambdas/deploy-prod-lambdas -- OIDC + concurrency, thin shells over scripts (S-M each); ci-rca.yml -- workflow_run chaining, the hardest single dependency: no common CI has an equivalent cross-workflow completion event, so RCA would need webhook plumbing or polling (M); signal-green/pr-conflict-signal -- gh CLI comment plumbing, trivially rewritable but harness-coupled (S). Verdict: portable-with-cost -- the check LOGIC exits cheaply; the EVENT FABRIC (workflow_run, Environments, OIDC issuer, comment wakes) is the lock-in, roughly 1-3 weeks of focused work to re-plumb."}
+    - {q: Q11, verdict: sequenced-plan-with-rollback, basis: [PRIV-01, PRIV-02, PRIV-03, PRIV-04, PRIV-07],
+       prose: "Produced under protest per the contract: the Q1 headline is recommend-public, so this plan is conditioned on the requester overriding it (its existence is not endorsement). Shape: paper first (decision reversal, PRIV-07), then plan upgrade BEFORE flip (Pro restores rulesets/CODEOWNERS on private -- flipping on Free silently disables main-protection, the Decision 89 redux), then the PRIV-01 gate replacement and PRIV-03 probe re-scope landed and tested WHILE STILL PUBLIC (the flip's asymmetry: environment-reviewer behaviour on private cannot be rehearsed from a public repo, so the replacement must not DEPEND on private-only behaviour -- workflow_dispatch gating satisfies this), then the flip via terraform/github human-gated local apply in the same change-set as the AGENTS.md/Decision-83 evidence amendments (closing the ULF-01 assertion-outlives-reality window), and only then, optionally, the runner cutover job-family by job-family with the wake substrate pinned hosted (PRIV-04). Lockout analysis (revised through all three adversarial rounds; final state NOT re-reviewed -- see meta.unconverged_items): the dominant failure mode is INVERTED -- controls silently vanish rather than block -- with TWO known blocking stalls the sequence produces by construction, neither a permanent lockout. (1) Budget stall (round 2): on a private repo Actions minutes are metered and personal accounts default to a USD 0 spending limit; Pro's 3,000 included minutes exhaust roughly FIVE DAYS after the flip at the observed 17,500 min/mo (runner cutover comes later), at which point workflows stop, required checks cannot run, and AGENT merges block -- the human admin retains the ruleset's always-on bypass (repo.tf:75-79), so this stalls the autonomous loop, not the operator; recoverable in minutes in billing settings; hence the non-zero-budget precondition at steps 2 and 5. (2) Flip-apply stall (round 3): repo.tf:13-24 pins secret_scanning and secret_scanning_push_protection to 'enabled', which the API rejects on a private repo without the unpurchasable paid product -- so step 5's terraform apply ERRORS unless the security_and_analysis block is amended in the same change-set; loud and human-attended, but blocking until fixed. Earlier draft errors corrected by review: round 1 refuted a claimed full-tier wedge from the ghas check (SKIP-when-unscoped contract); round 2 surfaced the budget stall; round 3 surfaced the flip-apply stall and the bypass-survives correction. The remaining hazards are silent ones -- the unwatched standing-red weekly probes (ghas-probe, and codeql on a private repo) and the stale liveness assertions (PRIV-03) -- which is why the probe re-scopes and the AGENTS.md/Decision-83 amendments ship in the flip change-set, not after. terraform/github/CLAUDE.md's lockout-recovery procedure (bypass actor actor_id=5 / UI ruleset disable) survives on Pro; on Free it is moot because the ruleset itself is dead. Full step table in migration_plan."}
+    - q: Q12
+      answers:
+        - {question: "Process obligation for reversing ratified decisions (dec-111/dec-112, T2.10 exit criteria)?",
+           answer: "dec-111's own reversal-conditions stanza names the path: 're-open as a candidate only if the public-repo decision is reversed' -- i.e. file a new candidate decision and ratify it through the Decision 105 lane, engaging the original rationale (DD-C). This audit does NOT satisfy that obligation; it is input to it. T2.10 is not re-opened -- its exit criteria were true when completed; a new tier item owns the new runner work.",
+           basis: [PRIV-07]}
+        - {question: "Does going private contradict the stated end-state (PROJECT_CONTEXT.md:20)?",
+           answer: "Yes, verbatim ('The platform end-state is a public, agent-first automation platform'). A flip without amending it institutionalises a false premise for every future planning session -- the Decision 89/83 lesson. Must change: PROJECT_CONTEXT.md:20, the curated-portal items (T2.11a/T2.11b), and the portal artifacts' framing (README, SECURITY.md, EVALUATION-PROMPTS.yaml). AGENTS.md's boundary section is visibility-independent and stands.",
+           basis: [PRIV-07]}
+        - {question: "Fate of claude.yml and the Claude Code OAuth token on a private repo?",
+           answer: "Survives: it authenticates via CLAUDE_CODE_OAUTH_TOKEN (secret, not visibility-dependent) and @claude mention triggers still fire. Its minutes become billable (it stays on ubuntu-latest -- it is in the 16 non-validate workflows). If instead routed to the self-hosted box, a mention-triggered agent executing model-driven actions on the privileged host joins Q7's threat model; keep it hosted.",
+           basis: []}
+        - {question: "Do the sole-developer compensating controls change meaning on a private repo?",
+           answer: "On Pro they carry over mechanically; their MEANING narrows favourably -- with no outside collaborators possible, prevent_self_review=false and count=0 no longer face even theoretical third-party traffic, and the GitHub audit log keeps recording bypasses. On Free the question is moot (ruleset dead, PRIV-02). No new gap; the deliberate-constraints list stands.",
+           basis: []}
+        - {question: "Unnamed middle options, and does one dominate?",
+           answer: "Three examined: (1) private + hosted + Pro -- dominates self-hosting on availability/ops (zero new burden) at ~GBP 54-86/mo, still loses required-reviewers and GHAS (PRIV-01/03). (2) Hybrid runners -- dominates all-self-hosted on wake liveness (Q4) for ~GBP 7-12/mo. (3) CD.32 split-repo: keep this repo public, put sensitive FUTURE work in a new private repo whose CI fits inside the free tier -- protects the delta the requester actually fears losing, keeps portfolio value, keeps all public-repo controls here, needs no runner. Option 3 dominates the proposal on every axis except totality of enclosure and is the audit's recommended I-B path.",
+           basis: [PRIV-01, PRIV-03, BEN-01]}
+        - {question: "Maintenance burden of a self-hosted runner, and who absorbs it?",
+           answer: "Steady-state 2-6 h/mo (AI-06: image rebuilds, runner/version pins, disk, cert/token rotation, queue incidents) plus an incident tail measured in days/year (hardware, power, ISP). Absorbed entirely by the sole developer, i.e. priced in platform-roadmap opportunity cost; at any plausible personal-time valuation it exceeds the entire hosted-runner bill it saves.",
+           basis: []}
+        - {question: "What does the repo LOSE by going private that is not a security control?",
+           answer: "The curated-portal asset ratified by dec-111 (README/AGENTS.md/EVALUATION-PROMPTS.yaml as an evaluator-facing surface), T2.11a's one-click evaluator boot (deferred but designed FOR public evaluators), portfolio/credibility value (the I-C asset -- EVALUATION-PROMPTS.yaml exists precisely for external evaluation), unlimited free public-repo Actions minutes, and free GHAS-class scanning. Also the option value of community scrutiny, currently near-zero (0 forks) but non-negative.",
+           basis: [BEN-01]}
+        - {question: "(own extension) Does the flip interact with the audit-artifact convention itself?",
+           answer: "Yes, mildly: audits/ and docs/ publish governance detail (workflow anatomy, gate design) that is reconnaissance-useful; Decision 101 already keeps credentials/ids out, so the marginal exposure is architectural, and NS6 says market exactly this. A flip hides future audit artifacts along with everything else -- a small real benefit under I-B, nil under I-C.",
+           basis: []}
+        - {question: "(own extension) What happens to open Dependabot/dedup-probe/scheduled noise budgets on a metered plan?",
+           answer: "Every scheduled workflow becomes a recurring bill: main-canary alone is ~6,100 min/mo (~GBP 27 at Pro rates) -- roughly a third of the projected private-hosted bill. Cadence tuning (canary 3h->6h, drift hourly->3h) saves more money than self-hosting saves after non-Actions costs, at ~zero risk. This lever belongs in ANY cost decision and is currently priced nowhere (PRIV-08).",
+           basis: [PRIV-08]}
+  intent_dependencies:
+    - {question: Q1, flips_on: [I-A, I-B, I-C, I-D],
+       conclusion_under_each: "I-A public; I-B conditional (CD.32 split-repo preferred, full flip only with Pro + gate redesign + probe re-scope + ratified reversal); I-C public; I-D public",
+       what_the_requester_must_decide: "Whether the platform is intended for commercialisation (I-B) or remains portfolio/open-core (I-C/I-D). This single decision selects the headline; the repository evidence currently points I-C/I-D while the requester's brief signals I-B drift."}
+    - {question: Q9, flips_on: [I-B, I-C],
+       conclusion_under_each: "License: keep-apache-2.0 under I-A/I-C/I-D; under I-B switch future commits to source-available (BUSL-1.1 class) or go proprietary inside the private repo. Retraction verdict (worth-doing, as a rider on a flip) does not flip.",
+       what_the_requester_must_decide: "Same intent decision as Q1; the license follows it."}
+  cost_analysis:
+    fx_basis: "1 USD = 0.74 GBP, mid-market ~2026-08-12 (wise.com/exchangerates.org.uk history pages; AI-01). No range applied: a +/-5% FX move shifts no conclusion."
+    amortisation_basis: "GBP 1,390 over 36 months = GBP 38.6/mo for the whole box; CI attributed 0-50% (GBP 0-19/mo, AI-07) because the machine exists for PySR regardless."
+    current_billed_monthly_gbp: "GBP 0 -- observed: billable.UBUNTU.total_ms=0 on all 4 sampled runs incl. run 31685689143; cross-checked against the documented rule that standard hosted runners are free in public repos (zero means not-billed, not not-reported: the same endpoint returns non-zero for billable private usage per GitHub's docs)."
+    monthly_usage_minutes: "14,000-21,000 job-minutes/mo (point 17,500; AI-05). Derivation from 3 sampled run lists: ci.yml push-to-main ~4.6/day x ~27 job-min; PR-event CI ~8-15/day x ~5 job-min; main-canary 8/day x 25 min (single job, ~6,100/mo -- the largest single line, C12 confirmed as a real datum); terraform-drift hourly ~1,750/mo; ci-rca ~60 runs/day rounding to ~1,800/mo; convergence-health/rec-autoclose/signals/misc ~2,000-2,500/mo."
+    options:
+      - {option: stay-public, plan: Free,
+         actions_cost_gbp_per_month: "0 (observed)",
+         plan_cost_gbp_per_month: "0",
+         non_actions_cost_gbp_per_month: "0",
+         total_gbp_per_month: "0",
+         assumptions: [],
+         confidence: CONFIRMED}
+      - {option: private-hosted-runners, plan: Free,
+         actions_cost_gbp_per_month: "53-85 ((14k-21k minus 2k included) x USD 0.006 x 0.74); slower 2-core private runners could inflate this 20-50% (AI-08)",
+         plan_cost_gbp_per_month: "0",
+         non_actions_cost_gbp_per_month: "0",
+         total_gbp_per_month: "53-85 -- AND loss-blocking on governance (no ruleset/CODEOWNERS on Free, PRIV-02): not a viable row, priced for completeness",
+         assumptions: [AI-01, AI-05, AI-08],
+         confidence: HYPOTHESIS}
+      - {option: private-hosted-runners, plan: Pro,
+         actions_cost_gbp_per_month: "49-80 (3k included)",
+         plan_cost_gbp_per_month: "3 (USD 4)",
+         non_actions_cost_gbp_per_month: "0",
+         total_gbp_per_month: "52-83",
+         assumptions: [AI-01, AI-05, AI-08],
+         confidence: HYPOTHESIS}
+      - {option: private-self-hosted, plan: Free,
+         actions_cost_gbp_per_month: "0 today; +~23 if the postponed PR-1 charge returns as announced",
+         plan_cost_gbp_per_month: "0",
+         non_actions_cost_gbp_per_month: "4-51 (electricity 4-32 by duty-cycle span AI-02/AI-03; amortisation share 0-19 AI-07) + 2-6 h/mo unpriced labour (AI-06)",
+         total_gbp_per_month: "4-51 (+PR-1 risk) -- same Free-plan governance losses as row 2 (PRIV-01/02): not viable without Pro",
+         assumptions: [AI-01, AI-02, AI-03, AI-05, AI-06, AI-07],
+         confidence: HYPOTHESIS}
+      - {option: private-self-hosted, plan: Pro,
+         actions_cost_gbp_per_month: "0 today; +~23 PR-1 risk",
+         plan_cost_gbp_per_month: "3",
+         non_actions_cost_gbp_per_month: "4-51 + 2-6 h/mo labour",
+         total_gbp_per_month: "7-54 (+PR-1 risk)",
+         assumptions: [AI-01, AI-02, AI-03, AI-05, AI-06, AI-07],
+         confidence: HYPOTHESIS}
+      - {option: hybrid, plan: Pro,
+         actions_cost_gbp_per_month: "4-9 (signal/small jobs ~4,000-5,000 min/mo hosted, 3k included)",
+         plan_cost_gbp_per_month: "3",
+         non_actions_cost_gbp_per_month: "4-51 + 2-6 h/mo labour",
+         total_gbp_per_month: "11-63 (+PR-1 risk on the self-hosted share)",
+         assumptions: [AI-01, AI-02, AI-03, AI-05, AI-06, AI-07],
+         confidence: HYPOTHESIS}
+    counterfactual_no_self_hosting: "Private on Pro with hosted runners: ~GBP 52-83/mo and ZERO new engineering hours or availability risk -- versus ~GBP 7-54/mo plus 2-5 days build plus 2-6 h/mo forever for self-hosting. The gap self-hosting closes is ~GBP 30-60/mo; the cheapest lever is neither: main-canary cadence 3h->6h saves ~GBP 13/mo and drift/ci-rca tuning ~GBP 8-12/mo more, for ~1 hour of work, shrinking the hosted bill toward GBP 30-55/mo. In engineering hours, not self-hosting is strictly dominant; in money, self-hosting wins only if the operator's time is priced at zero."
+    dedup_note: "cost_projection already owns: the retired runner baseline (ec2_runner_24_7, ~USD 35/mo historical), 'GH-hosted runner minutes' folded into add_on_usd 10-30 (line_items_not_enumerated), and BOTH halves of this question as standing triggers -- substrate_reevaluation_triggers 'Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)' and reevaluation_triggers 'Self-hosted runner cost becomes >2x scheduled-runner alternative' (two distinct lists, F43). Nothing here is a novel discovery; PRIV-08 records only that the triggers are unexecuted. Optional rows: hybrid x Pro ADDED (Q4 concludes hybrid viable); Team rows OMITTED (Q5 drops Team: org-transfer breaks OIDC/PAT scope and buys no required-reviewers)."
+  migration_benefits:
+    - id: BEN-01
+      surface: S-VIS
+      question: Q1
+      title: "Future-commit IP enclosure under commercial intent (I-B)"
+      claim: "A visibility flip closes the direct-read and future-mirroring channels for all future commits, and the value of that enclosure GROWS over time as operational-data learning is encoded into prompts, contracts and config (requester thread b)."
+      evidence: "docs/ROADMAP-PLATFORM.yaml cost_projection breakdown (deepseek_executor_inference / anthropic_escape_hatch_spillover -- the feedback loop exists); AGENTS.md Decision 101 boundary (the data itself never lands in the repo)"
+      evidence_kind: static
+      current_behavior: "Every commit is world-readable and irrevocably Apache-2.0 licensed at publication."
+      improved_behavior: "Future commits readable only by the owner; no new license grants issue."
+      magnitude: M
+      magnitude_rationale: "M not L: the crown-jewel asset (DuckLake data) is already private in AWS; enclosure protects the growing encoded residue, not the jewel itself. On magnitude sizing (revised in adversarial round 2): the residue accrues at the platform's recorded operating rate (~100-300 recs/month per cost_projection's baseline), but NOTHING measures what share of that distillate lands in committed artifacts versus the private warehouse, and a competitor's starting point is the entire already-published, irrevocably-licensed history -- only the delta is enclosed. Any lead-time figure would be a guess (HYPOTHESIS-class), which is exactly why this benefit cannot outweigh the pound-denominated losses on its own and needs the requester's intent decision to price it. Under I-C/I-D the magnitude is negative (destroys the portfolio asset)."
+      alternative_route: "CD.32 split-repo: fence sensitive FUTURE work in a new private repo (free-tier CI suffices at its volume) while this repo stays public. Captures most of the benefit at near-zero governance cost -- under I-B this cheaper route DOMINATES, so the benefit does not by itself justify migrating THIS repo."
+      roadmap_crossref: {classification: already-recorded, item_ids: [CD.32], dedup_search_terms: ["visibility", "private", "IP boundary", "repo axis"], dedup_hit_count: 1, note: "CD.32's discipline points record the repo-axis-vs-data-axis orthogonality this benefit rides on."}
+      confidence: CONFIRMED
+      adversarial_verdict: overstated-and-revised
+    - id: BEN-02
+      surface: S-RUNNER
+      question: Q2
+      title: "Self-hosted capability unlock: caches, memory, job-duration ceiling"
+      claim: "A self-hosted runner removes the hosted 6-hour job limit (self-hosted jobs may run up to 5 days), offers 32 GB and 16C/32T against hosted standard cores, allows persistent warm caches (venv, pip, terraform provider mirror) that collapse setup time, and could host the currently-excluded integration-marked tests."
+      evidence: "GitHub Docs :: Actions limits :: https://docs.github.com/en/actions/reference/limits :: retrieved 2026-08-13 (5-day self-hosted job limit); scripts/checks/_scaffolding.py -m 'not integration' (excluded set exists)"
+      evidence_kind: external
+      current_behavior: "Cold setup per job; integration tests never run in CI; hosted resource ceiling."
+      improved_behavior: "Warm full tier est. 6-9 min uncontended (Q2); integration tier becomes schedulable."
+      magnitude: M
+      magnitude_rationale: "A capability the platform does not currently have (integration tier in CI) plus a recurring time saving on post-merge tiers; not L because the latency-critical PR loop is already ~2 min and gains almost nothing."
+      alternative_route: "Larger hosted runners (8-core Linux ~USD 0.022/min post-2026-01-01 cut; naively ~GBP 285/mo at observed minutes, realistically ~1.5-2.5x the standard-runner bill since wider runners consume fewer minutes -- rate corrected in round 2, consumption model in round 3) or actions/cache for warm setup (free, partial, no memory/duration unlock). The cache route captures the setup saving without any migration; the integration-tier unlock genuinely requires self-hosting or paid larger runners."
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["integration tests CI", "runner memory", "job limit", "self-hosted capability"], dedup_hit_count: 0, note: "no roadmap item records this capability gap"}
+      confidence: CONFIRMED
+      adversarial_verdict: stands
+    - id: BEN-03
+      surface: shared
+      question: Q5
+      title: "Owned hardware voids the EC2-era cost precedent"
+      claim: "The ~USD 35/mo figure that justified retiring the EC2 runner (CD.21) priced CLOUD rental 24/7; the owned box's marginal cost is GBP 4-12/mo incremental electricity if it already runs for PySR -- the historical 'self-hosting costs more' conclusion does not transfer (C16 adjudicated: stands, narrowly)."
+      evidence: "docs/ROADMAP-PLATFORM.yaml:281-291 ec2_runner_24_7 '$0 (retired 2026-05-28 per CD.21; ~$35/mo historical...)'; cost_analysis rows 4-5"
+      evidence_kind: static
+      current_behavior: "The recorded cost baseline implies self-hosting carries a ~USD 35/mo class cost."
+      improved_behavior: "Marginal-cost accounting: GBP 4-12/mo (already-on case) to GBP 23-51/mo (worst case incl. amortisation share and sole-use power)."
+      magnitude: S
+      magnitude_rationale: "S not M: it corrects a cost premise but only matters conditional on going private at all; staying public keeps the bill at GBP 0 regardless."
+      alternative_route: "None needed -- this is an accounting correction, not an obtainable improvement; recorded so the cost_projection trigger execution (PRIV-08) prices owned hardware correctly."
+      roadmap_crossref: {classification: already-recorded, item_ids: ["cost_projection.reevaluation_triggers"], dedup_search_terms: ["self-hosted runner cost", "ec2_runner_24_7"], dedup_hit_count: 2, note: "the >2x-alternative trigger owns exactly this comparison"}
+      confidence: CONFIRMED
+      adversarial_verdict: stands
+    - id: BEN-04
+      surface: S-VIS
+      question: Q1
+      title: "Reduced public-boundary review load"
+      claim: "Going private shrinks the standing Decision-101 curation cost: per-artifact public-content review, the account-id scrubbing paths, and the 'is this publishable' judgment on every commit."
+      evidence: "AGENTS.md 'PUBLIC repository / confidential-data boundary'; .claude/hooks pre-commit never-commit hook (which must REMAIN regardless -- NS6 makes the credential boundary visibility-independent)"
+      evidence_kind: static
+      current_behavior: "Every artifact is composed under public-content review discipline."
+      improved_behavior: "Review narrows to the credential/alpha boundary only; the publishability judgment disappears."
+      magnitude: S
+      magnitude_rationale: "Noticeable friction reduction on one workflow; no cost line moves. The hook and secret hygiene survive, so the reduction is partial by design."
+      alternative_route: "None equivalent -- the burden exists because of publicness. But its converse is BEN-01's caveat: the burden is also what keeps the portfolio asset publishable."
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["Decision 101", "public-content boundary", "never-commit"], dedup_hit_count: 0, note: ""}
+      confidence: CONFIRMED
+      adversarial_verdict: stands
+    - id: BEN-05
+      surface: S-SEC
+      question: Q3
+      title: "Private repo eliminates the fork-PR attack surface"
+      claim: "On a sole-collaborator private repo, fork PRs are structurally impossible, so the primary risk GitHub's self-hosted-runner guidance warns about (PR-2's actual content) vanishes, and RP8 rates n/a rather than needing runner groups the personal plan does not offer."
+      evidence: "GitHub Docs :: Adding self-hosted runners :: https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners :: retrieved 2026-08-13; forks_count=0, sole collaborator (API 2026-08-13)"
+      evidence_kind: external
+      current_behavior: "Public repo: anyone can fork; a self-hosted runner would face untrusted fork workloads (mitigated only by approval settings)."
+      improved_behavior: "No untrusted external workload class exists; runner hardening scope shrinks."
+      magnitude: S
+      magnitude_rationale: "Simplifies the Q3 design materially but only matters if self-hosting proceeds; worthless standalone."
+      alternative_route: "While public: 'require approval for all outside contributors' settings -- weaker (approval fatigue, human error) and runner groups are unavailable to personal accounts, so the private route is the only clean one."
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["fork PR", "runner group", "outside collaborator"], dedup_hit_count: 0, note: ""}
+      confidence: CONFIRMED
+      adversarial_verdict: stands
+  per_surface_assessment:
+    - {surface: S-VIS, maturity: frontier, strengths: "The confidential-data boundary (Decision 101) is visibility-independent and already keeps the crown-jewel asset out of the repo; the flip itself is cheap, reversible, and OIDC-neutral.",
+       top_gaps: [PRIV-07], top_benefits: [BEN-01, BEN-04]}
+    - {surface: S-RUNNER, maturity: strong, strengths: "The authored design (Q3) reaches ephemeral/JIT/containerised with no missed checklist property; owned hardware makes the economics genuinely cheap at the margin.",
+       top_gaps: [PRIV-05], top_benefits: [BEN-02, BEN-05]}
+    - {surface: S-CI, maturity: frontier, strengths: "validate.py is a real portability boundary for check logic; the two-tier design keeps the PR loop fast (observed ~2 min) independent of runner choice.",
+       top_gaps: [PRIV-06, PRIV-08], top_benefits: [BEN-02]}
+    - {surface: S-WAKE, maturity: strong, strengths: "The event-driven wake design is sound while jobs run on always-available runners; the hybrid pinning fix is small and fully restores it.",
+       top_gaps: [PRIV-04], top_benefits: []}
+    - {surface: S-GOV, maturity: solid, strengths: "The guard + Environment + ruleset stack is coherent and its lockout-recovery procedure survives on Pro; the losses are plan-tier-imposed, not design flaws.",
+       top_gaps: [PRIV-01, PRIV-02], top_benefits: []}
+    - {surface: S-SEC, maturity: strong, strengths: "ghas-probe's loud-fail design does exactly its ULF-01 job -- it would detect the lapse rather than let the assertion outlive reality; Dependabot survives the flip.",
+       top_gaps: [PRIV-03], top_benefits: [BEN-05]}
+    - {surface: S-CRED, maturity: strong, strengths: "OIDC trust is visibility-independent, short-lived, and sub-pinned; no static keys exist to leak on either runner substrate.",
+       top_gaps: [PRIV-05], top_benefits: []}
+  rubric_ratings:
+    - {surface: S-VIS, dimension: VD1, rating: adequate, evidence: "AGENTS.md Decision 101 boundary; Q1 adversary_model", note: "the flip addresses a named adversary class but the highest-value asset is already out of reach of that class"}
+    - {surface: S-VIS, dimension: VD2, rating: strong, evidence: "terraform/github/repo.tf:11 + live API visibility field", note: "visibility state is trivially provable both ways"}
+    - {surface: S-VIS, dimension: VD3, rating: "n/a", evidence: "", note: "visibility does not participate in the CI/merge loop"}
+    - {surface: S-VIS, dimension: VD4, rating: strong, evidence: "repo.tf one-line change; Q9", note: "flip and un-flip are both single Terraform applies; history reach is the only sticky part"}
+    - {surface: S-VIS, dimension: VD5, rating: adequate, evidence: "Q1 channels analysis", note: "narrows the reader set for future commits; model-provider channel remains open by design"}
+    - {surface: S-VIS, dimension: VD6, rating: weak, evidence: "PRIV-08; cost_projection triggers unexecuted", note: "the proposal's cost premise was unquantified until this audit; the repo's own triggers exist but have not fired"}
+    - {surface: S-VIS, dimension: VD7, rating: strong, evidence: "Q11 step 5 rollback", note: "revert = one visibility apply; nothing new published while private"}
+    - {surface: S-RUNNER, dimension: VD1, rating: adequate, evidence: "Q7 threat model; Q3 controls", note: "threats named and controls property-matched, but the model is authored, not exercised"}
+    - {surface: S-RUNNER, dimension: VD2, rating: weak, evidence: "RP7 is design-only; no liveness mechanism exists today", note: "post-migration liveness would be asserted until the off-box monitor is built -- NS3 gap"}
+    - {surface: S-RUNNER, dimension: VD3, rating: weak, evidence: "PRIV-04; 24h queue cancellation", note: "single box, no failover; saturation by PySR is a designed-in degradation mode"}
+    - {surface: S-RUNNER, dimension: VD4, rating: adequate, evidence: "runs-on label swap restores hosted in one commit", note: "runner exit is cheap; the sunk build effort (L) is the exit cost"}
+    - {surface: S-RUNNER, dimension: VD5, rating: adequate, evidence: "Q3 RP4/RP9/RP10 + cgroups; Q7 residuals", note: "containment designed but host still co-tenants the trading workload"}
+    - {surface: S-RUNNER, dimension: VD6, rating: adequate, evidence: "cost_analysis rows 4-6 with ranges and AI-ids", note: "ranges honest; PR-1 repricing risk carried explicitly"}
+    - {surface: S-RUNNER, dimension: VD7, rating: strong, evidence: "decommission = deregister + relabel workflows", note: ""}
+    - {surface: S-CI, dimension: VD1, rating: "n/a", evidence: "", note: "the pipeline is not itself an adversary-facing control; fork-risk rated under S-SEC/S-RUNNER"}
+    - {surface: S-CI, dimension: VD2, rating: strong, evidence: "validate.py single-source-of-truth; ci.yml thin-shell comment", note: "verdicts are reproducible locally; signal-green comment is explicitly unverified-by-design and re-checked before merge"}
+    - {surface: S-CI, dimension: VD3, rating: weak, evidence: "PRIV-04; PRIV-06; 24h queue-cancellation limit", note: "under the proposal the pipeline's availability inherits one consumer box shared with PySR; the CI design itself is non-wedging (ghas check SKIPs unscoped -- corrected in adversarial round 1)"}
+    - {surface: S-CI, dimension: VD4, rating: adequate, evidence: "F4: 3 of 19 workflows route through validate.py; Q10", note: "check logic portable; event fabric is the lock-in"}
+    - {surface: S-CI, dimension: VD5, rating: adequate, evidence: "default_workflow_permissions=read (repo.tf:123-139)", note: "read-only default token; per-workflow escalations explicit"}
+    - {surface: S-CI, dimension: VD6, rating: adequate, evidence: "DD-A derivation; AI-05", note: "usage now empirically bounded; canary share surfaced (C12)"}
+    - {surface: S-CI, dimension: VD7, rating: strong, evidence: "runs-on relabel; validate.py unchanged either way", note: ""}
+    - {surface: S-WAKE, dimension: VD1, rating: "n/a", evidence: "", note: "wake substrate has no adversary; it is a liveness mechanism"}
+    - {surface: S-WAKE, dimension: VD2, rating: weak, evidence: "DD-B: queued-not-started emits no signal; cancellation-relay unverified", note: "the substrate cannot prove its own liveness when the runner is down"}
+    - {surface: S-WAKE, dimension: VD3, rating: weak, evidence: "PRIV-04 timeline T+1h/T+6h/T+24h", note: "reopened-gap under the proposal as stated; hybrid pinning restores it"}
+    - {surface: S-WAKE, dimension: VD4, rating: adequate, evidence: "gh CLI comment plumbing; harness subscription", note: "GitHub- and harness-coupled but thin and rewritable (Q10)"}
+    - {surface: S-WAKE, dimension: VD5, rating: "n/a", evidence: "", note: "holds pull-requests:write only for comments"}
+    - {surface: S-WAKE, dimension: VD6, rating: "n/a", evidence: "", note: "no cost dimension; signal jobs are sub-minute"}
+    - {surface: S-WAKE, dimension: VD7, rating: strong, evidence: "signal jobs pinned hosted in one commit", note: ""}
+    - {surface: S-GOV, dimension: VD1, rating: strong, evidence: "environments.tf header: gate exists for the guard fail-closed set (IAM/trust/destroy)", note: "control has a named threat and asset"}
+    - {surface: S-GOV, dimension: VD2, rating: weak, evidence: "PRIV-01: reviewer gate silently void on private pinned plans", note: "post-migration the gate's live state would be asserted-but-false -- the ULF-01 shape on a governance control"}
+    - {surface: S-GOV, dimension: VD3, rating: adequate, evidence: "bypass_actors always; terraform/github/CLAUDE.md lockout recovery", note: "non-wedging by design; recovery survives on Pro"}
+    - {surface: S-GOV, dimension: VD4, rating: adequate, evidence: "Q10: Environments are a GH-native feature with no direct CI-portable equivalent", note: ""}
+    - {surface: S-GOV, dimension: VD5, rating: weak, evidence: "PRIV-01: IAM/trust/destroy applies lose their human authorization boundary", note: "the single largest authority expansion in the proposal"}
+    - {surface: S-GOV, dimension: VD6, rating: "n/a", evidence: "", note: "no cost dimension beyond the plan fee, priced in cost_analysis"}
+    - {surface: S-GOV, dimension: VD7, rating: adequate, evidence: "Q11: restore requires re-flip to public or Enterprise; workflow_dispatch redesign is the durable fix", note: ""}
+    - {surface: S-SEC, dimension: VD1, rating: adequate, evidence: "ghas-probe.yml header names the protected boundary (Decision 101 controls)", note: ""}
+    - {surface: S-SEC, dimension: VD2, rating: adequate, evidence: "ghas-probe LOUD-FAIL runner vs SKIP-when-unscoped registered check (validate_ghas_probe.py:7-15); ci-rca.yml:24-31", note: "the monitor detects the lapse (its ULF-01 job) but the alarm has no consumer -- not in ci-rca's watch list, precedented by Decision 83's 2026-07..08 blind window; detection without delivery is a liveness gap"}
+    - {surface: S-SEC, dimension: VD3, rating: adequate, evidence: "validate_ghas_probe SKIP-when-unscoped contract", note: "no wedge: the merge loop and full tier are unaffected post-flip (corrected in adversarial round 1; the draft claimed a standing-red full tier)"}
+    - {surface: S-SEC, dimension: VD4, rating: adequate, evidence: "Q6: semgrep/gitleaks class replacements exist at real capability cost", note: ""}
+    - {surface: S-SEC, dimension: VD5, rating: "n/a", evidence: "", note: "scanning controls hold no authority"}
+    - {surface: S-SEC, dimension: VD6, rating: adequate, evidence: "Q6: paid-product unavailability on personal accounts established from docs, not assumed", note: ""}
+    - {surface: S-SEC, dimension: VD7, rating: strong, evidence: "re-flip to public restores the entire GHAS suite automatically (repo.tf:15-17 always-on comment)", note: ""}
+    - {surface: S-CRED, dimension: VD1, rating: strong, evidence: "oidc.tf design: per-context roles, sub-pinned trust", note: ""}
+    - {surface: S-CRED, dimension: VD2, rating: adequate, evidence: "session_start_aws probe; sts get-caller-identity check", note: "role liveness checked per session, not continuously"}
+    - {surface: S-CRED, dimension: VD3, rating: adequate, evidence: "Q8: OIDC unaffected by flip or runner substrate", note: ""}
+    - {surface: S-CRED, dimension: VD4, rating: adequate, evidence: "Q8 forward half: issuer disappears if CI leaves Actions; vault/static options costed", note: ""}
+    - {surface: S-CRED, dimension: VD5, rating: strong, evidence: "short-lived tokens; no static keys in CI; dormant agent/* entry noted (rejected C9)", note: ""}
+    - {surface: S-CRED, dimension: VD6, rating: "n/a", evidence: "", note: "OIDC is free on both substrates"}
+    - {surface: S-CRED, dimension: VD7, rating: strong, evidence: "trust conditions are Terraform-managed; any change is one gated apply", note: ""}
+  migration_plan:
+    - {step: 1, action: "Ratify the reversal", changes: "File a candidate decision reversing dec-111 (and dec-112 if self-hosting proceeds) through the Decision 105 lane, engaging the original rationale per DD-C; amend PROJECT_CONTEXT.md:20 and the portal items (T2.11a/b) in the ratification change-set",
+       reversible: true, rollback: "decline the candidate; nothing built", preconditions: ["requester pins intent (I-B vs I-C/I-D) -- the audit's intent_dependencies gate"], abort_criterion: "intent lands I-C/I-D => stop entirely (headline path)", lockout_risk: "none -- paper only"}
+    - {step: 2, action: "Upgrade the account to GitHub Pro AND set a non-zero Actions spending limit BEFORE any flip", changes: "plan + billing budget only; no repo change. Budget sized from the observed baseline: >= (17,500 - 3,000) x USD 0.006 ~= USD 90/mo headroom until cadence tuning or runner cutover lands",
+       reversible: true, rollback: "downgrade / re-zero the limit", preconditions: ["step 1 ratified"], abort_criterion: "n/a", lockout_risk: "none at this step; ordering constraints it prevents: flipping on Free silently disables main-protection + CODEOWNERS (PRIV-02, Decision 89 redux), and flipping with the default USD 0 spending limit stalls ALL workflows -- required checks, merges, and the wake substrate -- within ~5 days of the flip (adversarial round 2)"}
+    - {step: 3, action: "Land the tf-gated-apply replacement while still public", changes: "rework the three gated jobs (reconcile.yml:647, terraform-apply-sandbox.yml:750, tf-gated-apply-prototype.yml:35) to a workflow_dispatch-gated apply (human dispatch = the approval act); keep the Environment declaration for deployment-branch scoping",
+       reversible: true, rollback: "revert the workflow change; Environment gate still works while public", preconditions: ["step 1"], abort_criterion: "the replacement gate cannot demonstrate fail-closed behaviour (a gated apply runs without a human dispatch) => abort the flip", lockout_risk: "low -- deliberately testable pre-flip because workflow_dispatch semantics are visibility-independent (PRIV-01's chosen mitigation for the flip asymmetry)"}
+    - {step: 4, action: "Re-scope the security monitors in the flip change-set (prepared now, merged with step 5)", changes: "validate_ghas_probe expectations parameterised by visibility; AGENTS.md T2.12 stanza and Decision 83 evidence annotated 'lapsed at flip'; optional: wire gitleaks/semgrep into validate.py as partial replacements",
+       reversible: true, rollback: "revert", preconditions: ["step 3 merged"], abort_criterion: "n/a", lockout_risk: "none (no wedge: the registered check is SKIP-when-unscoped); if SKIPPED the hazard is silent instead -- a permanently red, unconsumed weekly probe and stale liveness assertions (PRIV-03)"}
+    - {step: 5, action: "Flip visibility", changes: "terraform/github/repo.tf: visibility public->private AND remove/condition the security_and_analysis block in the SAME change-set (the API rejects an enabled secret-scanning status on a private repo without the unpurchasable paid product, so the apply errors otherwise -- adversarial round 3); via the human-gated LOCAL apply (Decision 77; never auto-applied), merged together with step 4's amendments",
+       reversible: true, rollback: "re-apply visibility=public and restore the security_and_analysis block; GHAS suite restores automatically; ruleset unaffected on Pro", preconditions: ["steps 2-4 all landed and verified", "fresh backup/confirmation that Sub-claim OIDC roles are untouched (Q8)"], abort_criterion: "post-flip verification (below) fails and cannot be fixed same-day => flip back", lockout_risk: "low -- dominant failure mode is silent de-governance; verify within the hour: ruleset still enforcing (API), pr-validate required check blocking a test PR, environments intact, ghas-probe re-scoped run green, Dependabot still filing, AND Actions spending limit non-zero with billed-minutes accrual visible (the round-2 budget stall check)"}
+    - {step: 6, action: "(only if self-hosting ratified) Build and shadow the runner", changes: "Q3 architecture on the box; register with a label NO workflow uses; run workflow_dispatch shadow jobs against claude/* branches",
+       reversible: true, rollback: "deregister runner", preconditions: ["step 5 done -- NEVER attach the runner while the repo is public (PR-2 fork risk, BEN-05 inverts)"], abort_criterion: "shadow full tier fails parity with hosted (different verdicts) or contended runtime exceeds hosted baseline (Q2 regression branch)", lockout_risk: "none while shadowing"}
+    - {step: 7, action: "Cut over job families with the wake substrate pinned hosted", changes: "runs-on relabel for main-validate/main-canary first (post-merge tiers, lowest availability stakes); signal-green, pr-conflict-signal, ci-rca, claude.yml stay on ubuntu-latest permanently (PRIV-04 hybrid); pr-validate LAST and only after a week of clean post-merge operation",
+       reversible: true, rollback: "relabel back to ubuntu-latest (one commit per family)", preconditions: ["step 6 shadow green 1 week", "RP7 off-box liveness alarm live and test-fired"], abort_criterion: "any queued>30min PR job or a missed wake during the trial week => revert that family", lockout_risk: "low with hybrid pinning; the never-wedge property is carried by the hosted signal jobs"}
+    - {step: 8, action: "Execute the recorded cost triggers", changes: "fire cost_projection's substrate_reevaluation_trigger (visibility change) and reevaluation_trigger (self-hosted >2x check) and record the new baseline in cost_projection (PRIV-08); set a standing check on PR-1 repricing news",
+       reversible: true, rollback: "n/a -- bookkeeping", preconditions: ["step 5 (and 7 if applicable)"], abort_criterion: "n/a", lockout_risk: "none"}
+  findings:
+    - id: PRIV-01
+      surface: S-GOV
+      question: Q5
+      also_serves: [Q7, Q11]
+      dimension: VD5
+      also_dimensions: [VD2]
+      title: "tf-gated-apply's required-reviewer gate is void on private repos for every pinned plan (Enterprise-only feature)"
+      evidence: "GitHub Docs :: Deployments and environments reference :: https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments :: retrieved 2026-08-13 ('If you are on a GitHub Free, GitHub Pro, or GitHub Team plan, required reviewers are only available for public repositories'); terraform/github/environments.tf (reviewers block); reconcile.yml:647, terraform-apply-sandbox.yml:750, tf-gated-apply-prototype.yml:35"
+      evidence_kind: external
+      current_behavior: "Jobs declaring environment: tf-gated-apply do not start until benjamin-blake approves -- the authorization boundary for guard fail-closed (IAM/trust/destroy) Terraform applies against live AWS."
+      ideal_behavior: "That human-approval property survives the visibility flip, or a property-matched replacement is in place before the flip."
+      gap: "On private Free/Pro/Team the required-reviewers protection rule is unavailable; the gated jobs would start without approval. The boundary between agent intent and irreversible IAM effect (NS1) silently disappears while environments.tf, AGENTS.md and Decision 92 continue to describe it as live -- the ULF-01 defect class applied to the governance plane."
+      compensating_controls_considered: "terraform_apply_guard.py still classifies the plan (exit 2 routes to the gated job) -- but routing to an ungated job is no gate: the guard exercises plan-CONTENT classification, not human authorization, so it fails the property-match test. The github_ci_apply role's IAM budget bounds blast radius but was sized ASSUMING the human gate. Deployment-branch scoping (protected_branches=true) survives on Pro but only constrains WHICH ref deploys, not WHO approves."
+      change_type: rescope
+      proposed_change: "Before any flip: rework the three gated jobs to workflow_dispatch-only apply (the dispatch act IS the human approval; fail-closed -- nobody dispatches, nothing runs), testable while still public because dispatch semantics are visibility-independent. Keep the Environment for branch scoping."
+      acceptance: "On a private test of the flow (or pre-flip rehearsal): a guard-exit-2 plan produces NO apply until a human dispatches; the dispatch path is exercised end-to-end once; environments.tf comment updated to record the gate's new mechanism."
+      severity: critical
+      severity_rationale: "Matches the pinned critical definition on two clauses: a silent lapse of a control the platform asserts is live, and an unbounded (relative to its designed envelope) expansion of agent authority over IAM/trust/destroy applies on live AWS."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["tf-gated-apply", "required reviewer", "environment gate", "Decision 92", "Decision 89"], dedup_hit_count: 0, note: "Decision 89 is precedent for the CLASS (plan-tier feature loss on private) but covers branch protection, not Environments; no item owns the Environments analogue."}
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: false, blocked_behind: [PRIV-07], note: "only worth building if the reversal ratifies; the redesign is migration-plan step 3"}
+      adversarial_verdict: stands
+    - id: PRIV-02
+      surface: S-GOV
+      question: Q5
+      also_serves: [Q11, Q12]
+      dimension: VD2
+      also_dimensions: [VD7]
+      title: "Flipping on the Free plan silently disables main-protection, CODEOWNERS and required checks -- the exact Decision 89 constraint, re-imposed"
+      evidence: "GitHub Docs :: GitHub's plans :: https://docs.github.com/en/get-started/learning-about-github/githubs-plans :: retrieved 2026-08-13 (protected branches + code owners: private repos require Pro/Team); docs/DECISIONS.md:5269 (Decision 89), 4487 (Decision 83); terraform/github/repo.tf:62-119; .github/CODEOWNERS"
+      evidence_kind: external
+      current_behavior: "main-protection ruleset active: required checks pr-validate + terraform-validate, code-owner review on the deploy-gate surface (Decision 144), linear history, deletion/non-FF blocks."
+      ideal_behavior: "The merge gate survives the flip, or the plan upgrade that preserves it is an explicit, ordered precondition."
+      gap: "The proposal as briefed assumes the Free plan ('private was unaffordable' framing). On Free, every server-side merge gate dies at the flip instant with no error -- the repository has already lived this failure mode (Decision 89 declared it 'permanently unavailable'; Decision 83 reversed that premise ONLY because the repo went public). The reversal's premise un-reverses silently."
+      compensating_controls_considered: "Convention-plus-tooling (Decision 89's own fallback: local validate.py, never_on_main hook, squash-merge discipline) exercises the same property for the SOLO HUMAN but not for autonomous sessions merging via API -- the required-check block is what stops a red-CI merge by an agent; the hook does not run server-side. Partial match only, hence a finding."
+      change_type: enforce
+      proposed_change: "Make 'GitHub Pro active' a hard, verified precondition of the flip (migration_plan step 2), and add a post-flip verification step that queries the ruleset's live enforcement via API before the flip session ends."
+      acceptance: "Migration plan carries the ordering; post-flip API check shows main-protection enforcement=active with both required checks intact on the private repo."
+      severity: high
+      severity_rationale: "Materially reduces a guarantee the platform depends on (agent merges gated by CI verdicts) and the compensating controls are judged insufficient for autonomous flows; not critical because the mitigation is a GBP 3/mo plan change with a trivial verification, and Decision 89's precedent makes the failure mode well-understood."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["branch protection", "required_status_checks", "Decision 89", "Decision 83", "private plan"], dedup_hit_count: 2, note: "Decisions 89/83 record the constraint's history but no item owns surviving a RE-flip; hits are precedent, not ownership."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: false, blocked_behind: [PRIV-07], note: "ordering constraint inside the migration plan"}
+      adversarial_verdict: stands
+    - id: PRIV-03
+      surface: S-SEC
+      question: Q6
+      also_serves: [Q11, Q5]
+      dimension: VD3
+      also_dimensions: [VD2]
+      title: "Post-flip, CodeQL/secret-scanning/push-protection are unpurchasable on a personal account; the weekly ghas-probe goes standing-red with no wake path while the liveness assertions go stale"
+      evidence: "GitHub Docs :: About GitHub Advanced Security :: https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security :: retrieved 2026-08-13 ('You must be on a GitHub Team or GitHub Enterprise plan in order to purchase GitHub Code Security or GitHub Secret Protection'; dependency graph + Dependabot 'included in all plans'); .github/workflows/ghas-probe.yml:1-39 + scripts/checks/misc/validate_ghas_probe.py:7-15 (two callers: SKIP-when-unscoped registered check vs loud-fail workflow runner); ci-rca.yml:24-31,59 (ghas-probe not watched; failure-conclusion filter); AGENTS.md T2.12 stanza; docs/DECISIONS.md:4487 (Decision 83 monitor-blind-window precedent)"
+      evidence_kind: external
+      current_behavior: "Secret scanning, push protection, CodeQL free and live (public repo); ghas-probe proves it weekly against the live API via the loud-fail _run_cli caller; the registered validate.py check is deliberately SKIP-when-unscoped (no token in CI), so the full tier does not depend on the probe; AGENTS.md and Decision 83 cite dated evidence."
+      ideal_behavior: "The flip change-set re-scopes the monitor and amends the assertions in the same commit, names replacements (or accepted losses) per control, and gives the now-red-forever probe an explicit disposition so its alarm does not decay unwatched."
+      gap: "Three server-side controls lapse at the flip with no purchasable path on Free/Pro (paid products are org-Team/Enterprise-only -- reachable only via the org transfer Q5 rejects). The weekly probe then goes STANDING-RED -- correctly -- but nothing consumes that alarm: ghas-probe is not in ci-rca's watched-workflows list and the full-tier check skips without a token, so the red runs surface to nobody. Decision 83 itself records the precedent (the 2026-07..08 blind window: 'all six scheduled runs fail unactioned... the monitor still carries no persistent-unavailability alarm'). Meanwhile AGENTS.md/Decision 83's 'live-verified' assertions outlive reality: the precise ULF-01 defect class, now with a permanently red monitor nobody is woken for. (Revised in adversarial round 1: an earlier draft claimed the full tier turns standing-red; refuted by validate_ghas_probe.py's SKIP-when-unscoped contract.)"
+      compensating_controls_considered: "The pre-commit never-commit hook survives and exercises the same property client-side, but fails exactly where push protection succeeds (fresh clones, --no-verify, non-hook surfaces) -- partial match. Dependabot alerts/updates survive (all plans) -- full match for the dependency slice only. The probe's loud-fail design is a detection control that DOES fire -- and its exclusion from ci-rca is a DELIBERATE adjudication (config/ci_rca_taxonomy.yaml:298-307: 'a red scheduled run is already its own alarm') -- but that adjudication's premise is precisely what Decision 83's 2026-07..08 blind window empirically disproved: detection without delivery fails the property match for a monitoring control. codeql.yml joins the same class post-flip (standing-red, unwatched)."
+      change_type: rescope
+      proposed_change: "In the flip change-set: parameterise the probe's expectations by repo visibility (expect-disabled on private = green with a WARN line) or retire it with a dated Decision 83 stanza; amend AGENTS.md T2.12; wire gitleaks (secret shape) and semgrep/bandit (SAST) into validate.py as declared partial replacements or record the accepted loss explicitly."
+      acceptance: "Post-flip: ghas-probe green under visibility-aware expectations (or formally retired); AGENTS.md/Decision 83 carry no assertion describing a lapsed control as live; replacement-or-accepted-loss recorded per control."
+      severity: high
+      severity_rationale: "A real guarantee reduction (server-side secret/push protection has no equivalent replacement and cannot be bought back on a personal account) whose compensating controls are partial; the monitoring side degrades silently (red-but-unconsumed alarm, precedented in Decision 83's blind window). Not critical because the full tier and merge loop are unaffected (SKIP-when-unscoped) and Dependabot -- the dependency-execution control most coupled to Q7 -- survives."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["ghas-probe", "ULF-01", "secret scanning private", "push protection", "code scanning"], dedup_hit_count: 1, note: "ULF-01/Decision 83 own the MONITORING pattern; nothing owns its behaviour under a visibility reversal."}
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: false, blocked_behind: [PRIV-07], note: "ships inside the flip change-set (migration_plan step 4), never after it"}
+      adversarial_verdict: overstated-and-revised
+    - id: PRIV-04
+      surface: S-WAKE
+      question: Q4
+      also_serves: [Q3, Q11]
+      dimension: VD3
+      also_dimensions: [VD2]
+      title: "An offline or saturated self-hosted runner starves every wake mechanism; watching sessions stall 24h minimum, plausibly indefinitely"
+      evidence: "ci.yml:293-304 (signal-green needs pr-validate+terraform-validate -- a job inside the run it reports on); .github/workflows/pr-conflict-signal.yml (its own job needs a runner); ci-rca.yml:59 (fires only on conclusion=='failure' on the default branch -- a CANCELLED run wakes nothing); AGENTS.md step 4 (F36: send_later backstop retired on 'no dropped-signal gap remains'); GitHub Docs :: Actions limits :: https://docs.github.com/en/actions/reference/limits :: retrieved 2026-08-13 (self-hosted jobs queued for 24 hours are cancelled)"
+      evidence_kind: static
+      current_behavior: "All three wake mechanisms are completion-triggered and answer in minutes on always-available hosted runners; on that premise the send_later backstop was retired."
+      ideal_behavior: "Wake and signal jobs remain live independently of the self-hosted box, and something tells the watching agent when the runner itself is down."
+      gap: "Under the proposal as stated (all jobs self-hosted): a down/saturated box means queued-never-started jobs, which emit no completion, no failure, no comment -- a watching session hears nothing at T+1h or T+6h; at T+24h GitHub cancels the queued job, and the cancellation demonstrably does NOT reach the recovery pipeline: ci-rca's gate requires conclusion=='failure' on the default branch (ci-rca.yml:59), so a cancelled run files no rec, and whether the harness relays a cancellation as a failure wake to the watching session is unverified (HYPOTHESIS on that one relay; everything else here is static-confirmed). The retirement's premise -- no dropped-signal gap -- does not survive the migration as proposed."
+      compensating_controls_considered: "pr-conflict-signal's push-triggered re-poll: same-runner-dependent, fails with the box -- no property match. The signal-green retry loop: retries a comment on a job that ran; does nothing for a job that never starts -- no match. A human noticing: real but is precisely what the wake substrate exists to replace."
+      change_type: rescope
+      proposed_change: "Hybrid pinning as a hard design rule: signal-green, pr-conflict-signal, ci-rca, rec-autoclose and claude.yml stay on ubuntu-latest permanently (~GBP 4-9/mo on Pro); plus RP7's off-box runner-liveness alarm (hosted scheduled workflow polling /actions/runners + dead-man switch) so runner-down is itself a delivered signal."
+      acceptance: "Kill the runner deliberately during a trial week: the watching session receives a liveness alarm within the poll interval, and a queued PR run is either failed fast (job-level timeout on queue via the alarm's cancel step) or surfaced; no silent stall past the alarm interval."
+      severity: high
+      severity_rationale: "Materially reduces the availability guarantee the autonomous merge loop depends on (NS5), and the named compensating mechanisms fail the property match; not critical because the stall is loud-by-absence to a human (a silent PR is noticeable) and fully designed-around by the hybrid rule at trivial cost."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["signal-green", "wake", "send_later", "pr-conflict-signal", "queued"], dedup_hit_count: 1, note: "AGENTS.md step 4 records the backstop retirement (deliberate constraint -- not flagged per se); Q4 reopens it lawfully because the migration breaks its premise. No item owns runner-availability wakes."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: false, blocked_behind: [PRIV-07], note: "the hybrid rule belongs in migration_plan step 7; the liveness alarm in step 6"}
+      adversarial_verdict: stands
+    - id: PRIV-05
+      surface: shared
+      affects_surfaces: [S-RUNNER, S-CRED]
+      question: Q7
+      also_serves: [Q3, Q6]
+      dimension: VD5
+      also_dimensions: [VD1]
+      title: "The runner host concentrates AWS authority, dependency execution, and the trading workload inside one personal blast radius; per-job disposability is lost"
+      evidence: "terraform/personal/oidc.tf (github-ci roles incl. IAM-capable apply role); PROPOSED HARDWARE (shared PySR box, requester-confirmed); .github/dependabot.yml (weekly dependency PRs whose install steps execute in CI); Q7 threat model"
+      evidence_kind: static
+      current_behavior: "Every job runs in a fresh disposable GitHub-managed VM; compromise of a job's environment dies with the VM; the execution venue shares nothing with the trading workload or personal network."
+      ideal_behavior: "Self-hosted execution preserves per-job clean-slate semantics, bounds credential exposure windows, and isolates the CI tenant from the PySR tenant and the home network."
+      gap: "A persistent host executing third-party code (pip chains, actions, Dependabot update PRs) while periodically holding OIDC-minted AWS credentials -- co-resident with PySR and any trading data, on a personal network -- loses the disposability, managed-patching and isolation properties the hosted arrangement provides for free. Q3's design (ephemeral containers, JIT, non-root, egress allowlist, off-box monitoring) restores most but not all (kernel-escape residual, JIT-minting PAT on host, physical/network exposure unstated); none of it exists yet."
+      compensating_controls_considered: "OIDC short-lived tokens: genuine property match for the CREDENTIAL slice (no standing keys to steal; bounded windows) -- lowers severity, does not dismiss. The guard + (post-PRIV-01) dispatch gate bounds what CI-held credentials can APPLY -- matches the IAM slice. Nothing existing matches the co-residency/blast-radius slice; that is Q3's unbuilt design."
+      change_type: add
+      proposed_change: "Build Q3's architecture as specified (RP1-RP10, cgroup caps, VLAN segmentation from personal devices) BEFORE any workflow targets the box; treat the runner build itself as a gated tier item with the checklist as exit criteria."
+      acceptance: "All ten RP properties demonstrably in place (RP5 at its argued partial level) before the first non-shadow job; a deliberate malicious-dependency drill (benign canary package) shows containment within the job container and no persistence across jobs."
+      severity: high
+      severity_rationale: "The lost disposability property materially weakens the execution-security guarantee, and today's compensating controls cover only the credential and IAM slices -- not co-residency with the trading workload; not critical because OIDC bounds authority windows and the design (if built) is a sound property-matched remedy."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [], dedup_search_terms: ["self-hosted runner security", "runner hardening", "ephemeral runner", "blast radius"], dedup_hit_count: 1, note: "Decision 68 (archive) recorded the OLD runner's credential posture (instance metadata, EC2-isolated) -- historical precedent, and notably that box was NOT co-resident with the trading workload; no item owns hardening an owned-hardware runner."}
+      effort: L
+      depends_on: []
+      sequencing: {safe_to_queue_now: false, blocked_behind: [PRIV-07], note: "migration_plan step 6; pointless unless self-hosting ratifies"}
+      adversarial_verdict: stands
+    - id: PRIV-06
+      surface: S-CI
+      question: Q4
+      also_serves: [Q2]
+      dimension: VD3
+      also_dimensions: [VD1]
+      title: "CD.38 would make a single consumer box the sole verification substrate for the autonomous executor"
+      evidence: "docs/ROADMAP-PLATFORM.yaml CD.38 ('GitHub Actions is the sole verifier/validation runner; AWS never runs validate.py or verifiers in-cloud', state: pending); PROPOSED HARDWARE (single box, unstated uptime, shared with PySR)"
+      evidence_kind: static
+      current_behavior: "CD.38 is pending; its discipline points assume GitHub Actions availability without qualifying the runner substrate -- written when 'GitHub Actions' meant GitHub-managed capacity."
+      ideal_behavior: "CD.38's premise is re-examined before ratification if the verifier substrate becomes personally-operated hardware: verifier availability is then an explicit design input (duty cycle, PySR contention, failover), or verification-critical jobs are excluded from the self-hosted set."
+      gap: "The executor's entire admission mechanism (NS2) would inherit the box's availability -- power cuts, PySR saturation, house moves -- turning every runner outage into a full-loop verification outage. Neither CD.38 nor the migration proposal names this coupling."
+      compensating_controls_considered: "The hybrid rule (PRIV-04) partially matches: pinning verification jobs hosted removes the coupling for those jobs -- but then the self-hosted box carries only non-verification load, which empties most of the migration's Q2 benefit. The tension is structural and belongs in CD.38's ratification, not silently resolved here."
+      change_type: clarify
+      proposed_change: "Add a discipline point to CD.38 before ratification: 'verifier jobs run on substrate with availability >= X; a self-hosted runner is admissible as verifier only with the PRIV-04 liveness alarm and a documented failover to hosted runners'."
+      acceptance: "CD.38's recorded discipline points name the runner-substrate availability requirement; the ratification decision cites this audit."
+      severity: medium
+      severity_rationale: "Contingent on a pending decision (not yet a live guarantee) with a clear one-line fix at ratification time; would escalate to high the day CD.38 ratifies without it."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-insufficient, item_ids: [CD.38], dedup_search_terms: ["CD.38", "sole verifier", "executor verification", "GitHub Actions substrate"], dedup_hit_count: 1, note: "CD.38 owns the verifier-delegation design; its remedy is silent on substrate availability -- insufficient for the self-hosted variant."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "a CD.38 amendment is worth queueing regardless of the migration verdict"}
+      adversarial_verdict: stands
+    - id: PRIV-07
+      surface: S-VIS
+      question: Q12
+      also_serves: [Q1, Q11]
+      dimension: VD7
+      also_dimensions: [VD1]
+      title: "The proposal reverses two ratified decisions and a ratified end-state without yet engaging the recorded reversal process"
+      evidence: "docs/DECISIONS.md:3177 (dec-111, reversal condition: 're-open as a candidate only if the public-repo decision is reversed'); :3153 (dec-112, reversal condition: 're-open... only if CI moves off GitHub-hosted runners + OIDC'); docs/PROJECT_CONTEXT.md:20; docs/DECISIONS_ARCHIVE.md:1546 (Decision 68 -- second-order: its superseded-on-hosting-only status would need re-litigation if dec-112 reverses); T2.10 exit criteria (F41)"
+      evidence_kind: static
+      current_behavior: "dec-111/dec-112 are ratified with explicit reversal conditions; PROJECT_CONTEXT.md:20 states the public end-state; T2.10 is complete with 'no remaining workflow references the self-hosted runner label' among its exit criteria."
+      ideal_behavior: "The migration proceeds only through the Decision 105 candidate->ratification lane, engaging the ORIGINAL rationale (DD-C): dec-111's public-flip reasoning (portfolio/curated portal) and dec-112's hosted-runner reasoning (zero-ops, OIDC) -- stating which ratification conditions actually changed."
+      gap: "DD-C adjudication: conditions HAVE partially changed since ratification -- requester intent has drifted toward monetisation (new information), and PR-1 introduced a repricing risk that did not exist at dec-112 time. A reversal justified on those grounds is procedurally legitimate. But the proposal as briefed reaches for implementation directly; executing it without the lane would corrupt the decision log's premise integrity (the Decision 89/83 lesson: stale premises mislead every future planning session). T2.10 is NOT invalidated -- its criteria were true at completion; new runner work needs a new item, not a re-opened one."
+      compensating_controls_considered: "The ratification lane itself (Decision 105) is the control and it exists and works -- this finding records that it has not been ENGAGED, not that it is missing."
+      change_type: persist
+      proposed_change: "File the candidate decision(s) reversing dec-111 (and dec-112 only if self-hosting is actually chosen -- the verdicts are decoupled, PR-2), citing this audit, the changed conditions, and the artifact list from Q12.2; amend PROJECT_CONTEXT.md:20 in the ratification change-set."
+      acceptance: "A ratified decision authorises the flip before any repo.tf visibility change lands; PROJECT_CONTEXT.md carries no contradicted end-state statement post-flip."
+      severity: medium
+      severity_rationale: "Process/consistency defect with a clear, cheap fix; it gates everything else but destroys nothing by itself. Not high: the lane exists and nothing has been broken yet -- this audit is itself the lane's input."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: [dec-111, dec-112], dedup_search_terms: ["reversal conditions", "Decision 105", "ratification", "public-flip"], dedup_hit_count: 2, note: "the decisions' own reversal-conditions stanzas ARE the sound-but-unexecuted remedy."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "migration_plan step 1; the gate on all other findings' remediation"}
+      adversarial_verdict: stands
+    - id: PRIV-08
+      surface: S-CI
+      question: Q5
+      also_serves: [Q1, Q10]
+      dimension: VD6
+      also_dimensions: []
+      title: "Both recorded cost triggers for exactly this decision exist and are unexecuted; the observed workload makes cadence tuning a cheaper lever than self-hosting"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:348-352 (substrate_reevaluation_triggers: 'Repo-visibility change...') and :385 (reevaluation_triggers: 'Self-hosted runner cost becomes >2x scheduled-runner alternative') -- two distinct lists, F43; observed: main-canary 8/day x ~25 min single job ~6,100 min/mo of a 14-21k total (C12 confirmed)"
+      evidence_kind: observed
+      current_behavior: "The repository anticipated both halves of this migration's cost question in its system of record; neither trigger has been executed against observed volume, and cost_projection's add_on folds 'GH-hosted runner minutes' at USD 0 actual (public repo)."
+      ideal_behavior: "Any visibility/runner decision is made against the executed triggers: an empirically derived minutes baseline, the per-plan bill, and the scheduled-cadence levers priced alongside the runner options."
+      gap: "The requester's affordability chain (Q1 thread a) was formed without the baseline; the single largest line (main-canary, ~a third of all minutes) is a cadence knob whose halving saves ~GBP 13/mo -- comparable to self-hosting's entire net saving after non-Actions costs -- at ~1 hour of effort and zero availability risk."
+      compensating_controls_considered: "The triggers themselves -- sound remedy, unexecuted (hence planned-unbuilt, not novel)."
+      change_type: persist
+      proposed_change: "Execute both triggers: record the DD-A matrix (cost_analysis block) into cost_projection, including the cadence-tuning option as a first-class alternative, and re-run on any PR-1 repricing news."
+      acceptance: "cost_projection carries a dated, observation-based Actions-minutes baseline and the per-option matrix; the next /plan session surfaces it instead of re-deriving."
+      severity: medium
+      severity_rationale: "Economic-honesty gap (VD6) with a clear fix; no guarantee is reduced -- but it directly shaped the requester's premise, so it is not low."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: ["cost_projection.substrate_reevaluation_triggers", "cost_projection.reevaluation_triggers"], dedup_search_terms: ["cost_projection", "runner minutes", "visibility change trigger", "cost_model (absent -- verified no such key)"], dedup_hit_count: 2, note: "both owning triggers found and engaged per DD-A; filing this as novel would have been the dedup failure the prompt warns about."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "worth executing even under the stay-public headline -- the baseline informs the next re-evaluation"}
+      adversarial_verdict: stands
+  rejected_candidates:
+    - {candidate: "C2 -- the cost premise inverts once F10 is established (current bill may not be lower than post-flip)",
+       origin: prompt-candidate,
+       why_dismissed: "Refined rather than confirmed: the current billed amount is GBP 0 (observed, billable=0 across 4 sampled runs; public-repo free rule). The premise does not INVERT -- going private genuinely creates a GBP 52-83/mo hosted bill, so 'private is expensive' still holds; what the requester's chain got wrong is not the direction but the framing (the cost is created by the flip, not pre-existing) and the unpriced governance losses. Adjudicated inside Q1(a) and DD-A; no residual defect to file.",
+       compensating_control: "", control_property_match: "", refutation: "", decision_or_item_id: ""}
+    - {candidate: "C9 -- OIDC trusts refs/heads/agent/* while sessions use claude/*; relationship undetermined",
+       origin: prompt-candidate,
+       why_dismissed: "Determined: 0 agent/* branches exist (8 claude/*); ci.yml fires only on pull_request (sub=repo:...:pull_request, trusted at oidc.tf:603) and push-to-main (sub=...refs/heads/main, trusted at :405) -- no live path presents an agent/* or claude/* branch sub, so nothing is broken and nothing about this migration changes it. The agent/* entry is dormant trust scope.",
+       compensating_control: "Only repository collaborators can create branches; the dormant sub pattern is not reachable by any external principal.",
+       control_property_match: "The control (collaborator-only branch creation) exercises the same property the trust condition guards (who can mint a matching sub claim) and would fail exactly if an untrusted principal could push an agent/* branch -- which requires write access, at which point trust conditions are moot anyway.",
+       refutation: "", decision_or_item_id: ""}
+    - {candidate: "C7 -- shared PySR box may not deliver the modelled speedup and CI may degrade PySR reciprocally",
+       origin: prompt-candidate,
+       why_dismissed: "True as stated but it is a CONSTRAINT, not a defect: Q2 models both contended and uncontended figures, picks the contended one as decision-relevant (verdict marginal-speedup), and Q3 caps runner concurrency via cgroups so the contention is bounded by design. Nothing to file beyond Q2/Q3's treatment.",
+       compensating_control: "Q3 cgroup caps (12 threads / 10 GB per runner container) bound CI's take from the box.",
+       control_property_match: "The cap exercises resource partitioning -- the same property contention violates -- and would fail (unbounded contention) exactly if the defect were real and uncapped.",
+       refutation: "", decision_or_item_id: ""}
+    - {candidate: "C8 -- validate.py is a narrower portability boundary than 'single entrypoint' implies",
+       origin: prompt-candidate,
+       why_dismissed: "Confirmed as a FACT (3 of 19 workflows route through it) and absorbed into Q10's verdict (portable-with-cost) with per-workflow costing. It is a status-quo property of the CI, not a defect the migration creates or worsens -- self-hosted runners still run GitHub Actions, so the event fabric survives this migration untouched.",
+       compensating_control: "", control_property_match: "", refutation: "", decision_or_item_id: ""}
+    - {candidate: "C13 -- model-provider transmission means the flip closes a smaller share of exposure than assumed",
+       origin: prompt-candidate,
+       why_dismissed: "Adjudicated in Q1 as directed: the channel is real and stays open, but its counterparty class (API providers under contractual terms, API content not used for training by default) is not the monetising-adversary class the requester fears; the share the flip DOES close (arbitrary public read/mirror) is the one that matters for that threat. Bounds the protection claim without voiding it -- recorded in Q1's adversary model, not a finding either way.",
+       compensating_control: "", control_property_match: "", refutation: "", decision_or_item_id: ""}
+    - {candidate: "C14/C15/C16 -- benefit-side candidates",
+       origin: prompt-candidate,
+       why_dismissed: "Not dismissed -- adjudicated INTO the benefits register with magnitudes and alternative routes (C14 -> BEN-04 S; C15 -> BEN-02 M; C16 -> BEN-03 S, narrowed: the marginal-cost argument stands but only conditional on going private at all). Listed here so the candidate ledger closes; see migration_benefits.",
+       compensating_control: "", control_property_match: "", refutation: "", decision_or_item_id: ""}
+    - {candidate: "C1/C3/C4/C5/C6/C10/C11/C12 -- remaining prompt candidates",
+       origin: prompt-candidate,
+       why_dismissed: "All traced and absorbed into findings rather than confirmed as-worded: C1 -> PRIV-07 (with T2.10 NOT invalidated -- a correction to the candidate); C3 -> PRIV-04 (refined: queue cancellation DOES eventually end the run at 24h, so 'no notifying mechanism' was overstated -- the defect is the 24h floor, the cancellation-is-not-failure blindness of ci-rca, and the unverified relay, not total silence); C4 -> PRIV-06 (reclassified planned-insufficient against CD.38); C5 -> PRIV-03; C6 -> PRIV-01 (sharpened: the loss holds on EVERY pinned plan, not just Free -- Decision 89 was the right precedent but understated it); C10 -> PRIV-05; C11 -> Q1 thread (b) analysis (cuts FOR enclosure under I-B, against under I-C -- an intent dependency, not a defect); C12 -> confirmed as a datum inside PRIV-08 (canary ~= a third of minutes).",
+       compensating_control: "", control_property_match: "", refutation: "", decision_or_item_id: ""}
+    - {candidate: "BEN-draft -- 'private repo removes the audit-artifact reconnaissance surface' as a standalone M-magnitude benefit",
+       origin: own-analysis,
+       why_dismissed: "Considered and rejected at composition time, before adversarial review: Decision 101 already excludes credentials/ids/hostnames from published artifacts, so the residual exposure is architectural pattern detail that NS6 deliberately publishes ('market the engineering') -- the draft benefit double-counted the existing boundary. The residue survives only as a Q12 own-extension note.",
+       compensating_control: "Decision 101 public-content boundary + never-commit hook.",
+       control_property_match: "The boundary exercises content-class exclusion at commit time -- the same property the benefit claimed to add -- and would fail (secrets/ids published) only if the hook and review discipline both failed, which is the PRIV-03 discussion, not a visibility question.",
+       refutation: "",
+       decision_or_item_id: "Decision 101"}
+  summary:
+    total_findings: 8
+    novel_count: 5
+    planned_insufficient_count: 1
+    planned_unbuilt_count: 2
+    total_benefits: 5
+    benefits_note: ""
+    top_benefits: [BEN-01, BEN-02, BEN-03, BEN-05, BEN-04]
+    top_improvements: [PRIV-01, PRIV-02, PRIV-03, PRIV-04, PRIV-05]
+    highest_leverage_change: PRIV-01
+    go_no_go: recommend-public
+    self_hosting_verdict: recommend-hosted-runners
+    verdicts_coupled: false
+    headline_sentence: "Stay public and keep GitHub-hosted runners; if commercial intent hardens, fence sensitive future work in a separate private repo (CD.32) rather than flipping this one -- and if the requester overrides toward private anyway, it must be Pro-plan-first with the tf-gated-apply gate redesigned and the security monitors re-scoped before the flip, with self-hosting remaining unrecommended either way."
+    maturity_S_VIS: frontier
+    maturity_S_RUNNER: strong
+    maturity_S_CI: frontier
+    maturity_S_WAKE: strong
+    maturity_S_GOV: solid
+    maturity_S_SEC: strong
+    maturity_S_CRED: strong
