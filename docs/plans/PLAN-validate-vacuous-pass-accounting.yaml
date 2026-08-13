@@ -299,8 +299,8 @@ verification_plan:
     command: bin/venv-python -m pytest tests/checks/registry/test_accounting.py -q
     expected: >-
       Passes. Cases assert examined(0)+no-append => "vacuous", examined(3)+no-append => "enforced",
-      skipped(reason) => "skipped", no declaration => "undeclared", and any append to `failed` =>
-      "failed" regardless of what was declared. Lifecycle, stated precisely because the sloppy form
+      skipped(reason) => "skipped", no declaration => "undeclared", and any append to the failed
+      list => "failed" regardless of what was declared. Lifecycle, stated precisely because the sloppy form
       contradicts VP step 10: the per-dispatch DECLARATION SLOT resets on each outcome_scope entry,
       while the ROW ACCUMULATOR resets per RUN via validation_result.clear() -- mirroring the
       existing _ATTRIBUTIONS contract at validation_result.py:14-17. Resetting the row list per
@@ -454,13 +454,13 @@ verification_plan:
       the committed diff against the push-aware base, the guard records examined>0 and evaluates the
       flip; the same fixture on the pre-fix working-tree base records examined==0 (vacuous). (b)
       OLD-CONTENT HALF: inspect the recorded _common.run call list and assert (i) no invocation
-      matches `git diff HEAD ... -- config/agent/data_quality/`, and (ii) the `git show` argument's
-      ref equals the base the diff used, not the literal "HEAD". Pinned as a node id rather than a
-      -k selector, per tests/CLAUDE.md and because the graduation registry row needs a node_id.
-      Note _common.get_changed_files() does NOT expose the base it used (it computes
-      `push_context_base() or "origin/main"` internally, with its own fallback to "HEAD" on a
-      non-zero returncode), so assertion (ii) is only satisfiable if the guard re-derives the base itself with
-      that same default -- see the execution step.
+      matches the retired git diff HEAD ... -- config/agent/data_quality/ shape, and (ii) the git
+      show argument's ref equals the base the diff used, not the literal "HEAD". Pinned as a node
+      id rather than a -k selector, per tests/CLAUDE.md and because the graduation registry row
+      needs a node_id. Note _common.get_changed_files() does NOT expose the base it used (it
+      computes push_context_base() or "origin/main" internally, with its own fallback to "HEAD" on
+      a non-zero returncode), so assertion (ii) is only satisfiable if the guard re-derives the
+      base itself with that same default -- see the execution step.
     fix_if: >-
       Assertion (a) passes on pre-fix code -- the fixture left the DQ change in the working tree, so
       both bases agree and the discrimination is destroyed; commit it instead. Assertion (b) is the
@@ -925,6 +925,23 @@ context:
     fix within a stated window) or the ratchet wedges unrelated PRs, unwind is channel + baseline +
     schema v3 together, since consumers key off the v3 shape. Must carry the fenced yaml metadata
     envelope and a significance routing claim (numbered_decision), per Decisions 167/150.
+  - >-
+    IMPLEMENT-TIME NOTE (post-hoc, added at execution): constraint 2's predicted scenario
+    materialized -- scripts/checks/_scaffolding.py crossed 500 SLOC once the accounting/DQ-
+    classifier code landed (measured 507). Per that constraint's own instruction, DECOMPOSED
+    rather than raised: the pre-existing, unrelated heavy-dependency test-deferral machinery
+    (run_pytest_diff and its helpers, ~350 SLOC, no coupling to this plan's accounting work) moved
+    to a new sibling module, scripts/checks/_pytest_diff.py, with scripts/checks/_scaffolding.py
+    re-exporting its public surface for facade back-compat (mirrors the existing _terraform.py
+    pattern in the same file). scripts/test_coverage_checker.py's _ORCHESTRATION_SCAFFOLDING_FILES
+    set gained the new module's basename so it maps to the same tests/validate/ home _scaffolding.py
+    and _terraform.py already use. tests/validate/test_pytest_diff.py gained direct-unit tests for
+    two previously-uncovered branches (_excluded_and_absent's empty-input guard,
+    _match_changed_test_path's directory-target ValueError branch) to hold 100% coverage on the
+    newly-split file. None of these three files carry any accounting-channel logic; the split is a
+    pure Decision 128 decompose-by-default mechanical move, out of this plan's own scope table by
+    construction (a file that did not exist when the plan was authored), but recorded here so a
+    future reader does not need to reverse-engineer it from the diff.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read

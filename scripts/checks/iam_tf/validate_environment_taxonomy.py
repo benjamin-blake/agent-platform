@@ -28,6 +28,7 @@ def validate_environment_taxonomy(failed: list[str]) -> None:
     phase_as_env = re.compile(r"\b(" + "|".join(product_phases) + r")[ \t]+environment\b", re.IGNORECASE)
     tier_as_phase = re.compile(r"\b(" + "|".join(platform_tiers) + r")[ \t]+phase\b", re.IGNORECASE)
     errors: list[str] = []
+    candidates: list[str] = []
     for rel in _common.get_changed_files():
         if not rel.endswith((".md", ".yaml", ".yml")):
             continue
@@ -37,11 +38,13 @@ def validate_environment_taxonomy(failed: list[str]) -> None:
             text = (_common.ROOT / rel).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        candidates.append(rel)
         for lineno, line in enumerate(text.splitlines(), start=1):
             if phase_as_env.search(line):
                 errors.append(f"{rel}:{lineno}: product phase used as an 'environment' (product states are phases)")
             if tier_as_phase.search(line):
                 errors.append(f"{rel}:{lineno}: platform tier used as a 'phase' (platform tiers are environments)")
+    registry.examined(len(candidates), unit="candidate_docs")
     if errors:
         print("Environment/phase taxonomy violations (see docs/contracts/environment-taxonomy.md):")
         for e in errors:

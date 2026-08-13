@@ -1,0 +1,89 @@
+contract:
+  id: check-accounting
+  class: D
+  contract_version: 1
+  status: ratified
+  ratified_via: "Decision 170 / PLAN-validate-vacuous-pass-accounting"
+  description: >-
+    The per-check accounting channel (scripts/checks/registry.py's examined()/skipped()/
+    outcome_scope() API, scripts/checks/validation_result.py's CheckOutcome row accumulator and
+    schema_version 3 evidence emission) that lets a registered check declare what it examined
+    or that it skipped, so a vacuous pass, a skip, and an enforced pass stop collapsing into one
+    indistinguishable "not failed" green. Self-hosting: this file's own evaluator,
+    validate_check_accounting, is the registered check that enforces the declaration ratchet
+    this document declares, and it derive-and-asserts its status vocabulary against
+    scripts.checks.registry.STATUS_VOCABULARY rather than restating it as free-floating prose.
+  subject: check-accounting
+  evaluator:
+    check: validate_check_accounting
+
+amendment_log: []
+
+status_vocabulary:
+  - failed
+  - skipped
+  - vacuous
+  - enforced
+  - undeclared
+
+discrimination_rule: >-
+  Constraint 5b, the single derivation authority for the plan's central observable. A check
+  whose derived input DOMAIN is empty declares examined(0), yielding status "vacuous".
+  skipped(reason) is reserved for an UNAVAILABLE INPUT OR UNMET PRECONDITION -- a missing
+  credential, an absent artefact, a recursion guard, an engagement condition that does not hold
+  -- and is never used for an empty domain. An append to the check's own `failed` list always
+  yields status "failed", regardless of what was declared (or not declared) beforehand. No
+  declaration at all yields "undeclared". Applied uniformly across every adopted check: two
+  structurally identical early returns must never receive opposite treatments.
+
+check_outcomes_grain: >-
+  ONE ROW PER DISPATCHED CHECK, PLUS ANY SCAFFOLD THAT OPENS AN outcome_scope. Each row carries
+  `check` (the step name -- matches the field name every consumer keys rows on, `r["check"]`),
+  `kind` ("check" | "scaffold"), `status` (one of status_vocabulary above), and the declaration
+  payload that produced that status (`examined_count`/`examined_unit` for an "examined"
+  declaration, `skipped_reason` for a "skipped" declaration, all null for "failed"/"undeclared").
+  Write mode is append-within-run then whole-file replace: logs/debug/validation-result.json is
+  regenerated every full run and is never read as history, so this is a run artifact, not an SCD2
+  or event-journal table -- it needs no merge key, identity, or partitioning. A dispatched check's
+  per-run DECLARATION SLOT resets on each outcome_scope entry; the ROW ACCUMULATOR this feeds
+  resets once per RUN (scripts.checks.validation_result.clear()), mirroring the existing
+  _ATTRIBUTIONS contract at that module's own top.
+
+validation_result_schema_v3: >-
+  logs/debug/validation-result.json's schema_version is 3. Additive over schema_version 2:
+  `check_outcomes` (a list of check_outcomes_grain rows) plus four rollup counts --
+  `ran_checks` (status "enforced"), `skipped_checks` (status "skipped"), `vacuous_checks`
+  (status "vacuous"), `undeclared_checks` (status "undeclared"). "failed" checks are NOT
+  double-counted in a rollup bucket -- they are already carried by the unchanged
+  `failed_checks`/`failed_check_attributions` fields. Those two fields keep their exact
+  schema_version 2 shape byte-for-byte (Decision 142 lineage: scripts.ci_rca.taxonomy's
+  Priority-0 attribution path is a live consumer and must keep resolving unmodified).
+
+baseline_grammar: >-
+  config/check_accounting_baseline.yaml is a ONE-TIME, shrink-only grandfather roster (Decision
+  159/130 style) of checks not yet adopting the declaration obligation at this contract's landing
+  -- a flat `entries:` list of check names. It carries NO marker escape grammar of any kind
+  (deliberate, per Decision 165 -- scripts/checks/_marker_guard.py is the mandatory home for any
+  future marker grammar, so adding one later means going there, not smuggling one into this
+  file). A name can leave the roster (adopt the declaration, shrink) but can never re-enter once
+  removed, and no name outside validate_check_accounting.py's own frozen `_BASELINE_SEED`
+  constant can ever be admitted by a config-file edit alone -- growing the roster past its seed
+  requires editing that frozen constant in a reviewed code change. TOUCH-IT-FIX-IT (Decision 162
+  r3 shape): editing a baselined check's own module in the same diff that leaves it undeclared
+  fails -- grandfathered stock cannot sit permanently exempt while still being actively
+  maintained. When config/check_accounting_baseline.yaml is unreadable at the diff base (e.g.
+  the seeding PR itself, or origin/main unreachable), the shrink-only comparison SKIPs loudly
+  rather than treating "missing base" as "empty base" -- mirrors
+  scripts.checks._marker_guard.default_base_reader's contract. The registration surface itself
+  (surface 7 of scripts/checks/registry.py's module docstring enumeration) is: every new
+  registered check must declare examined()/skipped() on introduction, or be added to this
+  baseline in the same PR -- validate_check_accounting fails a check that does neither.
+
+ratchet_limitation: >-
+  The AST ratchet proves a declaration EXISTS somewhere in a check's defining MODULE, not that
+  EVERY reachable exit path reaches one -- a module-level scan, not a path-aware one. rec-2915's
+  own measurement was 35 unconditional-success early-return sites across 24 checks, exactly the
+  path-level shape a module-level scan cannot see. Fail-closed vacuity enforcement (a full-tier
+  run failing on an unexplained vacuous result) is explicitly deferred future work, not installed
+  by this contract -- it is gated behind a future path-aware declaring-coverage metric on the
+  adopted set clearing a stated threshold (see Decision 170's reversal/deferred-work clause).

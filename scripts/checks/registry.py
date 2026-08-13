@@ -7,15 +7,33 @@ tier-sequence derivation now come from the 18 per-domain scripts/checks/<domain>
 ``Entry`` manifests (grammar: docs/contracts/check-manifest.yaml), never from a facade re-export
 block in scripts/validate.py.
 
-Registering a new check touches SIX surfaces, not merely this package (retracts the earlier
-"touches ONLY this package" claim -- three of the six sit outside scripts/checks entirely; plan-
+Registering a new check touches SEVEN surfaces, not merely this package (retracts the earlier
+"touches ONLY this package" claim -- three of the seven sit outside scripts/checks entirely; plan-
 obligation-closure / docs/contracts/plan-obligations.yaml): (1) the check module under
 scripts/checks/<domain>/; (2) its ``@register(...)`` decoration; (3) an ``Entry`` literal (bare
 string-literal module=/attr=) in that domain's ``_manifest.py``; (4) a
 config/ci_rca_taxonomy.yaml ``function_to_category`` row; (5) a
 config/agent/verification_registry/registry.yaml row per GRADUATED verification_plan step (not
-per check); (6) the mirror test at tests/<mirrored>/test_<module>.py. scripts/validate.py itself
-is still never touched. scripts/CLAUDE.md points at this enumeration; it does not restate it.
+per check); (6) the mirror test at tests/<mirrored>/test_<module>.py; (7) an ``examined()``/
+``skipped()`` declaration on every reachable exit path of the check body itself (Decision 170,
+docs/contracts/check-accounting.yaml) -- the accounting channel below, so the check's own run
+evidence distinguishes a vacuous pass, a skip and an enforced pass instead of collapsing all
+three into "not failed". scripts/validate.py itself is still never touched. scripts/CLAUDE.md
+points at this enumeration; it does not restate it.
+
+Accounting channel (Decision 170). A registered check's body -- or a non-check scaffold wrapped
+in ``outcome_scope`` -- declares what it examined via ``examined(count, unit=)`` or that it
+skipped via ``skipped(reason)``. The declaration is held in a per-dispatch SLOT (module-level,
+reset on each ``outcome_scope`` entry -- dispatch is sequential, never concurrent, so this is not
+reentrant by design) and is harvested by the caller immediately after the scope exits via
+``pop_declaration()``. ``derive_status()``/``build_outcome()`` are the SOLE place the five
+outcome states (failed/skipped/vacuous/enforced/undeclared) are computed, so they can never drift
+apart: an append to ``failed`` always yields "failed" regardless of what was declared; absent
+that, a ``skipped(reason)`` declaration yields "skipped", an ``examined(0)`` declaration yields
+"vacuous", an ``examined(n>0)`` declaration yields "enforced", and no declaration at all yields
+"undeclared". The ROW ACCUMULATOR this feeds (one ``CheckOutcome`` per dispatched check/scaffold)
+lives in ``scripts.checks.validation_result`` -- not here -- because it resets per RUN via that
+module's own ``clear()``, mirroring the existing ``_ATTRIBUTIONS`` contract.
 
 ``resolve(name)`` imports the Entry's defining module and returns ``getattr(module, entry.attr)``
 at CALL TIME. The module import may be cached (importlib's own sys.modules cache); the RESOLVED
@@ -32,9 +50,10 @@ of closures built locally in main() (they close over per-run locals a generic re
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import importlib
-from typing import Callable
+from typing import Callable, Iterator
 
 from scripts.checks._schema import Entry
 from scripts.checks.ci_guards._manifest import ENTRIES as _CI_GUARDS_ENTRIES
@@ -100,6 +119,103 @@ def register(name: str, owner: str = "platform", product_coupled: bool = False):
 
 def get_check(name: str) -> Check:
     return _REGISTRY[name]
+
+
+# --- Accounting channel (Decision 170, docs/contracts/check-accounting.yaml) -----------------
+#
+# STATUS_VOCABULARY is the authoritative status vocabulary -- docs/contracts/check-accounting.yaml
+# derive-and-asserts against this exact constant (validate_check_accounting), never restating it.
+STATUS_VOCABULARY: frozenset[str] = frozenset({"failed", "skipped", "vacuous", "enforced", "undeclared"})
+
+
+@dataclasses.dataclass(frozen=True)
+class _Declaration:
+    """One examined()/skipped() call's payload. `kind` is "examined" or "skipped"."""
+
+    kind: str
+    count: int | None = None
+    unit: str | None = None
+    reason: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckOutcome:
+    """One row of the per-run accounting evidence -- one per dispatched check, PLUS any scaffold
+    that opens an outcome_scope (the grain: ONE ROW PER DISPATCHED CHECK, PLUS ANY SCAFFOLD THAT
+    OPENS AN outcome_scope). `check` is the step name (matches CheckOutcome consumers keying rows
+    on `r["check"]`); `kind` is "check" or "scaffold"."""
+
+    check: str
+    kind: str
+    status: str
+    examined_count: int | None = None
+    examined_unit: str | None = None
+    skipped_reason: str | None = None
+
+
+# Per-dispatch declaration slot. Reset to None on each outcome_scope() entry; read (and left in
+# place) by pop_declaration() immediately after the scope exits. Dispatch is sequential -- never
+# concurrent -- so a single module-level slot is sufficient; this is deliberately not reentrant.
+_CURRENT_DECLARATION: _Declaration | None = None
+
+
+def examined(count: int, *, unit: str = "items") -> None:
+    """Declare that the calling check/scaffold examined `count` items of `unit`. count == 0
+    declares an EMPTY DOMAIN (status "vacuous"); count > 0 declares a real examination (status
+    "enforced", unless the check also appends to `failed`, which always wins as "failed")."""
+    global _CURRENT_DECLARATION
+    _CURRENT_DECLARATION = _Declaration(kind="examined", count=count, unit=unit)
+
+
+def skipped(reason: str) -> None:
+    """Declare that the calling check/scaffold skipped: an unavailable input or unmet
+    precondition, never an empty domain (docs/contracts/check-accounting.yaml's discrimination
+    rule -- reserve this for "could not examine", not "examined nothing")."""
+    global _CURRENT_DECLARATION
+    _CURRENT_DECLARATION = _Declaration(kind="skipped", reason=reason)
+
+
+@contextlib.contextmanager
+def outcome_scope(name: str, kind: str = "check") -> Iterator[None]:
+    """Reset the per-dispatch declaration slot for one check/scaffold's body. `name`/`kind` are
+    accepted for call-site readability at the wrapping site; the actual CheckOutcome is built by
+    the caller (via pop_declaration() + build_outcome()) immediately after this scope exits, since
+    the row accumulator lives in scripts.checks.validation_result, not here."""
+    global _CURRENT_DECLARATION
+    _CURRENT_DECLARATION = None
+    yield
+
+
+def pop_declaration() -> _Declaration | None:
+    """Read and clear the current declaration slot. Called by the harvesting caller (validation_
+    result.dispatch_recording / record_scaffold_outcome) immediately after an outcome_scope exits."""
+    global _CURRENT_DECLARATION
+    declaration = _CURRENT_DECLARATION
+    _CURRENT_DECLARATION = None
+    return declaration
+
+
+def derive_status(declaration: _Declaration | None, appended_to_failed: bool) -> str:
+    """The SOLE status-derivation function -- see module docstring's accounting-channel
+    paragraph for the five-state rule this implements."""
+    if appended_to_failed:
+        return "failed"
+    if declaration is None:
+        return "undeclared"
+    if declaration.kind == "skipped":
+        return "skipped"
+    return "vacuous" if declaration.count == 0 else "enforced"
+
+
+def build_outcome(name: str, kind: str, declaration: _Declaration | None, appended_to_failed: bool) -> CheckOutcome:
+    status = derive_status(declaration, appended_to_failed)
+    if declaration is not None and declaration.kind == "examined":
+        return CheckOutcome(
+            check=name, kind=kind, status=status, examined_count=declaration.count, examined_unit=declaration.unit
+        )
+    if declaration is not None and declaration.kind == "skipped":
+        return CheckOutcome(check=name, kind=kind, status=status, skipped_reason=declaration.reason)
+    return CheckOutcome(check=name, kind=kind, status=status)
 
 
 _ALL_ENTRIES: dict[str, Entry] = {

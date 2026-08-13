@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.checks import validation_result
 from scripts.checks.sloc._shared import iter_gated_py_files
 from scripts.checks.sloc.cc_limits import validate_cc_limits
 from scripts.checks.sloc.sloc_limits import _update_sloc_budgets, validate_sloc_limits
@@ -89,6 +90,12 @@ class TestEnsureFreshDqResults:
         else:
             yield
 
+    @pytest.fixture(autouse=True)
+    def _reset_outcomes(self):
+        validation_result._OUTCOMES.clear()
+        yield
+        validation_result._OUTCOMES.clear()
+
     def test_ensure_fresh_dq_runs_when_cache_missing(self, tmp_path: Path, capsys) -> None:
         """No dq-latest.json on disk: credential check runs, then data_quality_runner is invoked."""
         with (
@@ -109,6 +116,8 @@ class TestEnsureFreshDqResults:
         runner_cmd = mock_run.call_args_list[0].args[0]
         assert "data_quality_runner" in " ".join(runner_cmd)
         assert failed == []
+        assert validation_result._OUTCOMES[-1].status == "enforced"
+        assert validation_result._OUTCOMES[-1].kind == "scaffold"
 
     def test_ensure_fresh_dq_runs_when_cache_stale(self, tmp_path: Path, capsys) -> None:
         """dq-latest.json older than the freshness window: re-runs the runner."""
@@ -154,15 +163,24 @@ class TestEnsureFreshDqResults:
         # Fresh cache must short-circuit before invoking subprocess at all.
         assert mock_run.call_count == 0
         assert failed == []
+        assert validation_result._OUTCOMES[-1].status == "skipped"
+        assert validation_result._OUTCOMES[-1].skipped_reason == "DQ cache fresh -- runner not needed"
 
     def test_ensure_fresh_dq_skips_when_sso_unavailable(self, tmp_path: Path, capsys) -> None:
-        """Decision 57: failed boto3 credential check prints actionable guidance and skips."""
+        """Decision 57/170: a real botocore SSO-token-expired exception prints actionable guidance,
+        records a declared skip, and does not touch `failed`. requirements-fast.txt (the --pre
+        tier's CI environment) excludes boto3 -- and transitively botocore -- so this genuinely
+        skips there rather than crashing on ModuleNotFoundError (constraint 5's own caveat)."""
+        botocore_exceptions = pytest.importorskip("botocore.exceptions")
+
         with (
             patch("scripts.checks._common.ROOT", tmp_path),
             patch("boto3.Session") as mock_session,
             patch("scripts.checks._common.run") as mock_run,
         ):
-            mock_session.return_value.client.return_value.get_caller_identity.side_effect = Exception("Token has expired")
+            mock_session.return_value.client.return_value.get_caller_identity.side_effect = (
+                botocore_exceptions.UnauthorizedSSOTokenError()
+            )
             failed: list[str] = []
             ensure_fresh_dq_results(failed)
 
@@ -173,13 +191,17 @@ class TestEnsureFreshDqResults:
         assert failed == []
 
     def test_ensure_fresh_dq_skips_when_credentials_unavailable(self, tmp_path: Path, capsys) -> None:
-        """Decision 57: any boto3 credential error must skip with guidance, not crash."""
+        """Decision 57/170: a real botocore ProfileNotFound exception must skip with guidance,
+        not crash and not redden `failed`. requirements-fast.txt excludes boto3/botocore -- see
+        test_ensure_fresh_dq_skips_when_sso_unavailable's docstring."""
+        botocore_exceptions = pytest.importorskip("botocore.exceptions")
+
         with (
             patch("scripts.checks._common.ROOT", tmp_path),
             patch("boto3.Session") as mock_session,
             patch("scripts.checks._common.run") as mock_run,
         ):
-            mock_session.side_effect = Exception("ProfileNotFound")
+            mock_session.side_effect = botocore_exceptions.ProfileNotFound(profile="agent_platform")
             failed: list[str] = []
             ensure_fresh_dq_results(failed)
 
@@ -187,6 +209,60 @@ class TestEnsureFreshDqResults:
         assert "credentials not available" in captured.out and "skipping" in captured.out
         assert mock_run.call_count == 0
         assert failed == []
+
+    def test_ensure_fresh_dq_skips_on_expired_token_client_error(self, tmp_path: Path, capsys) -> None:
+        """A ClientError with code ExpiredToken (the live STS-call failure shape) is also
+        classified as credentials-unavailable and skips. requirements-fast.txt excludes
+        boto3/botocore -- see test_ensure_fresh_dq_skips_when_sso_unavailable's docstring."""
+        botocore_exceptions = pytest.importorskip("botocore.exceptions")
+
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("boto3.Session") as mock_session,
+            patch("scripts.checks._common.run") as mock_run,
+        ):
+            mock_session.return_value.client.return_value.get_caller_identity.side_effect = botocore_exceptions.ClientError(
+                {"Error": {"Code": "ExpiredToken", "Message": "token expired"}}, "GetCallerIdentity"
+            )
+            failed: list[str] = []
+            ensure_fresh_dq_results(failed)
+
+        captured = capsys.readouterr()
+        assert "credentials not available" in captured.out and "skipping" in captured.out
+        assert mock_run.call_count == 0
+        assert failed == []
+
+    def test_ensure_fresh_dq_fails_closed_on_a_non_matching_exception(self, tmp_path: Path, capsys) -> None:
+        """Constraint 5a's newly-installed fail-closed path: an exception the credential
+        classifier does NOT match (a genuine bug, not a credential problem) appends to `failed`
+        instead of being silently swallowed."""
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("boto3.Session") as mock_session,
+            patch("scripts.checks._common.run") as mock_run,
+        ):
+            mock_session.return_value.client.return_value.get_caller_identity.side_effect = RuntimeError(
+                "boom: unrelated bug in profile resolution"
+            )
+            failed: list[str] = []
+            ensure_fresh_dq_results(failed)
+
+        captured = capsys.readouterr()
+        assert "unexpected error" in captured.out.lower()
+        assert mock_run.call_count == 0
+        assert len(failed) == 1
+        assert "unexpected credential-check error" in failed[0]
+        assert validation_result._OUTCOMES[-1].status == "failed"
+
+    def test_credential_classifier_message_fallback_when_botocore_unimportable(self) -> None:
+        """Coverage-debt payoff: the isinstance tier's `except ImportError: pass` -- when
+        botocore.exceptions genuinely cannot be imported, the message-pattern tier alone must
+        still discriminate correctly (constraint 5's own stated degradation)."""
+        from scripts.checks._scaffolding import _is_credentials_unavailable
+
+        with patch.dict(sys.modules, {"botocore": None, "botocore.exceptions": None}):
+            assert _is_credentials_unavailable(Exception("Token has expired")) is True
+            assert _is_credentials_unavailable(RuntimeError("boom: unrelated bug")) is False
 
 
 class TestWholeRepoScanCoverage:
@@ -339,3 +415,138 @@ class TestUpdateSlocBudgetsArgv:
             _validate.main()
         assert exc_info.value.code == 0
         mock_update.assert_called_once_with()
+
+
+class TestBuildUnitTestCmd:
+    """Coverage-debt payoff: _build_unit_test_cmd() is otherwise only exercised outside
+    tests/validate/ (tests/checks/verification/test_validate_hermeticity_flags.py), which the
+    test-coverage-checker's tests/validate/ directory mapping for _scaffolding.py does not see."""
+
+    def test_includes_hermeticity_and_junit_flags(self) -> None:
+        from scripts.checks._scaffolding import _build_unit_test_cmd
+
+        cmd = _build_unit_test_cmd()
+        assert "tests/" in cmd
+        assert "-n" in cmd and "auto" in cmd
+        assert "--disable-socket" in cmd
+        assert any(str(part).startswith("--junitxml=") for part in cmd)
+
+
+class TestRunPrecommitChecks:
+    """Coverage-debt payoff (Decision 170) -- run_precommit_checks() had no dedicated tests."""
+
+    def test_skips_when_pre_commit_not_installed(self, capsys) -> None:
+        with patch("scripts.checks._scaffolding.importlib.util.find_spec", return_value=None):
+            failed: list[str] = []
+            _validate.run_precommit_checks(failed, all_files=True)
+        assert "pre-commit not installed" in capsys.readouterr().out
+        assert failed == []
+
+    def test_all_files_flag_is_passed_through(self) -> None:
+        with patch("scripts.checks._common.run") as mock_run:
+            mock_run.return_value = _mock_completed(0)
+            failed: list[str] = []
+            _validate.run_precommit_checks(failed, all_files=True)
+        cmd = mock_run.call_args.args[0]
+        assert "--all-files" in cmd
+        assert failed == []
+
+    def test_no_changed_files_skips_without_all_files(self) -> None:
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run") as mock_run,
+        ):
+            failed: list[str] = []
+            _validate.run_precommit_checks(failed, all_files=False)
+        mock_run.assert_not_called()
+        assert failed == []
+
+    def test_explicit_files_scope_runs_and_appends_on_failure(self) -> None:
+        with patch("scripts.checks._common.run") as mock_run:
+            mock_run.return_value = _mock_completed(1)
+            failed: list[str] = []
+            _validate.run_precommit_checks(failed, all_files=False, files=["scripts/foo.py"])
+        cmd = mock_run.call_args.args[0]
+        assert "--files" in cmd and "scripts/foo.py" in cmd
+        assert failed == ["pre-commit hooks"]
+
+
+class TestRunLintChecksTargetsAllFiltered:
+    """Coverage-debt payoff: an explicit files= scope with NO .py entries filters down to an
+    empty target list and no-ops (distinct from files=[] itself, already covered elsewhere)."""
+
+    def test_no_python_files_in_explicit_scope_is_a_no_op(self) -> None:
+        with patch("scripts.checks._common.invoke_step") as mock_invoke:
+            failed: list[str] = []
+            _validate.run_lint_checks(failed, files=["README.md", "docs/x.md"])
+        mock_invoke.assert_not_called()
+        assert failed == []
+
+
+class TestRunDependencyChecks:
+    """Coverage-debt payoff -- run_dependency_checks() had no dedicated tests."""
+
+    def test_reports_vulnerabilities_and_outdated_packages(self, capsys) -> None:
+        with patch("scripts.checks._common.run") as mock_run:
+            mock_run.side_effect = [_mock_completed(1), _mock_completed(0)]
+            _validate.run_dependency_checks()
+        out = capsys.readouterr().out
+        assert "vulnerabilities found" in out
+        assert mock_run.call_count == 2
+
+    def test_clean_run_no_vulnerabilities(self, capsys) -> None:
+        with patch("scripts.checks._common.run") as mock_run:
+            mock_run.side_effect = [_mock_completed(0), _mock_completed(0)]
+            _validate.run_dependency_checks()
+        assert "vulnerabilities found" not in capsys.readouterr().out
+
+    def test_pip_audit_not_installed(self, capsys) -> None:
+        with patch("scripts.checks._common.run", side_effect=[FileNotFoundError(), _mock_completed(0)]):
+            _validate.run_dependency_checks()
+        assert "pip-audit not installed" in capsys.readouterr().out
+
+    def test_pip_list_outdated_not_installed(self, capsys) -> None:
+        with patch("scripts.checks._common.run", side_effect=[_mock_completed(0), FileNotFoundError()]):
+            _validate.run_dependency_checks()
+        assert "Could not check outdated packages" in capsys.readouterr().out
+
+
+class TestRunCoverageCheckSysPathInjection:
+    """Coverage-debt payoff: both the sys.path-injection and already-present branches around the
+    scripts.verifiers import, mirroring the same shape in validate_lambda_deploy_gating."""
+
+    def test_injects_and_removes_repo_root_when_absent(self) -> None:
+        """A full test-suite run can leave MULTIPLE duplicate root_str entries on sys.path
+        (accumulated by unrelated modules) -- a single .remove() call does not guarantee
+        absence, so this strips EVERY occurrence and restores the same count afterward."""
+        root_str = str(ROOT)
+        removed_count = 0
+        while root_str in sys.path:
+            sys.path.remove(root_str)
+            removed_count += 1
+        try:
+            with (
+                patch("scripts.checks._common.get_changed_files", return_value=["docs/foo.md"]),
+                patch("scripts.verifiers.check_coverage", return_value=[]),
+            ):
+                run_coverage_check()
+            assert root_str not in sys.path
+        finally:
+            for _ in range(removed_count):
+                sys.path.insert(0, root_str)
+
+    def test_leaves_repo_root_alone_when_already_present(self) -> None:
+        root_str = str(ROOT)
+        already_present = root_str in sys.path
+        if not already_present:
+            sys.path.insert(0, root_str)
+        try:
+            with (
+                patch("scripts.checks._common.get_changed_files", return_value=["docs/foo.md"]),
+                patch("scripts.verifiers.check_coverage", return_value=[]),
+            ):
+                run_coverage_check()
+            assert root_str in sys.path
+        finally:
+            if not already_present and root_str in sys.path:
+                sys.path.remove(root_str)
