@@ -107,7 +107,7 @@ scope:
       from config/check_accounting_baseline.yaml declares none. MUST genuinely read
       docs/contracts/check-accounting.yaml -- naming the basename as an executable-context string
       literal and derive-and-asserting the status vocabulary from it, exactly as
-      validate_check_manifests.py:59 does for its own contract -- because Decision 168's
+      scripts/checks/deps/validate_check_manifests.py:59 does for its own contract -- because Decision 168's
       evaluator-resolution rule fails a new Class D file whose declared evaluator does not resolve.
       Filesystem-only, no subprocess, so it is safe in the fast tier (Decision 153). Carries a
       frozen in-module constant cross-check so a config-file edit alone can never admit a new
@@ -116,8 +116,12 @@ scope:
     action: Modify
     purpose: >-
       One Entry literal (bare string-literal module=/attr=) registering validate_check_accounting
-      in BOTH tiers -- pre=True with pre_globs=("scripts/checks/**",) and
-      full_segment="full_after_lint".
+      in BOTH tiers -- pre=True with
+      pre_globs=("scripts/checks/**", "config/check_accounting_baseline.yaml") and
+      full_segment="full_after_lint". The baseline path is in the glob deliberately: a PR editing
+      ONLY the baseline would otherwise be skipped in the authoritative pre-merge tier
+      (validate.py:92-103 skips a glob-gated check on a successful non-empty derivation with zero
+      matches) and caught only post-merge.
   - file: config/check_accounting_baseline.yaml
     action: Create
     purpose: >-
@@ -135,7 +139,14 @@ scope:
       adopted checks already carry rows -- verified, no other edit needed.
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
-    purpose: One row per VP step declared graduate (steps 1, 2, 4, 6, 7, 8, 9).
+    purpose: >-
+      One row per VP step declared graduate (steps 1, 2, 4, 6, 7, 8, 9).
+      validate_verification_registry materialises each NEWLY-ADDED row and requires it to FAIL on
+      origin/main and PASS on HEAD. Steps 2, 4 and 7 target test files that already exist and are
+      GREEN on origin/main, so a whole-file node_id would be rejected as not-admitted -- each of
+      those three check_specs must name a node id that is new in this diff (the specific new test
+      class or function), exactly as step 9 already does with ::TestBaseDerivation. Steps 1, 6 and
+      8 are safe as-is (new file, new file, and a probe that raises on a missing path).
   - file: docs/contracts/check-accounting.yaml
     action: Create
     purpose: >-
@@ -349,7 +360,7 @@ verification_plan:
       NOT match records no skip and does not suppress the failure.
     fix_if: >-
       Either surface still returns silently, or the skip declaration is attached to the blanket
-      `except Exception:` still present at _scaffolding.py:204 rather than to a named classifier --
+      `except Exception:` still present at _scaffolding.py:205 rather than to a named classifier --
       which would launder real bugs into accounted skips.
     hermetic: true
     graduation: graduate
@@ -447,8 +458,8 @@ verification_plan:
       ref equals the base the diff used, not the literal "HEAD". Pinned as a node id rather than a
       -k selector, per tests/CLAUDE.md and because the graduation registry row needs a node_id.
       Note _common.get_changed_files() does NOT expose the base it used (it computes
-      `push_context_base() or "origin/main"` internally, with its own returncode-0 fallback to
-      "HEAD"), so assertion (ii) is only satisfiable if the guard re-derives the base itself with
+      `push_context_base() or "origin/main"` internally, with its own fallback to "HEAD" on a
+      non-zero returncode), so assertion (ii) is only satisfiable if the guard re-derives the base itself with
       that same default -- see the execution step.
     fix_if: >-
       Assertion (a) passes on pre-fix code -- the fixture left the DQ change in the working tree, so
@@ -474,8 +485,8 @@ verification_plan:
     expected: >-
       Full tier exits 0; the record is schema_version 3 with >=97 outcome rows; all five adopted
       checks are non-undeclared; and BOTH "vacuous" and "enforced" appear among real statuses,
-      demonstrating the observable discriminates on live run data. (>=97 not 101 because
-      validate_terraform_try is registered but dispatched in neither tier, so the tier union is 100.)
+      demonstrating the observable discriminates on live run data. (>=97 not 101 because the full tier holds 97 of the 101
+      registered checks: 3 are pre-only AND validate_terraform_try is in neither tier.)
       Under constraint 5b the live "vacuous" is deterministic, not incidental:
       validate_lambda_deploy_gating has no affected Lambda artifacts on this scope, and
       _check_graduation_guard has no changed DQ YAML -- both are empty domains, so both declare
@@ -654,14 +665,14 @@ constraints:
     rename, or re-type those two.
   - >-
     (5) The skip declaration in ensure_fresh_dq_results must attach to a NAMED deterministic
-    classifier (Decision 155's reader_transient.py two-tier shape), not to the blanket
+    classifier (scripts/ops_portal/reader_transient.py:36-40's two-tier shape, Decision 155), not to the blanket
     `except Exception:` currently at :205 (its try: opens at :198) -- that handler spans the boto3 import, profile
     resolution, Session construction and the STS call, so a skip on it would launder real bugs into
     accounted skips. Discrimination basis must be explicit about its own limits: botocore types are
     NOT reliably importable at classify time (tests/validate/test_scaffold_gates.py:83-90 stubs
     sys.modules["boto3"] = MagicMock() precisely because boto3 is absent there), so the isinstance
     tier degrades to nothing under test and a named message-pattern tier must carry the
-    discrimination -- mirror reader_transient.py's isinstance-guarded-by-ImportError plus
+    discrimination -- mirror scripts/ops_portal/reader_transient.py's isinstance-guarded-by-ImportError plus
     message-fallback structure rather than assuming types are available.
   - >-
     (5a) The classifier INSTALLS a fail-closed behaviour that does not exist today: currently
@@ -685,8 +696,20 @@ constraints:
     early returns opposite treatments in _check_graduation_guard and validate_lambda_deploy_gating,
     which would have made the plan's own headline observable author-discretionary.
   - >-
-    validate_check_accounting must be filesystem-only with no subprocess so the fast tier stays
-    inside its 5-minute budget (Decision 153); the AST scan of ~101 modules is the whole check.
+    validate_check_accounting keeps the AST scan of ~101 modules fully IN-PROCESS -- no per-module
+    subprocess fan-out and no pytest spawn -- so the fast tier stays inside its 5-minute budget. It
+    MAY make the two bounded git reads the shrink-only comparison structurally requires, using the
+    sanctioned primitives: scripts/checks/_marker_guard.default_base_reader (a single
+    `git show origin/main:<path>`, carrying the missing-base SKIP at _marker_guard.py:324 this
+    baseline copies) and _common.get_changed_files() for the touch-it-fix-it changed-file set.
+    Precedent is live and in the same tier: validate_coverage_baseline_edits,
+    validate_mypy_baseline_edits and validate_sloc_budget_raises are all --pre members TODAY and all
+    read their base through that same helper (verified this session). An earlier revision said
+    "filesystem-only with no subprocess ... the AST scan is the whole check", which was both wrong
+    on the precedent and unsatisfiable against AC 6 / VP step 6 -- net-growth detection needs a base
+    to compare against, touch-it-fix-it needs the changed-file set, and "an absent base ref SKIPs
+    loudly" is meaningless with no git read at all. That framing is retracted. Decision 153's
+    subprocess-free clause is scoped to the composite-action guard, not to baseline guards.
   - >-
     config/check_accounting_baseline.yaml ships with NO marker escape grammar. This is a deliberate
     choice recorded in the contract, not an omission (Decision 165 makes scripts/checks/_marker_guard.py
@@ -740,11 +763,17 @@ context:
     designing the record). ONE ROW PER DISPATCHED CHECK, PLUS ANY SCAFFOLD THAT OPENS AN
     outcome_scope -- because the ensure_fresh_dq scaffold shares the collection, a check-only grain
     would be mixed the moment rec-3085's half lands. Each row therefore carries `kind`
-    ("check" | "scaffold") alongside the step name and status. KNOWN GAP, constraint-1-imposed:
+    ("check" | "scaffold") alongside the status and the step name, whose field is named `check` --
+    matching VP step 10's probe, which keys rows on r['check']; the contract must declare that
+    same field name so the executable assertion and the derive-and-assert contract cannot drift. KNOWN GAP, constraint-1-imposed:
     full_sequence() dispatches 103 steps (97 checks + 6 scaffolds -- lint, unit_tests,
     terraform_checks, dependency_health, ensure_fresh_dq, precommit_all_files) but only
     ensure_fresh_dq is wrapped here, because the other five closures live in scripts/validate.py
-    lines 112-140 which constraint 1 forbids editing. Achievable row count is therefore 98, not 103.
+    lines 112-140 which constraint 1 forbids editing. Achievable row count is therefore 98 at the time of writing, rising to 99 once this plan's own
+    validate_check_accounting joins the full tier. Do NOT carry either literal into
+    docs/contracts/check-accounting.yaml as an assertion -- tests/CLAUDE.md's count-coupling rule
+    applies and Decision 168 makes that file derive-and-assert authoritative; state the RULE, not
+    a number.
     Do NOT state the wider "one row per dispatched step" form in the contract -- Decision 168 makes
     the contract derive-and-assert authoritative, so an unachievable grain there would ship exactly
     the false-authoritative-statement defect that rule exists to prevent. Separately,
@@ -885,7 +914,7 @@ execution_steps:
     (off `git diff HEAD`) and the paired `git show HEAD:{path}` old-content read onto
     the SAME committed base, filtered to config/agent/data_quality/*.yaml. The guard must re-derive
     that base itself as `push_context_base() or "origin/main"`, because get_changed_files() does not
-    expose the base it used and carries its own returncode-0 fallback to "HEAD" -- without an
+    expose the base it used and carries its own fallback to "HEAD" on a non-zero returncode -- without an
     explicit re-derivation VP step 9's assertion (ii) is not satisfiable.
     Then declare examined counts and convert the three dq-latest.json degradation returns into
     declared skips.
@@ -906,8 +935,8 @@ execution_steps:
     scripts/checks/hygiene/validate_check_accounting.py -- the AST ratchet, which must genuinely
     read docs/contracts/check-accounting.yaml (basename as an executable-context literal,
     derive-and-assert the status vocabulary) so its Decision 168 evaluator resolves. Plus its Entry
-    in hygiene/_manifest.py (pre=True, pre_globs=("scripts/checks/**",),
-    full_segment="full_after_lint"), its config/ci_rca_taxonomy.yaml function_to_category row, and
+    in hygiene/_manifest.py (pre=True, pre_globs=("scripts/checks/**",
+    "config/check_accounting_baseline.yaml"), full_segment="full_after_lint"), its config/ci_rca_taxonomy.yaml function_to_category row, and
     the frozen in-module constant that makes a config-only edit insufficient to admit a member.
   - >-
     config/check_accounting_baseline.yaml -- generate the 96-entry seed from the live registry (do
