@@ -1,0 +1,1093 @@
+audit:
+  meta:
+    audited_commit: ddfb9cc
+    base_branch: main
+    model: "claude-fable-5"
+    methodology_version: 1
+    scope_surfaces: [S1, S2, S3, S4, S5, S6, S7]
+    degraded_dedup: false
+    contract_notes: "Direct GitHub REST access is proxy-blocked in this session, so the repo merge-method
+      settings (allow_squash_merge / allow_rebase_merge / squash_merge_commit_message) could not be read
+      from the API; live squash behaviour was instead established from observed squash-commit bodies and
+      PR-head-commit comparisons (evidence_kind observed); conflict-signal FAILURE-marker sweep covered run
+      conclusions for the 15 most recent runs but job logs for only the latest run (which showed the
+      idempotent skip of live-conflicted PR #781); empirical commit sweep covered the entire 50-commit
+      shallow window (under the 80 cap); PR-ref fetches for the DD-D sample left the shallow boundary
+      unmoved (re-checked before and after)."
+    stale_anchors: []
+  question_answers:
+    - q: Q1
+      verdict: keep-squash
+      basis: [GITOPS-01, GITOPS-04, GITOPS-06]
+      prose: "Both ledgers were traced before forming a view. DD-A (cost of changing): the squash shape is
+        load-bearing in at least five places. push_context_base() (scripts/checks/_common.py:40) prefers
+        GITHUB_EVENT_BEFORE but falls back to HEAD~1 under fetch-depth 2 (ci.yml:96, main-canary.yml:22),
+        a pairing Decision 159 explicitly attributes to the squash convention and verify_ci_workflow.py
+        (~152) pins with a guard that names the assumption; under rebase-merge of an N-commit batch the
+        HEAD~1 fallback silently under-selects (exactly the accepted residual Decision 159 clause 5 records
+        for multi-commit pushes), a silent wrong-scope failure class. rec-autoclose.yml reads exactly one
+        commit (git log -1 --format=%B HEAD); under rebase-merge a trailer in any non-tip commit of the
+        batch is silently missed, and under merge-commit the merge-commit message carries no trailer unless
+        separately composed -- either way the trailer transport must be redesigned. The feat({slug})
+        resolution in validate_vp_replay/validate_graduation_completeness operates on branch-side
+        `origin/main..HEAD` and is strategy-tolerant at PR time, but a rebase-merged main would carry
+        fix({slug}) fixup subjects that pollute subject-grammar consumers. plan_audit._verify_rec_in_git
+        greps full messages and survives any strategy that lands the trailer somewhere. The
+        session_start_sync_main.sh hook exists specifically because server-side squash leaves local main
+        with no fast-forward path -- rebase-merge would relax that, a small credit to changing.
+        DD-B (trailer drift): AGENTS.md:236 places the trailer in the squash-merge commit body;
+        implement/SKILL.md:547 places it in the PR body 'which the squash-merge commit body inherits';
+        .github/pull_request_template.md places it in the commit body and explicitly warns 'not just the
+        PR description'. The SKILL.md inheritance claim is empirically false here: observed squash bodies
+        (e.g. 84f9209 for #887, aa20689 for #888) are hand-composed condensed summaries -- not the PR body,
+        not concatenated branch commits (PR #888's branch commits carry no trailer yet its squash body
+        does) -- so the working delivery path is merge-time composition of commit_message, which no surface
+        documents. rec-2679/rec-2733 are re-assessed in GITOPS-01: their remedies (trailer in the git
+        commit message; explicit commit_message on merge_pull_request) remain the right fix and match
+        observed practice; a merge-strategy change would not obviate them -- rebase-merge would make the
+        loss mode strictly worse (no new commit is ever composed), merge-commit equally requires message
+        composition. DD-D (cost of keeping): sampled pre-merge commit counts over 7 merged PRs were
+        1,1,2,2,2,3,4 -- the collapsed sequence is predominantly implementation-plus-CI-fixups, and the
+        fixup narrative is disclosed in PR bodies which the composed squash bodies condense. The full
+        pre-merge sequences survive server-side: git ls-remote counted 894 refs/pull/*/head, and 6 were
+        fetched successfully without moving the shallow boundary; nothing in-repo fetches them today.
+        That nothing-fetches / nothing-bisects result was tested against the absence-of-need vs
+        absence-of-capability distinction: I judge it mostly absence-of-need -- rationale provenance is
+        dense in the parallel stores (plans, decisions, recs, PR bodies) and every main commit is a
+        CI-green reviewed unit, which makes PR-grain bisect and revert BETTER than intra-PR grain (whose
+        intermediate commits are individually untested) -- while acknowledging the evidence-shape
+        asymmetry: under squash nothing could have been cheaply built against intra-PR history, so its
+        absence is weak evidence. The candidate set as handed leaned slightly cost-of-keeping by count
+        (C9/C15-C18 vs C1/C2/C7/C8/C14) but the traced weight runs the other way: the cost-of-keeping
+        items dissolved on trace (C9 is dormant and only merge-commit would fix it; C15-C18 are
+        compensated), while the cost-of-changing items are live, load-bearing mechanisms. Verdict:
+        keep-squash, CONFIRMED. Rebase-merge buys intra-PR granularity nothing consumes at the price of
+        two silent-failure classes; merge-commit is forbidden by required_linear_history
+        (terraform/github/repo.tf:110) and its reviewed, CODEOWNERS-gated ruleset change (C8) buys only
+        the dormant branch-lifecycle predicate fix (GITOPS-04); hybrid puts two history shapes on one
+        main so every consumer meets both."
+    - q: Q2
+      verdict: partially-load-bearing
+      basis: []
+      prose: "Git history is irreplaceably load-bearing for four things the parallel stores structurally
+        cannot carry better: (1) diff derivation -- every diff-scoped gate (push_context_base consumers,
+        contract drift, plan-scope closure, coverage scoping) computes from commits, and the stores hold
+        no tree objects; (2) ancestry -- classify_closed_head's regression-vs-stale-rerun call is a
+        merge-base ancestry test over fixed_by_sha, which rec-autoclose stamps INTO the warehouse as a
+        git-SHA reference, making git the resolver of a warehouse field; (3) ordering/identity -- the
+        convergence record, plan.bin content-addressing, and CI wake idempotency markers all key on
+        commit SHAs; (4) the atomic merge event itself as the trigger edge for rec-autoclose and the
+        deploy channels. Conversely, narrative rationale is carried better by the stores: plans hold
+        intent and verification design, DECISIONS.md holds authority, recs hold SCD2-versioned work
+        state, PR bodies hold execution disclosures -- and the composed squash bodies (DD-D) duplicate a
+        condensed projection of that narrative, which is a deliberate redundancy (local availability)
+        rather than a source-of-truth split, since the PR record remains authoritative. Hence partially:
+        identity/ancestry/diff are git-only; why-narrative is store-primary with git as a local cache."
+    - q: Q3a
+      verdict: shallow-clone-dominant
+      basis: [GITOPS-03]
+      prose: "The two causes separate cleanly on evidence. The squash policy costs intra-PR granularity
+        (bounded, compensated -- see Q1/DD-D). The shallow clone costs ALL local history beyond a 9-day
+        window: rev-list count is 50 commits spanning 2026-08-04..2026-08-13, so any query about anything
+        older returns nothing or -- worse -- a confident wrong answer at the boundary (trap 9, reproduced:
+        the boundary commit 5bd32ea locally claims to touch docs/SESSION_LOG.md with a 666-line insertion,
+        while PR #844's real file list, fetched from the API, is 6 files not including it). Consumers
+        exposed: count_unapplied_tf_commits returns a silent 0 when the record SHA predates the window
+        (scripts/convergence_health/record.py:101, acknowledged in its docstring but silent at call
+        sites); plan_audit._verify_rec_in_git false-negatives any rec merged before the window;
+        session/preflight metrics and any last-changed query hit the boundary lie. Only two consumers
+        handle depth explicitly (_ensure_ancestry_history's best-effort unshallow,
+        ci_rca_lifecycle.py:151; count_unapplied's return-0), and CI workflows pin their own depths --
+        the dev container is the unmanaged surface. Remedy (assessed statically, not executed): a
+        session-start bounded deepen in an S7 hook -- the hooks already fetch origin main each session,
+        so `git fetch --deepen=500` (~3 months at the observed ~5.5 commits/day) or a full --unshallow
+        (~2k commits for 894 PRs, tens of MB, seconds, once per container) is cheap, mirrors what
+        ci_rca_lifecycle already does on demand, and would retire the entire trap-9 class rather than
+        patching consumers one by one. Judged a gap and filed as GITOPS-03."
+    - q: Q3b
+      verdict: agents-primary-humans-secondary
+      basis: []
+      prose: "Agents author every commit, and every load-bearing log consumer is a machine. But the
+        human claim is real on three surfaces: a human disposes of every PR (merged_by benjamin-blake on
+        all sampled PRs, and the CODEOWNERS/tf-gated-apply gates institutionalize human review on
+        protected paths); the repository is PUBLIC with an explicit marketing intent (Decision 101,
+        AGENTS.md:9 'market the engineering, not the alpha') -- the git log IS shop-window content for
+        an external human reader; and audits like this one are disposed of by a human reading PR-grain
+        history. So agents-primary-humans-secondary, and this constrains Q6: dropping a human-legible
+        convention (readable squash subjects, narrative commit bodies, (#NNN) suffixes) is only free
+        where no human claim exists; on S1/S2 the human claim is live, and the observed composed squash
+        bodies serve both consumers at once, which is why Q6 rates them a keep."
+    - q: Q4
+      verdict_coupling: mixed
+      verdict_enforcement: insufficient
+      basis: [GITOPS-01, GITOPS-02, GITOPS-04]
+      prose: "Per-mechanism (DD-A matrix; break behaviour under rebase-merge / merge-commit):
+        push_context_base -- HEAD~1 fallback under-selects silently under rebase (loud None only when
+        HEAD~1 fails to resolve); EVENT_BEFORE path survives both given adequate depth; coupling
+        essential AND documented (Decision 159 + the verify_ci_workflow pin makes it the best-behaved
+        coupling in the set). rec-autoclose single-commit read -- breaks silently under both (missed
+        trailer = no-op by design); coupling essential to squash, documented in the workflow header.
+        feat({slug}) resolution (vp_replay, graduation) -- branch-side, strategy-tolerant; coupling to
+        the SUBJECT GRAMMAR, not the topology; break is an advisory SKIP (loud-ish). plan_audit grep --
+        strategy-tolerant, depth-fragile (silent false negative beyond window). count_unapplied -- silent
+        0 on any error, acknowledged but swallowed (BLE001 handler ~:137). branch_lifecycle merge-base
+        predicate -- WRONG TODAY under squash (a squash-merged branch is never an ancestor of main, so
+        _is_checkpoint_branch_merged returns False and prune_merged_agent_branches never deletes);
+        rebase-merge same; only merge-commit fixes it; dormant (executor frozen, `agent/*` branches
+        absent in the CC-web model) -- the one genuinely accidental, unexamined coupling in the
+        inventory (GITOPS-04). vacuous_pass HEAD^ -- pinned by ci-rca.yml fetch-depth and returns
+        'undetermined' rather than guessing: good degradation. Baseline `git show origin/main:<path>`
+        readers (_baseline.py, contract _shared.py ls-tree/diff) are CONTENT reads off the fetched tip
+        -- immune to both strategy and depth; classifying each consumer by content-read vs history-read
+        confirmed only history-readers carry exposure. Overall: mixed -- mostly essential-and-documented,
+        one accidental (branch_lifecycle), two silent degraders. Enforcement of S2: insufficient. The
+        prefix table (AGENTS.md:190-198) is parsed by load-bearing checks, yet no commit-message
+        conformance check exists (re-derived: nothing in scripts/checks/ validates subjects); the live
+        window contains fix(, docs(, and audit( subjects absent from the table plus one bare `audit:`
+        (C4 -- still exactly one, #864); trailer well-formedness is enforced only by the parser's
+        tolerance, and rec-2922 (open) shows it over-matches prose. Efficacy sample (8 plans with
+        bundled_recommendations): 5 landed -- all their recs closed via the trailer path; 1 plan-only
+        (correctly open); 2 closed without a matching feat({slug}) landing -- closure there proves
+        manual portal closes exist, so closed-rec counts alone are not evidence the trailer works
+        (counterfactual applied)."
+    - q: Q5
+      verdict: unreliable-bounded
+      basis: [GITOPS-05]
+      prose: "DD-C trace. signal-green: fires on pull_request only, gated on needs [pr-validate,
+        terraform-validate] (ci.yml:303), claude/* heads only, 3-attempt retry, continue-on-error. Loss
+        points: (a) all three comment attempts fail -> permanently silent for that run, no failure
+        counter, no re-trigger (the run is one-shot per PR event) -- recovery is a human nudge, which
+        AGENTS.md explicitly accepts as the residual; (b) other pull_request-triggered checks exist
+        (codeql.yml, terraform-apply-sandbox speculative-plan) and are outside the needs list -- but the
+        comment text claims only 'all required PR checks passed', which is accurate against the ruleset's
+        required set, so C11 is adjudicated not-a-defect (deliberate ruleset minimality, Decision 83;
+        rec-2022 tracks extending the gate). pr-conflict-signal: push-to-main + dispatch only. Loss
+        points traced end to end: (a) a PR conflicted AT CREATION with no subsequent main push gets no
+        wake at all -- no trigger fires (C13, filed); (b) gh pr list failure aborts the whole sweep;
+        per-PR poll/comment failures mark _FAILURE_COUNT and exit 1, but the step's continue-on-error
+        makes the RUN conclusion success regardless, so a lost wake is observable only in the step
+        summary marker that nobody monitors (C12, filed as observability); (c) mergeability still
+        UNKNOWN after 5 polls -> deliberate skip (never false-wake), recovered on the next push; (d) a
+        comments-read failure posts the wake anyway (duplicate-cheap bias, correct). Empirical: 249
+        runs, 15 most recent all conclusion=success; the latest run's log shows the live-conflicted PR
+        #781 correctly recognized with its wake already posted (idempotent skip) -- the machinery
+        demonstrably works when triggered. Bounded: main advanced ~50 times in 9 days, so any
+        push-covered loss self-heals within hours; the unbounded case is only C13's zero-trigger gap
+        plus a signal-green triple-failure, both terminating in the documented human-nudge fallback.
+        Does Q1 change the design? No -- both signals key on PR state and head SHAs, not history shape;
+        the keep-squash verdict leaves them untouched, and GitHub-native auto-merge (Decision 76
+        deferred, Decision 83 unblocked) retires the green-wake need entirely while pr-conflict-signal
+        must outlive it (a conflicted PR stalls auto-merge silently)."
+    - q: Q6
+      verdict: "Keep the trunk-linear-squash substrate and PR-as-record; enforce the commit grammar
+        machines already parse; deepen the dev clone; adopt auto-merge; skip notes, SLSA, merge queues;
+        formalize composed squash bodies and wake-comment IPC as validated contracts."
+      basis: []
+      prose: "Constrained by Q3b: the human-reader claim is live on S1/S2 (public repo, human disposes),
+        so no entry below discards a convention merely for being human-legible; the two discards this
+        audit could have made (narrative commit subjects, (#NNN) suffixes) are retained because they
+        serve both consumers at once. The genuinely novel observation is that this repository has
+        ALREADY invented agent-only structures no industry playbook names -- comment-as-wake-IPC with
+        HTML idempotency markers, and merge-time-composed squash bodies that turn main into a sequence
+        of PR-grain condensed records -- but has documented neither; the risk in both is convention
+        without contract (GITOPS-01/-02). The checklist entries below are the sole input the maturity
+        top tier reads."
+      industry_adaptation:
+        - practice: trunk-based development
+          rating: already-in-place
+          surfaces: [S1, S7]
+          agent_first_form: "Short-lived harness session branches cut from fresh origin/main
+            (fresh_branch_base.py side-effecting guard), merged to a single main; no long-lived branches."
+          evidence: "AGENTS.md branching topology; .claude/hooks/fresh_branch_base.py; 23 remote heads vs
+            894 PRs -- branches do not accumulate."
+        - practice: linear history
+          rating: already-in-place
+          surfaces: [S1, S3]
+          agent_first_form: "required_linear_history enforced by ruleset; every main commit is a CI-green
+            PR unit, which is what makes HEAD~1 diff-scoping and single-commit trailer reads possible."
+          evidence: "terraform/github/repo.tf:110; Decision 159."
+        - practice: Conventional Commits
+          rating: adapt-for-agents
+          surfaces: [S2, S3]
+          agent_first_form: "The repo already adapted the idea -- a workflow-tier grammar
+            (feat/plan/roadmap/scope/audit keyed to the four-tier workflow, not the upstream CC set).
+            The agent-first completion is registering the full live prefix set and enforcing conformance
+            with a gate, since load-bearing checks parse it (GITOPS-02)."
+          evidence: "AGENTS.md:190-198; window sweep: 23 feat(, 22 plan(, plus fix(/docs(/audit( outside
+            the table; no conformance check exists."
+        - practice: commit trailers as structured key-value metadata
+          rating: adapt-for-agents
+          surfaces: [S2, S3, S5]
+          agent_first_form: "Resolves: is already a load-bearing machine trailer (rec-autoclose ->
+            warehouse close + fixed_by_sha stamp). Adapt = one documented delivery path (explicit
+            commit_message at merge) plus presence validation when bundled_recommendations is non-empty
+            (GITOPS-01)."
+          evidence: "scripts/rec_trailer.py; rec-autoclose.yml; 10 of 50 window commits carry trailers;
+            observed merge-time composition."
+        - practice: git notes as detachable machine-readable annotation
+          rating: n/a
+          surfaces: [S5]
+          agent_first_form: "Not applicable here: the annotation-store role is filled by the DuckLake
+            warehouse (SCD2 recs, decisions, telemetry) with a closed verb boundary. git notes would add
+            a second, push-fragile, GitHub-invisible store -- exactly the two-store drift surface NS2
+            forbids."
+          evidence: "AGENTS.md warehouse-as-source-of-truth invariant; Decision 84."
+        - practice: PR-as-record vs commit-as-record
+          rating: adapt-for-agents
+          surfaces: [S1, S5]
+          agent_first_form: "Deliberate hybrid already practiced: the PR holds the full record (VP
+            compliance tables, disclosures, gate history), the squash commit carries a hand-composed
+            condensed projection plus trailer. Adapt = state this division in the git-ops contract so
+            the projection step stops being folklore."
+          evidence: "PR #887 body vs 84f9209 commit body (23-line condensed summary, neither PR body nor
+            branch-commit concatenation)."
+        - practice: bisectability
+          rating: adopt-as-is
+          surfaces: [S1, S3]
+          agent_first_form: "PR-grain bisect over always-green commits. Nothing bisects today (repo-wide
+            sweep: zero consumers), but the capability is preserved at the right granularity -- an
+            intra-PR bisect would land on individually untested intermediate states. An agent bisects
+            too; this is not human-only pressure."
+          evidence: "grep sweep for bisect across scripts/.github/.claude: no consumer; C18 adjudication."
+        - practice: revertability
+          rating: already-in-place
+          surfaces: [S1, S3]
+          agent_first_form: "One squash commit per PR = single-commit revert unit; forward-fix policy
+            (Decision 55/72/129) makes revert the exception deliberately."
+          evidence: "PR #855 rollback section ('single-PR revert'); deliberate-constraints list."
+        - practice: SLSA-style provenance and build attestation
+          rating: n/a
+          surfaces: []
+          agent_first_form: "Bears on no in-scope surface: the repository distributes no build artifacts;
+            Lambda deploys ride a governed CD channel (deploy-paths contract, out of scope) whose
+            integrity anchor is the convergence record + saved-plan sha256 digests (DEP-07), an in-house
+            attestation shaped to the actual deploy paths. Justification for the empty surfaces list:
+            provenance here is a deploy-model property, and the deploy model is explicitly out of scope."
+          evidence: "docs/contracts/deploy-paths.yaml (pointer only); terraform/CLAUDE.md DEP-07 digest
+            mechanism."
+        - practice: branch hygiene and post-merge branch deletion
+          rating: adapt-for-agents
+          surfaces: [S7]
+          agent_first_form: "Merged PR heads are deleted (observed: no branch survives for recently
+            merged #887/#888/#892-894), but stale non-PR debris persists (probe/dep05-*-deleteme,
+            codex/*, claude/zz-conflict-probe among 23 heads). Adapt = a periodic stale-branch sweep;
+            note branch_lifecycle.py's prune is the executor-era attempt and is broken under squash
+            (GITOPS-04)."
+          evidence: "git ls-remote --heads: 23 heads enumerated; merged-PR head absence."
+        - practice: CI checkout-depth strategy (shallow vs full vs on-demand deepening)
+          rating: adapt-for-agents
+          surfaces: [S4, S7]
+          agent_first_form: "CI side is deliberate and guarded per workflow (0/1/2 with pins and
+            comments); the dev-container clone is the unmanaged residue -- adapt by adding a
+            session-start bounded deepen so local history queries stop lying (GITOPS-03)."
+          evidence: "fetch-depth inventory (ci.yml:29/96, ci-rca.yml:83, claude.yml:34,
+            convergence-health.yml:72, main-canary.yml:22, rec-autoclose.yml:23);
+            verify_ci_workflow.py pin."
+        - practice: merge queues
+          rating: n/a
+          surfaces: [S1]
+          agent_first_form: "Not applicable at this contention level: a sole-developer repo with
+            serialized agent sessions, commit-time auto-rebase, and strict=false checks has no queue
+            pressure; a merge queue would add latency and a new wake-signal surface for zero conflict
+            reduction. Revisit only if concurrent implementing sessions become routine (see Q8)."
+          evidence: "repo.tf:104-107 strict=false rationale; observed cadence ~5.5 merges/day, serial."
+        - practice: auto-merge
+          rating: adopt-as-is
+          surfaces: [S1, S6]
+          agent_first_form: "GitHub-native auto-merge takes the container out of the merge loop, retiring
+            the CI-green comment wake (its lost-wake residual included); pr-conflict-signal must survive
+            it (a conflicted PR stalls auto-merge and wakes no one). Already decided and unblocked, not
+            built."
+          evidence: "Decision 76 deferred follow-up; Decision 83 'technically unblocked'; AGENTS.md
+            git-ops step 4 durable-successor note; rec-940 (closed), rec-2827 (open guard contract)."
+        - practice: signed commits
+          rating: already-in-place
+          surfaces: [S1, S7]
+          agent_first_form: "Harness-held SSH signing key, session-start allowedSigners config, GitHub
+            reports Verified; ruleset deliberately omits required_signatures with documented rationale
+            (server-side verification is not the blocker)."
+          evidence: "AGENTS.md commit-signing subsection; repo.tf:112-117 comment;
+            session_start_commit_signing.py."
+        - practice: monorepo change-scoping conventions
+          rating: already-in-place
+          surfaces: [S1, S3]
+          agent_first_form: "Path-filtered workflows (terraform/personal/**), CODEOWNERS path gates,
+            per-domain check manifests, SLOC/structural-size budgets per file class -- scoping is
+            contract-driven rather than directory-convention-driven."
+          evidence: ".github/CODEOWNERS; terraform-apply-sandbox.yml path filter; Decision 169 manifest
+            dispatch (#883)."
+        - practice: merge-time-composed squash commit body (novel structure)
+          rating: invent-novel-structure
+          surfaces: [S1, S2, S5]
+          agent_first_form: "The merging agent composes the squash commit_message at merge time: a
+            condensed, locally-greppable projection of the PR record plus the machine trailer. This
+            exists only because the reader is a machine that re-summarizes -- no human team hand-writes
+            a third rendering of every change. Cost honestly stated: it is a convention nothing
+            documents or validates (the docs actively misdescribe it as PR-body inheritance), and its
+            trailer leg silently no-ops when the composing agent forgets (GITOPS-01). Formalize, do not
+            drop."
+          evidence: "Observed on 84f9209/aa20689; SKILL.md:547 inheritance claim empirically false;
+            rec-2679/rec-2733 incident history."
+        - practice: wake-comment session IPC with idempotency markers (novel structure)
+          rating: invent-novel-structure
+          surfaces: [S6]
+          agent_first_form: "PR comments as a machine-to-machine wake channel: CI-green comments and
+            conflict wakes carrying '<!-- conflict-wake:<headRefOid> -->' markers, replacing polling in a
+            hibernating-session model. Already invented here; the agent-first completion is
+            observability for lost wakes (GITOPS-05) and eventual retirement of the green half by
+            auto-merge. Cost: comments are a public, rate-limited, best-effort transport -- acceptable
+            because every loss path terminates in a human nudge."
+          evidence: "ci.yml:293-322; pr_conflict_signal.sh marker discipline; 249-run history."
+        - practice: structured commit-body id block (plan/rec/decision trailers) (novel structure)
+          rating: invent-novel-structure
+          surfaces: [S2, S5]
+          agent_first_form: "Extend the composed squash body with a machine-parseable trailer block --
+            Plan: {slug}, Resolves: rec-NNNN, Decisions: NNN -- so the plan linkage that today rides
+            subject-grammar convention (feat({slug})) and the decision linkage that rides prose become
+            greppable key-value pairs, validated at merge. Cost argued: trailers are unrecoverable after
+            a history rewrite and duplicate warehouse fields -- acceptable only as a projection (warehouse
+            stays authoritative), and only worth building after GITOPS-01/-02 land enforcement; filed as
+            direction, not obligation."
+          evidence: "Existing partial forms: feat({slug}) parsing in validate_vp_replay:10-17;
+            Resolves: parser; (#NNN) suffix."
+    - q: Q6b
+      verdict: n/a-keep-squash
+      basis: []
+      prose: "Q1 is keep-squash, so no transition is specified. For the record, the trace showed any
+        future change must be go-forward-only (a retroactive rewrite would invalidate fixed_by_sha
+        stamps, convergence-record SHAs, and audit filename anchors held in the warehouse and audits/),
+        and the landing set that must move together is: the ruleset (repo.tf), the live allow_* settings
+        (currently unmanaged -- GITOPS-06 must land first for the change to even be declarable), the
+        verify_ci_workflow fetch-depth guard, rec-autoclose's read window, AGENTS.md step 5, and the
+        trailer placement contract."
+    - q: Q7
+      verdict: neither-suitable-replace-both
+      basis: [GITOPS-07]
+      prose: "What a session log carries that a commit log structurally cannot: work that produced no
+        commit (the 2026-07-01 entry is an operational remediation -- convergence-record recovery, guard
+        routing, a corrected ExternalId misstep -- with no code PR), abandoned approaches, RCA reasoning,
+        and human decisions taken in chat. That gap is inherent to git only for no-commit sessions; for
+        commit-producing sessions the observed composed squash bodies plus PR disclosures already carry
+        most of what recent SESSION_LOG entries duplicated, so the commit-contract lever (Q6 N1/N3)
+        shrinks but does not close the gap. The decisive evidence is behavioural: the log is already
+        abandoned -- newest entry 2026-07-01, six weeks and 50 merges before HEAD; the writer path
+        (postflight --close) is not invoked by any live command (the commands call --close-session,
+        telemetry only; the session_close prompt was deleted at T-1.13) -- while its READERS still run
+        (preflight recent_sessions feeds stale momentum to every planning session; prompt_compliance
+        treats entries as compliance evidence). And ops_session_log rides the dead OpsWriter path
+        pending T2.26. So neither surface is suitable as-is, and the repository has already decided the
+        replacement shape: T-1.9 (complete, REPORT-ONLY) directs retiring BOTH -- markdown log archived
+        post-reader-rewire, ops_session_log retired/migrated at T2.26 -- in favour of turn-events
+        through the DuckLake writer with a query-verb reader. This audit's contribution is that the
+        interim state is not neutral: stale reads are live (GITOPS-07, planned-unbuilt)."
+    - q: Q8
+      answers:
+        - question: "Does the two-PR flow (plan( then feat() belong in git at all, or is it an artefact
+            of PR-as-handoff?"
+          answer: "It is an artefact of PR-as-handoff, but a load-bearing one worth keeping: the plan PR
+            buys schema validation in CI (plan_documents, graduation-completeness plan-leg), a SHA-pinned
+            handoff (the implement session reads the plan from main by path), and a review point at the
+            cheapest moment. The cost is doubled merge traffic (22 plan( vs 23 feat( in the window --
+            near 1:1) and doubled wake-signal load. Moving plans to the warehouse would forfeit CI
+            gating unless rebuilt there; not recommended now."
+          basis: []
+        - question: "What happens to reconstructability if a merged PR's branch is deleted and GitHub's
+            PR record becomes the only holder of the pre-merge commits?"
+          answer: "Pre-merge commits remain reachable via refs/pull/<N>/head after head-branch deletion
+            (verified: 894 refs, 6 fetched including deleted-branch PRs) -- but that is a GitHub
+            platform behaviour, not a contractual guarantee, and it costs a network fetch per PR (NS6).
+            Nothing in-repo depends on it today; the system's reconstructability floor is main + plans +
+            warehouse, which survives total PR-ref loss. Acceptable risk; worth one sentence in the
+            git-ops contract naming the dependency."
+          basis: []
+        - question: "Does the (#NNN) PR-number suffix constitute adequate provenance indirection given
+            the round-trip cost?"
+          answer: "Yes, at the margin it is exercised: the round-trip is paid only for deep forensics
+            (reviews, CI runs, pre-merge sequence), because the composed squash body carries the
+            condensed record locally and the parallel stores carry rationale. The suffix is also the
+            only universally-present machine link in every subject (50/50 in the window) -- it is the
+            de facto primary key joining git to the PR record, which argues for enforcing its presence
+            (GITOPS-02) rather than replacing it."
+          basis: []
+        - question: "Is there a git-ops failure mode that only manifests when multiple agent sessions run
+            concurrently against main?"
+          answer: "Yes, two. (1) Stale-base merge: strict_required_status_checks_policy=false means
+            session B can merge a PR whose checks ran against pre-A main; textually-disjoint but
+            semantically-conflicting changes land green-on-green. Compensated deliberately: post-merge
+            full-tier main-validate + canary + forward-fix (Decisions 73/159) -- accepted residual, not
+            filed. (2) EOF-append collisions on registry/roster files (PR #855's rebase note documents
+            one) and jsonl merge=union races -- handled by commit-time auto-rebase and the conflict
+            wake. The unguarded corner is (1) combined with a lost green wake: B merges on a stale
+            comment; bounded by the same post-merge net."
+          basis: []
+        - question: "Should the merge method be declared in infrastructure-as-code at all?"
+          answer: "Yes. The policy is decision-recorded (89 clause 4, 76) and consumer-load-bearing, but
+            the live setting is a clickable repo option inside lifecycle.ignore_changes;
+            required_linear_history still permits BOTH squash and rebase, so a UI toggle enabling
+            rebase-merge would silently expose the HEAD~1/trailer stack with zero Terraform diff.
+            Declaring allow_squash_merge/allow_rebase_merge/allow_merge_commit (and
+            squash_merge_commit_title/message) closes the drift surface at the cost of owning the
+            import (GITOPS-06)."
+          basis: [GITOPS-06]
+        - question: "(own) Should the merge-time commit_message composition be a validated contract
+            rather than folklore?"
+          answer: "Yes -- it is the single point where the trailer, the condensed record, and the
+            subject grammar all converge, and today no surface documents it while one (SKILL.md:547)
+            misdescribes it. GITOPS-01's fix (document explicit commit_message; validate trailer
+            presence for bundled-rec plans post-merge) is the minimum; Q6 N3 is the extension."
+          basis: [GITOPS-01]
+        - question: "(own) Is auto-merge adoption the real fix for the wake-signal residuals?"
+          answer: "For the green half, yes: auto-merge removes the watching-session merge step, so a
+            lost CI-green comment costs nothing (Decision 76's own durable-successor analysis, ratified
+            in AGENTS.md step 4). It does NOT subsume the conflict wake -- a conflicted PR stalls
+            auto-merge silently -- so GITOPS-05's creation-time gap and observability fix remain
+            necessary regardless. Sequencing: adopt auto-merge (owned, unbuilt), keep
+            pr-conflict-signal permanent."
+          basis: [GITOPS-05]
+        - question: "(own) Does any surface depend on GitHub Actions log retention for provenance?"
+          answer: "Soft dependencies only: Decision 83 cites a run id as live-probe evidence, and
+            ghas-probe run records back GHAS verification; Actions logs expire (default 90 days), so
+            those citations decay into dated assertions -- which the decisions already treat them as
+            (dated evidence, re-verification conditions). No mechanism reads old run logs. No finding;
+            the pattern of copying dated evidence INTO decisions rather than linking it is the correct
+            agent-first form and is already practiced."
+          basis: []
+  merge_strategy_decision:
+    squash:
+      verdict: recommended
+      mechanism: "One reviewed, CI-green, hand-composed commit per PR on a linear main; PR record +
+        refs/pull/*/head retain the full sequence server-side; parallel stores carry rationale."
+      what_changes: "Nothing structural. Land GITOPS-06 (declare the method in Terraform), GITOPS-01
+        (document/validate the trailer's real delivery path), GITOPS-02 (enforce the subject grammar
+        consumers parse)."
+      cost: "Intra-PR granularity absent locally (sampled 1-4 commits/PR, mostly CI fixups); (#NNN)
+        round-trip for deep forensics; branch_lifecycle merged-predicate stays wrong (dormant)."
+      rationale: "Every load-bearing consumer is built to this shape and the shape is what makes
+        HEAD~1 diff-scoping, single-commit trailer reads, PR-grain revert, and always-green bisect
+        possible; the losses are compensated (composed bodies, PR refs, S5 stores) and the shallow
+        clone -- not squash -- is the binding constraint on log recovery (Q3a)."
+      confidence: CONFIRMED
+    rebase_merge:
+      verdict: rejected
+      mechanism: "Replay branch commits onto main individually; permitted by required_linear_history
+        without a ruleset change."
+      what_changes: "push_context_base HEAD~1 fallback under-selects multi-commit merges silently;
+        fetch-depth 2 pins (ci.yml:96, main-canary:22, rec-autoclose:23) and the verify_ci_workflow
+        guard all need rework to dynamic depth; rec-autoclose must scan EVENT_BEFORE..HEAD instead of
+        -1; trailer placement must move into branch commits (the merge composes no new message --
+        rec-2679/2733's loss mode becomes the only path); fix({slug}) fixup subjects land on main and
+        meet the subject-grammar consumers; merge=union .gitattributes driver applies per-commit."
+      cost: "Two new silent-failure classes (diff under-selection, trailer loss) traded for intra-PR
+        granularity that no existing consumer reads and refs/pull already retains."
+      rationale: "Strictly dominated: pays migration across the whole DD-A inventory to acquire the
+        exact loss modes the current design's known defects already warn about."
+      confidence: CONFIRMED
+    merge_commit:
+      verdict: rejected
+      mechanism: "True merge commits; branch tips become ancestors of main."
+      what_changes: "Forbidden today by required_linear_history (repo.tf:110) -- requires a
+        CODEOWNERS-gated, admin-logged ruleset change plus declaring the allow_* settings (C8/C7).
+        HEAD~1 semantics shift to first-parent (survivable); rec-autoclose reads the merge-commit
+        message, which carries no trailer unless composed; log consumers meet a two-parent topology."
+      cost: "Reviewed infra change, trailer-transport redesign, non-linear log for every consumer and
+        the public human reader."
+      rationale: "Its sole concrete benefit is fixing the dormant branch_lifecycle ancestor predicate
+        (GITOPS-04), which is cheaper to fix in code (ask GitHub for the PR merge state, or compare
+        squash-diff equivalence) than by changing the repository's history shape."
+      confidence: CONFIRMED
+    hybrid:
+      verdict: rejected
+      mechanism: "Merge method keyed on PR class (e.g. squash for feat/plan, rebase for multi-commit
+        migrations)."
+      what_changes: "main carries two history shapes permanently; every consumer keyed on HEAD~1,
+        --grep, single-commit reads, or merge-base meets both and must branch on shape detection."
+      cost: "The full rebase-merge consumer migration PLUS a per-PR classification mechanism nothing
+        currently needs, PLUS permanent two-shape complexity at every future consumer."
+      rationale: "No PR class in the observed window (50/50 one-commit-per-PR, 1-4 pre-merge commits)
+        would benefit; complexity without a customer."
+      confidence: CONFIRMED
+  per_surface_assessment:
+    - surface: S1
+      maturity: strong
+      maturity_note: "0 critical/high findings; frontier blocked only by the merge-queues entry rating
+        n/a on S1 (a genuine non-applicability, not an assessment gap)."
+      strengths: "Policy triple-anchored (Decision 89 cl.4, Decision 76, AGENTS.md step 5) with
+        pointer discipline; ruleset deliberately minimal and documented per rule; linear history
+        enforced; deliberate non-wedging design consistently reasoned."
+      top_gaps: [GITOPS-06]
+    - surface: S2
+      maturity: frontier
+      maturity_note: "Mechanical top tier (0 critical/high; all four bearing industry entries assessed);
+        both S2 findings are medium and both are enforcement gaps on an otherwise well-designed
+        contract."
+      strengths: "Grammar is workflow-native (tiers, not upstream convention); trailer parser is pure,
+        tested, tolerant; PR template is the one surface that states the trailer rule correctly."
+      top_gaps: [GITOPS-01, GITOPS-02]
+    - surface: S3
+      maturity: frontier
+      maturity_note: "Mechanical top tier; the inventory is mostly essential-and-documented coupling
+        with two silent degraders (medium/low findings)."
+      strengths: "The best couplings are self-announcing: Decision 159 names its residuals,
+        verify_ci_workflow pins the assumption with a failure message citing it, classify_closed_head
+        fails closed, vacuous_pass returns undetermined rather than guessing."
+      top_gaps: [GITOPS-01, GITOPS-04]
+    - surface: S4
+      maturity: strong
+      maturity_note: "Exactly one high finding (GITOPS-03); also capped below frontier by bearing on
+        fewer than three industry entries. CI-side depth management is exemplary; the dev container is
+        the unmanaged half."
+      strengths: "Every CI workflow pins an explicit, commented fetch-depth matched to its consumer;
+        the pin is itself guarded by a registered check."
+      top_gaps: [GITOPS-03]
+    - surface: S5
+      maturity: strong
+      maturity_note: "0 high; frontier blocked by the git-notes entry rating n/a on S5 (genuine
+        non-applicability). The store architecture is strong; the session-log corner is the decay."
+      strengths: "Warehouse single-portal invariant, SCD2 rec history, decisions rebuildable from
+        DECISIONS.md, plans schema-validated in CI, fixed_by_sha bridges warehouse to git identity."
+      top_gaps: [GITOPS-07]
+    - surface: S6
+      maturity: strong
+      maturity_note: "0 high; capped below frontier by bearing on fewer than three industry entries.
+        249-run history with the live conflicted PR correctly handled."
+      strengths: "Structural validator gates the workflow shape; per-call-site exit-status discipline
+        (rec-2735 lineage); duplicate-cheap/missed-wake-expensive bias correctly chosen; idempotency
+        markers per head SHA."
+      top_gaps: [GITOPS-05]
+    - surface: S7
+      maturity: strong
+      maturity_note: "One high finding shared with S4 (GITOPS-03 -- S7 is where the remedy lands).
+        Dual on-main guards (never_on_main.py + pre-commit no-commit-to-branch) adjudicated as layered
+        defense at different layers (tool-call vs git hook), not VD5 drift."
+      strengths: "Hooks are self-healing (session-start reinstall), fail-open with loud warnings by
+        documented design, and the sync-main hook states its squash-coupling rationale in its own
+        header."
+      top_gaps: [GITOPS-03]
+  rubric_ratings:
+    - {surface: S1, dimension: VD1, rating: strong, evidence: "AGENTS.md:230; docs/DECISIONS.md:4861",
+       note: "Policy and flow fully reconstructible locally; only the live GitHub setting needs a
+       round-trip."}
+    - {surface: S1, dimension: VD2, rating: weak, evidence: "terraform/github/repo.tf:39-44",
+       note: "required_linear_history enforced, but the merge method itself sits in ignore_changes and
+       the ruleset permits rebase-merge (GITOPS-06)."}
+    - {surface: S1, dimension: VD3, rating: strong, evidence: "docs/DECISIONS.md:608",
+       note: "The squash coupling is named, decided, and pinned by a guard -- necessary and documented."}
+    - {surface: S1, dimension: VD4, rating: adequate, evidence: "terraform/github/repo.tf:110",
+       note: "A method flip needs deliberate admin action; linear-history rejection is loud, but a
+       rebase flip inside the allowed set would be silent downstream."}
+    - {surface: S1, dimension: VD5, rating: adequate, evidence: "AGENTS.md:242",
+       note: "Merge protocol defers to Git-ops procedure (pointer discipline holds); live setting
+       undeclared in IaC is the one drift surface."}
+    - {surface: S1, dimension: VD6, rating: strong, evidence: "docs/DECISIONS.md:3591",
+       note: "Shape serves both live consumers (agents + public human reader) deliberately."}
+    - {surface: S2, dimension: VD1, rating: strong, evidence: "scripts/rec_trailer.py",
+       note: "Grammar and trailers parse locally with a pure function."}
+    - {surface: S2, dimension: VD2, rating: weak, evidence: "AGENTS.md:190-198",
+       note: "Load-bearing grammar with no conformance gate; live prefixes outside the table
+       (GITOPS-02); trailer presence unvalidated (GITOPS-01)."}
+    - {surface: S2, dimension: VD3, rating: adequate, evidence: "scripts/checks/verification/validate_vp_replay.py:10-17",
+       note: "feat({slug}) linkage is essential by design but convention-held."}
+    - {surface: S2, dimension: VD4, rating: weak, evidence: ".github/workflows/rec-autoclose.yml",
+       note: "A missing trailer is an explicit no-op -- silent by design at the exact point a loss
+       occurs (GITOPS-01)."}
+    - {surface: S2, dimension: VD5, rating: weak, evidence: ".claude/skills/implement/SKILL.md:547",
+       note: "Three surfaces state trailer placement in non-identical terms; one is empirically wrong
+       (GITOPS-01/C5)."}
+    - {surface: S2, dimension: VD6, rating: strong, evidence: "audits window sweep",
+       note: "The grammar serves real machine consumers and stays human-scannable -- deliberate dual
+       fit."}
+    - {surface: S3, dimension: VD1, rating: adequate, evidence: "scripts/checks/_common.py:40",
+       note: "Local and cheap within the clone window; beyond it, depth (not shape) degrades answers."}
+    - {surface: S3, dimension: VD2, rating: strong, evidence: "scripts/verify_ci_workflow.py:149-153",
+       note: "The shape assumption is pinned by a registered check whose failure message names the
+       decision."}
+    - {surface: S3, dimension: VD3, rating: adequate, evidence: "scripts/executor/branch_lifecycle.py:140",
+       note: "Mostly essential-and-documented; one accidental coupling (merge-base ancestor predicate,
+       GITOPS-04)."}
+    - {surface: S3, dimension: VD4, rating: adequate, evidence: "scripts/convergence_health/record.py:137",
+       note: "Mixed: push_context_base warns loudly, classify_closed_head fails closed, vacuous_pass
+       returns undetermined -- but count_unapplied returns a silent 0."}
+    - {surface: S3, dimension: VD5, rating: "n/a", evidence: "",
+       note: "Consumers are readers, not a provenance store; the dimension does not structurally
+       apply."}
+    - {surface: S3, dimension: VD6, rating: strong, evidence: "docs/DECISIONS.md:608",
+       note: "Each consumer's shape assumption maps to a real workflow need."}
+    - {surface: S4, dimension: VD1, rating: weak, evidence: "git rev-list --count origin/main = 50",
+       note: "A 9-day local window bounds all repository-local history recovery (Q3a)."}
+    - {surface: S4, dimension: VD2, rating: strong, evidence: ".github/workflows/ci-rca.yml:77-83",
+       note: "CI depths are pinned, commented, and guard-checked per workflow."}
+    - {surface: S4, dimension: VD3, rating: adequate, evidence: ".github/workflows/claude.yml:34",
+       note: "CI couplings deliberate; the container depth is a harness default no repo surface has
+       examined (GITOPS-03)."}
+    - {surface: S4, dimension: VD4, rating: absent, evidence: "PR #844 file list vs local git log -- docs/SESSION_LOG.md",
+       note: "Observed: the boundary commit confidently misattributes file history (trap 9);
+       count_unapplied silently returns 0. Wrong-but-trusted class."}
+    - {surface: S4, dimension: VD5, rating: "n/a", evidence: "",
+       note: "Clone depth is not a provenance store; dimension does not apply."}
+    - {surface: S4, dimension: VD6, rating: adequate, evidence: ".github/workflows/ci.yml:29",
+       note: "CI depths fit consumers exactly; the container's depth serves no stated consumer --
+       inherited, not chosen."}
+    - {surface: S5, dimension: VD1, rating: strong, evidence: "docs/plans/, docs/DECISIONS.md, docs/decisions-index.json",
+       note: "Plans, decisions, index, audits all local; warehouse readable via named verbs."}
+    - {surface: S5, dimension: VD2, rating: adequate, evidence: "scripts/checks/decisions/validate_decision_entry_conformance.py",
+       note: "Plans and decisions are schema/conformance-gated; SESSION_LOG has no gate at all."}
+    - {surface: S5, dimension: VD3, rating: strong, evidence: "logs/.recommendations-log.jsonl (read cache)",
+       note: "Stores are decoupled from history shape; git SHAs are referenced, not depended on for
+       store integrity."}
+    - {surface: S5, dimension: VD4, rating: weak, evidence: "scripts/preflight/context_docs.py:62-65",
+       note: "Stale session-log reads degrade silently into every planning session (GITOPS-07)."}
+    - {surface: S5, dimension: VD5, rating: adequate, evidence: "AGENTS.md warehouse invariant",
+       note: "Recs/decisions have exemplary single-SoT discipline; the session log currently exists as
+       two dead surfaces pending T2.26."}
+    - {surface: S5, dimension: VD6, rating: adequate, evidence: "docs/SESSION_LOG.md header",
+       note: "Most stores match their consumers; SESSION_LOG names three consumers of which none
+       writes and two still read."}
+    - {surface: S6, dimension: VD1, rating: "n/a", evidence: "",
+       note: "Wake signals are delivery machinery, not a record an agent reconstructs history from."}
+    - {surface: S6, dimension: VD2, rating: strong, evidence: "scripts/checks/ci_guards/validate_pr_conflict_signal.py",
+       note: "Workflow shape, delegation anchoring, and per-call-site exit-status capture are
+       structurally gated."}
+    - {surface: S6, dimension: VD3, rating: strong, evidence: "scripts/ci/pr_conflict_signal.sh",
+       note: "No history-shape coupling; keyed on PR state and head SHAs."}
+    - {surface: S6, dimension: VD4, rating: weak, evidence: ".github/workflows/pr-conflict-signal.yml:44",
+       note: "continue-on-error masks the script's deliberate exit 1; failures visible only in an
+       unmonitored step summary; creation-time conflicts never trigger (GITOPS-05)."}
+    - {surface: S6, dimension: VD5, rating: strong, evidence: "AGENTS.md git-ops step 4",
+       note: "One script, one validator, one narrative home with pointers."}
+    - {surface: S6, dimension: VD6, rating: strong, evidence: "ci.yml:296-301 invariant comment",
+       note: "Agent-only consumer, shaped for the hibernating-session model deliberately."}
+    - {surface: S7, dimension: VD1, rating: strong, evidence: ".claude/hooks/session_start_sync_main.sh",
+       note: "Hooks are local, self-describing, and log what they change."}
+    - {surface: S7, dimension: VD2, rating: adequate, evidence: ".claude/hooks/session_start_precommit.sh",
+       note: "Self-healing reinstall each session; hook presence itself is not gated but re-converges."}
+    - {surface: S7, dimension: VD3, rating: adequate, evidence: "session_start_sync_main.sh header",
+       note: "The one squash-coupling (no-fast-forward local main) is documented in the hook's own
+       rationale."}
+    - {surface: S7, dimension: VD4, rating: adequate, evidence: "fresh_branch_base.py docstring",
+       note: "Fail-open-with-warning is the documented design for session-start hooks; guards
+       (never_on_main) fail closed. Deliberate split."}
+    - {surface: S7, dimension: VD5, rating: strong, evidence: "AGENTS.md '## Git-ops procedure'",
+       note: "Canonical-authority pattern holds; hooks point at it; dual on-main guards operate at
+       different layers (tool-call vs git), judged layered defense, not drift."}
+    - {surface: S7, dimension: VD6, rating: strong, evidence: ".claude/hooks/never_on_main.py",
+       note: "Shaped precisely for the harness-session consumer that exists."}
+  findings:
+    - id: GITOPS-01
+      candidate_ids: [C5, C6]
+      surface: [S2, S3]
+      question: [Q1, Q4]
+      dimension: [VD2, VD4, VD5]
+      title: "Resolves-trailer delivery works only via undocumented merge-time commit_message
+        composition; two of three documenting surfaces misdescribe the path"
+      evidence: "AGENTS.md:236; .claude/skills/implement/SKILL.md:547; .github/pull_request_template.md
+        Resolves section; observed: aa20689 (#888) squash body hand-composed with trailer while neither
+        the PR body verbatim nor any branch commit carries that text; 84f9209 (#887) single-commit body
+        inherited verbatim"
+      evidence_kind: observed
+      current_behavior: "SKILL.md instructs placing the trailer in the PR body and claims the squash
+        commit inherits it -- empirically false (merge_pull_request without commit_message inherits the
+        single branch commit's message, per the rec-2679/rec-2733 incidents on PRs #557/#627). In
+        practice merging agents hand-compose commit_message including the trailer, which no surface
+        documents; when one forgets, rec-autoclose silently no-ops (its no-trailer path is an explicit
+        exit 0). The window shows the compensation mostly working: all 5 landed plans' bundled recs
+        closed."
+      ideal_behavior: "One documented delivery path -- explicit commit_message on merge_pull_request
+        carrying the trailer -- stated identically in AGENTS.md, SKILL.md, and the PR template, plus a
+        post-merge validation (the skill's existing step-5 fallback made checkable) so a dropped
+        trailer is loud."
+      gap: "The load-bearing step exists only as folklore; the documented instruction reproduces the
+        loss mode on any single-commit PR merged by an agent that follows it literally."
+      compensating_controls_considered: "Skill step 5 post-merge closeout fallback (manual, unverified);
+        plan_audit rec-in-git grep (advisory); manual portal close (observed in sample) -- none makes
+        the loss loud at merge time."
+      change_type: unify
+      proposed_change: "Amend AGENTS.md step 5 and SKILL.md step 1/4 to instruct composing
+        commit_message explicitly (rec-2733's remedy, matching observed practice); align SKILL.md:547
+        with the PR template's correct warning (rec-2679); add a rec-autoclose-side or postflight check
+        that a merged feat PR whose plan had non-empty bundled_recommendations produced a trailer."
+      acceptance: "grep of SKILL.md and AGENTS.md shows the explicit-commit_message instruction; a
+        merged bundled-rec PR without a trailer produces a loud signal (workflow annotation or filed
+        rec) within one CI cycle."
+      severity: medium
+      severity_rationale: "Silent no-op class, but with observed-working compensation, a manual
+        fallback step, and two incident recs already tracking it -- material, not high."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [rec-2679, rec-2733]
+        dedup_search_terms: [trailer, squash, commit message, merge_method]
+        dedup_hit_count: 7
+        note: "rec-2679 + rec-2733 (both open) own the loss mode and their remedies remain correct and
+          match observed practice -- adequate but unbuilt for that half. Classified
+          planned-insufficient because the third surface's owner (workflow-review-d107b4a.yaml:560 /
+          CE-11) proposes reconciling the drift TO the inheritance wording this audit empirically
+          falsified, and no owner covers post-merge trailer validation. rec-2922 (parser over-match) is
+          adjacent, not owning."
+      effort: S
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Doc halves land independently;
+        the validation half should land with or after them."}
+    - id: GITOPS-02
+      candidate_ids: [C3, C4]
+      surface: [S2]
+      question: [Q4]
+      dimension: [VD2]
+      title: "Load-bearing commit-subject grammar is unenforced and its registered table is incomplete"
+      evidence: "AGENTS.md:190-198 (five prefixes); window sweep over all 50 commits: 23 feat(, 22
+        plan(, 2 audit(, 1 fix(, 1 docs(, 1 bare 'audit:' (#864, dcdf416); re-derived: no
+        commit-message conformance check exists under scripts/checks/"
+      evidence_kind: observed
+      current_behavior: "validate_vp_replay and validate_graduation_completeness key plan resolution on
+        feat({slug}) subjects, and the audit-prompt flow mandates audit({slug}); yet nothing validates
+        subjects, the table omits live prefixes (fix(, docs(), and one non-conforming subject reached
+        main. C4 adjudication: the bare 'audit:' remains the single exception in the current window --
+        an unregistered-but-reasonable form, immaterial in itself; the defect is the absent gate that
+        let the question require an audit to answer."
+      ideal_behavior: "A registered check validating merge-bound subject shape (prefix in a registered
+        set, parenthesised scope, (#NNN) suffix presence on main) -- per NS5, enforce what
+        load-bearing code parses; table extended to the live prefix set."
+      gap: "A malformed feat subject silently exempts its PR from VP replay and graduation-completeness
+        (both legs resolve nothing and skip advisory), an enforcement bypass no one would notice."
+      compensating_controls_considered: "The two consumers skip loudly with printed DEFER/SKIP lines --
+        but only in CI logs; the counterfactual (a typo'd slug) passes green. PR template lists
+        conventions as a comment (advisory)."
+      change_type: enforce
+      proposed_change: "Add a subject-conformance check (pre tier: validate branch-side commit subjects
+        for the grammar consumers parse; post-merge tier: assert main-bound shape), register fix( and
+        docs( or normalize them away, and decide bare 'audit:' in or out."
+      acceptance: "A PR whose feat subject typos the slug fails --pre with a named check; the prefix
+        table and the live window agree."
+      severity: medium
+      severity_rationale: "Enforcement gap over a consumer that silently skips -- the miss is an
+        un-run verification, not a wrong action."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: [commit message, commit-message, conventional, prefix, subject]
+        dedup_hit_count: 0
+        note: "No open rec, tier item, or candidate decision covers subject-grammar enforcement."
+      effort: S
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: GITOPS-03
+      candidate_ids: [C2, C14]
+      surface: [S4, S7]
+      question: [Q3a, Q2]
+      dimension: [VD4, VD1]
+      title: "The dev-container shallow clone yields confident wrong local-history answers and no
+        session-start deepen exists"
+      evidence: "Observed: git log origin/main -- docs/SESSION_LOG.md locally names boundary commit
+        5bd32ea (#844) with a 666-line insertion, while PR #844's API file list is 6 files not
+        including it; .git/shallow holds two commits of which one is unreachable;
+        scripts/convergence_health/record.py:101 returns silent 0; scripts/roadmap/plan_audit.py:126
+        false-negatives any rec merged before the 50-commit / 9-day window"
+      evidence_kind: observed
+      current_behavior: "Exactly two consumers handle depth (ci_rca_lifecycle.py:151 best-effort
+        unshallow; count_unapplied's return-0); every other local history consumer -- rec greps,
+        last-changed queries, session metrics -- silently degrades to nothing-or-wrong beyond 9 days.
+        CI workflows are immune (own pinned depths). This, not squash-merge, is the binding constraint
+        on agent log recovery (Q3a)."
+      ideal_behavior: "A session-start hook performs a bounded deepen (e.g. git fetch --deepen=500,
+        roughly one quarter at observed velocity) or full --unshallow, mirroring the on-demand deepen
+        ci_rca_lifecycle already trusts; local history queries then answer correctly for any window a
+        consumer actually uses."
+      gap: "The entire trap-9 class is live in the primary dev surface, and the fix surface (S7
+        session-start hooks, which already fetch origin main every session) exists with no occupant."
+      compensating_controls_considered: "ci_rca_lifecycle's guard-fetch covers only its own ancestry
+        check; count_unapplied's 0 is acknowledged but indistinguishable from a true 0 at call sites;
+        no control covers the general class -- property match fails."
+      change_type: add
+      proposed_change: "Add session_start_deepen_history.sh (advisory, fail-open like sync_main):
+        bounded --deepen with a cheap depth check; document the residual boundary semantics in the
+        hook header."
+      acceptance: "After session start, git rev-list --count origin/main exceeds the deepen bound (or
+        .git/shallow is absent); git log -- <old-file> in a fresh session names the true last-touch
+        commit for files older than the previous window."
+      severity: high
+      severity_rationale: "Wrong-but-trusted history answers in the primary dev surface with no
+        property-matched compensating control; not critical because the traced consumers feed
+        advisory/reporting paths, not irreversible actions."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: [shallow, unshallow, fetch-depth, deepen, clone depth]
+        dedup_hit_count: 2
+        note: "rec-2438 (test isolation) and rec-2685 (empty-git-log guard) touch adjacent symptoms;
+          neither owns a session-start deepen or the wrong-answer class."
+      effort: S
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Independent of the merge-strategy
+        verdict; highest-leverage single change in this audit."}
+    - id: GITOPS-04
+      candidate_ids: [C9]
+      surface: [S3]
+      question: [Q1, Q4]
+      dimension: [VD3, VD4]
+      title: "branch_lifecycle's merged-branch predicate is structurally false under squash-merge;
+        prune is a silent no-op"
+      evidence: "scripts/executor/branch_lifecycle.py:140 and :311 (git merge-base --is-ancestor
+        <branch> main); a squash-merged branch tip is never an ancestor of main, so
+        _is_checkpoint_branch_merged returns False for every actually-merged branch and
+        prune_merged_agent_branches deletes nothing (git branch -d would refuse regardless)"
+      evidence_kind: static
+      current_behavior: "Under the live squash policy the predicate answers 'not merged' for merged
+        branches today; the same holds under rebase-merge; only true merge commits satisfy it.
+        Reachability: dormant -- the executor is frozen (Decision 67) and the code operates on local
+        agent/* branches, which do not exist in the CC-web session model (git branch --list agent/*
+        is empty). Cross-checked against remote state: 23 remote heads, none agent/*, merged claude/*
+        heads already deleted by other means."
+      ideal_behavior: "Merged-ness determined by a squash-aware mechanism: the PR merge state via API,
+        or git cherry / patch-equivalence against main -- or the prune path deleted with the executor
+        if it never unfreezes."
+      gap: "A latent wrong-answer mechanism that re-arms the day the executor thaws (T4.2 is an active
+        roadmap item), at which point stale checkpoint resumption logic consults it."
+      compensating_controls_considered: "The executor freeze itself (property match: while frozen the
+        code cannot run -- controls severity, not correctness); the false answer's failure direction
+        is conservative (never deletes)."
+      change_type: switch_mechanism
+      proposed_change: "Replace the is-ancestor predicate with PR-state or patch-equivalence
+        detection inside branch_lifecycle, or excise prune_merged_agent_branches; annotate the
+        module's squash incompatibility either way."
+      acceptance: "A unit test simulating a squash-merged branch has _is_checkpoint_branch_merged
+        return True (or the prune path is removed)."
+      severity: low
+      severity_rationale: "Dormant code path; conservative failure direction; becomes medium the day
+        the executor unfreezes."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: [branch_lifecycle, prune, merge-base, is-ancestor]
+        dedup_hit_count: 0
+        note: "No owner; T4.2 (executor) is the reactivation trigger, not an owner of this defect."
+      effort: S
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Should land before any T4.2
+        executor thaw."}
+    - id: GITOPS-05
+      candidate_ids: [C12, C13]
+      surface: [S6]
+      question: [Q5]
+      dimension: [VD4]
+      title: "Conflict-wake losses are invisible (success conclusion) and a PR conflicted at creation
+        gets no wake at all"
+      evidence: ".github/workflows/pr-conflict-signal.yml (triggers: push to main + dispatch only;
+        poll step continue-on-error: true); scripts/ci/pr_conflict_signal.sh (_signal_failure ->
+        _FAILURE_COUNT -> exit 1); observed: 249 runs, 15 most recent all conclusion=success"
+      evidence_kind: observed
+      current_behavior: "C13: a claude/* PR that is CONFLICTING at creation time receives no wake
+        until the next unrelated push to main -- no trigger covers PR creation. Rare (the commit flow
+        auto-rebases before push) but exactly the stranded-session case the workflow exists to
+        prevent. C12: the script's failure ledger is real (marker to stderr + step summary, exit 1)
+        but the step's continue-on-error converts every outcome to run success, so a genuinely lost
+        wake (e.g. gh pr list failing the whole sweep) is observable only by reading step summaries
+        nobody monitors. Losses ARE bounded: any later push to main re-polls (observed cadence ~5.5
+        pushes/day), and the latest run correctly idempotent-skipped the live conflicted PR #781."
+      ideal_behavior: "Add pull_request [opened, reopened] (or a schedule fallback) to the trigger set
+        so creation-time conflicts wake; surface _FAILURE_COUNT>0 as a visible signal (a
+        workflow-level annotation, a filed rec via the watched ci-rca set, or a distinct neutral
+        check conclusion) while keeping the never-red-a-build invariant."
+      gap: "The unbounded corner of an otherwise bounded design: zero-trigger at creation plus
+        masked failures equals a strandable session with no signal anywhere."
+      compensating_controls_considered: "Next-push re-poll (property match: covers C13 only if a push
+        happens -- fails on a quiet main); human nudge (documented residual -- not same-property: it
+        requires the human to notice the silence the wake exists to prevent); ci-rca does not watch
+        this workflow (its runs always conclude success, so watching would not help without the
+        exit-status fix)."
+      change_type: retune_gate
+      proposed_change: "Extend triggers with pull_request types [opened, reopened] scoped to claude/*
+        (the script is already idempotent per head SHA, so extra invocations are safe), and emit a
+        loud artifact on _FAILURE_COUNT>0 (e.g. file a rec through the portal or fail a separate
+        non-required observability job)."
+      acceptance: "A PR opened already-conflicting receives its wake within one workflow cycle without
+        any push to main; a forced gh failure in the sweep produces a signal visible outside the run's
+        own logs."
+      severity: medium
+      severity_rationale: "Loss modes are real but bounded by push cadence and idempotent re-polls;
+        the stranded case terminates in the documented human-nudge fallback rather than a wrong
+        action."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: [conflict-signal, signal-green, wake, continue-on-error]
+        dedup_hit_count: 12
+        note: "rec-3067..3071 cover script-internal call-site discipline; rec-2019..2022 cover
+          signal-green docs and its gate list; none covers the creation-time trigger gap or
+          run-conclusion observability."
+      effort: S
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Wake-signal finding filed
+        against S6 per the DD-C scope ruling; no deploy-model change involved."}
+    - id: GITOPS-06
+      candidate_ids: [C7]
+      surface: [S1]
+      question: [Q1, Q8]
+      dimension: [VD2, VD5]
+      title: "The merge method every consumer depends on is not declared in infrastructure-as-code,
+        and the ruleset still permits rebase-merge"
+      evidence: "terraform/github/repo.tf:39-44 (allow_merge_commit, allow_squash_merge,
+        allow_rebase_merge, allow_auto_merge, allow_update_branch, delete_branch_on_merge all inside
+        lifecycle.ignore_changes); repo.tf:110 (required_linear_history forbids only merge commits);
+        squash_merge_commit_title/message are neither declared nor ignored"
+      evidence_kind: static
+      current_behavior: "Squash-only is policy (Decision 89 clause 4, preserved by Decision 76) and
+        the whole DD-A consumer stack assumes it, but the live enforcement chain is: ruleset forbids
+        merge commits only; the allow_* toggles and the squash-message default are UI-mutable with
+        zero Terraform diff and zero review. An out-of-band enable of rebase-merge (or a
+        squash-message default change) would silently expose the HEAD~1 diff base, rec-autoclose's
+        single-commit read, and the trailer inheritance path. Could not read live values (API access
+        unavailable this session); drift is a possibility surface, not an observed state."
+      ideal_behavior: "allow_squash_merge=true, allow_rebase_merge=false, allow_merge_commit=false,
+        and the squash_merge_commit_* defaults declared in terraform/github/repo.tf (removed from
+        ignore_changes), so the method consumers rely on is a reviewed, CODEOWNERS-gated,
+        drift-detectable declaration."
+      gap: "NS5 violation at the policy root: the single highest-leverage setting in scope is the one
+        setting nothing enforces or even observes."
+      compensating_controls_considered: "Sole-collaborator reality (only the admin can click it --
+        reduces likelihood, exercises no detection property); required_linear_history (blocks merge
+        commits only -- partial property match); Decision 89 (policy text, no mechanism)."
+      change_type: persist
+      proposed_change: "Declare the six merge-adjacent settings (plus squash_merge_commit_title:
+        PR_TITLE and the message default) in repo.tf and drop them from ignore_changes; apply via the
+        module's human-gated runbook."
+      acceptance: "terraform plan against terraform/github shows the settings managed and converged;
+        a UI toggle of allow_rebase_merge subsequently surfaces as drift in plan."
+      severity: medium
+      severity_rationale: "Requires deliberate admin action to trigger, but the failure it enables is
+        silent and broad; a declaration is cheap."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: [merge method, allow_squash, ignore_changes, delete_branch]
+        dedup_hit_count: 0
+        note: "No rec, tier item, or candidate decision owns declaring the merge method; rec-2827
+          (protected-path auto-merge contract) is adjacent scope, different property."
+      effort: XS
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "terraform/github is
+        never-auto-apply; lands via the module's human-gated local apply runbook."}
+    - id: GITOPS-07
+      candidate_ids: [C10]
+      surface: [S5]
+      question: [Q7]
+      dimension: [VD5, VD4]
+      title: "SESSION_LOG.md is orphaned (no live writer since 2026-07-01) while its readers still
+        feed stale content into every planning session"
+      evidence: "docs/SESSION_LOG.md newest entry 2026-07-01 vs a main window entirely within
+        2026-08-04..2026-08-13; scripts/session/postflight.py run_close() (the entry generator) is
+        reachable only via --close, which no live command invokes (commands call --close-session,
+        telemetry only); .github/prompts/ contains only scheduled/ -- session_close/task_start/
+        strategic_review prompts deleted at T-1.13; readers still live:
+        scripts/preflight/context_docs.py:62-65 (recent_sessions), scripts/prompt_compliance.py:221-242"
+      evidence_kind: observed
+      current_behavior: "The header's stated writer/reader contract is dead on the writer side and
+        live on the reader side: every /plan and /implement preflight surfaces 'recent momentum' that
+        is six weeks and ~50 merges stale, and prompt_compliance judges compliance against entries no
+        session writes. The de facto abandonment confirms T-1.9's retirement thesis while the interim
+        misleads."
+      ideal_behavior: "T-1.9's own disposition, built: rewire preflight.recent_sessions to a
+        warehouse query verb (or, interim, to a git-derived recent-merges summary, which the composed
+        squash bodies make cheap), archive the markdown log, retire the prompt_compliance read."
+      gap: "The retirement is designed (T-1.9 complete as REPORT-ONLY, execution pending T2.26) but
+        the reader-rewire half has no landed slice, so a stale record is consumed as fresh -- NS4's
+        wrong-but-plausible shape at planning time."
+      compensating_controls_considered: "Preflight also surfaces roadmap/recs state (fresher signals
+        dominate in practice -- partial property match, which is why this is medium not high);
+        SESSION_LOG_ARCHIVE preserved."
+      change_type: rescope
+      proposed_change: "Land the reader-rewire slice ahead of full T2.26: point recent_sessions at
+        warehouse turn-events or recent squash-commit bodies; stamp the markdown log header
+        'frozen -- see archive' so no reader treats it as current."
+      acceptance: "preflight's recent_sessions block derives from a source updated within the current
+        window; prompt_compliance no longer reads SESSION_LOG.md."
+      severity: medium
+      severity_rationale: "Silent staleness in an advisory-but-ambient planning input; bounded by
+        fresher co-surfaced signals."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-unbuilt
+        item_ids: [T-1.9, T2.26]
+        dedup_search_terms: [SESSION_LOG, session log, ops_session_log, recent_sessions]
+        dedup_hit_count: 3
+        note: "T-1.9 (complete, REPORT-ONLY) designed exactly this retirement; T2.26 (in_progress)
+          owns the table half; the reader-rewire slice is the unbuilt remainder."
+      effort: M
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Reader-rewire can precede the
+        T2.26 table disposition safely."}
+  rejected_candidates:
+    - candidate_ids: [C1]
+      candidate: "main carries exactly one commit per merged PR; four mechanisms read that shape
+        (HEAD~1, git log -1, feat({slug}) resolution, --grep)."
+      why_dismissed: "Verified (50/50 window commits carry (#NNN), one per PR) and adjudicated
+        per-mechanism under Q4: the shape-dependence is predominantly essential-and-documented
+        coupling, not a defect. The two defective members of the inventory are filed separately
+        (GITOPS-01 trailer leg, GITOPS-04 branch_lifecycle)."
+      compensating_control: "Decision 159 names the coupling and its residuals;
+        verify_ci_workflow.py's fetch-depth guard fails loudly citing it."
+      control_property_match: "The guard exercises the same property (the depth/squash pairing) at
+        scripts/verify_ci_workflow.py:149-153 and would fail CI if the pairing were broken -- which
+        is exactly what would happen if this candidate were a live defect."
+      decision_or_item_id: "Decision 159; Decision 76"
+    - candidate_ids: [C8]
+      candidate: "required_linear_history constrains available merge methods; code-owner review plus
+        CODEOWNERS scopes terraform/github behind review."
+      why_dismissed: "Not a defect in any reading -- these are the protective facts on the other side
+        of the ledger. Consumed as Q1 cost inputs (a merge-commit recommendation would carry a
+        reviewed ruleset change; a rebase recommendation would not) and as partial mitigation
+        context for GITOPS-06."
+      compensating_control: "n/a -- the candidate itself is the control."
+      control_property_match: "n/a -- dismissal is not-a-defect, not control-covered."
+      decision_or_item_id: "Decision 83; Decision 144 (DEP-05)"
+    - candidate_ids: [C11]
+      candidate: "signal-green gates on two checks while other pull_request-triggered checks exist
+        (codeql.yml, terraform-apply-sandbox speculative-plan); a CI-green comment can precede an
+        omitted check's completion."
+      why_dismissed: "Traced and dismissed: the comment asserts 'all REQUIRED PR checks passed',
+        which is accurate -- the ruleset's required set is exactly pr-validate + terraform-validate
+        by deliberate minimality (Decision 83), so a watching session merging on the comment acts
+        consistently with the merge gate; codeql is advisory-for-merge by design and also runs on
+        push to main; the speculative-plan job is deliberately not a required check (Decision 83 /
+        CD.35 non-wedging). The residual improvement is already owned by open rec-2022 (extend the
+        needs list), which this audit endorses but cannot elevate into a defect of the current
+        design."
+      compensating_control: "The main-protection ruleset's required_status_checks set is the merge
+        authority, not the comment."
+      control_property_match: "The ruleset enforces at merge time the exact property (required
+        checks green) the comment reports; if the comment lied about a REQUIRED check the merge
+        would still be blocked by the ruleset -- the control catches the harmful case, and the
+        non-required case is deliberate policy."
+      decision_or_item_id: "Decision 83; rec-2022"
+    - candidate_ids: [C15, C16, C17, C18]
+      candidate: "Cost-of-keeping facets: the intra-PR commit sequence is absent from main; full PR
+        provenance needs an API round-trip; branch deletion leaves GitHub as sole holder of
+        pre-merge commits; bisect localizes to a PR, not a step."
+      why_dismissed: "Traced as one argument and dismissed as defects (they remain Q1 evidence).
+        C15/C17: the ordered sequence survives on refs/pull/<N>/head -- verified fetchable (894 refs;
+        6 fetched across merged and deleted-branch PRs; shallow boundary re-checked unmoved), and the
+        sampled sequences (1-4 commits) are dominated by CI fixups whose narrative the composed
+        squash bodies and PR disclosures already carry. C16: the round-trip is paid only for deep
+        forensics; the condensed record is local (Q8.3). C18: nothing bisects (swept), and
+        PR-grain-over-always-green-commits is the BETTER bisect substrate for both agents and humans
+        -- absence-of-need, argued with the capability/need distinction stated in Q1 prose rather
+        than assumed."
+      compensating_control: "GitHub PR refs + composed squash bodies + parallel provenance stores
+        (plans, decisions, SCD2 recs, PR bodies)."
+      control_property_match: "The controls carry the same information the candidates mourn
+        (ordering via refs/pull, rationale via stores, condensed narrative via squash bodies); if
+        the loss were real -- e.g. refs unfetchable or bodies empty -- the fetch test and body
+        sampling performed in DD-D would have failed, and they did not."
+      decision_or_item_id: "Decision 76; Decision 115 (PR-scoped ephemeral evidence)"
+  summary:
+    total_findings: 7
+    novel_count: 5
+    planned_insufficient_count: 1
+    planned_unbuilt_count: 1
+    rejected_count: 4
+    candidates_unadjudicated: []
+    top_improvements: [GITOPS-03, GITOPS-01, GITOPS-06, GITOPS-05, GITOPS-02]
+    highest_leverage_change: GITOPS-03
+    maturity_S1: strong
+    maturity_S2: frontier
+    maturity_S3: frontier
+    maturity_S4: strong
+    maturity_S5: strong
+    maturity_S6: strong
+    maturity_S7: strong
