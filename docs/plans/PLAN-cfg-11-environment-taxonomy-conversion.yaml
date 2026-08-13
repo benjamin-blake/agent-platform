@@ -44,8 +44,11 @@ scope:
     action: Modify
     purpose: >-
       Remove the now-stale prose_allowlist.allowed_globs entry "docs/contracts/environment-taxonomy.md".
-      This narrows allowed_globs (permitted; the ratchet-only rule binds grandfathered_globs). No
-      routes: entry names either .md contract, so no route breaks. DELIBERATE CALL: the new .yaml
+      This narrows allowed_globs (permitted; the ratchet-only rule binds grandfathered_globs).
+      AMENDMENT-LOG REQUIRED: this file is itself Class D (status active), and removing a list
+      element changes its parsed dict, so validate_contract_drift's check_amendment_log_for_class_d
+      fails without a new amendment_log[] entry. No routes: entry names either .md contract, so no
+      route breaks. DELIBERATE CALL: the new .yaml
       is NOT given a routes: entry either. check_topic_equals_subject binds only routed files and
       validate_placement is a dead-target check, not a registration-completeness check, so adding a
       route would import a topic==subject obligation for no discovery gain this plan needs. If a
@@ -105,8 +108,12 @@ scope:
     action: Modify
     purpose: >-
       TWO obligations. (A) T-1.19 upgrade: (i) convert exit_criteria from bare strings to the
-      id/text/status ledger shape -- MANDATORY, not cosmetic, since validate_platform_roadmap check
-      (ii) fails any tier_item touched in the git diff that retains bare-string criteria; (ii)
+      id/text/status ledger shape, per Decision 136 and at the human's explicit direction. Accuracy
+      note: this is VOLUNTARY, not forced by CI -- validate_platform_roadmap check (ii) derives
+      touched_ids from `^[+-]\s+- id: (\S+)` and matches them against TIER_ITEM ids, so the `- id:
+      c1` lines this conversion emits capture `c1`, which matches no tier_item, and a
+      note-or-files_in_scope-only edit emits no `- id:` line at all. Do not justify the upgrade by
+      that check; (ii)
       re-ground the stale files_in_scope path docs/REPORT-delegate-cli-consumer-identification.md
       (a docs/-root path the RS-03 docs_root_allowlist no longer admits) to docs/plans/reports/;
       (iii) record the CFG-11 dedup correction on the item note; (iv) record delegate-cli.md's
@@ -180,7 +187,9 @@ scope:
     purpose: >-
       Citation sweep (2 path-form). Line 107 is an ANCHOR reference
       (...environment-taxonomy.md#5-lambda-codeinfra-decoupling-principle-personal-account-lambdas)
-      that must be re-expressed as a YAML key path, not path-swapped.
+      that must be re-expressed as a YAML key path, not path-swapped. AMENDMENT-LOG REQUIRED: this
+      file is Class D (status ratified) and the edit changes a real YAML value
+      (deploy_channels.ducklake_functions.see), so a new amendment_log[] entry is mandatory.
   - file: docs/contracts/credential-routing.yaml
     action: Modify
     purpose: Citation sweep (1 bare-name reference).
@@ -189,7 +198,12 @@ scope:
     purpose: >-
       Citation sweep. Lines 39, 71 and 79 are ANCHOR references
       (blocks_ref: "environment-taxonomy.md#2-the-two-axes ...") requiring re-expression as YAML
-      key paths. Line 44 also carries the stale "four DuckLake Lambdas" fact.
+      key paths. Line 44 also carries the stale "four DuckLake Lambdas" fact, and line 87's
+      admin_out_of_band description carries another citation. AMENDMENT-LOG REQUIRED: this file is
+      Class D (status active) and five parsed values change, so a new amendment_log[] entry is
+      mandatory. NOTE docs/contracts/credential-routing.yaml is deliberately NOT in this category:
+      it is Class C and its citation sits under allowed_values.unmapped_phases_note, which
+      check_amendment_for_diff does not cover.
   - file: docs/intent-migration/MANIFEST.yaml
     action: Modify
     purpose: Citation sweep (1 bare-name reference).
@@ -310,7 +324,10 @@ verification_plan:
       A (shape) failure means the contract: block is malformed. A (grandfather) failure means the
       new file declared status: active or evaluator.none_grandfathered -- both are closed at birth
       for a NEW file. A (subject) failure means the subject collides with an existing Class D
-      subject or ritual contract id.
+      subject or ritual contract id. An (amendment) failure -- "parsed content changed but no new
+      amendment_log[] entry was added" -- is EXPECTED on FOUR files unless each got an entry:
+      contract-population.yaml, file-router.yaml, build-lambda.yaml and deploy-paths.yaml are all
+      Class D, and every one of them takes a parsed-value edit in this change.
     graduation: waive
     graduation_waiver_reason: >-
       Not admissible as a graduated check: validate_contract_drift already PASSES on origin/main
@@ -446,8 +463,12 @@ verification_plan:
       OK')"
     expected: "T-1.19 OK"
     fix_if: >-
-      A bare-string criterion on a diff-touched item fails validate_platform_roadmap check (ii). A
-      surviving docs/REPORT- path is the RS-03 docs_root_allowlist violation this plan re-grounds.
+      A failure here means the ledger conversion is incomplete or malformed (validate_platform_roadmap
+      enforces criterion-object shape and closes_criteria referential integrity). Note check (ii)'s
+      bare-string rule does NOT fire on this edit -- see the scope row's accuracy note -- so a green
+      validate_platform_roadmap alone does not prove the conversion happened; the explicit
+      isinstance assertions in this command are what prove it. A surviving docs/REPORT- path is the
+      RS-03 docs_root_allowlist violation this plan re-grounds.
     graduation: graduate
     graduation_check_id: t-1-19-ledger-upgraded
     hermetic: true
@@ -623,8 +644,8 @@ verification_plan:
       After the squash-merge, confirm rec-2751 actually closed via the Resolves: trailer and
       rec-autoclose.yml rather than assuming it.
     command: >-
-      bin/venv-python -m scripts.sync.ops pull && grep -c '"id": "rec-2751".*"status": "closed"'
-      logs/.recommendations-log.jsonl
+      bin/venv-python -m scripts.ops_data_portal --sync && grep -c '"id": "rec-2751".*"status":
+      "closed"' logs/.recommendations-log.jsonl
     expected: "1 (rec-2751 closed)"
     fix_if: >-
       If still open, the trailer did not fire; close it manually with `bin/venv-python -m
@@ -686,7 +707,11 @@ constraints:
   - "The converted file is NEW to the gate: it may not declare status: active nor evaluator.none_grandfathered (both grandfather-only, closed at birth)."
   - "docs/ROADMAP-PRODUCT.yaml is operator-FROZEN at 4707 EFFECTIVE LINES (not bytes). An in-line .md -> .yaml swap changes neither the line count nor the 301-char longest line, so the gate does not go red. The only rule is: do not ADD or REMOVE a line. Do NOT delete content to make room."
   - "PROSE BUDGETS ARE THE TIGHTEST CONSTRAINT IN THIS PLAN. Six in-scope surfaces are byte-pinned in config/prose_budgets.yaml, measured live: src/lambdas/CLAUDE.md 1313/1313 (ZERO headroom), terraform/github/CLAUDE.md 5266/5266 (ZERO), .claude/skills/planning/SKILL.md 55810/55816 (6), src/data/handlers/CLAUDE.md 4302/4307 (5), AGENTS.md inside the S1 aggregate 33183/33201 (18), terraform/CLAUDE.md 30483/30497 (14 -- against TWO references). The mandatory '.md' -> '.yaml' swap costs +2 bytes per reference, so on the two zero-headroom files it alone hard-fails validate_prose_limits (current > budget). Never raise a prose budget: that needs a Decision-cited marker this plan forbids, and reseeding DOWN is impossible when current already equals budget."
-  - "THE VALVE (apply on every byte-constrained surface): drop the 'docs/contracts/' prefix and cite the contract by BARE BASENAME -- `environment-taxonomy.yaml` instead of `docs/contracts/environment-taxonomy.yaml`. That is -15 bytes per reference, comfortably absorbing both the +2 extension cost and any key-path re-expression. It is the citation style already used repo-wide in deploy-paths.yaml, credential-routing.yaml, intent-migration/MANIFEST.yaml and every terraform/*.tf comment, so it introduces no new convention. SECOND LEVER: choose SHORT top-level key names in the converted contract, since AC-4 requires 'section N' phrases to be re-expressed as key paths and a verbose key name spends budget on every citing surface. If a file still cannot absorb the edit, the sanctioned relief valve is relocating unrelated content out per Decision 86 (prose_limits names it) -- never a budget raise. If an edit makes a file SMALLER, reseed its budget DOWN in the same change."
+  - "THE VALVE (apply on every byte-constrained surface): drop the 'docs/contracts/' prefix and cite the contract by BARE BASENAME -- `environment-taxonomy.yaml` instead of `docs/contracts/environment-taxonomy.yaml`. Net -13 bytes per reference (-15 for the dropped prefix, +2 for the .md -> .yaml extension). It is the citation style already used repo-wide in deploy-paths.yaml, credential-routing.yaml, intent-migration/MANIFEST.yaml and every terraform/*.tf comment, so it introduces no new convention. Measured post-valve slack, i.e. the budget left for re-expressing a 'section N' phrase as a key path: src/lambdas/CLAUDE.md 13 bytes (1 ref, HAS a section phrase -- so the section-5 key path must fit in 22 bytes; this is the BINDING surface), terraform/github/CLAUDE.md 13 (1 ref, no section phrase), src/data/handlers/CLAUDE.md 18 (1 ref, has one), planning/SKILL.md 32 (2 refs, one has one), AGENTS.md 44 via S1 (2 refs, one has one), terraform/CLAUDE.md 40 (2 refs, NEITHER has a section phrase -- the least constrained of the six, despite having the most references)."
+  - "SECOND LEVER: choose SHORT top-level key names in the converted contract. AC-4 requires 'section N' phrases to be re-expressed as key paths, and a verbose key name spends budget on every citing surface -- src/lambdas/CLAUDE.md caps the section-5 key path at 22 bytes. Settle the key names FIRST (execution step 2). If a file still cannot absorb the edit, the sanctioned relief valve is relocating unrelated content out per Decision 86 (prose_limits names it) -- never a budget raise. If an edit leaves a file smaller than its pin, reseed that budget DOWN in the same change."
+  - "THREE more in-scope files carry STRUCTURAL (effective-line) pins at ZERO headroom: docs/intent-migration/MANIFEST.yaml 521/521, .github/workflows/reconcile.yml 536/536, .github/workflows/terraform-apply-sandbox.yml 529/529. Do not ADD a non-comment line to any of them. The two workflow citations sit on '#' comment lines, which effective_lines excludes, so those edits are free; MANIFEST.yaml's reference is to the lint's allowlist SET rather than the contract path and may need no edit at all -- confirm before touching it."
+  - "config/agent/verification_registry/registry.yaml sits at 5,329 of its 6,000 calibrated ceiling and this change graduates 9 entries (roughly 110 lines). That lands ~5,440, comfortably under -- but confirm with validate_structural_size_limits before commit, because Decision 166 point 6 pre-commits that a breach routes to CD.29 archival, never a second raise."
+  - "AC-4's mechanical enforcement (VP step 14) covers only two reference shapes: '#'-anchors and 'section N'. The NAMED-subsection form -- 'Axis A + Guard classification subsection' at terraform/CLAUDE.md:10,78, AGENTS.md:34, scripts/terraform_apply_guard.py:134 and deploy-paths.yaml:39 -- passes step 14 untouched. Keep recognisable axis_a / guard_classification top-level keys in the converted contract so those references still resolve by name, and check them by eye; the grep will not."
   - "Never author a local terraform init/validate/plan command (Decision 119) -- terraform is not installed in this environment; CI is the authoritative verifier."
   - "No rescue agents or workaround loops (Decision 55)."
 context:
@@ -721,6 +746,7 @@ execution_steps:
   - "Verify the new file against the smuggling detector before going further: bin/venv-python -c \"import yaml; from scripts.checks.contracts._population import detect_smuggled_shape; print(detect_smuggled_shape(yaml.safe_load(open('docs/contracts/environment-taxonomy.yaml'))))\" must print None."
   - "Delete docs/contracts/environment-taxonomy.md and remove its prose_allowlist entry from docs/contracts/file-router.yaml."
   - "Correct docs/contracts/contract-population.yaml's shape_grammar.extension_and_depth to name delegate-cli.md as the sole remaining baseline .md member, and add the required amendment_log[] entry."
+  - "Add an amendment_log[] entry to EACH of the other three Class D contracts whose parsed values this change edits: file-router.yaml (allowed_globs element removed), build-lambda.yaml (deploy_channels...see) and deploy-paths.yaml (three blocks_ref values, deploy_code.description, admin_out_of_band description). Without them validate_contract_drift fails with '(amendment): parsed content changed but no new amendment_log[] entry was added'. credential-routing.yaml needs none -- it is Class C and its citation is outside check_amendment_for_diff's covered fields."
   - "Repoint the three verification_registry entries. Entries 1 and 2 need check_spec.path and guard_target updated. Entry 3 (env-taxonomy-section6-lockfile-committed) needs its awk-based markdown section extraction RE-EXPRESSED against the YAML structure -- or retired with a recorded reason; a path swap alone leaves it broken."
   - "Repoint scripts/checks/iam_tf/validate_environment_taxonomy.py to the .yaml path, keeping the path literal in EXECUTABLE context (not a docstring or comment) so the evaluator resolves."
   - "Rewrite scripts/checks/ops_governance/validate_deploy_channel_conformance.py::_taxonomy_state to read the typed conformance field; retire _DUCKLAKE_TAXONOMY_MARKER and _PROD_TAXONOMY_MARKER; preserve both class legs and the ambiguous/missing-value failure branches."
