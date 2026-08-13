@@ -101,9 +101,14 @@ class TestStandardContractGate:
 
         assert any("not a YAML mapping" in f for f in failed)
 
-    def test_contract_bearing_key_fails(self, tmp_path: Path) -> None:
+    def test_contract_bearing_key_now_passes(self, tmp_path: Path) -> None:
+        # INVERTED (migration-step-3-grandfathering): data-modeling-standard.yaml now legitimately
+        # carries a Class D `contract:` envelope (its own evaluator is
+        # {check: validate_data_model_standard} -- this check self-hosts). The pre-migration
+        # rejection ("must stay non-ritual so the CD.25 drift gate keeps skipping it") is gone;
+        # this check now only enforces the required sections, regardless of contract: presence.
         data = dict(_COMPLETE_STANDARD)
-        data["contract"] = {"class": "A"}
+        data["contract"] = {"id": "data-modeling-standard", "class": "D", "contract_version": 1, "status": "active"}
         _write_yaml(tmp_path / "data-modeling-standard.yaml", data)
 
         failed: list[str] = []
@@ -111,7 +116,7 @@ class TestStandardContractGate:
             failed, contracts_dir=tmp_path, changed_files=["docs/contracts/data-modeling-standard.yaml"]
         )
 
-        assert any("contract:/class:" in f for f in failed)
+        assert failed == [], failed
 
     def test_missing_section_fails(self, tmp_path: Path) -> None:
         _write_yaml(tmp_path / "data-modeling-standard.yaml", {"version": 1, "rules": []})

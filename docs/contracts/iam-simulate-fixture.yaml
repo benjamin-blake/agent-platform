@@ -15,10 +15,12 @@
 # expected decision, so a later sweep re-derives nothing and a later auditor cannot mistake a
 # by-design denial for an unnoticed gap. A `by_design: ...` field marks the deliberate refusals.
 #
-# NOT A RITUAL CONTRACT (Decision 118 governs RATIFIED contracts): this is a free-form registry, the
-# same shape as docs/contracts/deploy-paths.yaml and docs/contracts/file-router.yaml -- no
-# contract:/class:/contract_version:/status: block, so validate_contract_drift skips it. Amend it by
-# editing it in the same PR as the grant change it records.
+# NOT A RITUAL A/B/C CONTRACT (Decision 118 governs RATIFIED contracts): a Class D mechanism
+# contract as of the `contract:` block below (migration-step-3-grandfathering, T2.56 migration
+# step 3), grandfathered with evaluator.none_grandfathered (its only reader is a CI script, not a
+# registered check -- see the enforcement_route). Amend the body by editing it in the same PR as
+# the grant change it records; amend the `contract:` envelope's own fields via a new
+# amendment_log[] entry.
 #
 # PUBLIC REPO (Decision 101): ${account_id} and ${region} are PLACEHOLDERS, resolved at run time by
 # the runner. A literal 12-digit account id must NEVER appear in this file -- the pre-commit
@@ -33,6 +35,32 @@
 # PROVIDER-SCOPED: every call-set inference below is scoped to hashicorp/aws 5.100 (the version in
 # .terraform.lock.hcl). RE-RUN THIS FIXTURE ON ANY PROVIDER BUMP -- a provider that migrates a call
 # (e.g. logs:TagLogGroup -> logs:TagResource) changes which companion verbs are load-bearing.
+contract:
+  id: iam-simulate-fixture
+  class: D
+  contract_version: 1
+  status: active
+  description: >-
+    Class D mechanism-contract envelope for this file (migration-step-3-grandfathering, T2.56
+    migration step 3). The standing live-simulate fixture body itself (expected_decision_values,
+    the per-verb decision records) is unchanged by this envelope.
+  subject: iam-simulate-fixture
+  evaluator:
+    none_grandfathered:
+      reason: >-
+        The only reader of this fixture is a CI script, not a registered validate.py check --
+        wiring it into --pre would red the very PR that fixes a legitimate gap (see WHAT THIS IS
+        above).
+      consumer: scripts/ci/iam_simulate.py
+      mechanism: >-
+        Register a check over expected_decision_values / the per-verb placeholders shape (never
+        the condition-key/intersection semantics themselves, which stay a POST-APPLY-only
+        concern).
+      blocker: the reader is a CI script, not a registered check
+      shape: check
+
+amendment_log: []
+
 schema_version: 1
 
 principal:

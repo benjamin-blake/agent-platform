@@ -14,6 +14,14 @@ from scripts.contracts_schema import ContractMeta, EvaluatorSpec
 
 _ROOT = Path(__file__).resolve().parents[3]
 
+_COMPLETE_ROUTE = {
+    "reason": "pre-ritual free-form doc, pending future ratification",
+    "consumer": "scripts/some_consumer.py",
+    "mechanism": "assert some_field matches reality",
+    "blocker": "no check reads it yet",
+    "shape": "check",
+}
+
 
 class TestClassifyFile:
     def test_ritual_classes(self) -> None:
@@ -95,6 +103,37 @@ class TestExtensionDepthAndScan:
         (sub / "b.yaml").write_text("x: 1\n", encoding="utf-8")
         found = {p.relative_to(tmp_path).as_posix() for p in _population.scan_tree(tmp_path)}
         assert found == {"a.yaml", "sub/b.yaml"}
+
+
+class TestModuleContainsLiteral:
+    """Path-shaped literal acceptance + the MATCHER TRAP whitespace-rejection regression
+    (migration-step-3-grandfathering)."""
+
+    def test_path_shaped_literal_ending_in_basename_resolves(self, tmp_path) -> None:
+        mod = tmp_path / "checker.py"
+        mod.write_text('_CONTRACT_REL_PATH = "docs/contracts/decision-entry.yaml"\n', encoding="utf-8")
+        assert _population.module_contains_literal(mod, "decision-entry.yaml")
+
+    def test_prose_literal_with_whitespace_is_rejected(self, tmp_path) -> None:
+        # The MATCHER TRAP: a long prose annotation string that merely ENDS with the contract's
+        # basename must never certify as a reading -- mirrors the live
+        # scripts/checks/iam_tf/_write_companions.py instance that motivated this guard.
+        mod = tmp_path / "checker.py"
+        mod.write_text(
+            '_NOTE = "this file writes companion policies referenced by docs/contracts/iam-simulate-fixture.yaml"\n',
+            encoding="utf-8",
+        )
+        assert not _population.module_contains_literal(mod, "iam-simulate-fixture.yaml")
+
+    def test_path_shaped_literal_with_no_slash_falls_back_to_exact_match_only(self, tmp_path) -> None:
+        mod = tmp_path / "checker.py"
+        mod.write_text('X = "not-the-basename"\n', encoding="utf-8")
+        assert not _population.module_contains_literal(mod, "basename.yaml")
+
+    def test_bare_basename_still_resolves_via_exact_match(self, tmp_path) -> None:
+        mod = tmp_path / "checker.py"
+        mod.write_text('X = "target.yaml"\n', encoding="utf-8")
+        assert _population.module_contains_literal(mod, "target.yaml")
 
 
 class TestResolveEvaluatorModuleBoundary:
@@ -267,7 +306,9 @@ class TestResolveEvaluatorModuleBoundary:
         assert "does not contain" in detail2
 
     def test_none_grandfathered_kind_never_resolves(self) -> None:
-        resolves, detail = _population.resolve_evaluator("x.yaml", EvaluatorSpec(none_grandfathered="reason"), root=_ROOT)
+        resolves, detail = _population.resolve_evaluator(
+            "x.yaml", EvaluatorSpec(none_grandfathered=_COMPLETE_ROUTE), root=_ROOT
+        )
         assert not resolves
         assert "never resolves" in detail
 
@@ -420,7 +461,7 @@ class TestAmendmentLogAndKindChangeDirect:
             )
 
         resolving = _meta({"check": "validate_placement"})
-        grandfathered = _meta({"none_grandfathered": "reason"})
+        grandfathered = _meta({"none_grandfathered": _COMPLETE_ROUTE})
         err = _population.check_evaluator_kind_change(resolving, grandfathered)
         assert err is not None
         assert "resolving evaluator" in err
@@ -439,100 +480,10 @@ class TestAmendmentLogAndKindChangeDirect:
         assert _population.check_conformance_loss("class_d", "class_d") is None
 
 
-class TestRatchetSpecAndCensus:
-    def test_ratchet_spec_shape(self) -> None:
-        spec = _population.ratchet_spec()
-        assert spec.rel_path == "docs/contracts/contract-population.yaml"
-        assert spec.token == "raise-approved"
-        assert spec.gated_direction == "up"
-        assert spec.gates_new_entry(0) is True
-
-    def test_validate_ratchet_pin_missing_file(self, tmp_path) -> None:
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and errors == []
-
-    def test_validate_ratchet_pin_unparseable(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("{bad: [unclosed", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and errors
-
-    def test_validate_ratchet_pin_non_mapping(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("- a\n- b\n", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and errors
-
-    def test_check_ratchet_direction_base_present_but_no_ratchet_entry_skips(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  grandfathered_max: 25\n", encoding="utf-8")
-        violations = _population.check_ratchet_direction(
-            tmp_path, 25, base_reader=lambda rel: "ratchet:\n  some_other_key: 1\n"
-        )
-        assert violations == []
-
-    def test_validate_ratchet_pin_missing_key(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  other: 1\n", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and "missing" in errors[0]
-
-    def test_validate_ratchet_pin_no_ratchet_block(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("other_key: 1\n", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and "missing" in errors[0]
-
-    def test_validate_ratchet_pin_string(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  grandfathered_max: 'x'\n", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and "non-bool int" in errors[0]
-
-    def test_validate_ratchet_pin_bool(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  grandfathered_max: false\n", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and "non-bool int" in errors[0]
-
-    def test_validate_ratchet_pin_negative(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  grandfathered_max: -5\n", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value is None and "non-negative" in errors[0]
-
-    def test_validate_ratchet_pin_valid(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  grandfathered_max: 21\n", encoding="utf-8")
-        value, errors = _population.validate_ratchet_pin(tmp_path)
-        assert value == 21 and errors == []
-
-    def test_check_ratchet_direction_base_absent_skips(self, tmp_path) -> None:
-        assert _population.check_ratchet_direction(tmp_path, 999, base_reader=lambda rel: None) == []
-
-    def test_check_ratchet_direction_decrease_and_equal_pass(self, tmp_path) -> None:
-        base_text = "ratchet:\n  grandfathered_max: 21\n"
-        assert _population.check_ratchet_direction(tmp_path, 10, base_reader=lambda rel: base_text) == []
-        assert _population.check_ratchet_direction(tmp_path, 21, base_reader=lambda rel: base_text) == []
-
-    def test_check_ratchet_direction_unmarked_increase_fails(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  grandfathered_max: 25\n", encoding="utf-8")
-        base_text = "ratchet:\n  grandfathered_max: 21\n"
-        violations = _population.check_ratchet_direction(tmp_path, 25, base_reader=lambda rel: base_text)
-        assert violations and "unauthorized" in violations[0]
-
-    def test_check_ratchet_direction_marked_increase_authorized_passes(self, tmp_path, monkeypatch) -> None:
-        (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: 25  # raise-approved: dec-500 grew\n", encoding="utf-8"
-        )
-        base_text = "ratchet:\n  grandfathered_max: 21\n"
-        monkeypatch.setattr(
-            _population._marker_guard,
-            "load_decision_bodies",
-            lambda: {500: "authorizes grandfathered_max"},
-        )
-        violations = _population.check_ratchet_direction(tmp_path, 25, base_reader=lambda rel: base_text)
-        assert violations == []
-
-    def test_check_ratchet_direction_marked_increase_unauthorized_fails(self, tmp_path, monkeypatch) -> None:
-        (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: 25  # raise-approved: dec-999 unrelated\n", encoding="utf-8"
-        )
-        base_text = "ratchet:\n  grandfathered_max: 21\n"
-        monkeypatch.setattr(_population._marker_guard, "load_decision_bodies", lambda: {999: "unrelated text"})
-        violations = _population.check_ratchet_direction(tmp_path, 25, base_reader=lambda rel: base_text)
-        assert violations and "does not authorize" in violations[0]
+class TestCensus:
+    """The ratchet spec/pin/direction tests migrated to tests/checks/contracts/test__ratchet.py
+    alongside the scripts/checks/contracts/_ratchet.py source move (Decision 128 decompose /
+    Decision 131 mirror convention). Census itself stays here -- it did not move."""
 
     def test_census_render_and_identity(self) -> None:
         census = _population.Census(scanned=3, ritual=1, declared=1, grandfathered=1, skipped=0)
@@ -545,4 +496,5 @@ class TestRatchetSpecAndCensus:
 
 @pytest.mark.parametrize("kind", ["check", "agent_surface", "none_grandfathered"])
 def test_evaluator_spec_accepts_each_kind_alone(kind: str) -> None:
-    EvaluatorSpec.model_validate({kind: "value"})
+    value = _COMPLETE_ROUTE if kind == "none_grandfathered" else "value"
+    EvaluatorSpec.model_validate({kind: value})

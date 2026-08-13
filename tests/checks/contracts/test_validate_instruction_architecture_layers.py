@@ -52,3 +52,50 @@ class TestValidateInstructionArchitectureLayers:
             validate_instruction_architecture_layers(failed)
 
         assert failed == []
+
+
+class TestContractPresence:
+    """migration-step-3-grandfathering: an absent/unparseable instruction-architecture.yaml now
+    FAILS the check instead of silently falling back to a stub dict and passing vacuously (the
+    real hole: prompt_compliance._load_instruction_architecture() degrades a missing contract to
+    {"layers": []}, which check_layer_compliance reports as zero violations)."""
+
+    def test_missing_contract_fails(self, tmp_path: Path) -> None:
+        # tmp_path has no docs/contracts/instruction-architecture.yaml at all.
+        mock_compliance = MagicMock()
+        with (
+            patch("scripts.checks.contracts.validate_instruction_architecture_layers._common.ROOT", tmp_path),
+            patch(
+                "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+                return_value=mock_compliance,
+            ) as load_compliance,
+        ):
+            failed: list[str] = []
+            validate_instruction_architecture_layers(failed)
+
+        assert len(failed) == 1
+        assert "does not exist" in failed[0]
+        # The presence assertion fires BEFORE delegating -- the vacuous-pass loader is never
+        # even reached on a genuinely missing contract.
+        load_compliance.assert_not_called()
+
+    def test_present_contract_still_delegates_normally(self, tmp_path: Path) -> None:
+        contracts_dir = tmp_path / "docs" / "contracts"
+        contracts_dir.mkdir(parents=True)
+        (contracts_dir / "instruction-architecture.yaml").write_text("layers: []\n", encoding="utf-8")
+
+        mock_compliance = MagicMock()
+        mock_compliance._load_instruction_architecture.return_value = {"layers": []}
+        mock_compliance.check_layer_compliance.return_value = []
+
+        with (
+            patch("scripts.checks.contracts.validate_instruction_architecture_layers._common.ROOT", tmp_path),
+            patch(
+                "scripts.checks.contracts.validate_instruction_architecture_layers._load_prompt_compliance",
+                return_value=mock_compliance,
+            ),
+        ):
+            failed: list[str] = []
+            validate_instruction_architecture_layers(failed)
+
+        assert failed == []
