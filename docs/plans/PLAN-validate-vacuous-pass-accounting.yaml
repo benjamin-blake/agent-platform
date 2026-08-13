@@ -23,9 +23,10 @@ scope:
     action: Modify
     purpose: >-
       Add the per-run accounting channel next to Check: the ambient accumulator, the public
-      examined(count, unit=)/skipped(reason) API check bodies call, an outcome_scope context
-      manager for non-check scaffolds, the CheckOutcome record, and the single status-derivation
-      function (failed|skipped|vacuous|enforced|undeclared). Chosen as the home because every
+      examined(count, unit=)/skipped(reason) API check bodies call, an outcome_scope(name, kind=)
+      context manager for non-check scaffolds, the CheckOutcome record (carrying `kind`, see the
+      grain declaration in context), and the single status-derivation function
+      (failed|skipped|vacuous|enforced|undeclared). Chosen as the home because every
       check module already imports this module, so no check gains a new import, and rec-2915 names
       registry.Check as the natural home. Also extends the module docstring's SIX-surface
       registration enumeration to SEVEN by naming the declaration obligation, so a new check's
@@ -42,11 +43,15 @@ scope:
     action: Modify
     purpose: >-
       ensure_fresh_dq_results() records its creds-absent early return as a declared skip
-      (rec-3085 half 1). Requires TWO edits, not one: a registry.outcome_scope("ensure_fresh_dq")
-      wrapper, AND narrowing the blanket `except Exception:` at lines 204-210 via a named
-      module-level classifier, because a skip attached to the blanket handler would launder real
-      bugs into accounted skips. See constraint 5 -- the earlier "wrapper only, no logic here"
-      framing was unsatisfiable against the live code and is retracted.
+      (rec-3085 half 1). Requires TWO edits, not one: a
+      registry.outcome_scope("ensure_fresh_dq", kind="scaffold") wrapper, AND narrowing the blanket
+      `except Exception:` at lines 204-210 via a named module-level classifier, because a skip
+      attached to the blanket handler would launder real bugs into accounted skips. See constraint 5
+      -- the earlier "wrapper only, no logic here" framing was unsatisfiable against the live code
+      and is retracted. THIS INSTALLS A NEW FAIL-CLOSED BEHAVIOUR (constraint 5a): today the handler
+      swallows every exception and never touches `failed`; after this change a non-matching
+      exception appends to `failed`. That is a live full-tier behaviour change, not a preserved
+      default.
   - file: scripts/checks/roadmap/check_graduation_guard.py
     action: Modify
     purpose: >-
@@ -71,8 +76,10 @@ scope:
   - file: scripts/checks/misc/validate_scheduled_agent_logs.py
     action: Modify
     purpose: >-
-      Declare examined counts and skips on every reachable exit path; pay the measured
-      91%/5-statement coverage debt. DIAGNOSIS CORRECTED (see context): this check's domain is
+      Declare on every reachable exit path per constraint 5b: the empty-diff return is an empty
+      domain -> examined(0)/vacuous, while the "not a scheduled-agent branch" return is an UNMET
+      PRECONDITION -> skipped(reason). Pay the measured 91%/5-statement coverage debt.
+      DIAGNOSIS CORRECTED (see context): this check's domain is
       empty because the scheduled-agent producers are DISABLED (T4.12), not because of its diff
       base -- it engages only when every changed path is under logs/, which no ordinary branch or
       squashed merge satisfies. Its raw `git diff origin/main...HEAD` base is a real but SECONDARY
@@ -84,8 +91,12 @@ scope:
   - file: scripts/checks/lambda_pkg/validate_lambda_deploy_gating.py
     action: Modify
     purpose: >-
-      Declare examined counts and its no-changed-files / no-affected-artifacts early returns. Also
-      pay the measured 94%/2-statement pre-existing coverage debt.
+      Apply constraint 5b's discrimination rule: BOTH the no-changed-files and the
+      no-affected-artifacts early returns are empty DOMAINS, so both declare examined(0) -> vacuous,
+      NOT skipped. (An earlier revision called these skips, which contradicted the identical shape
+      in _check_graduation_guard; the rule now settles it uniformly.) On the implementing branch
+      this check is the deterministic source of the live `vacuous` reading VP step 10 asserts, since
+      no Lambda artifact is affected. Also pay the measured 94%/2-statement coverage debt.
   - file: scripts/checks/hygiene/validate_check_accounting.py
     action: Create
     purpose: >-
@@ -127,11 +138,16 @@ scope:
     action: Create
     purpose: >-
       Class D mechanism contract owning the field semantics this plan creates -- the CheckOutcome
-      status vocabulary, the validation-result.json schema_version 3 shape, and the baseline
-      grammar including the touch-it-fix-it clause. Required because Decision 150 routes field
-      semantics to the owning contract, never into a numbered Decision entry. Self-hosting like
-      check-manifest.yaml: subject check-accounting, evaluator {check: validate_check_accounting}.
-      New Class D files may not declare status: active (grandfather-only, Decision 168).
+      status vocabulary, THE skipped-versus-vacuous DISCRIMINATION RULE (constraint 5b) as the
+      single derivation authority, the declared GRAIN of check_outcomes, the
+      validation-result.json schema_version 3 shape, and the baseline grammar including the
+      touch-it-fix-it clause. Required because Decision 150 routes field semantics to the owning
+      contract, never into a numbered Decision entry. Self-hosting like check-manifest.yaml:
+      subject check-accounting, evaluator {check: validate_check_accounting}. Envelope must carry
+      id, class D, contract_version 1, status ratified, ratified_via
+      "Decision NNN / PLAN-validate-vacuous-pass-accounting", description, subject, evaluator, and
+      a top-level `amendment_log: []`. New Class D files may not declare status: active
+      (grandfather-only, Decision 168).
   - file: docs/contracts/file-router.yaml
     action: Modify
     purpose: One routes[] entry with topic check-accounting (topic-equals-subject self-hosting rule).
@@ -168,13 +184,19 @@ scope:
     action: Modify
     purpose: >-
       ensure_fresh_dq_results records a declared skip when the credential classifier matches, and
-      does NOT record a skip for any other exception class (Decision 155 narrow-skip rule); plus
-      the pre-existing uncovered branches in this file's scaffold targets.
+      for any other exception records no skip and appends to `failed`. REQUIRES REWORKING the two
+      existing tests at :158 and :175, which raise bare Exception("Token has expired") /
+      Exception("ProfileNotFound") and assert failed == [] -- both go red under constraint 5a and
+      must be rewritten to raise realistic credential exceptions, with a new companion case pinning
+      the non-matching path. Plus the pre-existing uncovered branches in this file's scaffold targets.
   - file: tests/checks/roadmap/test_check_graduation_guard.py
     action: Modify
     purpose: >-
-      Base-fix red-green tests (VP step 9), the rec-3085 dq_unavailable case named by that rec's
-      acceptance, and the 8 pre-existing uncovered statements.
+      A TestBaseDerivation class carrying both halves of VP step 9's red-green (changed-file base
+      AND old-content ref), the rec-3085 dq_unavailable case named by that rec's acceptance, and the
+      8 pre-existing uncovered statements. The existing `_make_run` helper at line 104 must have its
+      old-content branch re-keyed: it currently matches on `"show" in joined and "HEAD:" in joined`,
+      which stops matching once the read is repointed and silently returns "" instead.
   - file: tests/checks/misc/test_validate_test_coverage.py
     action: Modify
     purpose: Declared-examined/skip tests plus the 16 pre-existing uncovered statements.
@@ -224,8 +246,12 @@ acceptance_criteria:
     working-tree base made every clean CI checkout an unconditional early return.
   - >-
     All five adopted checks (_check_graduation_guard plus the four full-tier-only diff consumers)
-    declare an examined count or a skip on every reachable exit path, and all nine pre-existing
-    Python scope files measure 100% per-file coverage.
+    declare an examined count or a skip on every reachable exit path, applying constraint 5b's
+    discrimination rule uniformly, and all nine pre-existing Python scope files measure 100%
+    per-file coverage. Evidence mapping: VP step 5's --cov-fail-under=100 gates four of the nine
+    directly; the remaining five (_scaffolding, check_graduation_guard, registry, validation_result,
+    hygiene/_manifest) are gated by the standing validate_test_coverage check inside VP step 10's
+    full-tier run, which enforces the same 100% per-file standard on every changed unbaselined file.
   - >-
     validate_check_accounting is registered in BOTH pre_sequence() and full_sequence(), fails a new
     check module that declares no outcome and is absent from the baseline, fails any net growth of
@@ -399,17 +425,25 @@ verification_plan:
       THE DISCRIMINATING PROOF, replacing the earlier live-dead-gate step that could not work. Show
       red-green on a real defect: the graduation guard's base fix converts a reading that was
       unconditionally vacuous into an examined one, hermetically and replayably in CI.
-    command: bin/venv-python -m pytest tests/checks/roadmap/test_check_graduation_guard.py -q -k "base_derivation"
+    command: bin/venv-python -m pytest "tests/checks/roadmap/test_check_graduation_guard.py::TestBaseDerivation" -q
     expected: >-
-      Passes. Given a CLEAN working tree and a DQ YAML change present in the committed diff against
-      the push-aware base, the guard records examined>0 and evaluates the flip. The same fixture run
-      against the pre-fix working-tree base records examined==0 (vacuous) -- so the test is red on
-      the old code and green on the new, on the exact defect that made this gate inert in CI since
-      it shipped.
+      Passes. TWO assertions, because the fix has two call sites and only one of them is otherwise
+      observable. (a) CHANGED-FILE HALF: given a clean working tree and a DQ YAML change present in
+      the committed diff against the push-aware base, the guard records examined>0 and evaluates the
+      flip; the same fixture on the pre-fix working-tree base records examined==0 (vacuous). (b)
+      OLD-CONTENT HALF: inspect the recorded _common.run call list and assert (i) no invocation
+      matches `git diff HEAD ... -- config/agent/data_quality/`, and (ii) the `git show` argument's
+      ref equals the base the diff used, not the literal "HEAD". Pinned as a node id rather than a
+      -k selector, per tests/CLAUDE.md and because the graduation registry row needs a node_id.
     fix_if: >-
-      The test passes on the pre-fix code too, which means it is not exercising the base derivation
-      and proves nothing. Re-check that the fixture commits the DQ change rather than leaving it in
-      the working tree, since a dirty tree makes both bases agree and destroys the discrimination.
+      Assertion (a) passes on pre-fix code -- the fixture left the DQ change in the working tree, so
+      both bases agree and the discrimination is destroyed; commit it instead. Assertion (b) is the
+      one that must not be dropped: the existing _make_run helper keys its old-content branch on
+      `"show" in joined and "HEAD:" in joined`, so once the read is repointed that branch stops
+      matching, stdout falls through to "", old_map becomes {} and EVERY enforced:true reads as a
+      flip -- silent over-blocking that no existing test catches, because
+      test_blocks_new_enforced_true_when_fail already exercises the empty-old_map case. Update
+      _make_run's keying as part of this step.
     hermetic: true
     graduation: graduate
     graduation_check_id: graduation-guard-committed-base-derivation
@@ -425,11 +459,17 @@ verification_plan:
       checks are non-undeclared; and BOTH "vacuous" and "enforced" appear among real statuses,
       demonstrating the observable discriminates on live run data. (>=97 not 101 because
       validate_terraform_try is registered but dispatched in neither tier, so the tier union is 100.)
+      Under constraint 5b the live "vacuous" is deterministic, not incidental:
+      validate_lambda_deploy_gating has no affected Lambda artifacts on this scope, and
+      _check_graduation_guard has no changed DQ YAML -- both are empty domains, so both declare
+      examined(0). "enforced" comes from validate_test_coverage and validate_environment_taxonomy,
+      which both examine real changed files here.
     fix_if: >-
-      No check records "vacuous" -- meaning every adopted check happened to examine something on
-      this branch. Do NOT weaken the assertion: add a declaring check whose domain is genuinely
-      empty on this diff, or move the discrimination claim entirely onto step 9, which proves it
-      hermetically and is the graduated guard.
+      No check records "vacuous". Under 5b that means a tranche check mislabelled an empty domain as
+      a skip -- fix the labelling to match the rule. Do NOT weaken the assertion and do NOT retreat
+      to step 9: AC 8 exists precisely to demand live-run discrimination "not only on fixtures", so
+      dropping this step's claim would retire an acceptance criterion without amending it. An
+      earlier revision offered exactly that escape and it is removed.
     hermetic: false
     graduation: not-applicable
   - step: 11
@@ -438,8 +478,7 @@ verification_plan:
       File the two follow-on findings as recommendations BEFORE rec-2917 is closed, so neither
       discovered defect is discarded (AGENTS.md: out-of-scope bugs become recommendations, never
       inline fixes).
-    command: |-
-      bin/venv-python -c "from scripts.ops_data_portal import file_rec, get_rec_write_guidance; print(get_rec_write_guidance())"
+    command: bin/venv-python -m scripts.ops_data_portal --guidance
     expected: >-
       Guidance prints; the implementing agent then files TWO recs via file_rec: (a) the surviving
       rec-2917 proposal -- classify registered checks tree-scoped vs change-scoped and run
@@ -498,21 +537,29 @@ test_obligations:
   - source: scripts/checks/_scaffolding.py
     behavior: >-
       ensure_fresh_dq_results records a declared skip only when the named credential classifier
-      matches; any other exception records no skip and does not suppress the failure.
+      matches; any other exception records no skip and appends to `failed` (constraint 5a's newly
+      installed fail-closed path).
     verification_step: 4
     test_selector: tests/validate/test_scaffold_gates.py
     red_green_expectation: >-
       red before (the blanket except at lines 204-210 returns with no record of any kind and no
-      classifier exists to distinguish causes), green after.
+      classifier exists to distinguish causes), green after. Note this file's existing tests at
+      :158 and :175 go red BY DESIGN under the new behaviour and are reworked as part of the same
+      change -- a red-green on the non-matching-exception path is only meaningful once they stop
+      asserting the swallow-everything contract.
   - source: scripts/checks/roadmap/check_graduation_guard.py
     behavior: >-
-      Both the changed-file set and the old-content read derive from the committed push-aware base,
-      and every degraded exit is a declared skip.
-    verification_step: 9
+      Both the changed-file set AND the old-content read derive from the same committed push-aware
+      base, and every dq-latest degradation is a declared skip while an empty DQ domain is
+      examined(0) per constraint 5b.
+    verification_step: 4
     test_selector: tests/checks/roadmap/test_check_graduation_guard.py
     red_green_expectation: >-
-      red before (a clean-tree fixture with a committed DQ change reads vacuous under the
-      working-tree base), green after (the same fixture reads examined>0).
+      red before on BOTH halves, which is the point: (a) a clean-tree fixture with a committed DQ
+      change reads vacuous under the working-tree base; (b) the run-call assertion fails because the
+      `git show` ref is the literal "HEAD". Green after on both. Half (b) is load-bearing -- without
+      it a mis-repointed old-content read silently empties old_map and over-blocks every
+      enforced:true, and no existing test catches that.
   - source: scripts/checks/misc/validate_test_coverage.py
     behavior: >-
       Declares an examined count or a skip on every reachable exit path, at 100% file coverage.
@@ -587,11 +634,37 @@ constraints:
     lineage; the ci-rca-evidence-fidelity work owns it). Additive fields only; never reorder,
     rename, or re-type those two.
   - >-
-    The skip declaration in ensure_fresh_dq_results must attach to a NAMED deterministic classifier
-    (Decision 155's reader_transient.py shape), not to the blanket `except Exception:` currently at
-    lines 204-210 -- that handler spans the boto3 import, profile resolution, Session construction
-    and the STS call, so a skip on it would launder real bugs into accounted skips. Every
-    non-matching exception keeps the Decision 55 fail-closed default.
+    (5) The skip declaration in ensure_fresh_dq_results must attach to a NAMED deterministic
+    classifier (Decision 155's reader_transient.py two-tier shape), not to the blanket
+    `except Exception:` currently at lines 204-210 -- that handler spans the boto3 import, profile
+    resolution, Session construction and the STS call, so a skip on it would launder real bugs into
+    accounted skips. Discrimination basis must be explicit about its own limits: botocore types are
+    NOT reliably importable at classify time (tests/validate/test_scaffold_gates.py:83-90 stubs
+    sys.modules["boto3"] = MagicMock() precisely because boto3 is absent there), so the isinstance
+    tier degrades to nothing under test and a named message-pattern tier must carry the
+    discrimination -- mirror reader_transient.py's isinstance-guarded-by-ImportError plus
+    message-fallback structure rather than assuming types are available.
+  - >-
+    (5a) The classifier INSTALLS a fail-closed behaviour that does not exist today: currently
+    ensure_fresh_dq_results swallows every exception, prints, and returns with `failed` untouched.
+    After this change a non-matching exception APPENDS to `failed` and reddens the full tier. An
+    earlier revision described this as "keeping the Decision 55 fail-closed default" -- that was
+    factually wrong, there is no such default on this path to keep. Two currently-passing tests
+    assert the old behaviour and MUST be reworked, not deleted:
+    tests/validate/test_scaffold_gates.py:158 (test_ensure_fresh_dq_skips_when_sso_unavailable) and
+    :175 (test_ensure_fresh_dq_skips_when_credentials_unavailable). Both raise a bare
+    Exception("Token has expired") / Exception("ProfileNotFound") and assert failed == []; a
+    type-based classifier matches neither, so both go red. Rewrite them to raise realistic
+    credential exceptions and add a companion case pinning the new non-matching-exception path.
+  - >-
+    (5b) DISCRIMINATION RULE for the plan's central observable, stated once here and made
+    authoritative in docs/contracts/check-accounting.yaml: a check whose derived input DOMAIN is
+    empty declares examined(0), yielding status `vacuous`. `skipped(reason)` is reserved for an
+    UNAVAILABLE INPUT OR UNMET PRECONDITION -- a missing credential, an absent artefact, a
+    recursion guard, an engagement condition that does not hold -- and is never used for an empty
+    domain. Apply it uniformly across the tranche; an earlier revision gave structurally identical
+    early returns opposite treatments in _check_graduation_guard and validate_lambda_deploy_gating,
+    which would have made the plan's own headline observable author-discretionary.
   - >-
     validate_check_accounting must be filesystem-only with no subprocess so the fast tier stays
     inside its 5-minute budget (Decision 153); the AST scan of ~101 modules is the whole check.
@@ -643,6 +716,24 @@ context:
     is TWO call sites, not one: the diff base plus the paired `git show HEAD:{path}` old-content
     read -- repointing only the diff would leave the guard live but permanently blind, since
     old_map would equal new_map and no false->true flip could ever be detected.
+  - >-
+    GRAIN DECLARATION for check_outcomes (AGENTS.md data-modeling default: name the grain before
+    designing the record). ONE ROW PER DISPATCHED FULL-TIER STEP, not per check -- because the
+    ensure_fresh_dq scaffold shares the collection, a check-only grain would be mixed the moment
+    rec-3085's half lands. Each row therefore carries `kind` ("check" | "scaffold") alongside the
+    step name and status. Write mode is append-within-run then whole-file replace: the evidence
+    file is regenerated every full run and never read as history, so this is not an SCD2 or
+    event-journal table and needs no merge key, identity or partitioning -- it is a run artifact.
+    That distinction is worth stating because the natural successor home for this stream at T2.36
+    IS telemetry_observations, where the full data-modeling walk WOULD apply; this plan does not
+    create that dependency and does not claim any T2.36 criterion.
+  - >-
+    SECOND live behaviour change to expect, in addition to the guard below: the ensure_fresh_dq
+    classifier (constraint 5a) installs a fail-closed path where none exists today. A non-credential
+    exception in the DQ probe -- a genuine bug in profile resolution, say -- will now redden the full
+    tier instead of printing and returning green. That is the intended correction, but it is a
+    behaviour change to the full tier that was previously undeclared here, and it is why two
+    currently-passing tests must be reworked rather than merely extended.
   - >-
     Live behaviour change to expect: the guard starts actually enforcing in CI for the first time. It
     only appends a failure when DQ YAML changed AND an enforced:false->true flip happened AND that
@@ -754,9 +845,11 @@ execution_steps:
     failed_checks and failed_check_attributions untouched.
   - >-
     scripts/checks/_scaffolding.py -- wrap ensure_fresh_dq_results' body in
-    registry.outcome_scope("ensure_fresh_dq"), AND replace the blanket `except Exception:` at lines
-    204-210 with a named module-level classifier so only credential-unavailability records a skip.
-    Both edits are required; the wrapper alone lands the shape constraint 5 forbids.
+    registry.outcome_scope("ensure_fresh_dq", kind="scaffold"), AND replace the blanket
+    `except Exception:` at lines 204-210 with a named module-level classifier so only
+    credential-unavailability records a skip while everything else appends to `failed`. Both edits
+    are required; the wrapper alone lands the shape constraint 5 forbids. Rework the two colliding
+    tests named in constraint 5a in the same commit -- they assert the behaviour being replaced.
   - >-
     scripts/checks/roadmap/check_graduation_guard.py -- repoint BOTH the changed-file derivation
     (off `git diff HEAD`) and the paired `git show HEAD:{path}` old-content read onto
@@ -766,9 +859,11 @@ execution_steps:
   - >-
     Adopt the accounting API in the four tranche checks (validate_test_coverage,
     validate_scheduled_agent_logs, validate_environment_taxonomy, validate_lambda_deploy_gating):
-    every reachable exit path declares either an examined count or a skip. Change NO other behaviour
-    in them -- in particular do not touch validate_scheduled_agent_logs' diff base or engagement
-    condition; both are filed as a rec in step 11.
+    every reachable exit path declares either an examined count or a skip, applying constraint 5b's
+    rule uniformly -- empty domain declares examined(0), skipped is reserved for an unavailable
+    input or unmet precondition. Change NO other behaviour in them -- in particular do not touch
+    validate_scheduled_agent_logs' diff base or engagement condition; both are filed as a rec in
+    step 11.
   - >-
     Pay the measured pre-existing coverage debt on the five sub-100% scope files (~53 statements) --
     validate_test_coverage 72%, _scaffolding 92%, check_graduation_guard 91%,
@@ -787,8 +882,10 @@ execution_steps:
     this seeding PR does not fail its own gate, and the reversal clause.
   - >-
     docs/contracts/check-accounting.yaml (Class D; subject check-accounting; evaluator
-    validate_check_accounting; NOT status active) plus its topic-equals-subject route in
-    docs/contracts/file-router.yaml. Confirm validate_contract_drift passes (VP step 8).
+    validate_check_accounting; status ratified + ratified_via; amendment_log: []; NOT status active)
+    carrying constraint 5b's discrimination rule and the check_outcomes grain as its authoritative
+    statements, plus its topic-equals-subject route in docs/contracts/file-router.yaml. Confirm
+    validate_contract_drift passes (VP step 8).
   - >-
     docs/DECISIONS.md -- author the numbered Decision from the draft in context, with the yaml
     envelope and significance claim, committing to channel + ratchet only, and stating the
