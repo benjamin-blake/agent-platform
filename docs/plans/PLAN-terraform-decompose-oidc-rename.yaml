@@ -94,8 +94,11 @@ scope:
       split: (a) boundary_policy_name, (b) role/<prefix>* inside IAMRoleWriteBounded
       (_check_v2_prefix), (c) DenySelfInlinePolicyWrite plus the self-exclusion ARN, and (d) the v1
       enumerated fallback. The retained 37-line file references the boundary only as a resource
-      reference, never as the literal string these greps need. Patching leg (a) alone leaves
-      (b)-(d) red.
+      reference, never as the literal string these greps need. Patching leg (a) alone leaves (b)
+      and (c) RED. Leg (d) is LATENT rather than red -- terraform/bootstrap/authority_budget.json
+      sets in_budget_managed_role_prefix, so _check_v2_prefix runs and _check_v1_enumerated is
+      unreachable in the current tree; it reads the same hcl_text and so must be repointed with the
+      others, but do not hunt a failure from it that cannot currently fire.
   - file: tests/checks/iam_tf/test__read_coverage.py
     action: Modify
     purpose: Add a decoy+split fixture regression case (red before the repoint, green after).
@@ -165,9 +168,12 @@ verification_plan:
       All green after the repoint. Before the repoint the newly added split/decoy cases FAIL,
       proving the gap is real and the tests are not tautological. GRADUATION CONSTRAINT (Decision
       132): the registry row's check_spec MUST be a test_selector naming the single NEW node
-      tests/checks/iam_tf/test_validate_convergence_writer_isolation.py::test_resolves_planner_document_from_sibling_tf_file
+      tests/checks/iam_tf/test_validate_convergence_writer_isolation.py::TestValidateConvergenceWriterIsolation::test_resolves_planner_document_from_sibling_tf_file
       -- that node is ABSENT on origin/main, so pytest exits non-zero there (FAIL) and passes on
-      HEAD, which is what the differential admission gate requires. Do NOT graduate this step's
+      HEAD, which is what the differential admission gate requires. The node id is CLASS-QUALIFIED
+      deliberately: every test in that module is a method of TestValidateConvergenceWriterIsolation
+      and no module-level `def test_` exists, so an unqualified id would not resolve on HEAD and
+      run_differential would hard-fail its "passes on HEAD" leg. Do NOT graduate this step's
       whole-directory command: it passes on origin/main and would be rejected as tautological.
     fix_if: >-
       A new case passes before the repoint -- it is not exercising cross-file resolution; rewrite
@@ -206,7 +212,7 @@ verification_plan:
       Assert the terraform/personal split is pure movement -- the non-comment content of the new
       file set equals the non-comment content of the pre-split oidc.tf.
     command: >-
-      bash -c "diff <(git show ${SPLIT_BASE:?export SPLIT_BASE=$(git rev-parse origin/main) BEFORE editing any file}:terraform/personal/oidc.tf | grep -vE '^[[:space:]]*(#|$)' | sort) <(cat terraform/personal/oidc.tf terraform/personal/oidc_ci_roles.tf terraform/personal/oidc_pipeline_roles.tf | grep -vE '^[[:space:]]*(#|$)' | sort)"
+      bash -c "diff <(git show f4c4f39343e3524289261c14381943ec5634f508:terraform/personal/oidc.tf | grep -vE '^[[:space:]]*(#|$)' | sort) <(cat terraform/personal/oidc.tf terraform/personal/oidc_ci_roles.tf terraform/personal/oidc_pipeline_roles.tf | grep -vE '^[[:space:]]*(#|$)' | sort)"
     expected: >-
       Empty diff, exit 0. Comment lines are excluded by construction, so the required comment
       re-grounding and rec-2820a do not perturb this assertion -- and HCL comments are stripped by
@@ -218,14 +224,15 @@ verification_plan:
     graduation_waiver_reason: >-
       A one-shot movement-purity assertion meaningful only against this wave's specific pre-split
       baseline commit. Graduated as a standing check it would compare an unrelated future diff
-      against a stale baseline and pass vacuously. SPLIT_BASE is pinned to a captured SHA rather
-      than a live origin/main because the commit-flow rebase (AGENTS.md Git-ops) legitimately moves
-      origin/main mid-implementation, which would silently re-baseline this assertion.
+      against a stale baseline and pass vacuously. The baseline is a HARDCODED SHA rather than a
+      live origin/main ref or a shell variable: the commit-flow rebase (AGENTS.md Git-ops) moves
+      origin/main mid-implementation and would silently re-baseline the assertion, and each Bash
+      tool invocation is independent so an exported variable would not survive between steps.
   - step: 5
     phase: pre-deploy
     action: Assert the terraform/bootstrap split is pure movement, same construction as step 4.
     command: >-
-      bash -c "diff <(git show ${SPLIT_BASE:?export SPLIT_BASE=$(git rev-parse origin/main) BEFORE editing any file}:terraform/bootstrap/github_ci_apply.tf | grep -vE '^[[:space:]]*(#|$)' | sort) <(cat terraform/bootstrap/github_ci_apply.tf terraform/bootstrap/github_ci_apply_policy.tf terraform/bootstrap/github_ci_apply_reads.tf terraform/bootstrap/github_ci_apply_boundary.tf | grep -vE '^[[:space:]]*(#|$)' | sort)"
+      bash -c "diff <(git show f4c4f39343e3524289261c14381943ec5634f508:terraform/bootstrap/github_ci_apply.tf | grep -vE '^[[:space:]]*(#|$)' | sort) <(cat terraform/bootstrap/github_ci_apply.tf terraform/bootstrap/github_ci_apply_policy.tf terraform/bootstrap/github_ci_apply_reads.tf terraform/bootstrap/github_ci_apply_boundary.tf | grep -vE '^[[:space:]]*(#|$)' | sort)"
     expected: Empty diff, exit 0.
     fix_if: >-
       Any divergence -- most likely an IAM action, Sid or ARN altered while relocating a policy
@@ -256,13 +263,23 @@ verification_plan:
       rec-2820(a) closure evidence -- no overview/header comment still describes the retired
       github_ci_plan / github_ci_drift roles as live composers or writers.
     command: >-
-      bash -c 'c=$(grep -REoh "github_ci_plan and github_ci_drift additionally compose|refresh-readable by github_ci_plan/drift|Trust mirrors github_ci_branch/github_ci_drift|github_ci_drift joins the sanctioned writer set" terraform/personal/ terraform/bootstrap/ | wc -l | tr -d " "); echo "stale_overview_phrases=$c"; [ "$c" -eq 0 ]'
+      bash -c 'n=$(grep -REn "^[[:space:]]*#.*github_ci_(plan|drift)\b" terraform/personal/ terraform/bootstrap/ | grep -vE "[Ff]rom github_ci_(plan|drift)" | grep -vE "github_ci_plan \(PR-sub" | wc -l | tr -d " "); echo "stale_retired_role_comments=$n"; [ "$n" -eq 0 ]'
     expected: >-
-      stale_overview_phrases=0. The per-statement "From github_ci_plan:" / "From github_ci_drift:"
-      provenance annotations are CORRECT and must remain -- rec-2820 explicitly preserves them.
+      stale_retired_role_comments=0. Currently RED at 8, not 4: oidc.tf:40, :41, :211, :215, :453,
+      :731, :943 and github_ci_apply.tf:105. TOKEN-based, not an enumerated phrase list, so a NEWLY
+      introduced stale mention is caught too -- an earlier phrase-allowlist draft of this step was
+      fail-open, matching 0 of 8 because its longest phrase spanned the oidc.tf:40/41 line break and
+      line-oriented grep cannot see across it. The PRESERVE set is exactly 8 lines and is excluded by
+      the two -v filters: the per-statement "From github_ci_plan:" / "From github_ci_drift:"
+      provenance annotations (7 lines, which rec-2820 explicitly keeps) and the past-tense merge
+      header at oidc.tf:735 ("github_ci_plan (PR-sub ... ) + github_ci_drift (main-sub ...)").
+      github_ci_plan\b does not match github_ci_planner (verified: 11 occurrences, 0 false hits).
     fix_if: >-
-      A count above zero means an overview comment still asserts a false current state. Re-ground
-      it to the 2-role reality (github_ci_planner + github_ci_deploy).
+      A count above zero means a comment still asserts a false CURRENT state -- e.g. oidc.tf:453
+      naming github_ci_drift as a live convergence writer (the real set is {github_ci_apply,
+      github_ci_planner main-sub}) or oidc.tf:731 saying github_ci_drift is "added below". Re-ground
+      to the 2-role reality (github_ci_planner + github_ci_deploy). Do NOT instead widen the two
+      preserve filters to make the count fall -- that reintroduces the fail-open shape.
     graduation: graduate
     graduation_check_id: "no-retired-ci-role-overview-comments"
   - step: 8
@@ -277,9 +294,11 @@ verification_plan:
       that any row computing other_lambda_writes references it OUTSIDE its echo payload, i.e. in a
       real assertion. Currently red -- it reports ['deploy-role-updatefunctioncode-prefix'].
     fix_if: >-
-      A check_id is listed: that row still computes the value without gating on it. Either assert on
-      it or delete the computation. Deliberately NOT a grep for one bash idiom -- [ "$other" -eq 0 ],
-      (( other == 0 )) and &&-chained forms are all legitimate gatings.
+      A check_id is listed: that row still computes the value without gating on it. Either reference
+      $other in a real assertion or delete the computation entirely. Note the test is FAIL-CLOSED by
+      design -- it looks for the literal $other outside the echo payload, so an arithmetic form like
+      (( other == 0 )) that never writes $other would still be flagged. That direction cannot produce
+      a false green, so prefer a $other-referencing assertion (or deletion) over widening the test.
     graduation: graduate
     graduation_check_id: "registry-other-lambda-writes-asserted"
   - step: 9
@@ -557,12 +576,14 @@ constraints:
     `try()` wrapper verbatim when relocating blocks.
   - >-
     config/agent/verification_registry/registry.yaml sits at ZERO long-line headroom: its longest
-    line is 2315 chars and long_line_budgets pins it at exactly 2315. Repointing ~21 grep specs to
-    ROOT-scoped equivalents makes command strings LONGER, and each new graduated row adds more. Any
-    line exceeding 2315 is an unauthorized raise under validate_structural_size_budget_raises, and
-    constraint 2 forbids adding a marker to fix it. Remedy is a YAML block scalar breaking the
-    command across lines -- never a ceiling raise. Effective lines are fine (5329 of 6000); the
-    long-line ceiling is the trap.
+    line is 2315 chars and long_line_budgets pins it at exactly 2315. Two DIFFERENT checks are
+    involved, do not conflate them -- a line exceeding 2315 fails validate_structural_size_limits,
+    while validate_structural_size_budget_raises fires only on RAISING the pinned entry. Calibration:
+    the 2315-char line belongs to an unrelated row (t4x-persona-contracts-mechanism-word-free); the
+    longest line among the ~21 rows this plan repoints is 829 chars, so root-scoping them (roughly
+    +10 chars per occurrence) has ample slack. The REAL trap is a NEW graduated row whose one-line
+    command runs long. Remedy either way is a YAML block scalar breaking the command across lines --
+    never a ceiling raise, which constraint 2 forbids. Effective lines are fine (5329 of 6000).
   - No rescue agents or workaround loops (Decision 55)
 context:
   - >-
@@ -570,7 +591,7 @@ context:
     decisions triaged. CITE list verbatim -- Decision 166, Decision 165, Decision 130, Decision 119,
     Decision 92 (points 4 and 5), Decision 156 (point 4), Decision 129 (clause 4), Decision 77,
     Decision 35, Decision 163, Decision 126.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE round 1 (7 blocking + 5 non-blocking findings applied); round 2 pending"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE round 1 (7 blocking) -> REVISE round 2 (1 blocking, fail-open detector) -> round 3 pending"
   - >-
     FLAG 1 resolved into the design (Decision 129 [WARN]): root concatenation risks flipping
     cardinality assertions if attribution is lost. Resolution adopted -- concatenation widens only
@@ -654,6 +675,20 @@ context:
     a rec-2820 closure step and a stale-reference sweep added; the validate_authority_budget scope
     row widened to all four assertion legs; constraint 4 extended to unresolvable document
     references; the registry long-line ceiling documented. Non-blocking F6-F10 also applied.
+  - >-
+    Purity baseline for VP steps 4 and 5 is PINNED to f4c4f39343e3524289261c14381943ec5634f508 --
+    the origin/main tip at planning time, and the last commit before this branch. If the branch is
+    later rebased onto a main that has itself modified either .tf file, this SHA must be updated in
+    both steps; a divergence reported against the old SHA would then be a real signal (the split
+    dropped an upstream change), not a false alarm.
+  - >-
+    Plan-critique round 2 returned REVISE with one blocking finding and confirmed all seven round-1
+    findings resolved. The blocking finding was a FAIL-OPEN detector in VP step 7: its longest
+    phrase spanned the oidc.tf:40/41 line break, so the line-oriented grep matched 0 of 8 stale
+    sites while reporting a passing-looking 4 from the other phrases -- and the step is `graduate`,
+    so the blind allowlist would have been promoted into the standing registry to report green
+    forever. Replaced with a token detector plus an explicit 8-line preserve set, verified to flag
+    exactly the 8 stale sites and exclude exactly the 8 correct provenance/past-tense lines.
   - >-
     Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 ahead/0 behind);
     no scope-file overlap with main, so no rebase decision was required.
