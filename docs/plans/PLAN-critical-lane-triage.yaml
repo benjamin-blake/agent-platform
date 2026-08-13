@@ -21,8 +21,8 @@ scope:
   - file: docs/plans/PLAN-critical-lane-triage.yaml
     action: Create
     purpose: >-
-      Sole scope row. This plan mutates NO repository file: its entire effect is eleven ops-portal
-      writes (ten --update-rec closures plus one file_rec) against the DuckLake ops_recommendations
+      Sole scope row. This plan mutates NO repository file: its entire effect is thirteen ops-portal
+      writes (ten --update-rec closures plus three file_rec calls) against the DuckLake ops_recommendations
       table via the closed writer boundary. docs/ROADMAP-PLATFORM.yaml was considered as a rehome
       target for the three executor-defect pointers and deliberately REJECTED at planning time (human
       decision, Q2): the pointers live solely in the resolution strings, which are durable,
@@ -95,6 +95,13 @@ acceptance_criteria:
     A new open recommendation exists against scripts/ops_portal/cli.py recording the governance gap
     that an agent can close or demote a Critical rec through the raw --update-rec CLI with no machine
     verification of the stated closure basis and no human-confirmation gate.
+  - >-
+    Two further open recommendations exist, filed on explicit human direction for gaps the critique
+    gate surfaced outside this plan's portal-only scope: one against
+    scripts/checks/verification/validate_handoff_full_tier.py (its matcher accepts a no-op --help
+    segment as the Decision 163 full-tier step), and one against AGENTS.md (its rec-curator caveat
+    attributes the priority-queue producer repoint to T2.26 rather than T4.3). Both carry acceptance
+    commands that are RED today and go green only when actually fixed.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -437,9 +444,13 @@ verification_plan:
   - step: 11
     phase: post-deploy
     action: >-
-      File the governance-gap recommendation the human raised when reviewing this plan's own premise --
-      that an agent can autonomously close or demote a Critical rec with no machine verification of the
-      stated basis. Call get_rec_write_guidance() first per AGENTS.md Precision Context Injection.
+      File three recommendations. (a) The governance-gap rec the human raised when reviewing this
+      plan's own premise -- that an agent can autonomously close or demote a Critical rec with no
+      machine verification of the stated basis. (b) and (c) Two gaps the plan-critique gate surfaced
+      that are real but outside this plan's portal-only scope, filed on explicit human direction
+      rather than fixed inline (AGENTS.md: out-of-scope bugs become recommendations, never inline
+      fixes). Call get_rec_write_guidance() once first per AGENTS.md Precision Context Injection; it
+      covers all three writes.
     command: >-
       bin/venv-python -m scripts.ops_data_portal --file-rec --source planning --priority High
       --effort M --file scripts/ops_portal/cli.py
@@ -459,10 +470,48 @@ verification_plan:
       would have executed identically with fabricated evidence. The gap is that the governed helper is
       advisory while the ungoverned CLI is the ergonomic default."
       --acceptance "bin/venv-python -m pytest tests/ops_data_portal -q -k closure_gate"
-      --verification-tier V2 --risk medium
+      --verification-tier V2 --risk medium &&
+      bin/venv-python -m scripts.ops_data_portal --file-rec --source planning --priority High
+      --effort S --file scripts/checks/verification/validate_handoff_full_tier.py
+      --title "validate_handoff_full_tier can be satisfied by a --help segment that validates nothing"
+      --context "Decision 163 made the pre-handoff full-tier run a CHECKED verification-plan step
+      rather than declared metadata alone, on the reasoning that a universal, exceptionless obligation
+      must be enforced structurally. The enforcing check, validate_handoff_full_tier, splits each VP
+      step's command on shell separators and accepts the step if ANY resulting segment matches the
+      regex -m\\s+scripts\\.validate(?![\\w.]) and does not contain --pre. It never inspects what the
+      segment actually does. So a plan satisfies the Decision 163 gate with a segment like
+      'bin/venv-python -m scripts.validate --help', which prints usage text, validates nothing, and
+      exits 0 -- structurally indistinguishable to the matcher from a real full-tier run. Why now:
+      PLAN-critical-lane-triage contains exactly such a segment in its VP step 5, where the --help
+      invocation is used legitimately to prove the --ci flag no longer exists. That plan is genuinely
+      compliant because its step 7 is a real full-tier run, but the coincidence demonstrates the hole
+      is reachable in ordinary authoring, not just adversarially. The gate should require the matched
+      segment to be an actual validation invocation -- at minimum rejecting --help, --version and
+      other no-op flags."
+      --acceptance "bin/venv-python -m pytest tests/checks/verification/test_validate_handoff_full_tier.py -q -k noop_segment"
+      --verification-tier V2 --risk low &&
+      bin/venv-python -m scripts.ops_data_portal --file-rec --source planning --priority Medium
+      --effort XS --file AGENTS.md
+      --title "AGENTS.md rec-curator caveat attributes the priority-queue producer repoint to T2.26, not T4.3"
+      --context "AGENTS.md's Re-enable Lambda scheduled agents runbook carries a caveat stating that
+      rec-curator's priority-queue producer flow still writes via the OpsWriter/Iceberg staging path
+      while all queue readers serve DuckLake, and that re-enabling before 'the T2.26 producer repoint'
+      sends curator output to a store nothing reads. The diagnosis is correct but the owner is wrong.
+      T2.26 (Deferred ops-table DuckLake migrations) migrated the ops_priority_queue TABLE, which is
+      what created the producer/reader split; the producer repoint itself is owned by T4.3, whose
+      title is 'Priority-queue producer repoint onto the DuckLake boundary', whose files_in_scope
+      names scripts/s3_log_store.py, and whose open criterion c1 is 'no OpsWriter/Iceberg staging
+      write survives on the producer path'. PROJECT_CONTEXT.md already records the correct chain:
+      'T2.26 migrated ops queue substrate -> T4.3 priority-queue producer repoint to DuckLake'. The
+      AGENTS.md line predates the RMAP-07 split. Why now: this stale line is load-bearing -- it is
+      ambient context every session reads, and it directly caused a wrong tier_item to be specified
+      for rec-457's closure pointer in PLAN-critical-lane-triage, caught only at the plan-critique
+      gate. Repoint the caveat at T4.3, keeping T2.26 named as the adjacent table-migration item."
+      --acceptance "grep -q 'T4.3 producer repoint' AGENTS.md && ! grep -q 'T2.26 producer repoint' AGENTS.md"
+      --verification-tier V1 --risk low
     expected: >-
-      Prints the writer-allocated rec id (Decision 84 I-2 allocates ids in-transaction; never
-      client-side). Record that id in the implementation report.
+      Three writer-allocated rec ids printed, one per --file-rec (Decision 84 I-2 allocates ids
+      in-transaction; never client-side). Record all three in the implementation report.
     fix_if: >-
       A context-length rejection means the >=80 stripped-character gate was not met -- expand the
       problem statement, do not pad. An acceptance-lint rejection means lint_acceptance_command()
@@ -501,23 +550,33 @@ verification_plan:
   - step: 13
     phase: post-deploy
     action: >-
-      Confirm the governance-gap rec from step 11 landed and is open, resolving it by title rather than
-      by id since the id is writer-allocated at insert time and cannot be predicted at planning time.
+      Confirm all three recs from step 11 landed and are open, resolving each by a distinctive title
+      substring rather than by id, since ids are writer-allocated at insert time and cannot be
+      predicted at planning time.
     command: >-
       bin/venv-python -c "import json,pathlib;
       rows=[json.loads(l) for l in
       pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
-      hits=[r for r in rows if 'no machine verification of the closure basis' in (r.get('title') or '')
-      and r.get('status')=='open'];
-      assert len(hits)==1, f'expected exactly 1 open gap rec, found {len(hits)}';
-      print('governance-gap rec filed:', hits[0]['id'])"
+      want={'governance-gap':'no machine verification of the closure basis',
+      'handoff-matcher':'satisfied by a --help segment that validates nothing',
+      'agents-md-t43':'attributes the priority-queue producer repoint to T2.26'};
+      out={};
+      missing=[];
+      [out.setdefault(k, [r['id'] for r in rows
+      if frag in (r.get('title') or '') and r.get('status')=='open'])
+      for k, frag in want.items()];
+      [missing.append(f'{k}: found {len(v)}') for k, v in out.items() if len(v)!=1];
+      assert not missing, f'expected exactly 1 open rec each: {missing}';
+      print('three recs filed:', {k: v[0] for k, v in out.items()})"
     expected: >-
-      Prints a single line confirming the governance-gap rec was filed, naming its writer-allocated
-      id; exits 0.
+      Prints "three recs filed:" followed by a mapping of all three writer-allocated ids; exits 0.
     fix_if: >-
-      Zero hits means step 11's file_rec did not land or the cache was not refreshed by step 12 -- re-run
-      --sync first. More than one hit means the rec was filed twice across attempts; close the duplicate
-      as relevance=duplicate rather than leaving both open.
+      A zero count for any key means that file_rec did not land or the cache was not refreshed by step
+      12 -- re-run --sync first. A count above one means that rec was filed twice across attempts;
+      close the duplicate as relevance=duplicate rather than leaving both open. If only some of the
+      three landed, re-issue ONLY the missing --file-rec calls -- the step-11 chain is && -linked, so a
+      mid-chain failure leaves the earlier writes landed and re-running the whole chain would duplicate
+      them.
   - step: 14
     phase: post-deploy
     action: >-
@@ -641,8 +700,9 @@ context:
     if the operator would rather cut the race than guard it, dropping the trailer is a one-line edit
     to execution_steps and costs this plan nothing.
   - >-
-    KNOWN GAP, deliberately not fixed here (out of the human's stated portal-only scope, surfaced for
-    a follow-on rec)- validate_handoff_full_tier's matcher splits a VP command on &&/||/;/newline and
+    TWO GAPS the critique gate surfaced. Both are real, both are outside this plan's portal-only
+    scope, and on explicit human direction BOTH ARE FILED AS RECS by VP step 11 rather than fixed
+    inline (AGENTS.md- out-of-scope bugs become recommendations, never inline fixes). (1) validate_handoff_full_tier's matcher splits a VP command on &&/||/;/newline and
     accepts any segment matching `-m scripts.validate` without `--pre`, so the Decision 163 gate can
     be satisfied by a `--help` invocation that validates nothing. This plan is genuinely compliant
     (step 7 is a real full-tier run), but step 5 contains a `--help` segment that would satisfy the
@@ -733,7 +793,7 @@ pre_implementation_checklist:
     Only the plan-cited decision sections read- Decision 103, 84, 88, 55, 67, 116, 117, 121, 64, 163
   - AWS agent_platform assume-role chain verified reachable before any portal write
   - >-
-    Acceptance criteria understood- the deliverable is eleven portal writes and zero repository
+    Acceptance criteria understood- the deliverable is thirteen portal writes and zero repository
     mutations beyond this plan file
 execution_steps:
   - >-
@@ -745,7 +805,8 @@ execution_steps:
     separate portal call; a failure mid-chain leaves earlier closures landed, which is safe and
     idempotent to re-run.
   - >-
-    Execute VP step 11 -- file the governance-gap recommendation. Call get_rec_write_guidance() before
+    Execute VP step 11 -- file all THREE recommendations (governance gap, validate_handoff_full_tier
+    matcher hole, AGENTS.md T4.3 staleness). Call get_rec_write_guidance() before
     file_rec() per AGENTS.md Precision Context Injection. Record the writer-allocated id in the report.
   - >-
     Execute VP steps 12 and 13 -- refresh the read cache and assert the terminal state (ten closed with
@@ -764,7 +825,8 @@ execution_steps:
     mandatory- acceptance criterion 7 is not satisfiable before the squash-merge exists.
   - >-
     'Report- which recs closed with which verdict, the writer-allocated id of the governance-gap rec,
-    the final open-Critical lane contents, and the step-14 post-merge resolution-survival result.'
+    the final open-Critical lane contents, the three writer-allocated rec ids from step 11, and the
+    step-14 post-merge resolution-survival result.'
 rollback: >-
   Closure is reversible through the same governed path- bin/venv-python -m scripts.ops_data_portal
   --update-rec rec-NNNN --status open, which appends a new SCD2 version rather than mutating history.
