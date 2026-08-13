@@ -250,6 +250,7 @@ def validate_deploy_channel_conformance(failed: list[str]) -> None:
             f"actually {'decoupled' if actual_prod else 'coupled'} -- update the conformance.prod_class field."
         )
 
+    registry.examined(2, unit="deploy_channel_classes")
     if len(failed) == pre_count:
         print(
             "  PASS: docs and terraform/personal agree "
