@@ -153,28 +153,65 @@ never a blocker.
 
 ## PROPOSED HARDWARE AND WORKLOAD
 
-Everything KNOWN about the target host, stated exactly as supplied by the requester:
+The target host is a specific, already-purchased machine. Full component specification, from the
+purchase record (April 2025):
 
-| Property | Value |
+| Component | Specification |
 |---|---|
-| CPU | AMD Ryzen 9 9950X, 16 cores / 32 threads |
-| RAM | 32 GB |
+| CPU | AMD Ryzen 9 9950X, AM5, 16 cores / 32 threads |
+| Motherboard | ASRock B850 LiveMixer WiFi (AM5) |
+| RAM | Kingston FURY Beast 32 GB as a **single 1x32GB DDR5-5600 module** |
+| Storage | 4 TB Kingston FURY Renegade M.2-2280 NVMe SSD |
+| GPU | Gigabyte GeForce RTX 3050 6 GB OC, low-profile |
+| CPU cooler | Arctic Liquid Freezer III 240 mm AIO |
+| PSU | 700 W, 80 Plus Bronze |
+| Case | Mid tower |
 | OS | Ubuntu |
-| Ownership | Owned outright by the requester; personal hardware |
-| Co-resident workload | The PySR workload (`AGENTS.md`: "PySR runs on a separate compute node" -- the requester confirms this is the SAME machine) |
+| Capital cost | ~GBP 1,390 including VAT, April 2025 |
+| Ownership | Owned outright; personal hardware |
 
-**Everything else is UNSTATED and you must not invent it.** Not stated, and not derivable from the
-repository: disk type and capacity, network bandwidth, whether the host is on a residential
-connection, physical location and security, UPS or power redundancy, expected uptime or duty cycle,
-whether the machine sleeps or is powered off when unattended, and PySR's CPU/memory/duty-cycle
-profile.
+Three properties of this specification are load-bearing and easy to miss:
 
-**Rule for unstated inputs:** where a calculation requires one of these, state the assumption
-explicitly in the finding or answer, give the figure as a RANGE across a plausible span rather
-than a point estimate, and record the input in `meta.assumed_inputs` as
-`{input, assumed_value, why, sensitivity}`. Do NOT silently pick a number, and do NOT refuse to
-answer. If a conclusion flips across the plausible span of an assumed input, that sensitivity is
-itself a finding.
+- **The memory is single-channel.** One 32 GB module populates one channel on a board that supports
+  two. Memory bandwidth is roughly half what a matched 2x16GB pair would deliver on the same board,
+  and a 32-thread CPU saturating a single channel is a plausible bottleneck for parallel workloads.
+  Free DIMM slots exist, so this is remediable for the price of RAM -- factor that into any
+  recommendation rather than treating it as fixed.
+- **32 GB total across up to 32 concurrent workers** is roughly 1 GB per worker before accounting
+  for the OS, the container runtime, and any co-resident workload.
+- **The GPU is a low-profile RTX 3050 (6 GB)** -- adequate for display output, not a compute asset.
+  Do not assume GPU acceleration is available for anything.
+
+### Dual-purpose intent (requester-supplied)
+
+This is the SAME machine intended to run the trading product's symbolic-regression / formula-discovery
+workload (PySR). `AGENTS.md` states "PySR runs on a separate compute node"; the requester confirms
+that node and this proposed runner are one physical machine.
+
+**Theorise briefly whether one CPU can carry both responsibilities** -- CI runner and formula
+discovery. One or two paragraphs in Q2's prose, informed by the memory-channel and per-worker-RAM
+facts above and by the duty-cycle question. Consider whether the two workloads can be temporally
+separated (scheduling, niceness, cgroup limits, pausing one for the other), whether that separation
+is compatible with the availability requirements Q4 establishes, and whether contention is
+symmetric or falls mainly on one side.
+
+**This is explicitly a BOUNDED theorisation.** Do not benchmark PySR, do not research symbolic
+regression performance characteristics in depth, and do not fetch external sources for it. Reason
+from the hardware facts and stated workload shapes, mark the conclusion as a hypothesis, and move
+on. It informs Q2's verdict; it is not a separate question.
+
+### Still unstated -- do not invent
+
+Not stated, and not derivable from the repository: network bandwidth and whether the host is on a
+residential connection, physical location and security, UPS or power redundancy, expected uptime or
+duty cycle, whether the machine sleeps or is powered off when unattended, electricity tariff, and
+PySR's actual CPU/memory profile and duty cycle.
+
+**Rule for unstated inputs:** where a calculation requires one, state the assumption explicitly in
+the finding or answer, give the figure as a RANGE across a plausible span rather than a point
+estimate, and record it in `meta.assumed_inputs` as `{input, assumed_value, why, sensitivity}`. Do
+NOT silently pick a number, and do NOT refuse to answer. If a conclusion flips across the plausible
+span of an assumed input, that sensitivity is itself a finding.
 
 ## REQUESTER CONTEXT (stated intent -- treat as claims to test, not as findings)
 
