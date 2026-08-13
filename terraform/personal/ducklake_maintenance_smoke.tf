@@ -26,7 +26,7 @@
 # tf-gated-apply). The non-IAM resources (function, Function URL, EventBridge rules/targets/
 # permissions, alarm) auto-apply behind the guard once the exec role exists in state.
 #
-# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): the aws_lambda_function
+# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.yaml conformance): the aws_lambda_function
 # resource below carries a lifecycle block ignoring source_code_hash changes -- code deploys go via
 # the governed CD channel (.github/workflows/deploy-ducklake-lambdas.yml, T2.38), never via this
 # apply path.

@@ -19,7 +19,7 @@
 #   2. terraform plan -> human review -> terraform apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (update the DR function code pointer from S3)
 #
-# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): RESOLVED. The
+# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.yaml conformance): RESOLVED. The
 # aws_lambda_function resource below now carries a lifecycle block ignoring source_code_hash
 # changes, so code-only redeploys no longer surface as a Terraform diff on this apply path. Code
 # deploys now go via step 3 above (`build_lambda --ducklake-only --deploy`) -- knowingly-interim

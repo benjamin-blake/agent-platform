@@ -18,7 +18,7 @@
 # terraform/personal apply for this change therefore routes to the MANUAL agent_platform_admin path,
 # NOT push-to-main auto-apply.
 #
-# CODE/INFRA DECOUPLING (Decision 125, environment-taxonomy.md section 5): every aws_lambda_function
+# CODE/INFRA DECOUPLING (Decision 125, environment-taxonomy.yaml conformance): every aws_lambda_function
 # below carries a lifecycle block ignoring source_code_hash changes FROM DAY ONE -- unlike the
 # DuckLake class (which coupled first and decoupled later at #544), this class is decoupled from its
 # very first apply. Code deploys go via the governed .github/workflows/deploy-prod-lambdas.yml channel

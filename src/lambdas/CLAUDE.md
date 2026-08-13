@@ -11,7 +11,7 @@ The DuckLake Lambdas here (`ducklake_writer`, `ducklake_reader`, `ducklake_maint
 authoritative channel status. Local `bin/venv-python -m
 scripts.build_lambda --ducklake-only --deploy` is break-glass only, not the routine channel.
 
-No standing rationale here (Decision 86) — see `docs/contracts/environment-taxonomy.md` section 5
+No standing rationale here (Decision 86) — see `environment-taxonomy.yaml` (conformance)
 for the classification SoT, `docs/contracts/build-lambda.yaml`'s `deploy_channels` for the
 artifact->channel mapping, and Decision 125 for the ratification rationale.
 

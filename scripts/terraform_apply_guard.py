@@ -131,7 +131,7 @@ _APPLY_ROLE_NAME = "agent-platform-github-ci-apply"
 # principal without ever touching an aws_iam_* type. Classified by a dedicated stage appended
 # LAST in evaluate_plan (after delete -> neon -> trust -> IAM). This list is a deliberately
 # curated allowlist, not exhaustive of every AWS resource-based-policy type that exists (see
-# docs/contracts/environment-taxonomy.md Guard classification subsection for the known-incomplete
+# docs/contracts/environment-taxonomy.yaml guard_classification for the known-incomplete
 # note) -- a future addition (e.g. aws_sqs_queue_policy, aws_kms_key_policy) requires a deliberate
 # guard extension, not an assumption of coverage.
 RESOURCE_POLICY_TYPES = frozenset(

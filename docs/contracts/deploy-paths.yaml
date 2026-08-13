@@ -8,7 +8,7 @@
 # tier_item T2.41. It is a POINTER for the other tiers and a PROCEDURE for the operator tier --
 # never a second source of truth: the apply-model / guard-classification rules (what blocks an
 # apply, in-budget vs out-of-budget IAM, guard exit codes) live SOLELY in
-# docs/contracts/environment-taxonomy.md (Decision 92 point 5 sole-SoT; Decision 86 no-drift) --
+# docs/contracts/environment-taxonomy.yaml (Decision 92 point 5 sole-SoT; Decision 86 no-drift) --
 # this file never restates them, including inside admin_out_of_band.procedure.
 #
 # Roles below are logical names only. No confidential AWS identifiers of any kind (account
@@ -27,7 +27,15 @@ contract:
   evaluator:
     agent_surface: AGENTS.md
 
-amendment_log: []
+amendment_log:
+  - date: "2026-08-13"
+    semantic_break: false
+    change_class: prose_improvement
+    summary: >-
+      CFG-11 conversion: three blocks_ref anchors and the procedure description's citation
+      repointed from the deleted environment-taxonomy markdown contract's anchors to
+      environment-taxonomy.yaml key paths; deploy_code.description corrected from "four" to "five"
+      DuckLake Lambdas (rec-2751).
 
 schema_version: 1
 decision: Decision-126
@@ -36,12 +44,12 @@ provision:
   description: "Infra changes: anything under terraform/**."
   trigger: "Open a PR touching terraform/**; CI plans and applies."
   actor_role: agent
-  blocks_ref: "environment-taxonomy.md#2-the-two-axes (Axis A apply gating + the Guard classification subsection)"
+  blocks_ref: "environment-taxonomy.yaml (axis_a apply gating + guard_classification)"
   recovery: "If the guard blocks the change (IAM/trust/destroy or out-of-budget), see reconcile below; do not fall back to a local apply."
   note: "Agents never run terraform apply as a self-directed, routine action -- the sole exception is the human-gated break-glass admin tier (see admin_out_of_band below)."
 
 deploy_code:
-  description: "Code-only deploys for artifacts on a governed code-deploy channel (e.g. the four DuckLake Lambdas, or the three prod-class Lambdas)."
+  description: "Code-only deploys for artifacts on a governed code-deploy channel (e.g. the five DuckLake Lambdas, or the three prod-class Lambdas)."
   trigger: "The governed code-deploy channel named in docs/contracts/build-lambda.yaml's deploy_channels. Terraform is not involved."
   actor_role: agent
   blocks_ref: "build-lambda.yaml#deploy_channels"
@@ -68,7 +76,7 @@ reconcile:
   description: "The apply pipeline is red or the convergence record is drifted."
   trigger: "One input-free Reconcile action (tier_item T2.37): reads the red commit from the convergence record and re-applies it. No operator-supplied SHA."
   actor_role: agent
-  blocks_ref: "environment-taxonomy.md#2-the-two-axes (guard classification determines whether Reconcile can auto-apply or must route to gated-apply)"
+  blocks_ref: "environment-taxonomy.yaml (guard_classification determines whether Reconcile can auto-apply or must route to gated-apply)"
   recovery: "If Reconcile itself cannot proceed (e.g. an out-of-budget IAM delta needs human approval), it routes to the existing gated-apply Environment; see admin_out_of_band for the human action."
   status: "Landed (tier_item T2.37): .github/workflows/reconcile.yml."
 
@@ -76,7 +84,7 @@ admin_out_of_band:
   description: "Operator-only admin tier: bootstrap root, agent_platform_admin IAM/trust/destroy changes, and the Decision 120 local-apply escape hatch."
   trigger: "A human operator acting outside CI, per terraform/CLAUDE.md's operator-only / break-glass subsection."
   actor_role: operator
-  blocks_ref: "environment-taxonomy.md#2-the-two-axes (guard classification); Decision 120 (the escape hatch this restored); Decision 98 (admin-create); Decision 77 (bootstrap)"
+  blocks_ref: "environment-taxonomy.yaml (guard_classification); Decision 120 (the escape hatch this restored); Decision 98 (admin-create); Decision 77 (bootstrap)"
   recovery: "For bootstrap root and agent_platform_admin IAM/trust/destroy changes, an agent's only move is to file a rec describing what's needed and why -- those are human-only. The Decision 120 break-glass local-apply loop is a narrower carve-out: an agent may execute terraform apply there only after a human has reviewed the plan and explicitly directed it -- never self-directed."
   status: "Quarantined here (Decision 126 point 4 as amended by Decision 127; tier_item T2.41). T2.37 (the heal button) landed and was verified before this quarantine, per the Fable ordering invariant (Decision 126)."
   procedure:
@@ -84,7 +92,7 @@ admin_out_of_band:
       Operator-recovery steps for the human-gated interactive apply loop. Never self-directed
       by an agent; usable only after a human has reviewed the plan and explicitly directed the
       apply (Decision 77 / Decision 126). Carries recovery STEPS only -- apply-model / guard-
-      classification rules stay solely in environment-taxonomy.md (Decision 92 point 5).
+      classification rules stay solely in environment-taxonomy.yaml (Decision 92 point 5).
     steps:
       - "A human operator who wants to apply a change by hand directs the CC-web agent through the loop: terraform plan -> PRESENT the plan output -> the human explicitly accepts -> the agent runs terraform apply. Never apply without presenting the plan and getting explicit acceptance first."
       - "This loop requires local terraform init to have succeeded first."

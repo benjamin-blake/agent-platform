@@ -17,7 +17,9 @@ import pytest
 from scripts.terraform_apply_guard import (
     _REVIEWER_PREAMBLE,
     _classify_iam_change,
+    _forced_resource_policy_attrs,
     _normalise_policy,
+    _summarise_value,
     _trust_changed,
     build_digest,
     evaluate_plan,
@@ -745,3 +747,9 @@ def test_digest_resource_policy_reason_redacts_external_principal() -> None:
     assert len(findings) == 1
     assert "336392948345" not in findings[0]["reason"]
     assert "[ARN]" in findings[0]["reason"]
+
+
+def test_forced_resource_policy_attrs_and_summarise_value_edges() -> None:
+    # A type outside RESOURCE_POLICY_TYPES has no forced-field set; a long scalar truncates.
+    assert _forced_resource_policy_attrs("aws_iam_role", before={}, after={}) == []
+    assert _summarise_value("x" * 100, max_len=80) == repr("x" * 100)[:77] + "..."
