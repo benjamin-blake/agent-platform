@@ -1,0 +1,624 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "validate-vacuous-pass-accounting"
+intent: >-
+  Give the registered-check contract a second output channel so a vacuous pass, a skip and an
+  enforced pass stop collapsing into one indistinguishable green, and record that channel in the
+  run evidence. This is the observable the recursive-improvement loop needs before any gate can be
+  trusted as enforcement rather than as mere absence of failure.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-validate-vacuous-pass-accounting.yaml
+phase: >-
+  Platform hygiene / verification-system integrity. Not a tier_item slice -- rec-driven
+  (source=manual + architectural-review), so the Tier Item Freshness Gate is skipped under the
+  ad_hoc_rec soft-warn exception category. Adjacent to T3.7 (validation-suite meta-validation,
+  deferred_post_mvp) and T2.54 (clause-to-check traceability, not_started); this plan supplies the
+  per-check examined/skip observable both would otherwise have to invent, and claims neither.
+scope:
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Add the per-run accounting channel next to Check: the ambient accumulator, the public
+      examined(count, unit=)/skipped(reason) API check bodies call, an outcome_scope context
+      manager for non-check scaffolds, the CheckOutcome record, and the single status-derivation
+      function (failed|skipped|vacuous|enforced|undeclared). Chosen as the home because every
+      check module already imports this module, so no check gains a new import, and rec-2915 names
+      registry.Check as the natural home. Also extends the module docstring's SIX-surface
+      registration enumeration to SEVEN by naming the declaration obligation, so a new check's
+      author meets it before composing the body (Decision 66 pre-composition injection).
+  - file: scripts/checks/validation_result.py
+    action: Modify
+    purpose: >-
+      dispatch_recording() brackets each check call with the accounting scope and harvests the
+      outcome (it currently measures a check ONLY by diffing len(failed), which is the mechanism
+      that makes a skip and a pass byte-identical). write_completed() emits schema_version 3 with
+      check_outcomes plus ran_checks/skipped_checks/vacuous_checks/undeclared_checks rollups.
+      failed_checks and failed_check_attributions keep their exact v2 shape (Decision 142).
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      ensure_fresh_dq_results() records its creds-absent early return as a declared skip via
+      registry.outcome_scope("ensure_fresh_dq") instead of returning silently (rec-3085 half 1).
+      Delta is deliberately a scope wrapper only -- all logic stays in registry.py -- because this
+      file measures 469 SLOC against the 500 unregistered ceiling (Decision 128).
+  - file: scripts/checks/roadmap/check_graduation_guard.py
+    action: Modify
+    purpose: >-
+      Two changes. (a) Base fix: derive the changed-DQ-YAML set from _common.get_changed_files()
+      (which honours push_context_base()) instead of `git diff HEAD`, and repoint the paired
+      `git show HEAD:{path}` old-content read at the same base. `git diff HEAD` reads the WORKING
+      TREE; every CI checkout is clean, so the guard has early-returned on every CI run since it
+      shipped and has never enforced there. (b) Declare examined counts and record the
+      dq-latest.json missing/unreadable/no-checks degradations as skips rather than silent
+      WARN-and-return (rec-3085 half 2). Note the ordering consequence: (a) is what first makes
+      (b) reachable in CI, so the two must land together.
+  - file: scripts/checks/misc/validate_test_coverage.py
+    action: Modify
+    purpose: >-
+      Declare examined counts (the count already exists -- the check prints "N source files
+      checked" to stdout with no structured channel) and declare its recursion-guard and
+      checker-absent early returns as skips.
+  - file: scripts/checks/misc/validate_scheduled_agent_logs.py
+    action: Modify
+    purpose: >-
+      Declare examined counts and skips. DELIBERATELY NOT FIXED in this plan: its raw
+      `git diff origin/main...HEAD` base does not honour push_context_base(), so its domain is
+      empty post-merge. It is retained broken on purpose as the live dead-gate the spine must
+      surface in VP step 8 -- fixing it here would leave the instrument with nothing real to catch.
+  - file: scripts/checks/iam_tf/validate_environment_taxonomy.py
+    action: Modify
+    purpose: Declare the examined count of candidate docs.
+  - file: scripts/checks/lambda_pkg/validate_lambda_deploy_gating.py
+    action: Modify
+    purpose: Declare examined counts and its no-changed-files / no-affected-artifacts early returns.
+  - file: scripts/checks/hygiene/validate_check_accounting.py
+    action: Create
+    purpose: >-
+      The adoption ratchet, and rec-2915's structural-prevention half. AST-scans each registered
+      check's defining module for an examined()/skipped() declaration and fails when a check absent
+      from config/check_accounting_baseline.yaml declares none. Filesystem-only, no subprocess, so
+      it is safe in the fast tier (Decision 153). Carries a frozen in-module constant cross-check so
+      a config-file edit alone can never admit a new member (Decision 162).
+  - file: scripts/checks/hygiene/_manifest.py
+    action: Modify
+    purpose: >-
+      One Entry literal (bare string-literal module=/attr=) registering validate_check_accounting
+      in BOTH tiers -- pre=True with pre_globs=("scripts/checks/**",) and
+      full_segment="full_after_lint".
+  - file: config/check_accounting_baseline.yaml
+    action: Create
+    purpose: >-
+      Shrink-only grandfather roster of the 96 checks not adopted in this plan's tranche (101
+      registered minus 5 adopted). Copies Decision 159's one-time-roster template: no marker escape
+      grammar at all (deliberate, per Decision 165 -- recorded as a choice, not an omission; aligned
+      with T2.55's frozen-shrink-only forward intent), a tamper guard, a missing-base SKIP so this
+      seeding PR does not fail its own gate, and an explicit reversal clause.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: One function_to_category row for validate_check_accounting (Decision 169 surface 4).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: One row per VP step declared graduate (steps 1, 2, 4, 6, 7).
+  - file: docs/contracts/check-accounting.yaml
+    action: Create
+    purpose: >-
+      Class D mechanism contract owning the field semantics this plan creates -- the CheckOutcome
+      status vocabulary, the validation-result.json schema_version 3 shape, and the baseline
+      grammar. Required because Decision 150 routes field semantics to the owning contract, never
+      into a numbered Decision entry. Self-hosting like check-manifest.yaml:
+      subject: check-accounting, evaluator {check: validate_check_accounting}. New Class D files may
+      not declare status: active (grandfather-only, Decision 168).
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: One routes[] entry with topic check-accounting (topic-equals-subject self-hosting rule).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      The numbered Decision (see the Decision-draft block in context). Commitment scope is the
+      CHANNEL plus the DECLARATION RATCHET -- both structurally enforced -- with fail-closed
+      vacuity enforcement named as explicitly deferred future work carrying its own trigger, never
+      as a stated-but-ungated universal rule (Decision 163). Requires the fenced yaml metadata
+      envelope immediately after the heading plus a significance routing claim (Decisions 167/150).
+  - file: tests/checks/registry/test_accounting.py
+    action: Create
+    purpose: Status-derivation and accumulator-lifecycle tests for the spine.
+  - file: tests/checks/test_validation_result.py
+    action: Modify
+    purpose: schema v3 emission, rollup correctness, and v2-field byte-compatibility tests.
+  - file: tests/ci_rca/taxonomy/test_load_and_classify.py
+    action: Modify
+    purpose: >-
+      Assert _load_attributions() still resolves attributions from a schema_version 3 record --
+      the consumer reads by key and never asserts a version, and this pins that (Decision 142).
+  - file: tests/validate/test_scaffold_gates.py
+    action: Modify
+    purpose: >-
+      ensure_fresh_dq_results records a declared skip when the creds probe fails, and does NOT
+      record a skip for any other exception class (Decision 155 narrow-skip rule).
+  - file: tests/checks/roadmap/test_check_graduation_guard.py
+    action: Modify
+    purpose: Base-fix tests plus the rec-3085 dq_unavailable case named by that rec's acceptance.
+  - file: tests/checks/misc/test_validate_test_coverage.py
+    action: Modify
+    purpose: Declared-examined/skip tests.
+  - file: tests/checks/misc/test_validate_scheduled_agent_logs.py
+    action: Modify
+    purpose: Declared-examined/skip tests, including the still-empty post-merge domain.
+  - file: tests/checks/iam_tf/test_validate_environment_taxonomy.py
+    action: Modify
+    purpose: Declared-examined tests.
+  - file: tests/checks/lambda_pkg/test_validate_lambda_deploy_gating.py
+    action: Modify
+    purpose: Declared-examined/skip tests.
+  - file: tests/checks/hygiene/test_validate_check_accounting.py
+    action: Create
+    purpose: Ratchet tests -- undeclared-new-check fails, baseline growth fails, frozen-constant cross-check.
+  - file: tests/checks/hygiene/test__manifest.py
+    action: Modify
+    purpose: Mirror-test coverage of the new Entry.
+bundled_recommendations:
+  - rec-2915
+  - rec-3089
+  - rec-3085
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A registered check that examines zero inputs, one that examines N>0, one that declares a skip,
+    one that appends to `failed`, and one that declares nothing are five DISTINGUISHABLE outcomes
+    after a real dispatch_recording() pass -- not four collapsed into "not failed".
+  - >-
+    logs/debug/validation-result.json is schema_version 3 and carries per-check outcome rows plus
+    ran/skipped/vacuous/undeclared rollups, while failed_checks and failed_check_attributions keep
+    their exact schema_version 2 shape and remain readable by scripts.ci_rca.taxonomy.
+  - >-
+    With AWS credentials unavailable AND logs/debug/dq-latest.json absent, both ensure_fresh_dq_results
+    and _check_graduation_guard record declared skips; neither contributes a silent pass. A non-creds
+    exception in the DQ probe does NOT record a skip.
+  - >-
+    _check_graduation_guard derives its changed-file domain from the push-aware primitive, so a clean
+    checkout (every CI run) no longer yields an unconditionally empty domain.
+  - >-
+    All five adopted checks (_check_graduation_guard plus the four full-tier-only diff consumers)
+    declare an examined count or a skip on a real invocation.
+  - >-
+    validate_check_accounting is registered in BOTH pre_sequence() and full_sequence(), fails a new
+    check module that declares no outcome and is absent from the baseline, fails any net growth of
+    config/check_accounting_baseline.yaml, and cannot be satisfied by a config-file edit alone.
+  - >-
+    A live full-tier run records validate_scheduled_agent_logs as having examined zero inputs --
+    the deliberately-unfixed dead gate is visible in the evidence as a direct consequence of this
+    change, proving the observable discriminates on a real defect rather than a synthetic one.
+  - >-
+    rec-2915, rec-3089 and rec-3085 are closed via the Resolves: trailer, and a close_proposed
+    command for rec-2917 (verdict contradicted) is surfaced for human confirmation, never run
+    automatically.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the five outcome states are distinguishable through a REAL dispatch pass, not a direct
+      unit call on the derivation helper.
+    command: bin/venv-python -m pytest tests/checks/registry/test_accounting.py -q
+    expected: >-
+      Passes. Cases assert examined(0)+no-append => "vacuous", examined(3)+no-append => "enforced",
+      skipped(reason) => "skipped", no declaration => "undeclared", and any append to `failed` =>
+      "failed" regardless of what was declared. The accumulator is reset between dispatches so runs
+      never cross-contaminate.
+    fix_if: >-
+      A state collapses into another (most likely vacuous into enforced when count==0 is treated as
+      falsy rather than as a declared zero), or accumulator state leaks between dispatches.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: check-accounting-status-derivation
+  - step: 2
+    phase: pre-deploy
+    action: Prove the evidence record carries skip accounting and stays backward-compatible.
+    command: bin/venv-python -m pytest tests/checks/test_validation_result.py -q
+    expected: >-
+      Passes. schema_version is 3; check_outcomes and the ran/skipped/vacuous/undeclared rollups are
+      present and mutually consistent; failed_checks and failed_check_attributions are byte-identical
+      to what schema_version 2 produced for the same inputs; the outcome list is a snapshot, so a
+      later clear() cannot mutate an already-written record.
+    fix_if: >-
+      Rollups disagree with check_outcomes, a v2 consumer field changed shape or ordering, or the
+      record holds a live reference to the accumulator.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: validation-result-v3-skip-accounting
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the CI-RCA attribution consumer is unbroken by the version bump -- the one downstream
+      reader of this file (Decision 142).
+    command: bin/venv-python -m pytest tests/ci_rca/taxonomy/test_load_and_classify.py -q
+    expected: >-
+      Passes, including a new case feeding a schema_version 3 record to _load_attributions() and
+      asserting the (check, label) pairs still resolve and Priority 0 classification still fires.
+    fix_if: >-
+      Attribution loading degrades to an empty list on a v3 record, which would silently demote
+      CI-RCA to its weaker log-derived ladder without failing anything.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The durable regression guard for this contract belongs on the CONSUMER's version-agnostic
+      read, which tests/ci_rca/taxonomy/ already owns as a package-level suite; graduating a second
+      registry row pinned to this plan's slug would duplicate that ownership and split the guard
+      across two homes with no added discrimination.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove rec-3085's composite hole is closed on BOTH surfaces, and that the skip is narrow
+      (Decision 155) rather than a blanket exception swallow.
+    command: bin/venv-python -m pytest tests/validate/test_scaffold_gates.py tests/checks/roadmap/test_check_graduation_guard.py -q
+    expected: >-
+      Passes. With the STS probe forced to fail and dq-latest.json absent, ensure_fresh_dq_results
+      records a declared skip naming the creds cause, and _check_graduation_guard records a declared
+      skip rather than a silent WARN-and-return. A non-creds exception from the probe does NOT
+      record a skip. Includes the dq_unavailable case rec-3085's own acceptance names.
+    fix_if: >-
+      Either surface still returns silently, or the skip declaration is attached to a bare
+      `except Exception` so a genuine bug is laundered into an accounted skip.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: dq-unavailable-records-skip
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove the adopted tranche declares real counts on real invocations, and that the graduation
+      guard's base fix gives it a non-empty domain on a clean checkout.
+    command: bin/venv-python -m pytest tests/checks/misc/test_validate_test_coverage.py tests/checks/misc/test_validate_scheduled_agent_logs.py tests/checks/iam_tf/test_validate_environment_taxonomy.py tests/checks/lambda_pkg/test_validate_lambda_deploy_gating.py -q
+    expected: >-
+      Passes. Each of the four checks declares an examined count or a skip on every reachable exit
+      path. validate_scheduled_agent_logs asserts examined==0 under a simulated post-merge state --
+      pinning the deliberately-unfixed defect as a fact rather than an accident.
+    fix_if: >-
+      A check has an exit path that declares nothing (it would silently read "undeclared" and the
+      ratchet would not catch it, since the ratchet proves a declaration EXISTS in the module, not
+      that every path reaches one).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This same guarantee is graduated once and structurally by validate_check_accounting (step 6),
+      which covers the whole 101-check population; graduating four per-file registry rows here would
+      pin the tranche membership of this specific plan as if it were the durable rule, and those
+      rows would go stale the moment the ratchet shrinks past them.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Prove the ratchet is a real gate in all four directions, including the config-edit-alone
+      admission path (Decision 162).
+    command: bin/venv-python -m pytest tests/checks/hygiene/test_validate_check_accounting.py -q
+    expected: >-
+      Passes. A synthetic check module declaring no outcome and absent from the baseline FAILS; the
+      same module added to the baseline still FAILS because the frozen in-module constant does not
+      list it; a module that declares examined()/skipped() PASSES; any net growth of the baseline
+      FAILS; and an absent base ref SKIPs loudly rather than passing silently.
+    fix_if: >-
+      Any direction passes when it should fail -- especially config-edit-alone admission, which
+      would make the baseline self-amending and reproduce the very class of gate this plan exists
+      to make visible.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: check-accounting-ratchet-shrink-only
+  - step: 7
+    phase: pre-deploy
+    action: Prove the new check is actually dispatched in both tiers, not merely defined.
+    command: |-
+      bin/venv-python -m pytest tests/checks/hygiene/test__manifest.py -q && bin/venv-python -c "from scripts.checks import registry; pre={s.name for s in registry.pre_sequence() if s.kind=='check'}; full={s.name for s in registry.full_sequence() if s.kind=='check'}; assert 'validate_check_accounting' in pre, 'absent from pre_sequence'; assert 'validate_check_accounting' in full, 'absent from full_sequence'; print('both tiers OK')"
+    expected: >-
+      The mirror test passes (Entry present and well-formed, dispatched in both tiers), then the
+      live registry probe exits 0 and prints "both tiers OK". The one-liner is a dependency-free
+      second opinion on the same fact, deliberately not sharing the test's fixtures.
+    fix_if: >-
+      The Entry sets pre/full_segment wrongly, or resolve() cannot import the module. A check that
+      is registered but dispatched in neither tier is the exact failure mode this plan exists to
+      surface, so it must not ship as one.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: check-accounting-registered-both-tiers
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      The discriminating end-to-end proof: run the real full tier and confirm the emitted evidence
+      records a REAL dead gate as vacuous. This is the step that distinguishes a working observable
+      from one that merely emits well-formed rows.
+    command: |-
+      bin/venv-python -m scripts.validate && bin/venv-python -c "import json,pathlib; d=json.loads(pathlib.Path('logs/debug/validation-result.json').read_text(encoding='utf-8')); assert d['schema_version']==3, d['schema_version']; o={r['check']: r for r in d['check_outcomes']}; assert len(o)>=97, len(o); adopted=['_check_graduation_guard','validate_test_coverage','validate_environment_taxonomy','validate_lambda_deploy_gating','validate_scheduled_agent_logs']; assert all(o[c]['status']!='undeclared' for c in adopted), [o[c] for c in adopted]; assert o['validate_scheduled_agent_logs']['status']=='vacuous', o['validate_scheduled_agent_logs']; print(sorted({r['status'] for r in d['check_outcomes']}))"
+    expected: >-
+      Full tier exits 0; the record is schema_version 3 with >=97 outcome rows; all five adopted
+      checks are non-undeclared; and validate_scheduled_agent_logs is recorded "vacuous", which is
+      the live demonstration that the spine catches a gate that is genuinely dead right now.
+    fix_if: >-
+      validate_scheduled_agent_logs reads "enforced" (the local branch diff is non-empty, so re-run
+      the assertion under a simulated post-merge base rather than weakening it), or the outcome
+      count is far below the registered population (scaffold/check bracketing is not covering the
+      whole sequence).
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: post-deploy
+    action: Closure obligation -- confirm the three bundled recs actually closed via the Resolves trailer.
+    command: |-
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text(encoding='utf-8').splitlines() if l.strip()]; by={r['id']: r for r in rows}; [print(i, by[i]['status']) for i in ('rec-2915','rec-3089','rec-3085')]; assert all(by[i]['status']=='closed' for i in ('rec-2915','rec-3089','rec-3085'))"
+    expected: All three print "closed" and the assertion passes.
+    fix_if: >-
+      rec-autoclose.yml did not fire or the trailer was malformed; fall back to the explicit
+      `--update-rec <id> --status closed --resolution "..."` portal call per Decision 70.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Surface the rec-2917 close proposal for human confirmation. Decision 103 forbids closing a
+      semantically-judged relevance verdict directly -- this emits the command and stops.
+    command: |-
+      bin/venv-python -c "from scripts.ops_data_portal import propose_or_close_rec; cmd=propose_or_close_rec('rec-2917','contradicted','Premise invalidated: push_context_base() + ci.yml fetch-depth 2 (dec-159) mean the post-merge diff base resolves to HEAD~1, so the claimed empty-set CI domain no longer exists -- measured on this branch, get_changed_files() returned 5 files under simulated push context. The surviving tree-scoped/change-scoped classification idea is unfiled residue, not this rec as written.',deterministic=False); print(cmd)"
+    expected: >-
+      Prints a `--update-rec rec-2917 --status closed ... # relevance=contradicted` command string.
+      The implementing agent PRINTS it and does not run it; the operator decides.
+    fix_if: >-
+      The function returns None (would mean the verdict was mistyped as relevant/unknown) or the
+      agent runs the printed command itself, which would be an unauthorised semantic auto-close.
+test_obligations:
+  - source: scripts/checks/registry.py
+    behavior: >-
+      The five outcome states stay distinguishable, and the accumulator resets between dispatches.
+    verification_step: 1
+    test_selector: tests/checks/registry/test_accounting.py
+    red_green_expectation: >-
+      red before (no accounting channel exists, so the module has no examined/skipped symbol to
+      import), green after.
+  - source: scripts/checks/validation_result.py
+    behavior: >-
+      schema_version 3 emission with rollups, while the two v2 consumer fields keep their shape.
+    verification_step: 2
+    test_selector: tests/checks/test_validation_result.py
+    red_green_expectation: >-
+      red before (the existing test pins schema_version == 2 and no outcome harvest happens in
+      dispatch_recording), green after.
+  - source: scripts/checks/_scaffolding.py
+    behavior: >-
+      ensure_fresh_dq_results records a declared skip on creds-probe failure only, never on other
+      exception classes.
+    verification_step: 4
+    test_selector: tests/validate/test_scaffold_gates.py
+    red_green_expectation: >-
+      red before (the creds-absent branch returns with no record of any kind), green after.
+  - source: scripts/checks/roadmap/check_graduation_guard.py
+    behavior: >-
+      Domain derives from the push-aware base rather than the working tree, and every degraded exit
+      is a declared skip.
+    verification_step: 4
+    test_selector: tests/checks/roadmap/test_check_graduation_guard.py
+    red_green_expectation: >-
+      red before (a clean-checkout fixture makes the guard early-return green, and the dq-missing
+      branch records nothing), green after.
+  - source: scripts/checks/misc/validate_test_coverage.py
+    behavior: Declares an examined count or a skip on every reachable exit path.
+    verification_step: 5
+    test_selector: tests/checks/misc/test_validate_test_coverage.py
+    red_green_expectation: red before (no declaration on any path), green after.
+  - source: scripts/checks/misc/validate_scheduled_agent_logs.py
+    behavior: >-
+      Declares an examined count or skip on every path, and declares examined==0 under a simulated
+      post-merge base -- pinning the unfixed empty-domain defect as an asserted fact.
+    verification_step: 5
+    test_selector: tests/checks/misc/test_validate_scheduled_agent_logs.py
+    red_green_expectation: red before (no declaration on any path), green after.
+  - source: scripts/checks/iam_tf/validate_environment_taxonomy.py
+    behavior: Declares the examined count of candidate docs on every reachable exit path.
+    verification_step: 5
+    test_selector: tests/checks/iam_tf/test_validate_environment_taxonomy.py
+    red_green_expectation: red before (no declaration on any path), green after.
+  - source: scripts/checks/lambda_pkg/validate_lambda_deploy_gating.py
+    behavior: Declares an examined count or a skip on every reachable exit path.
+    verification_step: 5
+    test_selector: tests/checks/lambda_pkg/test_validate_lambda_deploy_gating.py
+    red_green_expectation: red before (no declaration on any path), green after.
+  - source: scripts/checks/hygiene/validate_check_accounting.py
+    behavior: >-
+      Fails an undeclared, unbaselined check; fails baseline growth; fails config-edit-alone
+      admission; SKIPs loudly on an absent base.
+    verification_step: 6
+    test_selector: tests/checks/hygiene/test_validate_check_accounting.py
+    red_green_expectation: red before (the module does not exist), green after.
+  - source: scripts/checks/hygiene/_manifest.py
+    behavior: The new Entry is present, well-formed, and dispatched in both tiers.
+    verification_step: 7
+    test_selector: tests/checks/hygiene/test__manifest.py
+    red_green_expectation: red before (no Entry, so the tier-membership assertion fails), green after.
+constraints:
+  - >-
+    Do NOT edit scripts/validate.py (Decision 169): dispatch and tier sequence come from the
+    per-domain manifests. The ensure_fresh_dq skip is recorded by wrapping inside
+    scripts/checks/_scaffolding.py itself, not by adding a scaffold wrapper to the driver loop.
+  - >-
+    scripts/checks/_scaffolding.py measures 469 SLOC against the 500 unregistered ceiling. Keep its
+    delta to a context-manager wrapper. If it crosses, DECOMPOSE into a facade package (Decision
+    128) -- never raise the budget, never rely on --update-sloc-budgets (it does not auto-seed a
+    newly-oversized unregistered file).
+  - >-
+    None of the nine pre-existing Python scope files is pinned in config/coverage_baseline.yaml, so
+    every one of them carries the 100%-per-file coverage standard on the new branches. Do not add
+    baseline entries to escape this -- a new sub-100 entry needs a `# baseline-lowered: dec-NNN`
+    marker and is a reviewable exception, not a convenience.
+  - >-
+    failed_checks and failed_check_attributions are a live consumer contract read by
+    scripts/ci_rca/taxonomy.py and the ci-rca.yml artifact path (Decision 142). Additive fields only;
+    never reorder, rename, or re-type those two.
+  - >-
+    The skip declaration in ensure_fresh_dq_results attaches ONLY to the credential-probe failure.
+    Every other exception keeps the Decision 55 fail-closed default (Decision 155's narrow-skip
+    precedent) -- a blanket `except Exception` that records a skip would launder real bugs into
+    accounted skips, which is a strictly worse shape than today's silence.
+  - >-
+    validate_check_accounting must be filesystem-only with no subprocess so the fast tier stays
+    inside its 5-minute budget (Decision 153); the AST scan of ~101 modules is the whole check.
+  - >-
+    config/check_accounting_baseline.yaml ships with NO marker escape grammar. This is a deliberate
+    choice recorded in the contract, not an omission (Decision 165 makes scripts/checks/_marker_guard.py
+    the mandatory home for any marker grammar, so adding one later means going there).
+  - >-
+    Do not implement fail-closed vacuity enforcement. A vacuous full-tier check still passes after
+    this plan. Wording the Decision as though it were enforced would be exactly Decision 163's
+    declared-versus-executed failure mode.
+  - >-
+    Do not fix validate_scheduled_agent_logs' diff base. It is the live dead-gate VP step 8 needs;
+    fixing it here leaves the instrument with nothing real to catch. It is the named follow-on.
+  - >-
+    Do not close rec-2917 automatically. Decision 103 requires a close_proposed command for human
+    confirmation on any semantically-judged relevance verdict.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND (122 of 122 triaged).
+    CITE: dec-169, dec-104, dec-155, dec-62, dec-159, dec-161, dec-162, dec-165, dec-167, dec-150,
+    dec-153, dec-103. RELATED: dec-166, dec-130, dec-73, dec-135, dec-142, dec-55. Flags resolved
+    in-scope, all four accepted by the operator: dec-150 WARN (field semantics had no contract home
+    -> docs/contracts/check-accounting.yaml added as a Class D contract); dec-66 WARN (prevention was
+    post-rejection only -> registry.py's registration enumeration extended from six surfaces to
+    seven); dec-163 NOTE (declared-vs-executed risk -> Decision text commits to channel+ratchet only,
+    fail-closed named as deferred); dec-128 NOTE (_scaffolding.py at 469/500 -> delta capped at a
+    scope wrapper).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    rec-2917 EXCLUDED on a measured premise invalidation, operator-confirmed. Its headline claim is
+    that three full-tier-only diff consumers have the empty set as their live CI domain. Decision
+    159's push_context_base() plus ci.yml's fetch-depth 2 repaired that: measured on this branch,
+    push_context_base() resolved to HEAD~1 and get_changed_files() returned 5 real files under
+    simulated push context. The surviving idea -- that tree-scoped checks should run unscoped in the
+    full tier -- is real but is a different and much larger change (a scope_kind classification over
+    101 checks) and must be re-filed on its own merits. VP step 10 emits the close proposal.
+  - >-
+    rec-3086 (_marker_guard laundering a skip into an affirmative pass) is DEFERRED, not closed, per
+    the operator's original framing. It stays open and untouched. It is the same defect family one
+    layer down, and the natural second consumer of this plan's vocabulary.
+  - >-
+    TWO DEAD GATES FOUND DURING RECON, neither named by any rec, both confirmed empirically on the
+    clean tree. (1) _check_graduation_guard bases off `git diff HEAD` -- the WORKING TREE -- so every
+    CI checkout being clean means it has early-returned on every CI run since it shipped and has
+    never enforced there. This is deeper than rec-3085 describes: the guard never reaches the
+    dq-latest.json branch that rec cites. FIXED IN THIS PLAN by operator decision (the fix is the
+    diff base plus the paired `git show HEAD:` old-content read -- two call sites, not one).
+    (2) validate_scheduled_agent_logs uses a raw `git diff origin/main...HEAD` that does not honour
+    push_context_base(), so its domain is still empty post-merge. LEFT UNFIXED on purpose as VP step
+    8's live target.
+  - >-
+    Live behaviour change to expect from the graduation-guard base fix: the guard starts actually
+    running in CI for the first time. It only appends a failure when DQ YAML changed AND an
+    enforced:false->true flip happened AND that check's verdict is not PASS, so blast radius is
+    narrow -- but it is non-zero, and a PR doing exactly that will now be blocked where it previously
+    sailed through. See rollback.
+  - >-
+    Ordering consequence worth holding: fixing the guard's base is what first makes rec-3085's hole
+    REACHABLE in CI. Before the fix the guard never got far enough to care whether dq-latest.json
+    existed. The two halves must land together or the fix opens a hole the same plan was meant to close.
+  - >-
+    Decision 62's premise is stale and should be cited as such rather than worked around: it declined
+    a separate DQ scheduled routine because ensure_fresh_dq_results() handles the auto-invoke on "the
+    EC2 self-hosted runner, which has SSO credentials". That runner was retired (CD.21 / Decision
+    112), which is precisely why rec-3085's creds-absent path exists at all.
+  - >-
+    Baseline seed arithmetic, measured this session: 101 registered checks and 101 manifest entries;
+    5 adopted in this plan's tranche; 96 baseline entries at seed. 36 checks are full-tier-only and
+    3 are pre-only. The baseline being ~95% of the population is the honest starting point -- its
+    value is that a NEW check can never join it, which is rec-2915's "make the next instance
+    unbuildable" property.
+  - >-
+    rec-2915's acceptance string names `tests/test_checks_registry.py`, a path that does not exist
+    and does not match the current mirror convention (registry.py resolves to the tests/checks/registry/
+    PACKAGE via map_source_to_test). The acceptance is re-grounded onto
+    tests/checks/registry/test_accounting.py; do not create a file at the stale path to satisfy a
+    literal grep, which validate_placement would reject anyway.
+  - >-
+    The existing scripts/ci_rca/vacuous_pass.py is a DIFFERENT object despite the name collision: it
+    parses pytest COLLECTION vacuity out of a CI log for the RCA evidence bundle on a red main run.
+    This plan's object is per-check examined-input vacuity on any run, green ones included. Do not
+    merge them or route one through the other.
+  - >-
+    Decision draft (text to be authored at implement time; re-check the current max `## Decision NNN:`
+    header first, since numbers are not reserved at draft time and a concurrent PR may have claimed
+    it). Commitment: the registered-check contract gains a second, declarative output channel; a
+    check may declare the input set it examined or that it skipped; the run evidence records that
+    per check; and adoption is governed by a shrink-only ratchet that a new check can never join.
+    Explicitly NOT committed: fail-closed enforcement of vacuity. Deferred-work trigger to state in
+    the entry: revisit fail-closed once the recorded undeclared count falls below a stated threshold
+    and the vacuous-status population has been triaged. Reversal conditions: if the accounting proves
+    to be noise (no vacuous finding drives a fix within a stated window) or the ratchet wedges
+    unrelated PRs, unwind is channel + baseline + schema v3 together, since consumers key off the
+    v3 shape. Must carry the fenced yaml metadata envelope and a significance routing claim
+    (numbered_decision), per Decisions 167/150.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Re-read scripts/checks/registry.py's module docstring first -- it enumerates the six (soon seven)
+    surfaces registering a check touches, and is the authority for what else this plan must update.
+execution_steps:
+  - >-
+    scripts/checks/registry.py -- add the accounting channel next to Check: a module-level
+    accumulator (mirroring validation_result._ATTRIBUTIONS' existing shape), examined(count, unit=)
+    and skipped(reason) as the public API check bodies call, an outcome_scope(name) context manager
+    for non-check callers, a frozen CheckOutcome record, and ONE status-derivation function so the
+    five states can never drift apart. Extend the docstring's six-surface enumeration to seven by
+    naming the declaration obligation.
+  - >-
+    scripts/checks/validation_result.py -- bracket the fn(failed) call in dispatch_recording() with
+    the accounting scope and harvest the outcome; emit schema_version 3 from write_completed() with
+    check_outcomes plus the four rollups, snapshotting (never referencing) the accumulator. Leave
+    failed_checks and failed_check_attributions untouched.
+  - >-
+    scripts/checks/_scaffolding.py -- wrap ensure_fresh_dq_results' body in
+    registry.outcome_scope("ensure_fresh_dq") and record a declared skip on the credential-probe
+    failure path ONLY. Keep the delta to the wrapper; no logic in this file.
+  - >-
+    scripts/checks/roadmap/check_graduation_guard.py -- repoint the changed-file derivation off
+    `git diff HEAD` onto _common.get_changed_files() filtered to config/agent/data_quality/*.yaml,
+    and repoint the paired `git show HEAD:{path}` old-content read at the same base. Then declare
+    examined counts and convert the three dq-latest.json degradation returns into declared skips.
+  - >-
+    Adopt the accounting API in the four tranche checks (validate_test_coverage,
+    validate_scheduled_agent_logs, validate_environment_taxonomy, validate_lambda_deploy_gating):
+    every reachable exit path declares either an examined count or a skip. Change NO other behaviour
+    in them -- in particular leave validate_scheduled_agent_logs' diff base broken.
+  - >-
+    scripts/checks/hygiene/validate_check_accounting.py -- the AST ratchet, plus its Entry in
+    hygiene/_manifest.py (pre=True, pre_globs=("scripts/checks/**",),
+    full_segment="full_after_lint"), its config/ci_rca_taxonomy.yaml function_to_category row, and
+    the frozen in-module constant that makes a config-only edit insufficient to admit a member.
+  - >-
+    config/check_accounting_baseline.yaml -- generate the 96-entry seed from the live registry (do
+    not hand-list it), with the tamper guard, the missing-base SKIP so this seeding PR does not fail
+    its own gate, and the reversal clause.
+  - >-
+    docs/contracts/check-accounting.yaml (Class D; subject check-accounting; evaluator
+    validate_check_accounting; NOT status active) plus its topic-equals-subject route in
+    docs/contracts/file-router.yaml.
+  - >-
+    docs/DECISIONS.md -- author the numbered Decision from the draft in context, with the yaml
+    envelope and significance claim, committing to channel + ratchet only.
+  - >-
+    Write/extend the ten test files. Every new branch in the nine pre-existing scope files needs
+    coverage to 100%, since none of them is baseline-pinned.
+  - >-
+    config/agent/verification_registry/registry.yaml -- one row per graduate-disposition VP step
+    (1, 2, 4, 6, 7), using each step's declared graduation_check_id verbatim.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop
+    and RCA (Decision 55).
+  - >-
+    'Report: what was implemented, verification results, and the printed rec-2917 close_proposed
+    command left for the operator to run.'
+work_areas: []
+rollback: >-
+  The channel, the baseline and schema v3 unwind together, not separately -- a consumer keyed to the
+  v3 shape would break on a partial revert. Reverting the commit restores schema_version 2 evidence
+  and the single-channel check contract with no data migration, since validation-result.json is
+  regenerated every full run and is never read as history. The one piece with independent blast
+  radius is the graduation-guard base fix: if it blocks a legitimate PR, revert THAT hunk alone
+  (the guard returns to its inert `git diff HEAD` behaviour, which is the status quo ante) and file
+  the finding rather than weakening the guard's verdict logic.
