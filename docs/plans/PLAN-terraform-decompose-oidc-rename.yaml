@@ -122,9 +122,18 @@ scope:
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      Repoint the stale single-file grep specs to root-scoped equivalents; correct
+      21 rows name one of the two files as guard_target and 28 have a check_spec referencing either
+      root. Repoint the single-file grep specs to root-scoped equivalents; correct
       ci-role-boundary-attach-count-eq-6 (asserts 6, measures 4 since T2.49 merged 6 CI roles into
-      4); assert-on or remove the computed-unused other_lambda_writes (rec-2820b).
+      4); assert-on or remove the computed-unused other_lambda_writes (rec-2820b). SLOT CHANGE
+      REQUIRED for exactly two rows -- passrole-grant-present-identity-and-boundary and
+      updaterole-present-identity-and-boundary are primitive_slot grep_count with
+      path: terraform/bootstrap/github_ci_apply.tf and operator gte count 2, which asserts the verb
+      appears in BOTH the identity policy AND the boundary ceiling. The split puts those two layers
+      in different files and GrepCountCheck.run() reads a single Path (a directory raises
+      IsADirectoryError), and there is no root-scoped grep_count. They must move to
+      command_exit_zero PRESERVING the both-layers semantic (total gte 2 ACROSS _policy.tf and
+      _boundary.tf -- never gte 2 within either one, which would pass on a single-layer grant).
 bundled_recommendations:
   - rec-2820
 infrastructure_dependencies:
@@ -156,6 +165,11 @@ acceptance_criteria:
     block in an unrelated sibling .tf neither satisfies nor breaks any assertion, and an
     unresolvable local.<name> fails loud rather than silently passing.
   - rec-2820 is resolved -- no overview comment describes the retired github_ci_plan / github_ci_drift roles as live, and other_lambda_writes is asserted-on or removed.
+  - >-
+    All 28 verification-registry rows whose check_spec references either touched root EXECUTE green
+    against the split tree (27 are green today and one, ci-role-boundary-attach-count-eq-6, is
+    already red), with the two grep_count rows converted to command_exit_zero preserving their
+    both-layers semantic.
   - bin/venv-python -m scripts.validate --pre is green, and the full tier is green before handoff.
 verification_plan:
   - step: 1
@@ -299,6 +313,9 @@ verification_plan:
       design -- it looks for the literal $other outside the echo payload, so an arithmetic form like
       (( other == 0 )) that never writes $other would still be flagged. That direction cannot produce
       a false green, so prefer a $other-referencing assertion (or deletion) over widening the test.
+      NOTE: this step's own graduated row lives in registry.yaml and its command string contains
+      other_lambda_writes, so it falls inside its own scan scope. It passes only because the literal
+      $other lands in a ;-segment containing no echo -- preserve that shape if the row is reformatted.
     graduation: graduate
     graduation_check_id: "registry-other-lambda-writes-asserted"
   - step: 9
@@ -333,9 +350,11 @@ verification_plan:
       because removals are unrestricted.
     fix_if: >-
       A structural failure means a file is still over 500. An iam_tf failure means step 2 was not
-      genuinely satisfied. A validate_structural_size_budget_raises failure on
+      genuinely satisfied. A validate_structural_size_LIMITS failure on
       config/agent/verification_registry/registry.yaml means a repointed row breached the 2315-char
-      long-line ceiling -- break the line with a YAML block scalar; NEVER raise the ceiling.
+      long-line ceiling (that check enforces the char ceiling; validate_structural_size_budget_raises
+      fires only on RAISING the pinned entry) -- break the line with a YAML block scalar; NEVER
+      raise the ceiling.
     graduation: waive
     graduation_waiver_reason: >-
       Recursive: the verification registry's own graduated rows are materialized and executed BY
@@ -401,6 +420,29 @@ verification_plan:
       Still open -- the Resolves: trailer was missing or malformed in the squash-merge body. Close it
       via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2820 --status closed with a
       resolution naming this plan (the Decision 70 fallback path).
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      EXECUTE every verification-registry row whose check_spec references either touched root, and
+      assert all pass. Admission and execution are DIFFERENT things: Decision 132's differential
+      gate only ADMITS newly-added rows, but any row can be RUN via materialize_check(...).run().
+      27 of these 28 rows are green TODAY and many break on the split, with nothing in either
+      validate tier running them -- silent degradation of a security-adjacent guard set.
+    command: >-
+      bin/venv-python -c 'import yaml,sys; from scripts.verification_graduation import materialize_check; d=yaml.safe_load(open("config/agent/verification_registry/registry.yaml")); rows=[e for e in d["entries"] if "terraform/personal" in str(e.get("check_spec")) or "terraform/bootstrap" in str(e.get("check_spec"))]; bad=[e["check_id"] for e in rows if materialize_check(e).run().status.name != "PASS"]; print("rows=",len(rows)," failing=",bad); sys.exit(1 if bad else 0)'
+    expected: >-
+      rows= 28 failing= [] and exit 0. Currently RED with failing=
+      ['ci-role-boundary-attach-count-eq-6'] (asserts 6, measures 4 since T2.49), which is what
+      makes this step differential and therefore genuinely graduate-eligible without renaming any
+      check_id.
+    fix_if: >-
+      Any check_id is listed. Two failure shapes: (a) a row still greps a single file whose content
+      moved -- repoint it to the root; (b) the two grep_count rows below cannot be repointed in
+      their slot at all -- see the registry scope row. Do NOT silence a row by weakening its
+      assertion; these guard write verbs, boundary attachment, the self-exclusion Deny, PassRole
+      conditions and the inline-policy size preconditions.
+    graduation: graduate
+    graduation_check_id: "registry-rows-green-on-split-roots"
 test_obligations:
   - source: scripts/checks/iam_tf/_read_coverage.py
     behavior: >-
@@ -527,10 +569,12 @@ test_obligations:
     verification_step: 1
     test_selector: tests/checks/verification/test_validate_verification_registry.py
     waiver_reason: >-
-      These rows are DATA, not executed code, and validate_verification_registry runs its
-      differential admission gate only for rows newly added versus origin/main (keyed by check_id) --
-      so an edited existing row is structurally un-re-provable by design. Recorded as a deliberate
-      hygiene repair with no re-proof, per the decision-scout Decision 132 resolution; the general
+      An edited existing row cannot be re-ADMITTED: validate_verification_registry runs its
+      differential gate only for rows newly added versus origin/main (keyed by check_id). That is a
+      statement about admission, NOT about execution -- every row remains runnable via
+      materialize_check(...).run(), which is exactly what VP step 15 now does across all 28. So the
+      rows ARE re-proven functionally; only Decision 132's admission ceremony is unavailable to
+      them, and step 15 is itself a newly-added row that DOES pass through that gate. The general
       rot class is filed as a follow-on rec in execution step 8.
 constraints:
   - >-
@@ -540,7 +584,8 @@ constraints:
     by construction. This does NOT extend to trailing comments, `//` or `/* */` forms: steps 4/5
     strip only lines whose first non-whitespace character is `#`, so editing a TRAILING comment
     (notably the `# pragma: allowlist secret` on the OIDC thumbprint) breaks the purity assertion.
-    All four rec-2820a targets were verified to be full-line comments, so the scoped work is safe.
+    All EIGHT rec-2820a targets enumerated in VP step 7 were verified to be full-line comments (the
+    detector's ^[[:space:]]*# anchor guarantees it), so the scoped work is safe.
   - >-
     Do NOT add a `# raise-approved:` marker and do NOT increase any number in
     config/structural_size_budgets.yaml. Decision 166's ratified relief valve for the terraform
@@ -591,7 +636,7 @@ context:
     decisions triaged. CITE list verbatim -- Decision 166, Decision 165, Decision 130, Decision 119,
     Decision 92 (points 4 and 5), Decision 156 (point 4), Decision 129 (clause 4), Decision 77,
     Decision 35, Decision 163, Decision 126.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE round 1 (7 blocking) -> REVISE round 2 (1 blocking, fail-open detector) -> round 3 pending"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE round 1 (7 blocking) -> REVISE round 2 (1 blocking, fail-open detector) -> REVISE round 3 (1 blocking, unexecuted registry rows); all applied, 3-round cap reached and escalated to the human"
   - >-
     FLAG 1 resolved into the design (Decision 129 [WARN]): root concatenation risks flipping
     cardinality assertions if attribution is lost. Resolution adopted -- concatenation widens only
@@ -690,6 +735,14 @@ context:
     forever. Replaced with a token detector plus an explicit 8-line preserve set, verified to flag
     exactly the 8 stale sites and exclude exactly the 8 correct provenance/past-tense lines.
   - >-
+    Plan-critique round 3 confirmed rounds 1 and 2 fully resolved and found one further blocking
+    defect: the plan justified not re-proving the registry rows by calling them "structurally
+    un-re-provable by design", which conflated ADMISSION with EXECUTION. Decision 132's differential
+    gate only admits newly-added rows, but every row runs fine via materialize_check(...).run() --
+    measured 27 green / 1 red across the 28 rows referencing these roots. Many of the 27 break on
+    the split with nothing in either validate tier running them, which would have reproduced inside
+    this plan the exact silent-rot class the plan files a rec about. VP step 15 now executes them.
+  - >-
     Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 ahead/0 behind);
     no scope-file overlap with main, so no rebase decision was required.
 pre_implementation_checklist:
@@ -741,6 +794,10 @@ execution_steps:
     rot silently after an unrelated refactor because the differential admission gate only re-proves
     newly-added rows"; and propose rec-2390 for closure as satisfied using the evidence in Context.
     Update (do NOT close) rec-3024 with the residual three-file set.
+  - >-
+    Run VP step 15 to execute all 28 registry rows against the split tree, converting the two
+    grep_count rows to command_exit_zero with their both-layers semantic preserved. Do not weaken
+    any assertion to make a row pass.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55)
