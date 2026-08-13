@@ -1,0 +1,611 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "terraform-decompose-oidc-rename"
+intent: >-
+  Drain the two terraform-class grandfather roster entries that block the pending in-place
+  repository rename, by decomposing terraform/personal/oidc.tf and
+  terraform/bootstrap/github_ci_apply.tf into sibling .tf files within their SAME roots and
+  deleting their roster rows -- and decouple the repository's own IAM verification checks from
+  hardcoded single-.tf-file paths so the split cannot break them, and no future split can either.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-decompose-oidc-rename.yaml
+phase: >-
+  Platform governance -- Decision 166 terraform-class grandfather drain wave 1 of 2 (rec-3024 is
+  the standing drain owner for all five files; this wave takes the two that block the rename).
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Retain the header, the locals block, aws_iam_openid_connect_provider.github_actions and the
+      two shared refresh-read policy documents (ci_ssm_refresh_read, ci_full_refresh_read); move
+      the four role blocks out. Re-ground the convergence_writer_session_name 4-site enumeration
+      and the retired-role overview comments (rec-2820a). Target 243 effective lines.
+  - file: terraform/personal/oidc_ci_roles.tf
+    action: Create
+    purpose: >-
+      Receive github_ci_branch and github_ci_pr verbatim (role, policy document, role policy).
+      Target 253 effective lines.
+  - file: terraform/personal/oidc_pipeline_roles.tf
+    action: Create
+    purpose: >-
+      Receive github_ci_planner and github_ci_deploy verbatim, including the planner's lifecycle
+      precondition and the deploy precondition that references it as "above". Target 186 lines.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Retain the header, locals{github_repo}, both import{} blocks and aws_iam_role.github_ci_apply
+      with its dual-sub trust policy; move the three policy documents out. This is the file the
+      rename's dual-trust sub-claim edit will touch. Target 37 effective lines.
+  - file: terraform/bootstrap/github_ci_apply_policy.tf
+    action: Create
+    purpose: >-
+      Receive locals{github_ci_apply_policy_json} together with aws_iam_role_policy.github_ci_apply,
+      whose lifecycle precondition self-references that local. Target 403 effective lines.
+  - file: terraform/bootstrap/github_ci_apply_reads.tf
+    action: Create
+    purpose: >-
+      Receive locals{github_ci_apply_reads_policy_json}, aws_iam_policy.github_ci_apply_reads and
+      aws_iam_role_policy_attachment.github_ci_apply_reads. Target 160 effective lines.
+  - file: terraform/bootstrap/github_ci_apply_boundary.tf
+    action: Create
+    purpose: >-
+      Receive locals{github_ci_apply_boundary_policy_json} and
+      aws_iam_policy.github_ci_apply_boundary with its 6,144 B precondition. Target 95 lines.
+  - file: config/structural_size_budgets.yaml
+    action: Modify
+    purpose: >-
+      DELETE the two drained budgets: rows (terraform/personal/oidc.tf,
+      terraform/bootstrap/github_ci_apply.tf). No number is raised; no marker is added.
+  - file: scripts/checks/iam_tf/_read_coverage.py
+    action: Modify
+    purpose: >-
+      Replace _BOOTSTRAP_TF_REL (single file) with a bootstrap ROOT constant plus a shared helper
+      returning the concatenated text of every *.tf in a root, so the `policy = local.<name>` hoist
+      resolves across sibling files. Resolution pool widens; attribution stays per-resource.
+  - file: scripts/checks/iam_tf/_write_companions.py
+    action: Modify
+    purpose: >-
+      Consume the new bootstrap root constant at both boundary re-read sites (lines ~372, ~469).
+  - file: scripts/checks/iam_tf/_write_coverage.py
+    action: Modify
+    purpose: Update the failure-message text that names a single .tf file so it names the root.
+  - file: scripts/checks/iam_tf/validate_convergence_writer_isolation.py
+    action: Modify
+    purpose: >-
+      Parse the whole terraform/personal root instead of oidc.tf alone, preserving the per-named-
+      resource attribution the exactly-one-conditioned-Allow cardinality assertion depends on.
+  - file: scripts/checks/iam_tf/validate_invoke_implies_resolve.py
+    action: Modify
+    purpose: >-
+      Parse the whole terraform/personal root; the invoke/resolve statements now span three files.
+  - file: scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py
+    action: Modify
+    purpose: >-
+      Read both roots by directory (planner statements from personal, apply statements from
+      bootstrap) rather than by two hardcoded filenames.
+  - file: scripts/checks/iam_tf/validate_authority_budget.py
+    action: Modify
+    purpose: Assert boundary_policy_name against the bootstrap root text rather than one file.
+  - file: tests/checks/iam_tf/test__read_coverage.py
+    action: Modify
+    purpose: Add a decoy+split fixture regression case (red before the repoint, green after).
+  - file: tests/checks/iam_tf/test__write_companions.py
+    action: Modify
+    purpose: Add a split fixture regression case for the boundary re-read.
+  - file: tests/checks/iam_tf/test_validate_convergence_writer_isolation.py
+    action: Modify
+    purpose: >-
+      Add a split fixture case AND a decoy case proving a convergence reference in an unrelated
+      sibling .tf neither satisfies nor breaks the cardinality assertion.
+  - file: tests/checks/iam_tf/test_validate_invoke_implies_resolve.py
+    action: Modify
+    purpose: Add a split fixture regression case.
+  - file: tests/checks/iam_tf/test_validate_authority_budget.py
+    action: Modify
+    purpose: Add a split fixture regression case.
+  - file: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_end_to_end.py
+    action: Modify
+    purpose: Add a split fixture regression case across both roots.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Repoint the stale single-file grep specs to root-scoped equivalents; correct
+      ci-role-boundary-attach-count-eq-6 (asserts 6, measures 4 since T2.49 merged 6 CI roles into
+      4); assert-on or remove the computed-unused other_lambda_writes (rec-2820b).
+bundled_recommendations:
+  - rec-2820
+infrastructure_dependencies:
+  - >-
+    terraform/personal (LIVE, guard-gated auto-apply per Decision 77): movement only within one
+    root. Resource addresses are root-scoped, so no address changes, no terraform state mv, and no
+    apply is required -- the speculative plan MUST be empty. A non-empty plan means the split was
+    not pure: STOP and find the error rather than applying.
+  - >-
+    terraform/bootstrap (NEVER auto-applied, Decision 77/126 operator tier): movement only. No
+    apply is required at all; bootstrap state is unaffected by file reorganisation.
+  - >-
+    /terraform/bootstrap/ is CODEOWNERS-protected (.github/CODEOWNERS, DEP-05 / Decision 144), so
+    this PR requires code-owner review from benjamin-blake before merge. Do not expect autonomous
+    merge.
+acceptance_criteria:
+  - Every touched and newly created .tf file measures under 500 effective lines.
+  - >-
+    The two terraform roster rows are deleted from config/structural_size_budgets.yaml, the
+    dec-166 terraform-grandfather marker count falls 5 -> 3, and no budget value increases.
+  - >-
+    The multiset of non-comment, non-blank lines in each root's affected file set is byte-identical
+    before and after the split (movement, not rewriting).
+  - >-
+    All six pre-tier iam_tf checks pass against the split tree, and each carries a new regression
+    test that fails against the pre-repoint single-file implementation.
+  - >-
+    Root-wide parsing widens only the resolution pool, never the attribution scope: a decoy policy
+    block in an unrelated sibling .tf neither satisfies nor breaks any assertion, and an
+    unresolvable local.<name> fails loud rather than silently passing.
+  - rec-2820 is resolved -- no overview comment describes the retired github_ci_plan / github_ci_drift roles as live, and other_lambda_writes is asserted-on or removed.
+  - bin/venv-python -m scripts.validate --pre is green, and the full tier is green before handoff.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the new split-fixture regression tests. These must be written and observed RED against
+      the pre-repoint single-file implementation BEFORE the checks are changed.
+    command: bin/venv-python -m pytest tests/checks/iam_tf/ tests/checks/structural/ tests/checks/verification/ -q
+    expected: >-
+      All green after the repoint. Before the repoint the newly added split/decoy cases FAIL,
+      proving the gap is real and the tests are not tautological.
+    fix_if: >-
+      A new case passes before the repoint -- it is not exercising cross-file resolution; rewrite
+      it so the local/statement genuinely lives in a sibling .tf file.
+    graduation: graduate
+    graduation_check_id: "iam-tf-root-scoped-resolution-tests"
+  - step: 2
+    phase: pre-deploy
+    action: Run every pre-tier iam_tf check against the split tree via the domain manifest.
+    command: bin/venv-python -c "import importlib,sys; from scripts.checks.iam_tf._manifest import ENTRIES; failed=[]; [getattr(importlib.import_module(e.module), e.attr)(failed) for e in ENTRIES if e.pre]; print('FAILED:', failed); sys.exit(1 if failed else 0)"
+    expected: "Exit 0 with FAILED: [] -- all six pre-tier checks resolve statements across the split files."
+    fix_if: >-
+      Any check reports it cannot parse or cannot resolve a policy document -- it is still reading a
+      single hardcoded filename, or the local hoist moved away from its consuming resource.
+    graduation: graduate
+    graduation_check_id: "iam-tf-pre-checks-green"
+  - step: 3
+    phase: pre-deploy
+    action: Measure every touched and newly created .tf file against the 500 class limit.
+    command: bin/venv-python -c "import sys; from pathlib import Path; from scripts.checks.structural._classify import effective_lines; fs=['terraform/personal/oidc.tf','terraform/personal/oidc_ci_roles.tf','terraform/personal/oidc_pipeline_roles.tf','terraform/bootstrap/github_ci_apply.tf','terraform/bootstrap/github_ci_apply_policy.tf','terraform/bootstrap/github_ci_apply_reads.tf','terraform/bootstrap/github_ci_apply_boundary.tf']; r=[(f,effective_lines(Path(f).read_text(encoding='utf-8'))) for f in fs]; [print(f,n) for f,n in r]; sys.exit(0 if all(n<500 for _,n in r) else 1)"
+    expected: All seven files print a value under 500; exit 0.
+    fix_if: >-
+      Any file is at or above 500 -- rebalance which blocks land in which file. Never add a roster
+      row or a raise marker (Decision 128/165/166).
+    graduation: graduate
+    graduation_check_id: "terraform-split-files-under-500"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Assert the terraform/personal split is pure movement -- the non-comment content of the new
+      file set equals the non-comment content of the pre-split oidc.tf.
+    command: bash -c "diff <(git show origin/main:terraform/personal/oidc.tf | grep -vE '^[[:space:]]*(#|$)' | sort) <(cat terraform/personal/oidc.tf terraform/personal/oidc_ci_roles.tf terraform/personal/oidc_pipeline_roles.tf | grep -vE '^[[:space:]]*(#|$)' | sort)"
+    expected: >-
+      Empty diff, exit 0. Comment lines are excluded by construction, so the required comment
+      re-grounding and rec-2820a do not perturb this assertion -- and HCL comments are stripped by
+      the parser, so they cannot affect terraform plan either.
+    fix_if: >-
+      Any line appears on one side only -- a resource, attribute or ARN was edited, indented
+      differently, or dropped during the move. Restore it verbatim; do not "fix forward".
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-shot movement-purity assertion that is only meaningful against the specific pre-split
+      origin/main baseline of this wave. Graduated as a standing check it would compare an
+      unrelated future diff against a stale baseline and pass vacuously.
+  - step: 5
+    phase: pre-deploy
+    action: Assert the terraform/bootstrap split is pure movement, same construction as step 4.
+    command: bash -c "diff <(git show origin/main:terraform/bootstrap/github_ci_apply.tf | grep -vE '^[[:space:]]*(#|$)' | sort) <(cat terraform/bootstrap/github_ci_apply.tf terraform/bootstrap/github_ci_apply_policy.tf terraform/bootstrap/github_ci_apply_reads.tf terraform/bootstrap/github_ci_apply_boundary.tf | grep -vE '^[[:space:]]*(#|$)' | sort)"
+    expected: Empty diff, exit 0.
+    fix_if: >-
+      Any divergence -- most likely an IAM action, Sid or ARN altered while relocating a policy
+      document. Restore verbatim. This root carries the apply role's own authority; do not improvise.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same one-shot baseline-bound property as step 4; meaningful only for this wave's pre-split
+      origin/main revision of github_ci_apply.tf.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Assert the roster drained -- both keys absent, marker count 5 -> 3, and no value raised
+      (this is also the partial-progress evidence against rec-3024's own acceptance metric).
+    command: bin/venv-python -c "import sys,yaml; d=yaml.safe_load(open('config/structural_size_budgets.yaml')); b=d.get('budgets',{}); tf=[k for k in b if str(k).endswith('.tf')]; gone=[k for k in ('terraform/personal/oidc.tf','terraform/bootstrap/github_ci_apply.tf') if k in b]; print('remaining_tf_keys=',sorted(tf)); print('should_be_absent_but_present=',gone); sys.exit(1 if gone or len(tf)!=3 else 0)"
+    expected: >-
+      should_be_absent_but_present=[] and exactly three .tf keys remain (iceberg_tables,
+      data_pipeline, platform_roles -- rec-3024's residual wave). Cross-check with
+      `grep -c 'raise-approved: dec-166 terraform class grandfather' config/structural_size_budgets.yaml`
+      which must fall from 5 to 3.
+    fix_if: >-
+      A key is still present, or a raise marker was added. Removals are unrestricted
+      (_marker_guard.check_diff iterates current entries only) -- no marker is ever needed to drain.
+    graduation: graduate
+    graduation_check_id: "oidc-bootstrap-absent-from-size-roster"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      rec-2820(a) closure evidence -- no overview/header comment still describes the retired
+      github_ci_plan / github_ci_drift roles as live composers or writers.
+    command: >-
+      bash -c 'c=$(grep -REoh "github_ci_plan and github_ci_drift additionally compose|refresh-readable by github_ci_plan/drift|Trust mirrors github_ci_branch/github_ci_drift|github_ci_drift joins the sanctioned writer set" terraform/personal/ terraform/bootstrap/ | wc -l | tr -d " "); echo "stale_overview_phrases=$c"; [ "$c" -eq 0 ]'
+    expected: >-
+      stale_overview_phrases=0. The per-statement "From github_ci_plan:" / "From github_ci_drift:"
+      provenance annotations are CORRECT and must remain -- rec-2820 explicitly preserves them.
+    fix_if: >-
+      A count above zero means an overview comment still asserts a false current state. Re-ground
+      it to the 2-role reality (github_ci_planner + github_ci_deploy).
+    graduation: graduate
+    graduation_check_id: "no-retired-ci-role-overview-comments"
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      rec-2820(b) closure evidence -- the verification registry's computed other_lambda_writes is
+      either asserted-on or removed, never computed-and-discarded.
+    command: >-
+      bash -c 'f=config/agent/verification_registry/registry.yaml; if grep -q other_lambda_writes "$f"; then grep -qE "\[ *\"\$other\"" "$f" || { echo "computed-but-unused other_lambda_writes still present"; exit 1; }; fi; echo ok'
+    expected: Prints ok -- the value is gated on, or the computation is gone.
+    fix_if: The value is still computed without gating; assert on it or delete the computation.
+    graduation: graduate
+    graduation_check_id: "registry-other-lambda-writes-asserted"
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Run the creds-free terraform gate. Decision 119: this is CI-DELEGATED -- the required
+      terraform-validate CI job runs this identical command and is the AUTHORITATIVE verifier.
+    command: bin/venv-python -m scripts.validate --terraform-only
+    expected: >-
+      Exit 0. On CC-web terraform is absent from PATH, so run_terraform_creds_free prints a visible
+      SKIP and this is advisory only. In CI it performs init -backend=false + validate + fmt -check
+      across all four roots, including both roots this plan touches. A local pass is NOT sufficient
+      evidence; the green CI check is.
+    fix_if: >-
+      CI reports a validate error (a moved block lost a brace, or a duplicate locals key was
+      introduced) or an fmt diff (indentation changed during the move -- step 4/5 should have caught
+      it). Never author a local terraform init/plan for these roots (Decision 119/120).
+    graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: Run the fast presubmit tier, which includes both structural checks and all iam_tf checks.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0. validate_structural_size_limits now governs both retained files and all five new
+      files at the class limit of 500; validate_structural_size_budget_raises passes with no marker
+      because removals are unrestricted.
+    fix_if: >-
+      A structural failure means a file is still over 500. An iam_tf failure means step 2 was not
+      genuinely satisfied.
+    graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Decision 163 pre-handoff obligation -- run the FULL validation tier to completion before
+      committing, and record the executed result rather than declaring it.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 across the full tier.
+    fix_if: >-
+      Any failure. Per handoff_policy.timeout_disposition, a timeout is BLOCKED -- resume later and
+      rerun the full tier from the start; do not commit on a partial run.
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: >-
+      After merge, confirm the convergence record stayed green -- the empty saved plan applied
+      cleanly through the apply-the-saved-plan path with no red flip.
+    command: bin/venv-python -m scripts.convergence_health
+    expected: >-
+      HealthVerdict status green, red_age_hours 0.0, escalation action none. This is the confirming
+      evidence that the terraform/personal split required no infrastructure change. The
+      speculative-plan PR comment showing "No changes" is the pre-merge counterpart.
+    fix_if: >-
+      Red. The split was not pure -- a resource address or attribute changed. Do NOT auto-remediate
+      (Decision 55/72): the red record files a ci_rca rec; review it, then clear via the
+      workflow_dispatch acknowledge-and-retry unlatch naming the red commit.
+test_obligations:
+  - source: scripts/checks/iam_tf/_read_coverage.py
+    behavior: >-
+      Bootstrap policy parsing must resolve a `policy = local.<name>` hoist whose local lives in a
+      sibling .tf file in the same root, and must fail loud when the local resolves nowhere.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test__read_coverage.py
+    red_green_expectation: >-
+      Red before the repoint (the local is invisible outside github_ci_apply.tf), green after.
+  - source: scripts/checks/iam_tf/_write_companions.py
+    behavior: The boundary DataPlaneAllow re-read must find the boundary local in a sibling .tf file.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test__write_companions.py
+    red_green_expectation: Red before the repoint, green after.
+  - source: scripts/checks/iam_tf/validate_convergence_writer_isolation.py
+    behavior: >-
+      The exactly-one-conditioned-Allow cardinality assertion must hold when the planner document
+      and the branch/pr documents live in different files, and a convergence reference in an
+      unrelated sibling .tf must neither satisfy nor break it.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test_validate_convergence_writer_isolation.py
+    red_green_expectation: >-
+      Red before the repoint (planner document unresolvable); green after. The decoy case is red if
+      concatenation widens attribution rather than only the resolution pool.
+  - source: scripts/checks/iam_tf/validate_invoke_implies_resolve.py
+    behavior: >-
+      Invoke-implies-resolve must hold when the shared SSM fragment and the invoking role policies
+      live in three different files.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test_validate_invoke_implies_resolve.py
+    red_green_expectation: Red before the repoint, green after.
+  - source: scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py
+    behavior: >-
+      Coverage parity between the apply role and the planner role must resolve across both split
+      roots, including the inline + managed reads union.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_end_to_end.py
+    red_green_expectation: Red before the repoint, green after.
+  - source: scripts/checks/iam_tf/validate_authority_budget.py
+    behavior: The boundary_policy_name drift assertion must find the boundary in a sibling .tf file.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test_validate_authority_budget.py
+    red_green_expectation: Red before the repoint, green after.
+  - source: scripts/checks/iam_tf/_write_coverage.py
+    behavior: No behaviour change -- failure-message text only.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test__write_coverage.py
+    waiver_reason: >-
+      This edit changes only a human-readable failure-message string that names a single filename;
+      no parsing, resolution or assertion logic is touched. The existing suite guards the behaviour.
+  - source: terraform/personal/oidc.tf
+    behavior: >-
+      The four CI roles' trust conditions, policy statements and the shared refresh-read documents
+      must remain byte-identical in effect after relocation.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_real_tree.py
+    red_green_expectation: >-
+      The real-tree assertions fail if the split scatters content the checks cannot resolve, and
+      pass once both the split and the repoint are in place -- the coupling is the guard.
+  - source: terraform/bootstrap/github_ci_apply.tf
+    behavior: >-
+      The apply role's trust policy, identity policy, reads policy and authority boundary must
+      remain byte-identical in effect after relocation across four files.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_real_tree.py
+    red_green_expectation: >-
+      Real-tree assertions fail if a relocated policy document becomes unresolvable; green once the
+      split and repoint are both in place.
+  - source: config/structural_size_budgets.yaml
+    behavior: >-
+      Both drained keys must be absent and the class limit of 500 must then govern the retained and
+      new files with no marker.
+    verification_step: 1
+    test_selector: tests/checks/structural/test_budget_raises.py
+    red_green_expectation: >-
+      Deleting the rows before the files are under 500 goes red on validate_structural_size_limits;
+      green once the split lands. Confirms the drain is real, not a roster edit.
+  - source: terraform/personal/oidc_ci_roles.tf
+    behavior: Receives relocated role blocks only; introduces no new resource or grant.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_real_tree.py
+    waiver_reason: >-
+      A receiving file in a pure move introduces no behaviour of its own. Its content is guarded by
+      the step 4 root-scoped purity assertion, which proves the non-comment line multiset is
+      unchanged, plus the same real-tree assertions that guard the source file.
+  - source: terraform/personal/oidc_pipeline_roles.tf
+    behavior: Receives relocated planner and deploy blocks only; introduces no new resource or grant.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test_validate_convergence_writer_isolation.py
+    waiver_reason: >-
+      Receiving side of a pure move; guarded by the step 4 purity assertion and by the convergence
+      writer isolation check, which re-proves the fail-closed condition after relocation.
+  - source: terraform/bootstrap/github_ci_apply_policy.tf
+    behavior: Receives the relocated identity policy local and its consuming role policy resource.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test__read_coverage.py
+    waiver_reason: >-
+      Receiving side of a pure move; guarded by the step 5 purity assertion and by the read-coverage
+      parser which must resolve the hoisted local from its new home.
+  - source: terraform/bootstrap/github_ci_apply_reads.tf
+    behavior: Receives the relocated reads policy local, managed policy and attachment.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_end_to_end.py
+    waiver_reason: >-
+      Receiving side of a pure move; the inline+managed union assertion in the coverage check is the
+      standing guard that the relocation did not read as a deletion of those grants.
+  - source: terraform/bootstrap/github_ci_apply_boundary.tf
+    behavior: Receives the relocated boundary policy local and its managed policy resource.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test_validate_authority_budget.py
+    waiver_reason: >-
+      Receiving side of a pure move; the authority-budget drift assertion is the standing guard that
+      the boundary document is still discoverable and unchanged.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Stale single-file grep specs repointed to root-scoped equivalents; no check semantics changed
+      beyond correcting a count that T2.49 invalidated.
+    verification_step: 1
+    test_selector: tests/checks/verification/test_validate_verification_registry.py
+    waiver_reason: >-
+      These rows are DATA, not executed code, and validate_verification_registry runs its
+      differential admission gate only for rows newly added versus origin/main (keyed by check_id) --
+      so an edited existing row is structurally un-re-provable by design. Recorded as a deliberate
+      hygiene repair with no re-proof, per the decision-scout Decision 132 resolution; the general
+      rot class is filed as a follow-on rec in execution step 8.
+constraints:
+  - >-
+    MOVEMENT ONLY in the .tf files. No resource, attribute, trust policy, IAM action, Sid, ARN,
+    condition or permission may change. The only permitted non-move edits are comments, which the
+    HCL parser strips (invisible to terraform plan) and which steps 4/5 exclude by construction.
+  - >-
+    Do NOT add a `# raise-approved:` marker and do NOT increase any number in
+    config/structural_size_budgets.yaml. Decision 166's ratified relief valve for the terraform
+    class is decomposition; Decision 128 makes decompose the default; Decision 165 requires a raise
+    marker to name an authorizing Decision. The correct outcome is FEWER roster rows.
+  - >-
+    Each hoisted `locals { ..._policy_json }` MUST travel into the same file as the resource whose
+    lifecycle precondition self-references it. The hoist exists precisely because a precondition
+    cannot reference `self`; separating them would break the byte-limit guard silently at apply.
+  - >-
+    Root-wide parsing must widen ONLY the resolution pool, never the attribution scope. Every
+    statement stays keyed to its owning named resource/document, and an unresolvable local.<name>
+    must FAIL LOUD rather than silently pass (Decision 129 clause 4).
+  - >-
+    No terraform apply on any root. If any plan shows a diff, the split was not pure -- STOP and
+    find the error (Decision 55: no workaround loops, no rescue agents).
+  - >-
+    Do not author a local `terraform init/validate/plan` for these roots (Decision 119); the
+    required terraform-validate CI job is the authoritative verifier. Decision 120's provider
+    mirror relaxes but does not remove that delegation.
+  - >-
+    terraform/bootstrap changes are the human/operator tier (Decision 126) and CODEOWNERS-protected
+    (Decision 144 / DEP-05). Author the split; never self-direct an apply.
+  - >-
+    Preserve the OIDC provider thumbprint's `# pragma: allowlist secret` trailing comment and every
+    `try()` wrapper verbatim when relocating blocks.
+  - No rescue agents or workaround loops (Decision 55)
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": verdict FLAGS_FOUND, 122 of 122
+    decisions triaged. CITE list verbatim -- Decision 166, Decision 165, Decision 130, Decision 119,
+    Decision 92 (points 4 and 5), Decision 156 (point 4), Decision 129 (clause 4), Decision 77,
+    Decision 35, Decision 163, Decision 126.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PENDING after 0 round(s)"
+  - >-
+    FLAG 1 resolved into the design (Decision 129 [WARN]): root concatenation risks flipping
+    cardinality assertions if attribution is lost. Resolution adopted -- concatenation widens only
+    the resolution pool; decoy-block tests are mandatory (see the convergence-writer test
+    obligation); unresolvable locals fail loud. NOTE: the scout cited inference_credentials.tf,
+    ducklake_lambdas.tf and secrets_manager_brokers.tf as carrying convergence references -- VERIFIED
+    FALSE, none of them do. The real second file is terraform/personal/platform_roles.tf
+    (Sid = "DenyStateAndConvergenceWrite", a Deny in a jsonencode-shaped inline policy). The flag is
+    valid; its cited instances were not.
+  - >-
+    FLAG 2 accepted with reasoning recorded (Decision 128 [NOTE]): github_ci_apply_policy.tf lands at
+    403 of 500 effective lines, ~97 lines of headroom, on the document Decision 144 is forward-
+    committed to widen. 403 is the FLOOR for pure movement -- the identity policy is a single
+    jsonencode expression, so splitting it further requires a concat() restructure, which is not
+    movement and would touch a byte-limited policy. Next relief valve when that headroom is consumed:
+    a second split along Sid families (reads/writes/denies), never a raise marker.
+  - >-
+    FLAG 3 resolved by bundling (Decision 132 [NOTE]): the ~21 stale registry rows are edited as a
+    deliberate hygiene repair with NO re-proof, because validate_verification_registry's differential
+    admission gate only re-proves rows newly added versus origin/main (keyed by check_id). This is
+    recorded rather than hidden, and execution step 8 files a rec for the general "registry rows rot
+    silently after an unrelated refactor" class.
+  - >-
+    Why ci-role-boundary-attach-count-eq-6 is stale: it asserts 6 and measures 4 because T2.49 /
+    DEP-12 merged six CI roles into four (plan+drift -> planner, ducklake-deploy+prod-deploy ->
+    deploy). The stale row and rec-2820 are the same T2.49 fallout, which is why they are bundled
+    together rather than opportunistically.
+  - >-
+    rec-3024 is the STANDING DRAIN OWNER for all five grandfathered .tf files and is deliberately NOT
+    bundled: this wave drains 2 of 5, so bundling it would create a closure obligation it cannot
+    meet. Step 6 asserts the 5 -> 3 marker drop as partial-progress evidence. rec-3024 must be
+    updated (not closed) with the residual set: terraform/personal/platform_roles.tf (587),
+    terraform/data_pipeline.tf (655), terraform/iceberg_tables.tf (1491).
+  - >-
+    rec-3024 singles out iceberg_tables.tf for GENERATION from its Pydantic schemas (via
+    scripts/schema_to_iceberg.py) rather than a hand-split of 1,491 lines, matching
+    config/structural_size_budgets.yaml's own terraform relief_valve text ("change the producer").
+    Do not hand-split that file in a later wave without revisiting that instruction. It and
+    data_pipeline.tf are in the LEGACY terraform/ root, retained per CD.21 and NO LONGER APPLIED --
+    so no empty-plan evidence is available for them, only terraform-validate.
+  - >-
+    rec-2390 was evaluated and is STALE, not bundled: its acceptance names two comments describing
+    github_ci_plan/github_ci_drift as mirroring IAMPlatformRolesRead, and those comments no longer
+    exist (the T2.49 merge rewrote them). The only surviving "Mirrors github_ci_apply's ..." comment
+    is oidc.tf:334 referencing a different Sid, and the two live IAMPlatformRolesRead references are
+    correct usages. Propose closure as satisfied via
+    propose_or_close_rec('rec-2390','satisfied',<evidence>,deterministic=False) -- do not carry it.
+  - >-
+    Terraform is NOT installed on CC-web, so `terraform fmt -check` cannot run locally either
+    (contrary to a common assumption). run_terraform_creds_free tool-gates on shutil.which and
+    prints a visible SKIP, which is why step 9 is advisory locally and authoritative only in CI.
+    Steps 4/5 compare lines verbatim, so they double as a local proxy for fmt stability.
+  - >-
+    Six of the seven affected iam_tf checks carry pre=True in scripts/checks/iam_tf/_manifest.py, so
+    they run in validate --pre, the authoritative pre-merge gate. Half B is therefore a PREREQUISITE
+    for Half A landing green, not an optional cleanup.
+  - >-
+    Glob-based checks are already split-safe and need no change: validate_boundary_attached,
+    validate_iam_policy_size, _read_coverage._scan_resources and validate_terraform_try all iterate
+    dir.glob("*.tf"). Do not "fix" them.
+  - >-
+    SLOC watch item: scripts/checks/iam_tf/_write_companions.py sits near the default 500-SLOC limit
+    with no config/sloc_budgets.yaml entry. Its edit is a constant swap (net ~0 lines). If it does
+    cross, decompose per Decision 128 -- never register a budget.
+  - >-
+    Decision 169: check dispatch is per-domain declarative manifests; confirm the six modules'
+    _manifest.py entries need no change alongside the internal repoint (the module paths and attr
+    names are unchanged, so no manifest edit is expected).
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 ahead/0 behind);
+    no scope-file overlap with main, so no rebase decision was required.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    FIRST, write the new split/decoy regression cases into the six iam_tf test modules and run
+    VP step 1 to observe them RED against the current single-file implementation. A case that
+    passes here is not exercising cross-file resolution -- rewrite it. This ordering is what makes
+    the red/green evidence real rather than asserted.
+  - >-
+    Add a shared helper (root .tf text concatenation) alongside the existing constants in
+    scripts/checks/iam_tf/_read_coverage.py, replacing _BOOTSTRAP_TF_REL with a bootstrap ROOT
+    constant. Preserve per-named-resource attribution and make an unresolvable local.<name> fail
+    loud. Repoint validate_convergence_writer_isolation, validate_invoke_implies_resolve,
+    validate_ci_refresh_read_coverage, validate_authority_budget and _write_companions to it;
+    update the _write_coverage message text. VP step 1 must now be GREEN.
+  - >-
+    Split terraform/personal/oidc.tf into oidc.tf + oidc_ci_roles.tf + oidc_pipeline_roles.tf by
+    relocating whole top-level blocks verbatim, preserving indentation exactly. Keep both locals in
+    the retained oidc.tf and keep the convergence_writer_session_name comment adjacent to its value,
+    re-grounding the 4-site enumeration so sites 1-3 name oidc_pipeline_roles.tf instead of
+    "(below)"; leave site 4 (the terraform-drift.yml workflow literal) as the only out-of-Terraform
+    site. Do not scatter the enumeration.
+  - >-
+    Split terraform/bootstrap/github_ci_apply.tf into github_ci_apply.tf + _policy.tf + _reads.tf +
+    _boundary.tf, keeping each hoisted policy-JSON local in the same file as the resource whose
+    precondition consumes it, and keeping the import{} blocks with the role. Update the depends_on
+    comment on aws_iam_role_policy.github_ci_apply to note the two resources are now also in two
+    files, and the forward-apply ordering edge that spans them.
+  - >-
+    Re-ground the retired-role overview comments in both roots (rec-2820a), preserving every
+    per-statement "From github_ci_plan:" / "From github_ci_drift:" provenance annotation verbatim.
+  - >-
+    DELETE the terraform/personal/oidc.tf and terraform/bootstrap/github_ci_apply.tf rows from
+    config/structural_size_budgets.yaml's budgets: section. Add nothing.
+  - >-
+    Repoint the stale literal single-file grep specs in
+    config/agent/verification_registry/registry.yaml to root-scoped equivalents, correct
+    ci-role-boundary-attach-count-eq-6 to the post-T2.49 reality, and assert-on or remove
+    other_lambda_writes (rec-2820b). Do NOT rename any check_id -- an edited row is intentionally
+    outside the differential admission gate, and this is recorded in Context as a no-re-proof repair.
+  - >-
+    Call get_rec_write_guidance() then file_rec() for the general class "verification registry rows
+    rot silently after an unrelated refactor because the differential admission gate only re-proves
+    newly-added rows"; and propose rec-2390 for closure as satisfied using the evidence in Context.
+    Update (do NOT close) rec-3024 with the residual three-file set.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55)
+  - >-
+    Commit with the Resolves: rec-2820 trailer, push, open the PR, and expect CODEOWNERS review from
+    benjamin-blake on the terraform/bootstrap paths. Hold the subscription through the merge-time
+    apply and confirm VP step 12 (convergence green) afterwards.
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Revert the PR as a single unit -- Half A and Half B are coupled and must never be reverted
+  independently (reverting only the check repoint while the .tf files stay split would red
+  validate --pre; reverting only the split would red the new regression tests). No infrastructure
+  rollback is required or possible: no apply is performed on any root, resource addresses are
+  unchanged throughout, and the convergence record is untouched by a no-op plan. If VP step 12
+  reports red post-merge, that indicates the split was NOT pure -- do not auto-remediate; review the
+  ci_rca rec, then clear via the workflow_dispatch acknowledge-and-retry unlatch naming the red
+  commit (Decision 55/72, CD.35).
