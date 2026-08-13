@@ -42,6 +42,7 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "validate.py": ROOT / "tests" / "validate",
             ROOT / "scripts" / "checks" / "_scaffolding.py": ROOT / "tests" / "validate",
             ROOT / "scripts" / "checks" / "_terraform.py": ROOT / "tests" / "validate",
+            ROOT / "scripts" / "checks" / "_pytest_diff.py": ROOT / "tests" / "validate",
             ROOT / "scripts" / "execute_recommendation.py": ROOT / "tests" / "execute_recommendation",
             ROOT / "scripts" / "ops_data_portal.py": ROOT / "tests" / "ops_data_portal",
             ROOT / "scripts" / "session" / "preflight.py": ROOT / "tests" / "session" / "preflight",

@@ -40,15 +40,16 @@ def extract_definitions(file_path: Path) -> list[str]:
     return names
 
 
-# scripts/checks/_scaffolding.py and _terraform.py are orchestration-internal helper modules --
-# not themselves registered checks -- whose tests have always lived alongside the orchestrator's
-# own tests (never with the per-check mirrors). Once "test_validate.py" retires from
-# _RETIRING_GRANDFATHER_HOMES (rec-2709 Wave 1), they route to the SAME tests/validate/
-# concern-split package scripts/validate.py itself resolves to (see the
-# "scripts/validate.py" entry in _CONCERN_SPLIT_TEST_PACKAGES below), rather than falling
-# through to the generic drop-root mirror rule (which would otherwise compute
+# scripts/checks/_scaffolding.py, _terraform.py, and _pytest_diff.py (Decision 170: extracted
+# from _scaffolding.py under Decision 128 decompose-by-default, same orchestration-internal
+# concern) are orchestration-internal helper modules -- not themselves registered checks --
+# whose tests have always lived alongside the orchestrator's own tests (never with the per-check
+# mirrors). Once "test_validate.py" retires from _RETIRING_GRANDFATHER_HOMES (rec-2709 Wave 1),
+# they route to the SAME tests/validate/ concern-split package scripts/validate.py itself
+# resolves to (see the "scripts/validate.py" entry in _CONCERN_SPLIT_TEST_PACKAGES below), rather
+# than falling through to the generic drop-root mirror rule (which would otherwise compute
 # tests/checks/test__scaffolding.py -- wrong; their real home is the orchestrator package).
-_ORCHESTRATION_SCAFFOLDING_FILES = {"_scaffolding.py", "_terraform.py"}
+_ORCHESTRATION_SCAFFOLDING_FILES = {"_scaffolding.py", "_terraform.py", "_pytest_diff.py"}
 
 # The four ducklake_runtime split-out modules (PLAN-sloc-ducklake-layer) route to the
 # pre-decomposition monolith's test file, mirroring the Decision 104 scripts/checks/** precedent:
@@ -309,11 +310,11 @@ def map_source_to_test(source_path: Path) -> Path | None:
     (and scripts/validate.py itself) now resolves via the mirror rule instead of colocating in
     the now-deleted tests/test_validate.py.
 
-    scripts/checks/_scaffolding.py and _terraform.py are a special case within the retired
-    "test_validate.py" home: they are orchestration-internal helpers, not registered checks, so
-    once "test_validate.py" retires they route to the SAME tests/validate/ concern-split package
-    scripts/validate.py resolves to (not the generic per-file mirror target) -- see
-    _ORCHESTRATION_SCAFFOLDING_FILES.
+    scripts/checks/_scaffolding.py, _terraform.py, and _pytest_diff.py are a special case within
+    the retired "test_validate.py" home: they are orchestration-internal helpers, not registered
+    checks, so once "test_validate.py" retires they route to the SAME tests/validate/
+    concern-split package scripts/validate.py resolves to (not the generic per-file mirror
+    target) -- see _ORCHESTRATION_SCAFFOLDING_FILES.
 
     3. DIRECT CONCERN-SPLIT (independent of retirement): a source path listed in
        _CONCERN_SPLIT_TEST_PACKAGES resolves to its test PACKAGE DIRECTORY even if its

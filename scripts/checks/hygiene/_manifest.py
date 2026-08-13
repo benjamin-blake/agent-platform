@@ -59,4 +59,12 @@ ENTRIES: tuple[Entry, ...] = (
         pre=True,
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_check_accounting",
+        module="scripts.checks.hygiene.validate_check_accounting",
+        attr="validate_check_accounting",
+        pre=True,
+        pre_globs=("scripts/checks/**", "config/check_accounting_baseline.yaml"),
+        full_segment="full_after_lint",
+    ),
 )

@@ -39,16 +39,19 @@ def validate_test_coverage(failed: list[str]) -> None:
 
     if os.environ.get("_COVERAGE_SUBPROCESS") == "1":
         print("Inside coverage subprocess — skipping to prevent recursion.")
+        registry.skipped("inside coverage subprocess (recursion guard)")
         return
 
     checker = _load_coverage_checker()
     if checker is None:
         print("test_coverage_checker.py not found — skipping.")
+        registry.skipped("test_coverage_checker.py not found")
         return
 
     source_files = checker.get_changed_source_files()
     if not source_files:
         print("No source file changes to check.")
+        registry.examined(0, unit="source_files")
         return
 
     missing_tests: list[str] = []
@@ -68,6 +71,7 @@ def validate_test_coverage(failed: list[str]) -> None:
     n = len(source_files)
     m = len(missing_tests)
     k = len(coverage_errors)
+    registry.examined(n, unit="source_files")
     print(f"Test coverage check: {n} source files checked, {m} missing test files, {k} below 100% coverage")
 
     if missing_tests:

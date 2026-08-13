@@ -125,6 +125,22 @@ class TestPriorityZeroAttribution:
         # does not fire, falls through to the substring scan
         assert src == "function_to_category"
 
+    def test_schema_v3_record_still_resolves_priority_zero_attribution(self, tmp_path):
+        """Decision 170's schema_version 3 bump is additive (check_outcomes + rollups) --
+        _load_attributions() and Priority-0 classification must keep resolving from the
+        unchanged failed_check_attributions field on a v3 record, exactly as on a v2 one."""
+        vr = write_validation_result(
+            tmp_path,
+            [{"check": "validate_test_coverage", "label": "Coverage below 100%"}],
+            schema_version=3,
+            check_outcomes=[{"check": "validate_test_coverage", "kind": "check", "status": "failed"}],
+        )
+        p = write_taxonomy(tmp_path, STEP_NAME_MAP_TAXONOMY)
+        cat, check, src = classify_failure("irrelevant log", path=p, validation_result_path=vr)
+        assert cat == "code_regression"
+        assert check == "validate_test_coverage"
+        assert src == "validate_failed_check_attribution"
+
     def test_duplicate_check_attributions_deduplicate_in_enumeration(self, tmp_path):
         taxonomy_data = dict(MINIMAL_TAXONOMY)
         taxonomy_data["function_to_category"] = {"validate_test_coverage": "code_regression"}

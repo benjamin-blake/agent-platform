@@ -2,6 +2,40 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 170: The registered-check contract gains a second, declarative output channel -- examined()/skipped() -- so a vacuous pass, a skip, and an enforced pass stop collapsing into one indistinguishable green, governed by a shrink-only adoption ratchet (Decided)
+
+```yaml
+number: 170
+status: Decided
+decided_date: "2026-08-13"
+amends: []
+significance:
+  value: numbered_decision
+  justification: A durable architectural commitment adding a second output channel to the registered-check contract, a new evidence schema version, and a structurally-enforced adoption ratchet, with reversal-relevant consequences for how every future check is authored.
+```
+
+**Status:** Decided
+**Date:** 2026-08-13
+**Warehouse ID:** dec-170 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** A registered check's only output was membership in `failed` -- an empty-domain check, a skip, and a genuine enforced pass were byte-identical: absent from `failed`. rec-2915 measured 35 unconditional-success early-return sites across 24 checks. rec-3085 found two DQ-unavailable degradations swallowed into a silent WARN-and-return; `_check_graduation_guard` was separately found to be a DEAD GATE -- its `git diff HEAD` base is the empty working tree on every clean checkout, so it early-returned before it could ever enforce.
+
+**Decision:**
+1. **A second, additive output channel.** `scripts/checks/registry.py` gains `examined(count, unit=)`/`skipped(reason)` (public API for a check body, or a scaffold via `outcome_scope(name, kind=)`). `validation_result.py` brackets each dispatch, harvests the outcome into a per-run `CheckOutcome` row accumulator (`_ATTRIBUTIONS` lifecycle), and `validation-result.json` becomes schema_version 3 (`check_outcomes` rows + `ran/skipped/vacuous/undeclared_checks` rollups); `failed_checks`/`failed_check_attributions` keep their exact v2 shape (Decision 142 -- CI-RCA Priority-0 is a live consumer). ONE derivation function computes all five states so they cannot drift: an append to `failed` always wins as "failed"; else `skipped`->"skipped", `examined(0)`->"vacuous", `examined(n>0)`->"enforced", no declaration->"undeclared". Full rule/grain/schema live in `docs/contracts/check-accounting.yaml` (Decision 86/127 routing).
+2. **Two defects fixed under the same channel.** `ensure_fresh_dq_results` and `_check_graduation_guard` now declare a skip on every dq-latest.json degradation (rec-3085) instead of WARN-and-return; the former's blanket `except Exception:` becomes a named credential classifier (mirrors `ops_portal.reader_transient`'s isinstance/message-fallback shape) -- a non-matching exception now appends to `failed` (new fail-closed behaviour). The guard now derives BOTH its changed-file set and its `git show` read from the same committed, push-aware base -- it starts actually enforcing in CI. Both hunks are independently revertible from the channel and from each other (see Rollback).
+3. **A shrink-only adoption ratchet (rec-2915's structural-prevention half).** `validate_check_accounting` (both tiers) AST-scans every check's module for a declaration; fails an undeclared, unbaselined check. `config/check_accounting_baseline.yaml` grandfathers the 96 not adopted here (101 minus 5: `validate_test_coverage`, `validate_scheduled_agent_logs`, `validate_environment_taxonomy`, `validate_lambda_deploy_gating`, `_check_graduation_guard`) -- no marker escape (Decision 165), bounded by the guard's own frozen `_BASELINE_SEED` (a config edit alone cannot grow it), touch-it-fix-it (Decision 162 r3 shape).
+4. **Registration now touches SEVEN surfaces, not six** -- `registry.py`'s docstring gains the declaration obligation as surface 7.
+
+**Explicitly NOT committed:** fail-closed vacuity enforcement (Decision 163 -- declared-but-ungated is a real failure mode). **Ratchet limitation:** the AST scan proves a declaration exists in a MODULE, not on every exit path (rec-2915's 35-site measurement is exactly that gap). **Deferred trigger:** revisit fail-closed once a path-aware declaring-coverage metric clears a stated threshold.
+
+**Reversal conditions:** (a) the channel proves noise (no vacuous finding drives a fix in a stated window) -- unwind channel+baseline+schema v3 TOGETHER; (b) the ratchet wedges unrelated PRs -- same combined unwind, never a config escape hatch; (c) the graduation-guard base fix blocks a legitimate PR -- revert that hunk alone, file the finding; (d) the credential classifier misses a real shape and reddens post-merge `main` -- revert that hunk alone, extend via a `source=ci_rca` rec (Decision 55, never inline). (c)/(d) revert independently of (a)/(b) and each other.
+
+**Rationale:** The channel is a cheap per-call declaration harvested by the existing dispatch loop. A shrink-only, frozen-ceiling ratchet (not a config-editable allowlist) is what gives rec-2915's "unbuildable next instance" property teeth; fixing rec-3085 and the dead gate under the same Decision proves the observable on real, not only synthetic, data.
+
+**Related:** Decision 104/169 (registry/manifest mechanism extended), Decision 168 (Class D contract mechanism), Decision 165 (marker-guard NOT bound into; `default_base_reader` reused as a bounded read only), Decision 159 (one-time-roster template), Decision 162 (frozen no-marker-escape / touch-it-fix-it precedent), Decision 155 (credential-classifier shape precedent), Decision 142 (v2 consumer contract preserved), Decision 163 (deferred fail-closed rationale), Decision 55 (forward-fix-not-workaround, condition (d)), Decision 86/127 (field-semantics routing). Roadmap ref: PLAN-validate-vacuous-pass-accounting (bundles rec-2915, rec-3089, rec-3085).
+
+---
+
 ## Decision 169: scripts/validate.py's check facade is retired in favour of per-domain declarative manifests -- dispatch, tier sequencing, and the equivalence oracle all move off the aggregator (amends Decision 104) (Decided)
 
 ```yaml

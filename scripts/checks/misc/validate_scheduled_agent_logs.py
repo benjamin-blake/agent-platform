@@ -27,13 +27,17 @@ def validate_scheduled_agent_logs(failed: list[str]) -> None:
 
     if not changed:
         print("No files changed relative to origin/main -- skipping.")
+        registry.examined(0, unit="changed_files")
         return
 
     # Only engage when all changed files are under the logs/ hierarchy.
     # Source-file changes indicate a feature branch, not a scheduled-agent run.
     if not all(f.startswith("logs/") for f in changed):
         print("Not a scheduled-agent branch (non-log files changed) -- skipping.")
+        registry.skipped("not a scheduled-agent branch (non-log files changed)")
         return
+
+    registry.examined(len(changed), unit="changed_files")
 
     canonical_files = {"logs/.recommendations-log.jsonl", "logs/.decisions-index.jsonl"}
     violations = [f for f in changed if f in canonical_files]

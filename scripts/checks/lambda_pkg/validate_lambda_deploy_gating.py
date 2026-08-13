@@ -28,13 +28,16 @@ def validate_lambda_deploy_gating(failed: list[str]) -> None:
         changed = list(_common.get_changed_files())
         if not changed:
             print("  No changed files detected; skipping deploy-gating scope check.")
+            registry.examined(0, unit="changed_files")
             return
 
         affected = compute_affected_artifacts(changed)
         if not affected:
             print("  No active Lambda artifacts affected by current branch changes.")
+            registry.examined(0, unit="affected_artifacts")
             return
 
+        registry.examined(len(affected), unit="affected_artifacts")
         print("  Active Lambda artifacts affected by branch changes (plan must include deploy steps):")
         for slug, files in sorted(affected.items()):
             print(f"    {slug}: {len(files)} file(s) changed")
