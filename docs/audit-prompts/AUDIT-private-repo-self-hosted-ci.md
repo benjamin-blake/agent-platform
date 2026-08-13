@@ -1,5 +1,27 @@
 # AUDIT: private-repo migration with self-hosted CI
 
+## PROMPT PROVENANCE (read once, then proceed)
+
+This prompt was composed by a cheaper model and verified by three independent zero-context
+reviewers -- a cold-executor ambiguity check, a repository fact auditor, and a frame/best-practice
+challenger -- across three revision rounds. It carries a known, bounded residue, disclosed here so
+you can calibrate rather than assume:
+
+- **Verified through revision round 2.** Every factual anchor and count below was independently
+  re-derived from the repository by the fact auditor, twice. Zero unresolved `blocking` ambiguities
+  remained at the last full verification.
+- **Round-3 edits were applied but NOT re-verified by the reviewer panel.** They were: adding `n/a`
+  to Q3's rating enum, adding the `affects_surfaces` field, splitting the headline into separate
+  visibility and self-hosting verdicts, the Team-plan org-transfer precondition in Q5, the
+  `cost_analysis` currency and row-set rules, the two-trigger-list correction in F43, and the
+  premise relabel to PR-1/PR-2. The composer mechanically re-checked every file path, line anchor,
+  and enum introduced in that round; nothing beyond that was re-reviewed.
+- **What this means for you:** treat schema-level instructions as reliable but not infallible. If
+  you hit a genuine internal contradiction in the output schema, resolve it by following the PROSE
+  instruction over the YAML comment, record the conflict in `meta.contract_notes`, and proceed.
+  Never abort over a schema ambiguity. The GROUNDING MAP's factual claims are the more thoroughly
+  verified layer; the trust-nothing clause still applies to all of them.
+
 ## TASK
 
 Assess a proposed migration of the repository `benjamin-blake/agent-platform` from its current
@@ -820,9 +842,9 @@ before relying on it** -- re-read the file, confirm the line, and record any non
   (a) `cost_projection.executor_substrate_billing.substrate_reevaluation_triggers` (lines 348-352,
   nested under `executor_substrate_billing:` at 301) lists four triggers, one of which reads
   "Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)".
-  (b) `cost_projection.reevaluation_triggers` (a sibling key directly under `cost_projection`,
-  NOT the same list) has five entries, one of which reads "Self-hosted runner cost becomes >2x
-  scheduled-runner alternative".
+  (b) `cost_projection.reevaluation_triggers` (line 385 -- a sibling key directly under
+  `cost_projection`, NOT the same list) has five entries, one of which reads "Self-hosted runner
+  cost becomes >2x scheduled-runner alternative".
   A `yaml.safe_load` projection addressing `cost_projection['substrate_reevaluation_triggers']`
   raises `KeyError`; addressing `cost_projection['reevaluation_triggers']` returns list (b), not
   (a). Read both.
