@@ -75,11 +75,13 @@ acceptance_criteria:
     pretend otherwise. (a) INTERPRETIVE clauses -- the T4.3 / T5.6 forward addresses, decision
     attributions, architectural framing -- verified by reading the cited decisions and roadmap items
     at planning time. (b) CHECKABLE BUT DELIBERATELY UNCHECKED -- rec-028's six schedule.yaml
-    provider entries and the COPILOT_MODEL_* routing under scripts/llm/, rec-027's commit-6a2f7c0
+    provider entries, its _invoke_copilot_sdk reference and the COPILOT_MODEL_* routing under
+    scripts/llm/, rec-457's :145-157 line anchor, rec-027's commit-6a2f7c0
     provenance, rec-609's scripts/sync/ops.py successor path, and rec-457's overwrite_jsonl call
     site; each was verified by inspection at planning time, and each is colour on an already-grounded
     verdict rather than load-bearing proof. (c) The commit-6a2f7c0 provenance specifically is NOT
-    independently verifiable here -- this is a shallow clone (50 commits) -- so it is asserted on
+    independently verifiable here -- this is a shallow clone, so the commit is unreachable -- and it
+    is therefore asserted on
     Decision 121's authority, not on a git probe of this session's making.
   - >-
     After the rec-autoclose.yml run for the squash-merge commit reports status=completed (not merely
@@ -201,7 +203,7 @@ verification_plan:
       the three retired Copilot paths (grounding rec-027 and rec-028); and rec-607's closed status
       (one of rec-610's cited blockers). Every clause asserted in a durable resolution string must be
       machine-verified here -- an unverified clause is exactly the free-text-never-checked-against-
-      reality failure this plan's own step-10 rec describes.
+      reality failure this plan's own step-11 rec describes.
     command: >-
       grep -q 'scripts/executor/rescue.py` (planned but not yet written) is cancelled'
       docs/DECISIONS.md &&
@@ -520,8 +522,11 @@ verification_plan:
   - step: 12
     phase: post-deploy
     action: >-
-      Refresh the read cache from the DuckLake reader and assert every one of the ten is closed with a
-      non-empty resolution, and that the open-Critical lane is now exactly the two live recs.
+      Refresh the read cache from the DuckLake reader and assert every one of the ten is closed, its
+      resolution non-empty and naming a relevance= verdict, its execution_result matching the
+      already_implemented / manual split, and that the open-Critical lane is now exactly the two live
+      recs. The execution_result and relevance= assertions exist so acceptance criteria 1 and 3 are
+      machine-checked rather than merely set-and-assumed in the step 8-10 commands.
     command: >-
       bin/venv-python -m scripts.ops_data_portal --sync &&
       bin/venv-python -c "import json,pathlib;
@@ -533,11 +538,18 @@ verification_plan:
       assert not bad, f'not closed: {bad}';
       thin=[i for i in tgt if not (by[i].get('resolution') or '').strip()];
       assert not thin, f'empty resolution: {thin}';
+      noverdict=[i for i in tgt if 'relevance=' not in (by[i].get('resolution') or '')];
+      assert not noverdict, f'resolution names no relevance verdict: {noverdict}';
+      already={'rec-457','rec-613'};
+      wrong=[i for i in tgt if by[i].get('execution_result') !=
+      ('already_implemented' if i in already else 'manual')];
+      assert not wrong, f'wrong execution_result: {wrong}';
       crit={r['id'] for r in rows if r.get('priority')=='Critical' and r.get('status')=='open'};
       assert crit == {'rec-2816','rec-3059'}, f'lane not clear: {sorted(crit)}';
-      print('all 10 closed with resolutions; open Critical lane =', sorted(crit))"
+      print('all 10 closed, verdicts+execution_result correct; open Critical lane =', sorted(crit))"
     expected: >-
-      Prints "all 10 closed with resolutions; open Critical lane = ['rec-2816', 'rec-3059']" and exits 0.
+      Prints "all 10 closed, verdicts+execution_result correct; open Critical lane = ['rec-2816',
+      'rec-3059']" and exits 0.
     fix_if: >-
       A rec still open after a reported-successful write means the read cache is stale -- re-run --sync
       before concluding the write failed. An empty resolution means the --resolution argument was lost
@@ -641,7 +653,7 @@ constraints:
     connectivity.
   - >-
     Recommendation ids are allocated BY THE WRITER atomically with the insert (Decision 84 I-2). Step
-    11's rec id cannot be predicted; step 13 resolves it by title.
+    11's three rec ids cannot be predicted; step 13 resolves them by title.
   - >-
     Decision 103 auto-close applies to rec-457 only. The other nine are semantic verdicts whose
     close_proposed disposition is discharged by explicit human direction recorded in this plan -- not by
@@ -807,10 +819,11 @@ execution_steps:
   - >-
     Execute VP step 11 -- file all THREE recommendations (governance gap, validate_handoff_full_tier
     matcher hole, AGENTS.md T4.3 staleness). Call get_rec_write_guidance() before
-    file_rec() per AGENTS.md Precision Context Injection. Record the writer-allocated id in the report.
+    file_rec() per AGENTS.md Precision Context Injection. Record all three writer-allocated ids in
+    the report.
   - >-
     Execute VP steps 12 and 13 -- refresh the read cache and assert the terminal state (ten closed with
-    non-empty resolutions, open-Critical lane exactly rec-2816 and rec-3059, gap rec open).
+    non-empty resolutions, open-Critical lane exactly rec-2816 and rec-3059, all three new recs open).
   - >-
     Commit the plan artefact only. Include in the squash-merge commit body the trailer
     'Resolves- rec-027, rec-028, rec-296, rec-423, rec-425, rec-457, rec-468, rec-609, rec-610,
@@ -830,6 +843,6 @@ execution_steps:
 rollback: >-
   Closure is reversible through the same governed path- bin/venv-python -m scripts.ops_data_portal
   --update-rec rec-NNNN --status open, which appends a new SCD2 version rather than mutating history.
-  No repository state needs reverting because none is changed. The governance-gap rec from step 11
+  No repository state needs reverting because none is changed. Any of the three recs filed at step 11
   would be closed as relevance=duplicate rather than deleted -- there is no public delete_rec and
   physical deletion is confined to Decision 70's bootstrap-record scope.
