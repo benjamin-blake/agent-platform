@@ -629,6 +629,54 @@ test_obligations:
     verification_step: 7
     test_selector: tests/checks/hygiene/test__manifest.py
     red_green_expectation: red before (no Entry, so the tier-membership assertion fails), green after.
+  - source: config/check_accounting_baseline.yaml
+    behavior: >-
+      The 96-entry seed is the ratchet's roster: net growth fails, an edited-but-unadopted baselined
+      check fails, and a config-only edit cannot admit a member.
+    verification_step: 6
+    test_selector: tests/checks/hygiene/test_validate_check_accounting.py
+    red_green_expectation: >-
+      red before (the file does not exist, so the ratchet has no roster to compare against and the
+      growth/touch-it-fix-it cases cannot be expressed), green after.
+  - source: docs/contracts/check-accounting.yaml
+    behavior: >-
+      The new Class D file's declared evaluator RESOLVES, and it owns the discrimination rule, the
+      grain and the schema v3 shape as authoritative statements.
+    verification_step: 8
+    command: registry.resolve('validate_contract_drift')
+    red_green_expectation: >-
+      red on a partial landing -- a contract created without validate_check_accounting naming its
+      basename as an executable-context literal fails Decision 168's evaluator-resolution rule --
+      green once both halves land together.
+  - source: docs/contracts/file-router.yaml
+    behavior: The check-accounting route exists and its topic equals the contract's subject.
+    verification_step: 8
+    command: registry.resolve('validate_contract_drift')
+    red_green_expectation: >-
+      red on a topic/subject mismatch or a missing route for a registered Class D file, green when
+      the topic-equals-subject self-hosting rule holds.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      validate_check_accounting carries a function_to_category row, so the taxonomy stays
+      total over the registered-check population.
+    verification_step: 10
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A single function_to_category row whose totality is already enforced by the standing
+      validate_ci_rca_taxonomy check (taxonomy-covers-registry), which VP step 10's full-tier run
+      executes. A bespoke test would restate that standing guard against a hand-copied roster,
+      which is precisely the count-coupling anti-pattern tests/CLAUDE.md forbids.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      One row per graduate-disposition VP step, each admitted by the differential gate.
+    verification_step: 10
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      validate_verification_registry already materialises every newly-added row and requires it to
+      FAIL on origin/main and PASS on HEAD before admitting it -- a stronger check than any test
+      authored here, and executed by VP step 10's full-tier run. Writing a test that asserts the
+      rows exist would prove membership without proving discrimination, the exact vacuity this
+      plan exists to make visible.
   - source: tests/fixtures/ci_rca/taxonomy_data.py
     behavior: write_validation_result() can emit a schema_version 3 record for the consumer test.
     verification_step: 3
