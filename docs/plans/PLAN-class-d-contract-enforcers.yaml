@@ -119,8 +119,9 @@ scope:
       One graduation row owed by VP step 7's graduate disposition (Decision 132). Required fields per
       validate_verification_registry._schema_errors -- check_id read-engine-verb-parity-red-path,
       primitive_slot test_selector, guard_target scripts/checks/contracts/validate_read_engine_verbs.py,
-      plan_slug class-d-contract-enforcers, graduated_at (implement date) -- plus graduated_by and a
-      check_spec.node_id, as every live row carries. See constraints for why the check_id names ONE exemplar.
+      plan_slug class-d-contract-enforcers, graduated_at (implement date) -- plus graduated_by and
+      check_spec, which are universal across all 413 live rows though not schema-required (guard_symbol is
+      conventional but not universal: 404 of 413). See constraints for why the check_id names ONE exemplar.
   - file: tests/s3_log_store/test_write_through_registry.py
     action: Modify
     purpose: >-
@@ -246,6 +247,8 @@ verification_plan:
       both on tmp copies, never mutating the working tree. (a) FAIL-CLOSED, all six: delete the top-level
       block each check reads; a check that iterates an absent target and passes is vacuous. (b) SEMANTIC
       DRIFT, read-engine: remove rec_history and confirm the parity check fails, then passes unperturbed.
+      Leg (b) PRESUPPOSES the contract fix -- it calls .remove("rec_history"), which raises ValueError until
+      execution step 4 has added the verb. Run this step after the contract edits, not standalone.
     command: |
       bin/venv-python - <<'EOF'
       import importlib, pathlib, shutil, tempfile, yaml
@@ -311,7 +314,7 @@ verification_plan:
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Step 7's graduated class-d-consumer-parity-red-path is the durable form of this same discrimination --
+      Step 7's graduated read-engine-verb-parity-red-path is the durable form of this same discrimination --
       each mirror test carries the absent-target and drift red paths as standing regressions. This step is
       the one-time live demonstration against the real tree; graduating it too would register the same
       discrimination twice, the identical reasoning applied to steps 4, 5, 8 and 9.
@@ -535,7 +538,7 @@ test_obligations:
     red_green_expectation: Red before (m.get(n) is None for all six), green after the six rows land.
   - source: config/agent/verification_registry/registry.yaml
     behavior: >-
-      The class-d-consumer-parity-red-path graduation row must exist and carry plan_slug
+      The read-engine-verb-parity-red-path graduation row must exist and carry plan_slug
       class-d-contract-enforcers, or validate_graduation_completeness's implement-PR leg fails in both tiers
       because VP step 7 declares graduation: graduate.
     verification_step: 10
@@ -637,7 +640,7 @@ context:
     FLAGS_FOUND and all three flags were resolved before this plan was written). CITE: Decision 168, Decision
     169, Decision 159, Decision 161, Decision 165, Decision 142, Decision 91, Decision 132, Decision 103,
     Decision 128, Decision 104, Decision 131, Decision 48, Decision 163, Decision 118."
-  - "gates: decision-scout=NO_FLAGS; plan-critique=REVISE after 2 rounds, all findings addressed (round 1: 8 missing test_obligations, the owed verification_registry row, a graduation misclassification, the vacuity gap, pre_globs narrowing, 3 minor; round 2: R1 registry-row shape and differential admission, R2 per-block perturbation for the two contracts reading two blocks, R3 six factually-false red-before claims corrected to conditional discrimination, R4-R7); re-critique pending"
+  - "gates: decision-scout=NO_FLAGS; plan-critique=3 REVISE rounds, all findings addressed, human-accepted at the round-3 convergence cap. Round 1: 8 missing test_obligations, the owed verification_registry row, a graduation misclassification, the vacuity gap, pre_globs narrowing, 3 minor. Round 2: registry-row shape and differential admission, per-block perturbation, six factually-false red-before claims corrected to conditional discrimination, 4 minor. Round 3: two stale execution_steps lines (a pre_globs narrowing instruction contradicting its own constraint, and an incomplete check_id rename that would have redded validate_graduation_completeness), plus 3 minor -- all corrected; no design, scoping or verification-strategy findings remained."
   - >-
     WHY THIS EXISTS: eight docs/contracts/*.yaml files declare evaluator.none_grandfathered, a form that
     never resolves BY DESIGN. Nothing enforces their content -- only the kind-change rule stops regression.
@@ -709,7 +712,8 @@ execution_steps:
     PLC0415) for consumer modules so registry.all_checks() stays cheap.
   - >-
     Add six Entry literals to scripts/checks/contracts/_manifest.py -- bare-string module=/attr=, pre=True
-    with pre_globs covering the contract path AND the consumer path, full_segment="full_after_lint".
+    with pre_globs=None (UNGATED, always runs in --pre; see constraints -- do NOT narrow to globs, an
+    incomplete glob is a silent --pre skip), full_segment="full_after_lint".
   - Add six function_to_category rows to config/ci_rca_taxonomy.yaml, all schema_drift.
   - >-
     Fix docs/contracts/read-engine.yaml -- add rec_history under read_surface.named_verbs.verbs.ops_recommendations
@@ -729,9 +733,14 @@ execution_steps:
     Delete TestLogStorageRegistry::test_anti_drift from tests/s3_log_store/test_write_through_registry.py and
     run ruff check --fix to clear any now-unused import.
   - >-
-    Add one row to config/agent/verification_registry/registry.yaml -- check_id
-    class-d-consumer-parity-red-path, plan_slug class-d-contract-enforcers -- matching the graduate
-    disposition on VP step 7 (Decision 132). Without it validate_graduation_completeness fails in both tiers.
+    Add one row to config/agent/verification_registry/registry.yaml matching VP step 7's graduate
+    disposition (Decision 132). All seven universally-present fields (verified across all 413 live rows):
+    check_id read-engine-verb-parity-red-path, primitive_slot test_selector, guard_target
+    scripts/checks/contracts/validate_read_engine_verbs.py, plan_slug class-d-contract-enforcers,
+    graduated_at (implement date), graduated_by implement-agent, and check_spec.node_id pointing at the
+    read-engine drift red-path test node. Add guard_symbol too if a single symbol is the guard (404 of 413
+    rows carry it; it is conventional, not schema-required). check_id and plan_slug MUST match VP step 7's
+    graduation_check_id and this plan's slug exactly, or validate_graduation_completeness fails in BOTH tiers.
   - >-
     Execute the Verification Plan -- run each step in order; loop until pass. VP step 6 (the perturbation
     proof) is the discriminating step: if the perturbed copy does not fail, the check is vacuous and must be
