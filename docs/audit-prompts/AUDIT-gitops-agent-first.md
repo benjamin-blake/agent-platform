@@ -54,10 +54,12 @@ it are welcome and are the clearest evidence the run added value.
   0 on error); others do not visibly handle it.
 - **C3** (S2) -- the `feat({slug})` / `plan({slug})` subject convention is parsed by load-bearing
   checks, and no check validates conformance to it.
-- **C4** (S2) -- of the 50 commit subjects in the sampled window, 49 carry a `prefix(scope)` form
-  and one does not: `audit: decision / contract / change-record content routing and
-  prior-intervention erosion (S1-S5) (#864)` uses a bare `audit:` with no parenthesised slug.
-  Re-derive this; determine whether it is a violation, an unregistered valid form, or immaterial.
+- **C4** (S2) -- at recon exactly one commit subject in the window did not carry a
+  `prefix(scope)` form: `audit: decision / contract / change-record content routing and
+  prior-intervention erosion (S1-S5) (#864)`, which uses a bare `audit:` with no parenthesised
+  slug. Re-derive over the CURRENT window (which will be larger) and count how many
+  non-conforming subjects exist now; determine whether this is a violation, an unregistered valid
+  form, or immaterial.
 - **C5** (S2, S3) -- three surfaces state where the `Resolves:` trailer belongs, in
   non-identical terms (AGENTS.md, `implement/SKILL.md`, `.github/pull_request_template.md`).
 - **C6** (S2, S3) -- two open recommendations (rec-2679, rec-2733) describe a trailer loss mode
@@ -194,7 +196,6 @@ record any anchor that does not resolve in `meta.stale_anchors`.
     (net-new plan set derived from a git diff)
   - `scripts/checks/verification/validate_handoff_full_tier.py` (documented degrade to
     `git diff HEAD`), `scripts/test_coverage_checker.py`
-  - `scripts/convergence_health/escalate.py`
   - `scripts/session/postflight.py`, `scripts/session/metrics.py`,
     `scripts/preflight/env_git.py`, `scripts/executor/postflight_gates.py`,
     `scripts/executor/acceptance_lint.py`, and the `scripts/executor/step_commit.py` /
@@ -561,9 +562,10 @@ Facts below are stated neutrally and carry no verdict.
   auto-merge as a deferred follow-up.
 - Decision 89 (`docs/DECISIONS.md:5269`) clause 4 states all merges must be squash merges.
 - `terraform/github/repo.tf:110` sets `required_linear_history = true`.
-- `terraform/github/repo.tf:39-44` lists `allow_merge_commit`, `allow_squash_merge`,
-  `allow_rebase_merge`, `allow_auto_merge`, and `delete_branch_on_merge` inside the
-  `lifecycle.ignore_changes` block.
+- `terraform/github/repo.tf:39-44` lists SIX settings inside the `lifecycle.ignore_changes`
+  block: `allow_merge_commit`, `allow_squash_merge`, `allow_rebase_merge`, `allow_auto_merge`,
+  `allow_update_branch`, and `delete_branch_on_merge`. All six are merge-adjacent; none is
+  declared in Terraform.
 - `terraform/github/repo.tf:105-107` sets `strict_required_status_checks_policy = false` with an
   inline comment citing the Decision 76 squash-merge flow.
 - The `main_protection` ruleset requires two checks: `pr-validate` and `terraform-validate`.
@@ -605,13 +607,18 @@ Facts below are stated neutrally and carry no verdict.
   belt-and-suspenders alongside that code-level guard-fetch.
 
 **S4 clone-and-checkout-depth**
-- The Claude-Code-on-the-web container clone has `.git/shallow` present; at the time of recon
-  `git rev-list --count origin/main` returned 50. Re-derive both.
-- All 50 commits carried a `(#NNN)` suffix, spanning PRs #841 to #891 -- one commit per merged PR
-  across the whole window.
-- Subject-prefix distribution in that window: 49 of 50 subjects match a `prefix(scope)` form --
-  25 `feat(`, 21 `plan(`, 1 each `fix(`, `docs(`, `audit(`. The 50th uses a bare `audit:` with no
-  parenthesised slug (see C4). Re-derive the whole distribution; do not assume the counts.
+- The Claude-Code-on-the-web container clone has `.git/shallow` present. **The window GROWS: at
+  recon `git rev-list --count origin/main` returned 50 spanning PRs #841-#891, and `main` advances
+  continuously, so by the time you run this the count and range WILL be larger. Every number in
+  this S4 block is a shape claim, not a value claim -- re-derive all of them and use your own
+  figures throughout; do not record the drift in `meta.stale_anchors` (it is expected, not stale).**
+- Every commit in the window carried a `(#NNN)` suffix -- one commit on `main` per merged PR,
+  with no exceptions across the whole window. That SHAPE is the load-bearing claim; confirm it
+  still holds rather than checking the count.
+- Subject-prefix distribution at recon: all but ONE subject matched a `prefix(scope)` form
+  (roughly half `feat(`, roughly half `plan(`, with single `fix(`, `docs(`, and `audit(` entries).
+  Exactly one did not (see C4). Re-derive the distribution yourself; the load-bearing claim is
+  "all but a small number conform", and your job includes checking whether that still holds.
 - `fetch-depth` settings across workflows range from `1` (`claude.yml`) through `2` to `0`
   (`ci.yml` PR job, `ci-rca.yml`, `convergence-health.yml`).
 - `docs/ROADMAP-PLATFORM.yaml:474` records an artefact whose "provenance [is] unrecoverable from
@@ -679,11 +686,14 @@ Decision 55/72/129 (forward-fix), `docs/contracts/instruction-architecture.yaml`
 Sample real artefacts; observed findings outrank static ones at equal severity. **Hard bounds --
 do NOT exceed:**
 
-- **<= 50** most recent `origin/main` commits -- deliberately set to cover the ENTIRE shallow-clone
-  window, because the subject-prefix distribution and the single non-conforming subject in C4 can
-  only be adjudicated over the whole set. Check subject-prefix conformance, `(#NNN)` presence, and
-  `Resolves:` trailer presence and well-formedness. Tag `evidence_kind: observed`. If the clone
-  holds more than 50 commits, sample the 50 most recent and say so in `meta.contract_notes`.
+- **The ENTIRE shallow-clone window** (`git rev-list --count origin/main`; ~50 at recon and
+  growing), capped at **80** to bound effort. The whole window is required because C4's
+  conformance question cannot be adjudicated over a subset -- and because the OLDEST commit in the
+  window is the one trap 9 and the S5 `--stat` example both depend on, so a cap that trims the
+  tail would silently remove your own evidence. Check subject-prefix conformance, `(#NNN)`
+  presence, and `Resolves:` trailer presence and well-formedness. Tag `evidence_kind: observed`.
+  If the window somehow exceeds 80, take the 80 most recent PLUS the oldest reachable commit, and
+  say so in `meta.contract_notes`.
 - **<= 15** most recent `pr-conflict-signal.yml` runs and **<= 15** most recent `ci.yml` runs, via
   the GitHub API. For the conflict signal, determine whether any run's step summary or log carries
   a `[PR-CONFLICT-SIGNAL] FAILURE` marker while the run conclusion is `success`.
