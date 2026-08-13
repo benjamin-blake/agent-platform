@@ -168,8 +168,10 @@ class TestEnsureFreshDqResults:
 
     def test_ensure_fresh_dq_skips_when_sso_unavailable(self, tmp_path: Path, capsys) -> None:
         """Decision 57/170: a real botocore SSO-token-expired exception prints actionable guidance,
-        records a declared skip, and does not touch `failed`."""
-        import botocore.exceptions as botocore_exceptions
+        records a declared skip, and does not touch `failed`. requirements-fast.txt (the --pre
+        tier's CI environment) excludes boto3 -- and transitively botocore -- so this genuinely
+        skips there rather than crashing on ModuleNotFoundError (constraint 5's own caveat)."""
+        botocore_exceptions = pytest.importorskip("botocore.exceptions")
 
         with (
             patch("scripts.checks._common.ROOT", tmp_path),
@@ -190,8 +192,9 @@ class TestEnsureFreshDqResults:
 
     def test_ensure_fresh_dq_skips_when_credentials_unavailable(self, tmp_path: Path, capsys) -> None:
         """Decision 57/170: a real botocore ProfileNotFound exception must skip with guidance,
-        not crash and not redden `failed`."""
-        import botocore.exceptions as botocore_exceptions
+        not crash and not redden `failed`. requirements-fast.txt excludes boto3/botocore -- see
+        test_ensure_fresh_dq_skips_when_sso_unavailable's docstring."""
+        botocore_exceptions = pytest.importorskip("botocore.exceptions")
 
         with (
             patch("scripts.checks._common.ROOT", tmp_path),
@@ -209,8 +212,9 @@ class TestEnsureFreshDqResults:
 
     def test_ensure_fresh_dq_skips_on_expired_token_client_error(self, tmp_path: Path, capsys) -> None:
         """A ClientError with code ExpiredToken (the live STS-call failure shape) is also
-        classified as credentials-unavailable and skips."""
-        import botocore.exceptions as botocore_exceptions
+        classified as credentials-unavailable and skips. requirements-fast.txt excludes
+        boto3/botocore -- see test_ensure_fresh_dq_skips_when_sso_unavailable's docstring."""
+        botocore_exceptions = pytest.importorskip("botocore.exceptions")
 
         with (
             patch("scripts.checks._common.ROOT", tmp_path),
