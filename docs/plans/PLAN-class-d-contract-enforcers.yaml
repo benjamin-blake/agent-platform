@@ -99,7 +99,12 @@ scope:
     purpose: "Flip evaluator to {check: validate_telemetry_lexicon_tables}; new amendment_log entry."
   - file: docs/contracts/ci-rca-lifecycle.yaml
     action: Modify
-    purpose: "Flip evaluator to {check: validate_ci_rca_lifecycle_projection}; new amendment_log entry."
+    purpose: >-
+      Flip evaluator to {check: validate_ci_rca_lifecycle_projection}; new amendment_log entry that RECORDS
+      THE NARROWING -- the erased route said "match ... the taxonomy file", while the check asserts only that
+      watched_workflow_set's pointers resolve, because the substantive workflow agreement is already owned by
+      validate_ci_rca_adjudication (which that block itself names). EvaluatorSpec is exactly-one-kind, so the
+      flip deletes the route text; without this note the narrowing leaves no trace.
   - file: docs/contracts/inference-provider.yaml
     action: Modify
     purpose: "Flip evaluator to {check: validate_inference_provider_registry}; new amendment_log entry."
@@ -111,9 +116,11 @@ scope:
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      One graduation row for VP step 7 -- check_id class-d-consumer-parity-red-path, plan_slug
-      class-d-contract-enforcers. Owed by Decision 132 because step 7 declares graduation: graduate;
-      validate_graduation_completeness's implement-PR leg fails without a new-in-diff row.
+      One graduation row owed by VP step 7's graduate disposition (Decision 132). Required fields per
+      validate_verification_registry._schema_errors -- check_id read-engine-verb-parity-red-path,
+      primitive_slot test_selector, guard_target scripts/checks/contracts/validate_read_engine_verbs.py,
+      plan_slug class-d-contract-enforcers, graduated_at (implement date) -- plus graduated_by and a
+      check_spec.node_id, as every live row carries. See constraints for why the check_id names ONE exemplar.
   - file: tests/s3_log_store/test_write_through_registry.py
     action: Modify
     purpose: >-
@@ -138,8 +145,9 @@ acceptance_criteria:
     grammar (_population.resolve_evaluator returns True), i.e. each check module contains its own
     contract basename as an executable-context string literal.
   - >-
-    Every check discriminates: deleting the top-level block it reads makes it FAIL (fail-closed, proven live
-    for all six in VP step 6 leg a), and a semantic drift makes it FAIL (proven live for read-engine in leg b).
+    Every check discriminates: deleting ANY top-level block it reads makes it FAIL (fail-closed, proven live
+    in VP step 6 leg a across all eight contract/block pairs -- ci-rca-lifecycle and inference-provider each
+    read two), and a semantic drift makes it FAIL (proven live for read-engine in leg b).
     Both shapes are guarded durably by red-path tests in each of the six mirror tests.
   - >-
     docs/contracts/read-engine.yaml lists rec_history under ops_recommendations, closing rec-3095, and the
@@ -241,13 +249,15 @@ verification_plan:
     command: |
       bin/venv-python - <<'EOF'
       import importlib, pathlib, shutil, tempfile, yaml
+      # Every top-level block each check reads -- ci-rca-lifecycle and inference-provider read TWO,
+      # so a single-block mutation would leave their second assertion leg's vacuity unproven.
       SIX = [
-          ("read_engine_verbs", "read-engine.yaml", "read_surface"),
-          ("marker_grammar_exports", "marker-grammar.yaml", "binding_surface"),
-          ("log_storage_registry", "log-storage.yaml", "routing"),
-          ("telemetry_lexicon_tables", "telemetry-lexicon.yaml", "lexicon"),
-          ("ci_rca_lifecycle_projection", "ci-rca-lifecycle.yaml", "projection_fields"),
-          ("inference_provider_registry", "inference-provider.yaml", "provider_defaults"),
+          ("read_engine_verbs", "read-engine.yaml", ["read_surface"]),
+          ("marker_grammar_exports", "marker-grammar.yaml", ["binding_surface"]),
+          ("log_storage_registry", "log-storage.yaml", ["routing"]),
+          ("telemetry_lexicon_tables", "telemetry-lexicon.yaml", ["lexicon"]),
+          ("ci_rca_lifecycle_projection", "ci-rca-lifecycle.yaml", ["projection_fields", "watched_workflow_set"]),
+          ("inference_provider_registry", "inference-provider.yaml", ["provider_defaults", "retired_providers"]),
       ]
       REAL = pathlib.Path("docs/contracts")
 
@@ -260,21 +270,22 @@ verification_plan:
           shutil.copytree(REAL, dest)
           return dest
 
-      for suffix, filename, block in SIX:
+      for suffix, filename, blocks in SIX:
           fn = check(suffix)
           green = []
           fn(green, contracts_dir=REAL)
           assert green == [], (suffix, "green path must be clean", green)
-          tmp = copy_tree()
-          path = tmp / filename
-          doc = yaml.safe_load(path.read_text())
-          assert block in doc, (filename, "expected top-level block missing from the real contract", block)
-          del doc[block]
-          path.write_text(yaml.safe_dump(doc))
-          red = []
-          fn(red, contracts_dir=tmp)
-          assert red, (suffix, "VACUOUS -- passed with its assertion target absent")
-          print("fail-closed OK", suffix)
+          for block in blocks:
+              tmp = copy_tree()
+              path = tmp / filename
+              doc = yaml.safe_load(path.read_text())
+              assert block in doc, (filename, "expected top-level block absent from the real contract", block)
+              del doc[block]
+              path.write_text(yaml.safe_dump(doc))
+              red = []
+              fn(red, contracts_dir=tmp)
+              assert red, (suffix, block, "VACUOUS -- passed with this assertion target absent")
+              print("fail-closed OK", suffix, block)
 
       tmp = copy_tree()
       path = tmp / "read-engine.yaml"
@@ -287,12 +298,14 @@ verification_plan:
       print("semantic-drift OK", drift[0])
       EOF
     expected: >-
-      Six 'fail-closed OK <name>' lines, then 'semantic-drift OK' with a message naming read-engine.yaml and
-      the missing verb. Exit 0.
+      Eight 'fail-closed OK <name> <block>' lines (six checks, two of which read two blocks), then
+      'semantic-drift OK' with a message naming read-engine.yaml and the missing verb. Exit 0.
     fix_if: >-
-      'VACUOUS -- passed with its assertion target absent' means that check does not fail closed; make it
-      append a failure when its target block or key is missing or empty. An empty list on the green leg means
-      the check does not honour contracts_dir and is re-reading the real tree. NOTE Decision 159's
+      'VACUOUS -- passed with this assertion target absent' means that check does not fail closed; make it
+      append a failure when its target block or key is missing or empty. An empty list on the RED leg is the
+      shared signature of two distinct faults -- a check that iterates nothing and passes, OR a check that
+      ignores contracts_dir and silently re-reads the real tree; rule out the second before assuming the
+      first. (An empty GREEN list is the pass condition, not a symptom.) NOTE Decision 159's
       100%-coverage floor does NOT discriminate here -- a loop over an absent or empty collection executes
       every line while asserting nothing, which is exactly what leg (a) exists to catch.
     hermetic: true
@@ -314,7 +327,7 @@ verification_plan:
       consumer. Assert on the failure MESSAGE content, not merely on list length.
     hermetic: false
     graduation: graduate
-    graduation_check_id: class-d-consumer-parity-red-path
+    graduation_check_id: read-engine-verb-parity-red-path
   - step: 8
     phase: pre-deploy
     action: >-
@@ -408,13 +421,15 @@ test_obligations:
     red_green_expectation: Red before, green after; provider drift and a retired/valid overlap both fail.
   - source: scripts/checks/contracts/_manifest.py
     behavior: >-
-      The six new Entry literals keep the bare-string module=/attr= grammar and their declared tier
-      membership, so registry aggregation and the dependency-graph AST edge stay intact.
+      Each new Entry's module= path imports and its attr= resolves to the callable registry.resolve()
+      returns. (The ast.Constant bare-literal grammar is owned by validate_check_manifests, and tier
+      membership by VP step 1 leg B -- both verified elsewhere in this plan, neither by this test.)
     verification_step: 7
     test_selector: tests/checks/contracts/test__manifest.py
     red_green_expectation: >-
-      Existing mirror test extended for the six new entries; red if an Entry is computed or mis-pathed,
-      green after.
+      No edit needed -- the test is already parametrized over _manifest.ENTRIES, so the six new entries are
+      picked up automatically. Red if an Entry names a module that does not import or an attr that does not
+      resolve; green after.
   - source: docs/contracts/read-engine.yaml
     behavior: >-
       The evaluator flips from the never-resolving none_grandfathered form to the verb-parity evaluator, which must
@@ -423,8 +438,12 @@ test_obligations:
     verification_step: 9
     test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
     red_green_expectation: >-
-      Red before (the file carries none_grandfathered, so this test takes the routed-debt branch), green
-      after (it takes the else branch and resolve_evaluator must return True).
+      GREEN before and GREEN after -- verified live (1 passed on the unmodified branch): the test is an
+      if/else, and today the file takes the routed-debt branch, which asserts the route is complete. After
+      the flip it takes the else branch, where resolve_evaluator must return True. The discrimination this
+      row buys is CONDITIONAL: it goes RED the moment an evaluator flips to a check that does not resolve,
+      which is exactly the failure this plan can introduce. Not a red-before-green-after row, and not
+      claimed as one.
   - source: docs/contracts/marker-grammar.yaml
     behavior: >-
       The evaluator flips from the never-resolving none_grandfathered form to the exports-parity evaluator, which must
@@ -433,8 +452,12 @@ test_obligations:
     verification_step: 9
     test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
     red_green_expectation: >-
-      Red before (the file carries none_grandfathered, so this test takes the routed-debt branch), green
-      after (it takes the else branch and resolve_evaluator must return True).
+      GREEN before and GREEN after -- verified live (1 passed on the unmodified branch): the test is an
+      if/else, and today the file takes the routed-debt branch, which asserts the route is complete. After
+      the flip it takes the else branch, where resolve_evaluator must return True. The discrimination this
+      row buys is CONDITIONAL: it goes RED the moment an evaluator flips to a check that does not resolve,
+      which is exactly the failure this plan can introduce. Not a red-before-green-after row, and not
+      claimed as one.
   - source: docs/contracts/log-storage.yaml
     behavior: >-
       The evaluator flips from the never-resolving none_grandfathered form to the routing-parity evaluator, which must
@@ -443,8 +466,12 @@ test_obligations:
     verification_step: 9
     test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
     red_green_expectation: >-
-      Red before (the file carries none_grandfathered, so this test takes the routed-debt branch), green
-      after (it takes the else branch and resolve_evaluator must return True).
+      GREEN before and GREEN after -- verified live (1 passed on the unmodified branch): the test is an
+      if/else, and today the file takes the routed-debt branch, which asserts the route is complete. After
+      the flip it takes the else branch, where resolve_evaluator must return True. The discrimination this
+      row buys is CONDITIONAL: it goes RED the moment an evaluator flips to a check that does not resolve,
+      which is exactly the failure this plan can introduce. Not a red-before-green-after row, and not
+      claimed as one.
   - source: docs/contracts/telemetry-lexicon.yaml
     behavior: >-
       The evaluator flips from the never-resolving none_grandfathered form to the canonical-tables evaluator, which must
@@ -453,8 +480,12 @@ test_obligations:
     verification_step: 9
     test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
     red_green_expectation: >-
-      Red before (the file carries none_grandfathered, so this test takes the routed-debt branch), green
-      after (it takes the else branch and resolve_evaluator must return True).
+      GREEN before and GREEN after -- verified live (1 passed on the unmodified branch): the test is an
+      if/else, and today the file takes the routed-debt branch, which asserts the route is complete. After
+      the flip it takes the else branch, where resolve_evaluator must return True. The discrimination this
+      row buys is CONDITIONAL: it goes RED the moment an evaluator flips to a check that does not resolve,
+      which is exactly the failure this plan can introduce. Not a red-before-green-after row, and not
+      claimed as one.
   - source: docs/contracts/ci-rca-lifecycle.yaml
     behavior: >-
       The evaluator flips from the never-resolving none_grandfathered form to the projection-fields evaluator, which must
@@ -463,8 +494,12 @@ test_obligations:
     verification_step: 9
     test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
     red_green_expectation: >-
-      Red before (the file carries none_grandfathered, so this test takes the routed-debt branch), green
-      after (it takes the else branch and resolve_evaluator must return True).
+      GREEN before and GREEN after -- verified live (1 passed on the unmodified branch): the test is an
+      if/else, and today the file takes the routed-debt branch, which asserts the route is complete. After
+      the flip it takes the else branch, where resolve_evaluator must return True. The discrimination this
+      row buys is CONDITIONAL: it goes RED the moment an evaluator flips to a check that does not resolve,
+      which is exactly the failure this plan can introduce. Not a red-before-green-after row, and not
+      claimed as one.
   - source: docs/contracts/inference-provider.yaml
     behavior: >-
       The evaluator flips from the never-resolving none_grandfathered form to the provider-registry evaluator, which must
@@ -473,8 +508,12 @@ test_obligations:
     verification_step: 9
     test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
     red_green_expectation: >-
-      Red before (the file carries none_grandfathered, so this test takes the routed-debt branch), green
-      after (it takes the else branch and resolve_evaluator must return True).
+      GREEN before and GREEN after -- verified live (1 passed on the unmodified branch): the test is an
+      if/else, and today the file takes the routed-debt branch, which asserts the route is complete. After
+      the flip it takes the else branch, where resolve_evaluator must return True. The discrimination this
+      row buys is CONDITIONAL: it goes RED the moment an evaluator flips to a check that does not resolve,
+      which is exactly the failure this plan can introduce. Not a red-before-green-after row, and not
+      claimed as one.
   - source: docs/contracts/contract-population.yaml
     behavior: >-
       Both equality-bound ratchet pins must equal their live census buckets after the six flips
@@ -482,8 +521,10 @@ test_obligations:
     verification_step: 9
     test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_real_population_passes_with_baseline_legs_enabled
     red_green_expectation: >-
-      Red before (pins 8/19 against post-flip buckets 2/17 -- 'does not equal the live census bucket'), green
-      after the pins are lowered in this same PR.
+      GREEN on the unmodified branch (pins 8/19 equal buckets 8/19). RED at the intermediate state where the
+      six flips have landed but the pins have not (8/19 against 2/17 -- 'does not equal the live census
+      bucket'). Green once both land in this same PR. That intermediate redness is the whole point of the
+      equality binding, and it is why this plan cannot be split across PRs.
   - source: config/ci_rca_taxonomy.yaml
     behavior: >-
       Each of the six new check names must resolve to the schema_drift failure category -- a Priority-0
@@ -575,6 +616,18 @@ constraints:
     one-directional: CiRcaContext carries many non-projection fields (proximate_cause, why_chain,
     fingerprint, ...), so a bidirectional equality would be WRONG. Record this in the check's own docstring
     so a later reader does not "tighten" it into an equality that cannot hold.
+  - >-
+    The verification_registry row is DIFFERENTIALLY ADMITTED, not merely schema-checked:
+    validate_verification_registry._run_added_entry_differentials materializes the check_spec, spins a real
+    origin/main worktree, and requires FAIL-on-main / PASS-on-HEAD, refusing a tautological outcome. A
+    test_selector node in a brand-new file satisfies this (absent on main -> fails there), and the check is
+    pre=True so a mistake surfaces in --pre, not post-merge.
+  - >-
+    The graduation check_id is read-engine-verb-parity-red-path, naming ONE exemplar deliberately: a
+    test_selector check_spec carries a single node_id, so a name implying it guards all six mirror tests
+    would overstate what one row can hold. Point node_id at the read-engine drift red path -- the exemplar
+    proven against real drift (rec-3095). The other five red paths are guarded by their own mirror tests via
+    VP step 7, which is not the same thing as being in the registry, and this plan does not claim otherwise.
   - No rescue agents or workaround loops (Decision 55).
   - Only modify files listed in the Scope table; out-of-scope findings become recommendations, not inline fixes.
 context:
@@ -584,7 +637,7 @@ context:
     FLAGS_FOUND and all three flags were resolved before this plan was written). CITE: Decision 168, Decision
     169, Decision 159, Decision 161, Decision 165, Decision 142, Decision 91, Decision 132, Decision 103,
     Decision 128, Decision 104, Decision 131, Decision 48, Decision 163, Decision 118."
-  - "gates: decision-scout=NO_FLAGS; plan-critique=REVISE after round 1 (6 findings, all addressed: 8 missing test_obligations, the owed verification_registry graduation row, VP step 6 graduation misclassification, the vacuity/fail-closed gap, pre_globs narrowing, and three minor corrections); re-critique pending"
+  - "gates: decision-scout=NO_FLAGS; plan-critique=REVISE after 2 rounds, all findings addressed (round 1: 8 missing test_obligations, the owed verification_registry row, a graduation misclassification, the vacuity gap, pre_globs narrowing, 3 minor; round 2: R1 registry-row shape and differential admission, R2 per-block perturbation for the two contracts reading two blocks, R3 six factually-false red-before claims corrected to conditional discrimination, R4-R7); re-critique pending"
   - >-
     WHY THIS EXISTS: eight docs/contracts/*.yaml files declare evaluator.none_grandfathered, a form that
     never resolves BY DESIGN. Nothing enforces their content -- only the kind-change rule stops regression.
@@ -644,7 +697,7 @@ pre_implementation_checklist:
   - docs/PROJECT_CONTEXT.md read
   - Only the plan-cited decision sections read (168, 169, 159, 161, 165, 104, 131, 128, 118, 103, 163, 91, 84)
   - docs/contracts/contract-population.yaml read in full -- it is the grammar this plan must satisfy
-  - All 22 files in scope located and readable
+  - All 23 files in scope located and readable
   - Acceptance criteria understood and verifiable
 execution_steps:
   - >-
