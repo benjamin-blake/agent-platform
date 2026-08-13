@@ -1,0 +1,945 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "cfg-11-environment-taxonomy-conversion"
+intent: >-
+  Close audit finding CFG-11 by converting docs/contracts/environment-taxonomy.md into a
+  declared-subject Class D contract, so the platform's most operationally dangerous contract is
+  governed by the same population, evaluator and size gates as every other contract rather than
+  sitting outside all of them.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-cfg-11-environment-taxonomy-conversion.yaml
+phase: >-
+  T2.56 (Normative / contract / ADR layering) -- the CFG-11 residual of migration step 3 of
+  audits/contract-first-governance-33c8667.yaml. Closes NO T2.56 exit criterion (c1/c2 both remain
+  open), matching the precedent set by PLAN-contracts-first-class-migration and
+  PLAN-migration-step-3-grandfathering; this plan declares no closes_criteria.
+scope:
+  - file: docs/contracts/environment-taxonomy.yaml
+    action: Create
+    purpose: >-
+      The converted Class D contract. contract.class D, a NON-active status, a unique subject, and
+      evaluator {check: validate_environment_taxonomy}. Transcribes the .md's Axis A platform
+      table, guard-classification table, Axis B phase table, vocabulary-reservation table, and
+      sections 1/4/5/6/7. Section 5's conformance status becomes a TYPED field
+      (conformance.ducklake_class / conformance.prod_class, values DECOUPLED|COUPLED). Measured
+      source: 193 effective lines / 412-char longest line; projected landing 250-330 effective
+      lines against the contracts class's 500 limit (benchmarks: contract-population.yaml 215,
+      decision-entry.yaml 458). Note _classify.effective_lines excludes any line whose first
+      non-whitespace character is '#', so transcribed headings inside block scalars do not count.
+  - file: docs/contracts/environment-taxonomy.md
+    action: Delete
+    purpose: Superseded one-way by the .yaml above; removal is what closes CFG-11's coverage hole.
+  - file: docs/contracts/contract-population.yaml
+    action: Modify
+    purpose: >-
+      shape_grammar.extension_and_depth asserts as live fact that BOTH delegate-cli.md and
+      environment-taxonomy.md are baseline-present grandfathered members and that the file-router
+      prose_allowlist is "narrowed to those two by name". This conversion falsifies that clause
+      inside the gate contract governing the act. Correct it to name delegate-cli.md only, and add
+      the amendment_log[] entry its own change_detection.amendment_log rule requires.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Remove the now-stale prose_allowlist.allowed_globs entry "docs/contracts/environment-taxonomy.md".
+      This narrows allowed_globs (permitted; the ratchet-only rule binds grandfathered_globs).
+      AMENDMENT-LOG REQUIRED: this file is itself Class D (status active), and removing a list
+      element changes its parsed dict, so validate_contract_drift's check_amendment_log_for_class_d
+      fails without a new amendment_log[] entry. No routes: entry names either .md contract, so no
+      route breaks. DELIBERATE CALL: the new .yaml
+      is NOT given a routes: entry either. check_topic_equals_subject binds only routed files and
+      validate_placement is a dead-target check, not a registration-completeness check, so adding a
+      route would import a topic==subject obligation for no discovery gain this plan needs. If a
+      route is added later, its topic MUST equal the contract's subject.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      NOT merely a citation sweep. THREE graduated checks execute against this contract and must be
+      repointed or re-expressed: (1) environment-taxonomy-stale-lambda-note-removed (grep_count,
+      check_spec.path, pattern "No such Lambda exists today", eq 0); (2)
+      environment-taxonomy-records-infra-error (grep_count, check_spec.path, pattern "infra_error",
+      gte 1); (3) env-taxonomy-section6-lockfile-committed (command_exit_zero) whose body extracts
+      markdown section 6 via `awk '/^## 6\./{f=1} /^## 7\./{f=0} f'` -- a COLUMN-0 markdown heading
+      match that cannot match YAML, where the section becomes a key or an indented block scalar.
+      A path swap does NOT save entry (3): re-express it against the YAML structure, or retire it
+      with a recorded reason. Entries (1) and (2) need their pattern preserved by the transcription
+      as well as their path repointed -- confirm the target strings survive into the .yaml.
+  - file: scripts/checks/iam_tf/validate_environment_taxonomy.py
+    action: Modify
+    purpose: >-
+      Repoint the allowlist path and messages to the .yaml. This check is also the declared
+      evaluator: the path-shaped literal "docs/contracts/environment-taxonomy.yaml" resolves under
+      contract-population.yaml's evaluator_kinds.check grammar (whitespace-free, final segment
+      equals the basename).
+  - file: scripts/checks/ops_governance/validate_deploy_channel_conformance.py
+    action: Modify
+    purpose: >-
+      Rewrite _taxonomy_state from prose-paragraph regex parsing (a re.search for a
+      "**Conformance status" paragraph, then whole-word DECOUPLED/COUPLED matching with a guard
+      against COUPLED matching inside DECOUPLED) into a structured read of the new typed
+      conformance field. Retire _DUCKLAKE_TAXONOMY_MARKER / _PROD_TAXONOMY_MARKER. Preserve both
+      class legs (ducklake and prod) and the ambiguous/missing-value failure branches -- the
+      MISSING-KEY branch especially, since a typed read that defaults on a missing key is the exact
+      silent-pass shape this rewrite must not introduce.
+  - file: tests/checks/iam_tf/test_validate_environment_taxonomy.py
+    action: Modify
+    purpose: >-
+      ADD a case asserting the .yaml contract is allowlisted (skipped by the lint). The module
+      currently contains NO reference to the contract path at all -- test_allowlisted_file_skipped
+      uses docs/DECISIONS.md -- so there is nothing to "re-ground"; without a new case this
+      module's result is identical before and after the change.
+  - file: tests/checks/ops_governance/test_validate_deploy_channel_conformance.py
+    action: Modify
+    purpose: >-
+      Replace prose-paragraph fixtures (the module builds a fake taxonomy doc with a
+      "**Conformance status:**" paragraph and a {ducklake_marker} placeholder) with typed-field
+      fixtures. The module today covers matching / stale-channel-class / stale-marker / no-functions
+      / partial plus the prod mirrors -- it has NO ambiguous-value case and NO missing-marker case.
+      All three of ambiguous-value, missing-marker and missing-key must therefore be ADDED, not
+      merely kept, for BOTH classes.
+  - file: tests/checks/contracts/validate_contract_drift/test_extension_depth.py
+    action: Modify
+    purpose: >-
+      test_two_baseline_md_members_pass_as_grandfathered encodes a two-member fiction after this
+      change. Re-ground it to the single remaining baseline .md member (delegate-cli.md).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      TWO obligations. (A) T-1.19 upgrade: (i) convert exit_criteria from bare strings to the
+      id/text/status ledger shape, per Decision 136 and at the human's explicit direction. Accuracy
+      note: this is VOLUNTARY, not forced by CI -- validate_platform_roadmap check (ii) derives
+      touched_ids from `^[+-]\s+- id: (\S+)` and matches them against TIER_ITEM ids, so the `- id:
+      c1` lines this conversion emits capture `c1`, which matches no tier_item, and a
+      note-or-files_in_scope-only edit emits no `- id:` line at all. Do not justify the upgrade by
+      that check; (ii)
+      re-ground the stale files_in_scope path docs/REPORT-delegate-cli-consumer-identification.md
+      (a docs/-root path the RS-03 docs_root_allowlist no longer admits) to docs/plans/reports/;
+      (iii) record the CFG-11 dedup correction on the item note; (iv) record delegate-cli.md's
+      remaining census and size invisibility, and that conversion closes both for free, as an
+      explicit conscious-deferral act; (v) note that T-1.19 has never ruled convert-vs-RETIRE for
+      delegate-cli.md. T-1.19 STAYS deferred_post_mvp; nothing depends on it, so Decision 93's
+      no-live-dep invariant holds. (B) CITATION SWEEP: this file carries 8 environment-taxonomy.md
+      citations, several inside completed tier_items' historical progress_notes. They ARE swept
+      (the roadmap is a live, continuously-edited governed surface -- it is NOT in the
+      workflow_outputs write-once class, which covers docs/plans/ and audits/ only), so VP step 5
+      deliberately does not exclude it.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Decisions 77 and 125 do not merely cite the .md -- they DESIGNATE it canonical SoT by name.
+      Append a dated, source-cited annotation to those TWO entries only, using
+      docs/contracts/decision-entry.yaml's amendment_forms (general_rule / blockquote_update); the
+      live precedent is Decision 118's own appended "> **Amended by Decision 168 (2026-08-10):**"
+      trailer. Do NOT edit any H2 heading, including Decision 125's parenthetical (Decision 149,
+      never-remove-headers). Every other historical citation is left stale-by-design.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: Regenerate after the two annotations so validate_decisions_index_freshness stays green.
+  - file: scripts/terraform_apply_guard.py
+    action: Modify
+    purpose: Comment-only citation update (line 134).
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Citation sweep (2 path-form references, line 36) AND the stale "four DuckLake Lambdas" fact.
+      BUDGET-CRITICAL: AGENTS.md sits inside the S1 root ambient load-set, whose prose budget has
+      only 18 BYTES of headroom (33,183 current vs 33,201 pinned in config/prose_budgets.yaml).
+      Two ".md" -> ".yaml" swaps cost +4 bytes; "four" -> "five" is byte-neutral. Any additional
+      rewording (e.g. re-expressing "section 5" as a longer YAML key name) must keep the net growth
+      at or under +18 bytes, or validate_prose_limits goes red.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Citation sweep (2 path-form references, incl. one "section 5" cross-reference at line ~245).
+      S4-budgeted at 55,816 bytes with the file at 55,810 -- 6 bytes of headroom; keep the edit
+      byte-neutral-or-smaller or reseed the budget DOWN, never up.
+  - file: .github/actions/write-convergence-record/action.yml
+    action: Modify
+    purpose: Citation sweep.
+  - file: .github/workflows/reconcile.yml
+    action: Modify
+    purpose: Citation sweep.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: Citation sweep.
+  - file: EVALUATION-PROMPTS.yaml
+    action: Modify
+    purpose: Citation sweep.
+  - file: docs/INTENT-ci-cd-architecture.md
+    action: Modify
+    purpose: Citation sweep (grandfathered INTENT doc; text edit only, no new doc created).
+  - file: docs/INTENT-multi-product-platform.md
+    action: Modify
+    purpose: Citation sweep (grandfathered INTENT doc; text edit only, no new doc created).
+  - file: docs/ROADMAP-PRODUCT.yaml
+    action: Modify
+    purpose: >-
+      Citation sweep (1 reference). The operator freeze in config/structural_size_budgets.yaml
+      budget_notes pins this file at 4707 EFFECTIVE LINES (unit: effective-lines, measured exactly
+      4707); its longest line is 301 chars and it carries NO long_line_budgets entry. An in-line
+      ".md" -> ".yaml" swap therefore changes neither measured quantity and the gate does NOT go
+      red. The real constraint is simply: do not ADD or REMOVE a line. Do not delete content to
+      "make room" -- there is nothing to make room for.
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      Citation sweep (2 path-form). Line 107 is an ANCHOR reference
+      (...environment-taxonomy.md#5-lambda-codeinfra-decoupling-principle-personal-account-lambdas)
+      that must be re-expressed as a YAML key path, not path-swapped. AMENDMENT-LOG REQUIRED: this
+      file is Class D (status ratified) and the edit changes a real YAML value
+      (deploy_channels.ducklake_functions.see), so a new amendment_log[] entry is mandatory.
+  - file: docs/contracts/credential-routing.yaml
+    action: Modify
+    purpose: Citation sweep (1 bare-name reference).
+  - file: docs/contracts/deploy-paths.yaml
+    action: Modify
+    purpose: >-
+      Citation sweep. Lines 39, 71 and 79 are ANCHOR references
+      (blocks_ref: "environment-taxonomy.md#2-the-two-axes ...") requiring re-expression as YAML
+      key paths. Line 44 also carries the stale "four DuckLake Lambdas" fact, and line 87's
+      admin_out_of_band description carries another citation. AMENDMENT-LOG REQUIRED: this file is
+      Class D (status active) and five parsed values change, so a new amendment_log[] entry is
+      mandatory. NOTE docs/contracts/credential-routing.yaml is deliberately NOT in this category:
+      it is Class C and its citation sits under allowed_values.unmapped_phases_note, which
+      check_amendment_for_diff does not cover.
+  - file: docs/intent-migration/MANIFEST.yaml
+    action: Modify
+    purpose: Citation sweep (1 bare-name reference).
+  - file: src/data/handlers/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Citation sweep (line 15, path-form + "section 5"). BUDGET-CRITICAL: S2-budgeted, 4,302 of
+      4,307 bytes -- 5 bytes of headroom. Apply the bare-basename valve (see constraints).
+  - file: src/lambdas/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Citation sweep (line 14, path-form + "section 5"). BUDGET-CRITICAL: S2-budgeted at 1,313 of
+      1,313 bytes -- ZERO headroom. The mandatory ".md" -> ".yaml" swap alone (+2 bytes) hard-fails
+      validate_prose_limits. Apply the bare-basename valve (see constraints).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Citation sweep (lines 10 and 78, both path-form section cross-references). BUDGET-CRITICAL:
+      S2-budgeted, 30,483 of 30,497 bytes -- 14 bytes of headroom against two references. Apply the
+      bare-basename valve (see constraints).
+  - file: terraform/github/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Citation sweep (line 15, path-form). BUDGET-CRITICAL: S2-budgeted at 5,266 of 5,266 bytes --
+      ZERO headroom. Apply the bare-basename valve (see constraints).
+  - file: terraform/personal/ducklake_catalog_dr.tf
+    action: Modify
+    purpose: Comment-only citation update (line 22, a "section 5" reference). No resource-affecting change.
+  - file: terraform/personal/ducklake_lambdas.tf
+    action: Modify
+    purpose: Comment-only citation update (line 21, a "section 5" reference). No resource-affecting change.
+  - file: terraform/personal/ducklake_maintenance.tf
+    action: Modify
+    purpose: Comment-only citation update (line 28, a "section 5" reference). No resource-affecting change.
+  - file: terraform/personal/ducklake_maintenance_smoke.tf
+    action: Modify
+    purpose: Comment-only citation update (line 29, a "section 5" reference). No resource-affecting change.
+  - file: terraform/personal/prod_lambdas.tf
+    action: Modify
+    purpose: Comment-only citation update (line 21, a "section 5" reference). No resource-affecting change.
+  - file: terraform/personal/backend-sandbox.hcl
+    action: Modify
+    purpose: Comment-only citation update (line 5, a "section 4" reference). No resource-affecting change.
+bundled_recommendations:
+  - rec-2751
+infrastructure_dependencies:
+  - >-
+    terraform/personal/*.tf and backend-sandbox.hcl are in scope for COMMENT-ONLY citation edits
+    (verified: all six citation lines begin with '#', as does scripts/terraform_apply_guard.py:134).
+    No resource, IAM, trust or destroy diff is introduced, so the deterministic guard classifies
+    the change as a no-op and it does not route to the tf-gated-apply Environment. Because the PR
+    touches terraform/**, it still enters the speculative-plan pipeline (PR-time plan reviewed and
+    saved, re-applied at merge with no re-plan, Decision 77 no-TOCTOU). The full pipeline mechanics
+    are owned by the contract this plan converts -- after conversion, cite
+    docs/contracts/environment-taxonomy.yaml, never the deleted .md.
+  - >-
+    These rows are deliberately NOT split into a separate PR: any terraform/** touch enters the
+    speculative-plan pipeline regardless, so splitting runs the pipeline twice and strands
+    terraform/ comments citing a deleted file between merges -- contradicting this plan's own
+    atomicity rationale.
+  - >-
+    Per Decision 119 and terraform/CLAUDE.md, CC-web cannot fetch provider checksums: NEVER author
+    a local terraform init/validate/plan command. terraform is not even installed in this
+    environment. The authoritative verifiers are CI's required terraform-validate check (which
+    already runs `fmt -check` across both roots at ci.yml:168) and the speculative-plan job.
+acceptance_criteria:
+  - >-
+    docs/contracts/environment-taxonomy.yaml exists as a valid Class D contract with a unique
+    subject and an evaluator that genuinely RESOLVES by evidence-of-reading, and
+    docs/contracts/environment-taxonomy.md no longer exists.
+  - >-
+    validate_contract_drift passes against the real tree with the converted file counted in the
+    `declared` bucket (5 -> 6), `grandfathered` unchanged at 19, `status_active` unchanged at 16,
+    and skipped == 0 -- so no ratchet pin needs to move and no raise marker is introduced.
+  - >-
+    validate_deploy_channel_conformance determines conformance from the typed conformance field,
+    not from prose-paragraph regex matching, and still fails on a doc/terraform disagreement for
+    BOTH the ducklake class and the prod class, including when the typed key is MISSING.
+  - >-
+    Every reference to the old contract REACHES ITS TARGET, not merely avoids the old filename: no
+    live surface cites docs/contracts/environment-taxonomy.md, AND no surviving reference points at
+    a markdown anchor (#slug) or a numbered markdown section that no longer exists -- each has been
+    re-expressed against a real YAML key path. Historical citations in docs/DECISIONS.md and
+    docs/decisions-index.json are deliberately retained, and Decisions 77 and 125 each carry a
+    dated append-only annotation recording the new path.
+  - >-
+    All three graduated verification-registry checks that execute against this contract still
+    execute and still assert their intended property -- verified by RUNNING them, not by grepping
+    their paths.
+  - >-
+    The converted contract is within the contracts structural-size class (500 effective lines,
+    2000-char lines) with NO entry added to config/structural_size_budgets.yaml budgets: or
+    long_line_budgets:, and no `# raise-approved` marker anywhere in this change.
+  - >-
+    T-1.19 carries id/text/status exit criteria, a files_in_scope path under docs/plans/reports/,
+    and a note recording the CFG-11 dedup correction, delegate-cli.md's residual, and the
+    unmade convert-vs-retire ruling -- while remaining status deferred_post_mvp.
+  - >-
+    The terraform/** diff (against the merge base) contains no added or removed non-comment line.
+  - >-
+    validate_prose_limits stays green across ALL six byte-pinned in-scope surfaces: the S1
+    aggregate (AGENTS.md) at or under 33,201; .claude/skills/planning/SKILL.md at or under 55,816;
+    src/lambdas/CLAUDE.md at or under 1,313; terraform/github/CLAUDE.md at or under 5,266;
+    src/data/handlers/CLAUDE.md at or under 4,307; terraform/CLAUDE.md at or under 30,497 -- with
+    no prose budget raised, and any budget the edit leaves slack in reseeded DOWN.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the contract drift gate against the real tree; it must pass with the converted file
+      present and the .md gone.
+    command: >-
+      bin/venv-python -c "from scripts.checks.contracts.validate_contract_drift import
+      validate_contract_drift; f=[]; validate_contract_drift(f); print('FAILURES:', f); assert not
+      f, f"
+    expected: "Exit 0, FAILURES: []"
+    fix_if: >-
+      A (shape) failure means the contract: block is malformed. A (grandfather) failure means the
+      new file declared status: active or evaluator.none_grandfathered -- both are closed at birth
+      for a NEW file. A (subject) failure means the subject collides with an existing Class D
+      subject or ritual contract id. An (amendment) failure -- "parsed content changed but no new
+      amendment_log[] entry was added" -- is EXPECTED on FOUR files unless each got an entry:
+      contract-population.yaml, file-router.yaml, build-lambda.yaml and deploy-paths.yaml are all
+      Class D, and every one of them takes a parsed-value edit in this change.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Not admissible as a graduated check: validate_contract_drift already PASSES on origin/main
+      today (verified live, FAILURES: []), so run_differential's revert leg would return "not
+      admitted -- revert did not produce FAIL (tautological)". The property is also already a
+      registered, sequenced check in both tiers; graduating a row that re-runs the whole gate would
+      duplicate it. Step 2 carries the differential signal instead.
+    hermetic: true
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert the census buckets moved exactly as predicted -- this is what proves no ratchet pin
+      needs to move and that no raise marker is required anywhere in this change.
+    command: >-
+      bin/venv-python -c "import io, contextlib, sys; from
+      scripts.checks.contracts.validate_contract_drift import validate_contract_drift; buf =
+      io.StringIO(); failed = []; ctx = contextlib.redirect_stdout(buf); ctx.__enter__();
+      validate_contract_drift(failed); ctx.__exit__(None, None, None); out = buf.getvalue();
+      sys.stdout.write(out); line = next(l for l in out.splitlines() if
+      l.strip().startswith('Census:')); assert failed == [], failed; assert ' declared=6
+      grandfathered=19 evaluator_none_grandfathered=8 status_active=16 skipped=0' in line, line;
+      print('CENSUS-OK')"
+    expected: >-
+      "CENSUS-OK". The assertion pins the tail of the census line (five buckets: declared,
+      grandfathered, evaluator_none_grandfathered, status_active, skipped); `scanned` and `ritual`
+      are left unpinned so an unrelated contract landing concurrently does not produce a spurious
+      failure. The assert runs INSIDE python (no shell pipe), so a gate failure cannot be swallowed
+      by a downstream exit status.
+    fix_if: >-
+      grandfathered != 19 means the .md deletion moved a pinned bucket -- it must not, since the
+      census never scanned .md files. declared != 6 means the converted file did not land in the
+      declared bucket (it declared a grandfather-only form, or its evaluator failed to resolve and
+      it fell into skipped). status_active != 16 means the new file declared status: active, which
+      is closed at birth for a NEW file.
+    graduation: graduate
+    graduation_check_id: contract-census-declared-includes-env-taxonomy
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert the declared evaluator genuinely resolves (evidence of READING, not mention) -- the
+      single property Decision 168 exists to enforce.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.checks.contracts import
+      _population; from scripts.contracts import load_contract_meta; m =
+      load_contract_meta(Path('docs/contracts/environment-taxonomy.yaml')); r, d =
+      _population.resolve_evaluator('environment-taxonomy.yaml', m.evaluator, root=Path('.'));
+      print(r, d); assert r, d"
+    expected: "True, with detail naming validate_environment_taxonomy's module as containing the basename in executable context"
+    fix_if: >-
+      False means the repointed literal is absent, is inside a docstring or comment (both excluded),
+      or is a path-shaped literal containing whitespace (rejected by the matcher-trap guard). Put
+      the path literal in executable context.
+    graduation: graduate
+    graduation_check_id: env-taxonomy-evaluator-resolves
+    hermetic: true
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the conformance check reads the TYPED field and still discriminates. The module's
+      existing seam (patch("scripts.checks._common.ROOT", tmp_path) with fabricated .tf /
+      build-lambda.yaml / taxonomy fixtures) already carries a wrong-value case; the missing-key
+      case must be added, since a typed read that defaults on a missing key is the silent-pass
+      shape this rewrite could introduce.
+    command: bin/venv-python -m pytest tests/checks/ops_governance/test_validate_deploy_channel_conformance.py -q
+    expected: All tests pass, including the disagreement, ambiguous-value AND missing-key branches for BOTH the ducklake and prod classes.
+    fix_if: >-
+      If the disagreement or missing-key test passes while the implementation defaults, the check is
+      not reading the typed field at all -- that is a vacuous pass, not a green check.
+    graduation: graduate
+    graduation_check_id: deploy-channel-conformance-missing-key-fails
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm no LIVE surface still cites the deleted .md. Historical write-once artifacts and the
+      decision corpus are excluded by design; docs/ROADMAP-PLATFORM.yaml is deliberately NOT
+      excluded (it is a live governed surface, not a write-once workflow output).
+    command: >-
+      git grep -l "environment-taxonomy\.md" -- . ':!audits/' ':!docs/plans/' ':!docs/audit-prompts/'
+      ':!docs/DECISIONS.md' ':!docs/decisions-index.json' | tee /dev/stderr | wc -l | grep -qx 0
+    expected: Exit 0 with an empty file list.
+    fix_if: Any listed file is an unswept live citation; update it. Do NOT add new exclusions to silence this.
+    graduation: graduate
+    graduation_check_id: env-taxonomy-md-no-live-citations
+    hermetic: true
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the .md is deleted and the prose allowlist no longer advertises permission for it.
+    command: >-
+      test ! -f docs/contracts/environment-taxonomy.md && ! grep -q "environment-taxonomy.md"
+      docs/contracts/file-router.yaml && echo CLEAN
+    expected: "CLEAN"
+    fix_if: >-
+      A surviving allowlist entry advertises a permission the population gate revokes -- exactly the
+      contradiction contract-population.yaml's extension_and_depth clause warns about.
+    graduation: graduate
+    graduation_check_id: env-taxonomy-md-deleted-and-delisted
+    hermetic: true
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm the converted contract sits inside the contracts size class with NO budgets entry and
+      no raise marker -- the Decision 165 honesty condition this plan committed to.
+    command: >-
+      bin/venv-python -c "from scripts.checks.structural import _classify; import pathlib;
+      p='docs/contracts/environment-taxonomy.yaml'; t=pathlib.Path(p).read_text(encoding='utf-8');
+      e=_classify.effective_lines(t); L=_classify.longest_line(t); c=_classify.classify_path(p,
+      text=t); reg=pathlib.Path('config/structural_size_budgets.yaml').read_text(encoding='utf-8');
+      print(c, e, L); assert c == 'contracts', c; assert e <= 500, e; assert L <= 2000, L; assert p
+      not in reg, 'a budgets entry was added -- use the defer-detail relief valve instead'"
+    expected: "contracts, <=500 effective lines, <=2000-char longest line, and the path absent from config/structural_size_budgets.yaml"
+    fix_if: >-
+      Over 500 effective lines: do NOT add a budgets entry and do NOT split the file (collocation
+      doctrine forbids splitting one subject). Use the contracts class relief valve "defer detail" --
+      move non-normative narrative (sections 6/7 detail) out to the consuming checks or T-1.19's
+      note. Projected landing is 250-330 lines, so this valve is unlikely to be needed.
+    graduation: graduate
+    graduation_check_id: env-taxonomy-yaml-within-contracts-class
+    hermetic: true
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Confirm the roadmap validates after the T-1.19 ledger upgrade, and that T-1.19 is still
+      deferred_post_mvp with structured criteria and a re-grounded report path.
+    command: >-
+      bin/venv-python -c "import yaml; from scripts.checks.roadmap.validate_platform_roadmap import
+      validate_platform_roadmap; f=[]; validate_platform_roadmap(f); assert not f, f;
+      d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); t=[i for i in d['tier_items'] if
+      i['id']=='T-1.19'][0]; assert t['status']=='deferred_post_mvp', t['status']; assert
+      all(isinstance(c, dict) and 'id' in c for c in t['exit_criteria']), t['exit_criteria']; assert
+      not any('docs/REPORT-' in p for p in t['files_in_scope']), t['files_in_scope']; print('T-1.19
+      OK')"
+    expected: "T-1.19 OK"
+    fix_if: >-
+      A failure here means the ledger conversion is incomplete or malformed (validate_platform_roadmap
+      enforces criterion-object shape and closes_criteria referential integrity). Note check (ii)'s
+      bare-string rule does NOT fire on this edit -- see the scope row's accuracy note -- so a green
+      validate_platform_roadmap alone does not prove the conversion happened; the explicit
+      isinstance assertions in this command are what prove it. A surviving docs/REPORT- path is the
+      RS-03 docs_root_allowlist violation this plan re-grounds.
+    graduation: graduate
+    graduation_check_id: t-1-19-ledger-upgraded
+    hermetic: true
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm the terraform diff is comment-only -- no added or removed non-comment line -- against
+      the MERGE BASE. Provider-free; never runs init/validate/plan, and never invokes the terraform
+      binary at all (it is not installed here; CI owns fmt/validate/plan).
+    command: >-
+      git fetch origin main --quiet; test -z "$(git diff origin/main...HEAD -- terraform/ | grep -E
+      '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*#')" && echo COMMENT-ONLY
+    expected: "COMMENT-ONLY"
+    fix_if: >-
+      Any non-comment line in the terraform diff means this change stopped being a no-op and now
+      carries real infrastructure risk -- revert it; it is out of this plan's scope.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Inherently diff-scoped and therefore not a durable standing guard: in a reverted origin/main
+      worktree the diff is empty so the assertion passes on both sides (not admissible under
+      run_differential), and post-merge it is vacuously true forever. Its value is entirely
+      pre-merge, which is exactly where this VP runs it.
+    hermetic: true
+  - step: 10
+    phase: pre-deploy
+    action: Regenerate the decisions index after the two append-only annotations and confirm freshness.
+    command: >-
+      bin/venv-python -c "from scripts.checks.decisions.validate_decisions_index_freshness import
+      validate_decisions_index_freshness; f=[]; validate_decisions_index_freshness(f); assert not f,
+      f; print('index fresh')"
+    expected: "index fresh"
+    fix_if: Regenerate docs/decisions-index.json via its generator before re-running.
+    graduation: waive
+    graduation_waiver_reason: >-
+      An identical freshness assertion is already a registered, sequenced check
+      (validate_decisions_index_freshness); graduating a second registry row asserting the same
+      property would duplicate an existing standing guard rather than add coverage.
+    hermetic: true
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Confirm rec-2751's stale content did not survive transcription: the converted contract must
+      exist AND must not describe the DuckLake Lambda set as "four".
+    command: >-
+      test -f docs/contracts/environment-taxonomy.yaml && ! grep -iE "four DuckLake"
+      docs/contracts/environment-taxonomy.yaml && grep -q "ducklake_maintenance_smoke"
+      docs/contracts/environment-taxonomy.yaml && echo COUNT-CORRECTED
+    expected: >-
+      "COUNT-CORRECTED". Both halves matter: the negative conjunct alone is satisfiable by DELETING
+      the sentence, so the positive conjunct on ducklake_maintenance_smoke is what proves the fifth
+      function was actually named. This mirrors rec-2751's own acceptance oracle, which
+      rec-autoclose.yml never evaluates (it calls update_rec straight from the Resolves: trailer).
+    fix_if: >-
+      The stale count was transcribed forward. Correct it against the live terraform: there are FIVE
+      aws_lambda_function resources across terraform/personal/ducklake_*.tf (writer, reader,
+      maintenance, catalog_dr, maintenance_smoke). Before restating the conformance claim, check
+      which of the five actually carry lifecycle { ignore_changes = [source_code_hash] } -- do not
+      assert a conformance property for maintenance_smoke without reading its resource.
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time transcription-correctness check with no durable regression surface: once the count
+      is right in the converted contract, nothing in the normal course of work re-introduces "four",
+      so a standing registry row would guard a property that cannot regress. (The command IS
+      differential-admissible with the test -f conjunct present -- it fails on origin/main where the
+      .yaml is absent -- so this is a deliberate waive on durability grounds, not an admissibility
+      failure.)
+    hermetic: true
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Prove the vocabulary lint allowlists the canonical contract at its NEW path -- via a case that
+      does not exist at origin/main.
+    command: bin/venv-python -m pytest tests/checks/iam_tf/test_validate_environment_taxonomy.py -q
+    expected: All tests pass, including the newly ADDED case asserting the .yaml contract is skipped by the lint.
+    fix_if: >-
+      A failure usually means the allowlist still names the deleted .md, so the converted contract is
+      linted as an ordinary changed doc and its two-axis vocabulary (which legitimately spans both
+      axes) trips the phase-as-env / tier-as-phase patterns.
+    graduation: graduate
+    graduation_check_id: env-taxonomy-yaml-allowlisted-by-lint
+    hermetic: false
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      EXECUTE the three repointed verification-registry entries rather than grepping their paths --
+      the only way to catch that env-taxonomy-section6-lockfile-committed's column-0 markdown awk
+      extraction cannot match YAML.
+    command: >-
+      bin/venv-python -c "import yaml; from scripts.verification_graduation import
+      materialize_check; rows=[r for r in
+      yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'] if
+      r['check_id'] in ('environment-taxonomy-stale-lambda-note-removed',
+      'environment-taxonomy-records-infra-error', 'env-taxonomy-section6-lockfile-committed')];
+      print(len(rows), 'entries'); assert rows, 'no entries matched -- check the registry key';
+      [print(r['check_id'], materialize_check(r).run().status) for r in rows]"
+    expected: >-
+      Either all three entries report CheckStatus.PASS, or env-taxonomy-section6-lockfile-committed
+      is absent because it was deliberately retired with a recorded reason (in which case 2 entries
+      print). Verified pre-change baseline: all three currently PASS against the .md, so any FAIL
+      here is a regression this change introduced, not a pre-existing condition.
+    fix_if: >-
+      A FAIL on entries 1 or 2 means the transcription dropped the string their pattern matches
+      ("No such Lambda exists today" / "infra_error") -- restore it or re-express the check. A FAIL
+      on entry 3 is EXPECTED if it was merely path-swapped: its awk extraction needs re-expression
+      against the YAML structure, or the entry must be retired with a reason. Note the two API
+      facts this command depends on, both verified: `materialize_check` lives in
+      scripts/verification_graduation.py (NOT scripts/verification_checks.py), and the registry's
+      top-level key is `entries` (NOT `checks`).
+    graduation: waive
+    graduation_waiver_reason: >-
+      Not admissible: validate_verification_registry's _added_entries matches by check_id, so a
+      REPOINTED entry is never "added" and no differential runs for it at all. The durable
+      regression guard for these three properties is the registry entries themselves, which already
+      exist; this step exists to prove they still execute after repointing.
+    hermetic: true
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Confirm no surviving reference points at a markdown anchor or numbered markdown section of the
+      converted contract -- the failure mode a mechanical s/.md/.yaml/ would leave behind.
+    command: >-
+      test -z "$(git grep -nE 'environment-taxonomy[^ \"]*#' -- . ':!audits/' ':!docs/plans/'
+      ':!docs/audit-prompts/' ':!docs/DECISIONS.md' ':!docs/decisions-index.json')" && test -z "$(git
+      grep -nE 'environment-taxonomy\.yaml.{0,60}[Ss]ection [0-9]' -- . ':!audits/' ':!docs/plans/'
+      ':!docs/audit-prompts/' ':!docs/DECISIONS.md' ':!docs/decisions-index.json')" && echo
+      NO-DANGLING-ANCHORS
+    expected: "NO-DANGLING-ANCHORS"
+    fix_if: >-
+      A hit is a reference that survived the path swap but no longer resolves: markdown anchors
+      (#5-lambda-codeinfra-...) and "section N" phrases have no referent in YAML. Re-express each as
+      the real top-level key path in the converted contract.
+    graduation: graduate
+    graduation_check_id: env-taxonomy-no-dangling-anchor-refs
+    hermetic: true
+  - step: 15
+    phase: pre-deploy
+    action: Confirm the ambient-prose byte budgets stay green after the AGENTS.md and SKILL.md edits.
+    command: >-
+      bin/venv-python -c "from scripts.checks.prose.prose_limits import validate_prose_limits;
+      f=[]; validate_prose_limits(f); assert not f, f; print('prose budgets green')"
+    expected: "prose budgets green"
+    fix_if: >-
+      SIX in-scope surfaces are pinned, TWO at zero headroom: src/lambdas/CLAUDE.md (1313/1313) and
+      terraform/github/CLAUDE.md (5266/5266), then src/data/handlers/CLAUDE.md (5 bytes),
+      planning/SKILL.md (6), terraform/CLAUDE.md (14, against two references) and the S1 aggregate
+      via AGENTS.md (18). Apply the bare-basename valve from the constraints (-15 bytes per
+      reference) rather than raising a budget -- a raise needs a Decision-cited marker this plan
+      forbids, and reseeding down is impossible at zero headroom.
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_prose_limits is already a registered, sequenced check asserting exactly this
+      property; graduating a duplicate row would add no coverage. Included as a VP step because the
+      headroom is unusually tight and an implementer would otherwise discover the breach only at
+      full validation.
+    hermetic: true
+  - step: 16
+    phase: post-deploy
+    action: >-
+      On the PR, confirm CI's required terraform-validate check and the speculative-plan job are
+      green and the saved plan reports no infrastructure changes. CI is the authoritative verifier
+      for terraform fmt/validate/plan (Decision 119); this cannot be asserted locally.
+    command: >-
+      echo "Read the PR check runs via mcp__github__pull_request_read (get_check_runs); require
+      terraform-validate green and the speculative-plan job reporting no resource changes."
+    expected: terraform-validate green; speculative plan shows 0 to add, 0 to change, 0 to destroy.
+    fix_if: >-
+      A non-empty plan means a scope file carried a resource-affecting edit despite VP step 9 --
+      stop and reconcile against step 9 before merging; do not approve a plan this change did not
+      intend to produce.
+  - step: 17
+    phase: post-deploy
+    action: >-
+      After the squash-merge, confirm rec-2751 actually closed via the Resolves: trailer and
+      rec-autoclose.yml rather than assuming it.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync && grep -c '"id": "rec-2751".*"status":
+      "closed"' logs/.recommendations-log.jsonl
+    expected: "1 (rec-2751 closed)"
+    fix_if: >-
+      If still open, the trailer did not fire; close it manually with `bin/venv-python -m
+      scripts.ops_data_portal --update-rec rec-2751 --status closed --resolution "..."` per
+      Decision 70.
+  - step: 18
+    phase: pre-deploy
+    action: >-
+      FINAL GATE before commit: run the full validation tier (not --pre). handoff_policy declares
+      full_validation_required_before_commit, so the commit waits for a completed exit 0; on
+      timeout the disposition is `blocked` -- resume later and rerun full from the start.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 with no failed checks.
+    fix_if: >-
+      Fix each reported failure and rerun from the start -- a partial rerun does not satisfy the
+      handoff policy. Expect the plan-document and handoff-full-tier checks to be the sensitive
+      ones for this change's own artifact.
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step invokes the entire presubmit suite; graduating it as a single registry row would
+      assert "all checks pass" as one kernel primitive, which is neither a discrete property nor
+      differentially meaningful -- every constituent check is already independently registered and
+      sequenced.
+    hermetic: false
+test_obligations:
+  - source: docs/contracts/environment-taxonomy.yaml
+    behavior: >-
+      The converted contract loads as a valid Class D envelope whose declared evaluator resolves by
+      evidence-of-reading -- the property Decision 168 exists to enforce.
+    verification_step: 3
+    command: _population.resolve_evaluator
+    red_green_expectation: >-
+      Red before: the file does not exist, so load_contract_meta raises and the command exits
+      non-zero. Green after: resolve_evaluator returns True naming validate_environment_taxonomy's
+      module as containing the basename in executable context.
+  - source: docs/contracts/contract-population.yaml
+    behavior: >-
+      The gate contract's extension_and_depth clause stops asserting that environment-taxonomy.md
+      is a live grandfathered member, and the edit carries the amendment_log entry its own
+      change_detection rule requires.
+    verification_step: 1
+    command: validate_contract_drift(f)
+    red_green_expectation: >-
+      Red before: editing the clause without an amendment_log entry fails with "(amendment): parsed
+      content changed but no new amendment_log[] entry was added". Green after: the entry is present
+      and the gate passes.
+  - source: docs/contracts/file-router.yaml
+    behavior: The prose allowlist no longer advertises permission for a file the population gate revokes.
+    verification_step: 6
+    command: docs/contracts/file-router.yaml
+    red_green_expectation: >-
+      Red before: the allowlist still names environment-taxonomy.md, so step 6's grep -q succeeds
+      and the negation fails the command. Green after: the entry is gone and the step prints CLEAN.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: >-
+      T-1.19 carries structured id/text/status criteria, a re-grounded report path under
+      docs/plans/reports/, and stays deferred_post_mvp.
+    verification_step: 8
+    command: validate_platform_roadmap
+    red_green_expectation: >-
+      Red before: the criteria are bare strings and files_in_scope still names a docs/-root
+      docs/REPORT- path, so step 8's isinstance and path assertions both fail. Green after: both
+      assertions hold and the roadmap still validates.
+  - source: docs/decisions-index.json
+    behavior: The generated index stays consistent with DECISIONS.md after the two append-only annotations.
+    verification_step: 10
+    command: validate_decisions_index_freshness
+    red_green_expectation: >-
+      Red before: annotating Decisions 77 and 125 without regenerating leaves the index stale and
+      the freshness check fails. Green after: the index is regenerated and current.
+  - source: docs/contracts/build-lambda.yaml
+    behavior: No behavior change -- an anchor citation re-expressed as a YAML key path, plus its amendment_log entry.
+    verification_step: 14
+    command: environment-taxonomy[^ \"]*#
+    waiver_reason: >-
+      The edit replaces a markdown anchor with a key path in a `see:` pointer field; no consumer
+      parses that value. VP step 14 proves no dangling anchor survives and VP step 1 proves the
+      required amendment_log entry landed -- together they are the evidence, and a behavioral test
+      would assert nothing this change altered.
+  - source: docs/contracts/deploy-paths.yaml
+    behavior: No behavior change -- three blocks_ref anchors re-expressed, a stale Lambda count corrected, plus its amendment_log entry.
+    verification_step: 14
+    command: environment-taxonomy[^ \"]*#
+    waiver_reason: >-
+      blocks_ref is a wayfinding pointer this repo never parses (deploy-paths.yaml is explicitly a
+      navigation index that points at, and never restates, the taxonomy). VP step 14 proves no
+      dangling anchor survives and VP step 1 proves the amendment_log entry landed.
+  - source: docs/contracts/credential-routing.yaml
+    behavior: No behavior change -- a bare-name citation updated.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      Class C contract whose citation sits under allowed_values.unmapped_phases_note, outside the
+      fields check_amendment_for_diff covers, so it needs no amendment entry and changes no parsed
+      obligation. VP step 5's sweep is the evidence.
+  - source: docs/intent-migration/MANIFEST.yaml
+    behavior: No behavior change -- a bare-name reference in a migration manifest.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      The reference is to the lint's allowlist SET rather than to the contract path and may need no
+      edit at all (confirm before touching it -- the file is also at 521/521 effective lines with
+      zero headroom). VP step 5's sweep settles whether an edit was required.
+  - source: docs/ROADMAP-PRODUCT.yaml
+    behavior: No behavior change -- one citation updated in an operator-frozen file.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      An in-line path swap in a roadmap entry's prose. The file is frozen at 4707 effective lines,
+      so the only real risk is line count, which VP step 18's structural-size check covers; there is
+      no behavioral surface to test.
+  - source: EVALUATION-PROMPTS.yaml
+    behavior: No behavior change -- one citation updated in an evaluation-prompt corpus.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      A path string inside prompt text, not an executable reference; nothing loads this file during
+      validation. VP step 5's sweep is the evidence.
+  - source: .github/actions/write-convergence-record/action.yml
+    behavior: No behavior change -- a citation inside a composite-action comment/description.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      The composite-action manifest and shell-body guards already gate this file's structure and
+      run in the full tier (VP step 18); the citation itself drives no action logic.
+  - source: .github/workflows/reconcile.yml
+    behavior: No behavior change -- a citation on a comment line.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      The citation sits on a '#' comment line, so it changes no workflow step and does not move the
+      file's effective-line count (it is pinned at 536/536 with zero headroom -- do not add a
+      non-comment line). The ci-workflow guards gate in VP step 18 covers the file's structure.
+  - source: .github/workflows/terraform-apply-sandbox.yml
+    behavior: No behavior change -- a citation on a comment line.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      Same shape as reconcile.yml: a '#' comment line, pinned at 529/529 effective lines with zero
+      headroom. The ci-workflow guards gate in VP step 18 covers the file's structure.
+  - source: terraform/personal/ducklake_catalog_dr.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 22).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only: VP step 9 asserts the entire terraform/ diff contains no added or removed
+      non-comment line, which is a stronger guarantee than a per-file test, and CI's
+      speculative-plan job (VP step 16) independently proves zero resource changes.
+  - source: terraform/personal/ducklake_lambdas.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 21).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16).
+  - source: terraform/personal/ducklake_maintenance.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 28).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16).
+  - source: terraform/personal/ducklake_maintenance_smoke.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA COUPLING comment block (line 29).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16). Note this file hosts the FIFTH DuckLake function whose
+      existence rec-2751 turns on -- read its resource before restating any conformance claim.
+  - source: terraform/personal/prod_lambdas.tf
+    behavior: No behavior change -- a citation inside a CODE/INFRA DECOUPLING comment block (line 21).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only; covered by VP step 9's whole-diff non-comment-line assertion and CI's
+      speculative plan (VP step 16).
+  - source: terraform/personal/backend-sandbox.hcl
+    behavior: No behavior change -- a citation inside a comment (line 5, a section 4 reference).
+    verification_step: 9
+    command: git diff origin/main...HEAD -- terraform/
+    waiver_reason: >-
+      Comment-only backend config; covered by VP step 9's whole-diff non-comment-line assertion.
+      Backend HCL is not part of the speculative plan's resource graph, so step 9 is the operative
+      evidence here.
+  - source: scripts/checks/ops_governance/validate_deploy_channel_conformance.py
+    behavior: >-
+      Conformance status is read from the contract's typed conformance field for both the ducklake
+      and prod classes; a disagreement with the live terraform state still fails, and a MISSING
+      typed key fails rather than silently defaulting.
+    verification_step: 4
+    test_selector: tests/checks/ops_governance/test_validate_deploy_channel_conformance.py
+    red_green_expectation: >-
+      Red before: the rewritten check reads a typed field that does not exist while the tests still
+      supply prose-paragraph fixtures. Green after: fixtures and check agree on the typed field and
+      every discrimination branch -- disagreement, ambiguous, missing-key -- still fires. The
+      graduated check_spec MUST be a test_selector naming the missing-key node_id, which does not
+      exist at origin/main; a whole-module selector would pass on both sides and fail admission.
+  - source: scripts/checks/iam_tf/validate_environment_taxonomy.py
+    behavior: >-
+      The vocabulary-reservation lint skips the canonical contract at its NEW path (and no longer
+      allowlists a path that does not exist).
+    verification_step: 12
+    test_selector: tests/checks/iam_tf/test_validate_environment_taxonomy.py
+    red_green_expectation: >-
+      Red before: no case in this module references the contract path at all, so the added case
+      fails against the unrepointed allowlist. Green after: the .yaml path is allowlisted and the
+      lint stays clean. The graduated check_spec MUST be a test_selector naming the ADDED node_id,
+      absent at origin/main.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Three graduated checks continue to execute and assert their intended properties against the
+      converted contract after repointing.
+    verification_step: 13
+    command: from scripts.verification_graduation import
+    waiver_reason: >-
+      The registry is data, not code: its behavior is exercised by the kernel primitives it
+      declares, and VP step 13 runs all three repointed entries directly. A mirror test module for
+      a registry row would duplicate validate_verification_registry's own gate, which already owns
+      this file's structural correctness. Recorded explicitly rather than omitted so the obligation
+      ledger shows the deliberate call.
+  - source: scripts/terraform_apply_guard.py
+    behavior: No behavior change -- a single stale path reference inside a comment.
+    verification_step: 5
+    command: git grep -l "environment-taxonomy\.md"
+    waiver_reason: >-
+      The only edit is comment text inside an existing explanatory block (line 134, verified to
+      begin with '#'); the module has no behavioral surface touched by this change, and VP step 5's
+      repo-wide live-citation sweep already proves this file's stale reference was updated. A
+      behavioral test here would assert nothing this change altered.
+constraints:
+  - "No new numbered Decision (human hard constraint). The conversion rides Decision 168's existing Class D authority and Decision 118/CD.25's conversion-as-default ritual; Decision 121 is not a counter-precedent (it minted a number to RETIRE a contract and frames retirement as the exception)."
+  - "No `# raise-approved:` marker anywhere in this change -- not in config/structural_size_budgets.yaml, not in config/prose_budgets.yaml, not in contract-population.yaml. A dec-168 citation on a budgets entry for this file WOULD pass the guard by ancestor-path match, but dec-168's body authorizes migration-step-3 sweep seeds, not this file's size -- citing it would satisfy the guard while defeating what Decision 165 built it to prove."
+  - "Do NOT split the converted contract into multiple files: the contracts class relief_valve states splitting a single subject is forbidden by collocation doctrine. If over budget, defer detail instead."
+  - "Do NOT edit any `## Decision NNN:` heading, including Decision 125's parenthetical (Decision 149, never-remove-headers). Annotations are append-only inside the body, per decision-entry.yaml's amendment_forms."
+  - "Do NOT rewrite historical citations in audits/, docs/plans/, docs/audit-prompts/ (write-once workflow_outputs class) or the bulk of docs/DECISIONS.md -- only the two SoT-designating entries (77, 125) get an annotation. docs/ROADMAP-PLATFORM.yaml is NOT in that class and IS swept."
+  - "Class-A/B smuggling detector: in the converted contract, no top-level key whose value is a mapping-of-mappings may have EVERY leaf carry >=2 of {type, nullable, description, semantics, populated_by, dq_intent} (Class A) or {payload_schema_ref, response_codes, typed_errors} (Class B). Verified safe: table entries keyed by domain terms (money_real, apply_gating, criteria, guard_verdict, reserved_meaning) pass; a naive {description:, semantics:} per-row shape is REJECTED as field-shaped."
+  - "The converted file is NEW to the gate: it may not declare status: active nor evaluator.none_grandfathered (both grandfather-only, closed at birth)."
+  - "docs/ROADMAP-PRODUCT.yaml is operator-FROZEN at 4707 EFFECTIVE LINES (not bytes). An in-line .md -> .yaml swap changes neither the line count nor the 301-char longest line, so the gate does not go red. The only rule is: do not ADD or REMOVE a line. Do NOT delete content to make room."
+  - "PROSE BUDGETS ARE THE TIGHTEST CONSTRAINT IN THIS PLAN. Six in-scope surfaces are byte-pinned in config/prose_budgets.yaml, measured live: src/lambdas/CLAUDE.md 1313/1313 (ZERO headroom), terraform/github/CLAUDE.md 5266/5266 (ZERO), .claude/skills/planning/SKILL.md 55810/55816 (6), src/data/handlers/CLAUDE.md 4302/4307 (5), AGENTS.md inside the S1 aggregate 33183/33201 (18), terraform/CLAUDE.md 30483/30497 (14 -- against TWO references). The mandatory '.md' -> '.yaml' swap costs +2 bytes per reference, so on the two zero-headroom files it alone hard-fails validate_prose_limits (current > budget). Never raise a prose budget: that needs a Decision-cited marker this plan forbids, and reseeding DOWN is impossible when current already equals budget."
+  - "THE VALVE (apply on every byte-constrained surface): drop the 'docs/contracts/' prefix and cite the contract by BARE BASENAME -- `environment-taxonomy.yaml` instead of `docs/contracts/environment-taxonomy.yaml`. Net -13 bytes per reference (-15 for the dropped prefix, +2 for the .md -> .yaml extension). It is the citation style already used repo-wide in deploy-paths.yaml, credential-routing.yaml, intent-migration/MANIFEST.yaml and every terraform/*.tf comment, so it introduces no new convention. Measured post-valve slack, i.e. the budget left for re-expressing a 'section N' phrase as a key path: src/lambdas/CLAUDE.md 13 bytes (1 ref, HAS a section phrase -- so the section-5 key path must fit in 22 bytes; this is the BINDING surface), terraform/github/CLAUDE.md 13 (1 ref, no section phrase), src/data/handlers/CLAUDE.md 18 (1 ref, has one), planning/SKILL.md 32 (2 refs, one has one), AGENTS.md 44 via S1 (2 refs, one has one), terraform/CLAUDE.md 40 (2 refs, NEITHER has a section phrase -- the least constrained of the six, despite having the most references)."
+  - "SECOND LEVER: choose SHORT top-level key names in the converted contract. AC-4 requires 'section N' phrases to be re-expressed as key paths, and a verbose key name spends budget on every citing surface -- src/lambdas/CLAUDE.md caps the section-5 key path at 22 bytes. Settle the key names FIRST (execution step 2). If a file still cannot absorb the edit, the sanctioned relief valve is relocating unrelated content out per Decision 86 (prose_limits names it) -- never a budget raise. If an edit leaves a file smaller than its pin, reseed that budget DOWN in the same change."
+  - "THREE more in-scope files carry STRUCTURAL (effective-line) pins at ZERO headroom: docs/intent-migration/MANIFEST.yaml 521/521, .github/workflows/reconcile.yml 536/536, .github/workflows/terraform-apply-sandbox.yml 529/529. Do not ADD a non-comment line to any of them. The two workflow citations sit on '#' comment lines, which effective_lines excludes, so those edits are free; MANIFEST.yaml's reference is to the lint's allowlist SET rather than the contract path and may need no edit at all -- confirm before touching it."
+  - "config/agent/verification_registry/registry.yaml sits at 5,329 of its 6,000 calibrated ceiling and this change graduates 9 entries (roughly 110 lines). That lands ~5,440, comfortably under -- but confirm with validate_structural_size_limits before commit, because Decision 166 point 6 pre-commits that a breach routes to CD.29 archival, never a second raise."
+  - "AC-4's mechanical enforcement (VP step 14) covers only two reference shapes: '#'-anchors and 'section N'. The NAMED-subsection form -- 'Axis A + Guard classification subsection' at terraform/CLAUDE.md:10,78, AGENTS.md:34, scripts/terraform_apply_guard.py:134 and deploy-paths.yaml:39 -- passes step 14 untouched. Keep recognisable axis_a / guard_classification top-level keys in the converted contract so those references still resolve by name, and check them by eye; the grep will not."
+  - "Never author a local terraform init/validate/plan command (Decision 119) -- terraform is not installed in this environment; CI is the authoritative verifier."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND -- CITE: 168, 77, 125, 86, 118, 127, 150, 167, 136, 93, 166, 103, 169, 151, 149. RELATED: 114, 147, 131, 126, 100. Constraint ruling: the no-new-numbered-Decision constraint CLEARS -- Decision 150 clause 1 routes field semantics to the owning contract and Decision 167 clause 2 rejects a numbered entry claiming that row; a container/format conversion preserving every rule is exactly that class."
+  - "gates: decision-scout=FLAGS_FOUND (round 3; rounds 1-2 evaluated a rejected census-only approach, round 1 returning BLOCK on a structural_size_budgets.yaml carve-out); plan-critique=<verdict> after <N> round(s)"
+  - "CITATION CORRECTION (plan-critique Finding 8): the 77/125 annotations are authorized by docs/contracts/decision-entry.yaml's amendment_forms (general_rule / blockquote_update), NOT by Decision 151. Decision 151 clause 3(ii) narrows its convention to placement inside an Intent section specifically and is forward-only; neither Decision 77 (2026-05-30) nor 125 (2026-07-10) has an Intent section. Live precedent: Decision 118's appended '> **Amended by Decision 168 (2026-08-10):**' trailer."
+  - "AUDIT CORRECTION: CFG-11's roadmap_crossref records dedup_hit_count: 0 with the note 'no owner covers the .md pair's gate invisibility'. That was WRONG -- tier item T-1.19 (deferred_post_mvp, Decision 93) already owned delegate-cli.md's conversion. The audit artifact is write-once and is NOT edited; the durable record of this correction lands on T-1.19's note (a PLAN context section is not a durable destination for an operational fact)."
+  - "SCOPE BOUNDARY: delegate-cli.md is deliberately NOT converted here -- T-1.19 owns it. After this change it is the SOLE remaining baseline .md contract: still outside the population census and, because config/structural_size_budgets.yaml drops .md at layer 1, outside the size engine. At 35 effective lines / 2,908 bytes that carries no realistic size risk, and T-1.19's conversion closes BOTH holes for free (a converted docs/contracts/*.yaml classifies into the contracts size class automatically -- verified)."
+  - "WHY NOT A CENSUS-ONLY FIX: an earlier draft proposed a new md_grandfathered census bucket plus pin instead of converting. Rejected by the human: it is scaffolding with a known demolition date, since T-1.19's eventual conversion makes the bucket, the pin, their tests and their contract clauses dead code. Decision 166 clause 8 ('Markdown remains wholly out of scope') independently blocked its size half, via the structural engine AND via config/prose_budgets.yaml (the same act relocated -- clause 8 reserved the unit choice, so switching to a byte unit exercises the reserved freedom rather than avoiding it)."
+  - "CENSUS MATH (verified pre-change: scanned=40 ritual=16 declared=5 grandfathered=19 evaluator_none_grandfathered=8 status_active=16 skipped=0): the .md was never counted, so deleting it does not move `grandfathered` (pin 19, EQUALITY-bound). The new declared file moves `declared` 5 -> 6, which is UNPINNED. status_active_max: 16 holds provided the new file avoids status: active. No ratchet pin moves. Bucket identity holds: 41 == 16 + 6 + 19 + 0."
+  - "LAMBDA DEPLOYMENT WAIVER (Decision 79 / CD.16+CD.24): compute_affected_artifacts() over this scope returns two ACTIVE artifacts -- data-pipeline (matched via docs/ROADMAP-PLATFORM.yaml, src/lambdas/CLAUDE.md, src/data/handlers/CLAUDE.md) and ops-compaction (matched via the two CLAUDE.md files through the manifests' broad `includes: - src/` prefix). No per-Lambda build/deploy/smoke steps are included, deliberately: every match is a DOCUMENTATION file with no behavioral surface and nothing enters either artifact's zip as a result of this change. Deploying to prove a comment edit would be ceremony, not verification. If a future edit to these paths touches behavior, the full V3 per-artifact treatment applies."
+  - "rec-2680 is deliberately NOT bundled. It is a channel-status fact owned by T2.38; transcribing the status into a typed field does not make it true, and closing it here would assert a state change that did not occur (Decision 103: only deterministic satisfaction may auto-close). Re-ground its `file` field to the new path via `update_rec` and leave it open."
+  - "rec-2751 SCOPE: its target file is docs/contracts/environment-taxonomy.md, so fixing the count in the converted contract genuinely satisfies it. The same 'four DuckLake' phrasing survives in ~12 other live files (AGENTS.md, deploy-paths.yaml:44, config/agent/data_quality/source_registry.yaml, iam-simulate-fixture.yaml, build_lambda_*.py, terraform/bootstrap/github_ci_apply.tf, roadmap notes). Only AGENTS.md and deploy-paths.yaml are in this plan's scope and are corrected; the rest are NOT claimed by rec-2751 and several may be legitimately 'four' (the count of code-deployed functions vs. the five aws_lambda_function resources). Do not widen the sweep on this phrase."
+  - "The evaluator check validate_environment_taxonomy is registered and in full_sequence() but NOT in pre_sequence(). That satisfies contract-population.yaml's evaluator_kinds.check (membership in either sequence qualifies), but means the vocabulary lint does not run on the PR --pre tier."
+  - "Branch was 0 commits behind origin/main at planning time; no Main Divergence Assessment was required."
+  - "The audit's own suggested alternative remedy for CFG-11 ('extend the size engine's contracts class to *.md') was overtaken by Decision 166 (2026-08-04), which postdates the audit and puts markdown wholly out of that engine's scope. Conversion is the only remedy that remains open without a new Decision."
+  - "Decision-header scarcity is NOT an argument here either way: live_max_h2_headers is 132 with the corpus at 122, so 10 slots of headroom exist. The no-new-Decision routing rests on Decision 150/167 significance rules, not on ceiling pressure."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections (168, 77, 125, 166, 165, 150, 149, 136, 127, 118, 103, 93, 86)
+  - docs/contracts/environment-taxonomy.md read IN FULL before transcription begins
+  - docs/contracts/contract-population.yaml read (the gate this conversion must satisfy)
+  - The three verification_registry entries that execute against this contract located and read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "Read docs/contracts/environment-taxonomy.md in full. Transcribe it into docs/contracts/environment-taxonomy.yaml: a Class D contract: block (class D, non-active status, unique subject, evaluator {check: validate_environment_taxonomy}), then the four tables as mappings keyed by domain terms, then sections 1/4/5/6/7. Section 5's two conformance paragraphs become typed fields conformance.ducklake_class and conformance.prod_class. Transcribe MEANING faithfully -- this file is the sole SoT for the apply model and guard classification (Decision 125); do not re-adjudicate any rule while converting."
+  - "SETTLE THE TOP-LEVEL KEY NAMES NOW and write them down before touching any other file -- roughly a dozen sweep targets carry markdown anchors (#5-lambda-codeinfra-..., #2-the-two-axes) or 'section N' phrases that must be re-expressed as real YAML key paths. The sweep cannot be done correctly until the key names are fixed."
+  - "While transcribing, fix rec-2751's stale content. There are FIVE aws_lambda_function resources across terraform/personal/ducklake_*.tf (writer, reader, maintenance, catalog_dr, maintenance_smoke). Check which carry lifecycle { ignore_changes = [source_code_hash] } before restating the conformance claim -- do not assert a conformance property for maintenance_smoke without reading its resource."
+  - "Preserve the exact strings two graduated registry checks match on: 'No such Lambda exists today' (environment-taxonomy-stale-lambda-note-removed expects eq 0 occurrences) and 'infra_error' (environment-taxonomy-records-infra-error expects gte 1)."
+  - "Verify the new file against the smuggling detector before going further: bin/venv-python -c \"import yaml; from scripts.checks.contracts._population import detect_smuggled_shape; print(detect_smuggled_shape(yaml.safe_load(open('docs/contracts/environment-taxonomy.yaml'))))\" must print None."
+  - "Delete docs/contracts/environment-taxonomy.md and remove its prose_allowlist entry from docs/contracts/file-router.yaml."
+  - "Correct docs/contracts/contract-population.yaml's shape_grammar.extension_and_depth to name delegate-cli.md as the sole remaining baseline .md member, and add the required amendment_log[] entry."
+  - "Add an amendment_log[] entry to EACH of the other three Class D contracts whose parsed values this change edits: file-router.yaml (allowed_globs element removed), build-lambda.yaml (deploy_channels...see) and deploy-paths.yaml (three blocks_ref values, deploy_code.description, admin_out_of_band description). Without them validate_contract_drift fails with '(amendment): parsed content changed but no new amendment_log[] entry was added'. credential-routing.yaml needs none -- it is Class C and its citation is outside check_amendment_for_diff's covered fields."
+  - "Repoint the three verification_registry entries. Entries 1 and 2 need check_spec.path and guard_target updated. Entry 3 (env-taxonomy-section6-lockfile-committed) needs its awk-based markdown section extraction RE-EXPRESSED against the YAML structure -- or retired with a recorded reason; a path swap alone leaves it broken."
+  - "Repoint scripts/checks/iam_tf/validate_environment_taxonomy.py to the .yaml path, keeping the path literal in EXECUTABLE context (not a docstring or comment) so the evaluator resolves."
+  - "Rewrite scripts/checks/ops_governance/validate_deploy_channel_conformance.py::_taxonomy_state to read the typed conformance field; retire _DUCKLAKE_TAXONOMY_MARKER and _PROD_TAXONOMY_MARKER; preserve both class legs and the ambiguous/missing-value failure branches."
+  - "Update both check test modules (ADD a contract-path case to the iam_tf module, which has none today; add a missing-key case to the conformance module), and re-ground tests/checks/contracts/validate_contract_drift/test_extension_depth.py's two-member fixture to the single remaining .md member."
+  - "Upgrade T-1.19 in docs/ROADMAP-PLATFORM.yaml: id/text/status criteria, re-grounded docs/plans/reports/ path, and a note carrying the CFG-11 dedup correction, delegate-cli.md's residual with the free-consequence rationale as the conscious-deferral act, and the unmade convert-vs-retire ruling. Keep status deferred_post_mvp. Then sweep this file's 8 .md citations, historical progress_notes included."
+  - "Append a dated, source-cited annotation to Decisions 77 and 125 in docs/DECISIONS.md recording the new contract path, using decision-entry.yaml's amendment_forms. Touch no heading. Regenerate docs/decisions-index.json."
+  - "Sweep every remaining live citation listed in the Scope table, re-expressing anchors and 'section N' phrases as YAML key paths. On EVERY byte-pinned surface apply the bare-basename valve (cite `environment-taxonomy.yaml`, dropping the `docs/contracts/` prefix, -15 bytes per reference): src/lambdas/CLAUDE.md and terraform/github/CLAUDE.md have ZERO headroom, src/data/handlers/CLAUDE.md 5, planning/SKILL.md 6, terraform/CLAUDE.md 14 across two references, AGENTS.md 18 via the S1 aggregate. ROADMAP-PRODUCT.yaml is line-pinned, not byte-pinned: add or remove no line. Run VP step 15 after the sweep and before committing, and reseed DOWN any budget the edit leaves slack in."
+  - "Re-ground rec-2680's `file` field to docs/contracts/environment-taxonomy.yaml via `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2680 ...`, leaving it OPEN to T2.38."
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)."
+  - "Include `Resolves: rec-2751` in the squash-merge commit body."
+  - "Report: what was implemented, verification results, the measured effective-line count of the converted contract, and the disposition of env-taxonomy-section6-lockfile-committed (re-expressed or retired)."
+rollback: >-
+  Single-commit revert restores the .md and every repointed consumer together. The conversion is
+  atomic by construction: the .md deletion, the two check repoints, the three registry-entry
+  repoints and the citation sweep must land in the same change, because a half-landed state leaves
+  either a contract with no consumers or consumers pointing at a deleted file. Nothing is deployed
+  and no infrastructure changes, so revert is the complete rollback.
