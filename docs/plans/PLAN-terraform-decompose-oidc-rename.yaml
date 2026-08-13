@@ -76,16 +76,40 @@ scope:
     action: Modify
     purpose: >-
       Parse the whole terraform/personal root instead of oidc.tf alone, preserving the per-named-
-      resource attribution the exactly-one-conditioned-Allow cardinality assertion depends on.
+      resource attribution the exactly-one-conditioned-Allow cardinality assertion depends on. ADDITIONALLY adopt the Decision 170 check-accounting declaration: this module is one of the
+      96 baselined checks that declares no examined()/skipped() outcome, and validate_check_accounting's
+      touch-it-fix-it leg FAILS any edited baselined module that has not adopted it. Per
+      docs/contracts/check-accounting.yaml's discrimination_rule: an EMPTY derived input domain declares
+      examined(0) (status vacuous); skipped(reason) is reserved for an UNAVAILABLE INPUT or UNMET
+      PRECONDITION (missing artefact, unreadable root) and must NEVER be used for an empty domain. The
+      examined unit is a design output of THIS plan, since the repoint widens the domain from one file to
+      a root of *.tf files -- declare the unit accordingly, and treat structurally identical early returns
+      identically.
   - file: scripts/checks/iam_tf/validate_invoke_implies_resolve.py
     action: Modify
     purpose: >-
-      Parse the whole terraform/personal root; the invoke/resolve statements now span three files.
+      Parse the whole terraform/personal root; the invoke/resolve statements now span three files. ADDITIONALLY adopt the Decision 170 check-accounting declaration: this module is one of the
+      96 baselined checks that declares no examined()/skipped() outcome, and validate_check_accounting's
+      touch-it-fix-it leg FAILS any edited baselined module that has not adopted it. Per
+      docs/contracts/check-accounting.yaml's discrimination_rule: an EMPTY derived input domain declares
+      examined(0) (status vacuous); skipped(reason) is reserved for an UNAVAILABLE INPUT or UNMET
+      PRECONDITION (missing artefact, unreadable root) and must NEVER be used for an empty domain. The
+      examined unit is a design output of THIS plan, since the repoint widens the domain from one file to
+      a root of *.tf files -- declare the unit accordingly, and treat structurally identical early returns
+      identically.
   - file: scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py
     action: Modify
     purpose: >-
       Read both roots by directory (planner statements from personal, apply statements from
-      bootstrap) rather than by two hardcoded filenames.
+      bootstrap) rather than by two hardcoded filenames. ADDITIONALLY adopt the Decision 170 check-accounting declaration: this module is one of the
+      96 baselined checks that declares no examined()/skipped() outcome, and validate_check_accounting's
+      touch-it-fix-it leg FAILS any edited baselined module that has not adopted it. Per
+      docs/contracts/check-accounting.yaml's discrimination_rule: an EMPTY derived input domain declares
+      examined(0) (status vacuous); skipped(reason) is reserved for an UNAVAILABLE INPUT or UNMET
+      PRECONDITION (missing artefact, unreadable root) and must NEVER be used for an empty domain. The
+      examined unit is a design output of THIS plan, since the repoint widens the domain from one file to
+      a root of *.tf files -- declare the unit accordingly, and treat structurally identical early returns
+      identically.
   - file: scripts/checks/iam_tf/validate_authority_budget.py
     action: Modify
     purpose: >-
@@ -98,7 +122,15 @@ scope:
       and (c) RED. Leg (d) is LATENT rather than red -- terraform/bootstrap/authority_budget.json
       sets in_budget_managed_role_prefix, so _check_v2_prefix runs and _check_v1_enumerated is
       unreachable in the current tree; it reads the same hcl_text and so must be repointed with the
-      others, but do not hunt a failure from it that cannot currently fire.
+      others, but do not hunt a failure from it that cannot currently fire. ADDITIONALLY adopt the Decision 170 check-accounting declaration: this module is one of the
+      96 baselined checks that declares no examined()/skipped() outcome, and validate_check_accounting's
+      touch-it-fix-it leg FAILS any edited baselined module that has not adopted it. Per
+      docs/contracts/check-accounting.yaml's discrimination_rule: an EMPTY derived input domain declares
+      examined(0) (status vacuous); skipped(reason) is reserved for an UNAVAILABLE INPUT or UNMET
+      PRECONDITION (missing artefact, unreadable root) and must NEVER be used for an empty domain. The
+      examined unit is a design output of THIS plan, since the repoint widens the domain from one file to
+      a root of *.tf files -- declare the unit accordingly, and treat structurally identical early returns
+      identically.
   - file: tests/checks/iam_tf/test__read_coverage.py
     action: Modify
     purpose: Add a decoy+split fixture regression case (red before the repoint, green after).
@@ -142,6 +174,17 @@ scope:
       iam:PassRole is UNQUOTED and matches the comments at github_ci_apply.tf:280 and :391, so the
       count of 2 is satisfiable by comments alone. The prescribed form is strictly STRONGER and is
       green on the current tree for both rows (measured 1/1 each with comments stripped).
+      A THIRD row needs the same per-file treatment and is easy to miss because its slot does NOT
+      change: instanceprofile-untagoidc-verbs-both-layers is already command_exit_zero and already
+      uses the comment-stripped quoted-token shape, but it greps the single file
+      github_ci_apply.tf, so after the split it returns 0 for each of its three verbs
+      (iam:ListInstanceProfilesForRole, iam:RemoveRoleFromInstanceProfile,
+      iam:UntagOpenIDConnectProvider -- each measured 1-in-_policy.tf / 1-in-_boundary.tf) and goes
+      RED. Convert its COMMAND to the same per-file both-layers form; do NOT root-scope it, which
+      would yield a total of 2 per verb and pass even with one layer deleted. Opposite calibration
+      for one row -- all-three-policy-docs-carry-size-precondition distributes 1/1/1 across
+      _policy/_reads/_boundary, so a ROOT-SCOPED TOTAL is the correct repoint there and a per-file
+      form would be wrong. Apply the per-file rule to both-layers CARDINALITY rows only.
 bundled_recommendations:
   - rec-2820
 infrastructure_dependencies:
@@ -438,7 +481,7 @@ verification_plan:
       27 of these 28 rows are green TODAY and many break on the split, with nothing in either
       validate tier running them -- silent degradation of a security-adjacent guard set.
     command: >-
-      bin/venv-python -c 'import yaml,sys; from scripts.verification_graduation import materialize_check; d=yaml.safe_load(open("config/agent/verification_registry/registry.yaml")); rows=[e for e in d["entries"] if e.get("plan_slug")!="terraform-decompose-oidc-rename" and ("terraform/personal" in str(e.get("check_spec")) or "terraform/bootstrap" in str(e.get("check_spec")))]; bad=[e["check_id"] for e in rows if materialize_check(e).run().status.name != "PASS"]; print("rows=",len(rows)," failing=",bad); sys.exit(1 if bad else 0)'
+      bin/venv-python -c 'import yaml,sys; from scripts.verification_graduation import materialize_check; d=yaml.safe_load(open("config/agent/verification_registry/registry.yaml")); rows=[e for e in d["entries"] if e.get("plan_slug")!="terraform-decompose-oidc-rename" and "materialize_check" not in str(e.get("check_spec")) and ("terraform/personal" in str(e.get("check_spec")) or "terraform/bootstrap" in str(e.get("check_spec")))]; bad=[e["check_id"] for e in rows if materialize_check(e).run().status.name != "PASS"]; print("rows=",len(rows)," failing=",bad); sys.exit(1 if bad else 0)'
     expected: >-
       rows= 28 failing= [] and exit 0. Currently RED with failing=
       ['ci-role-boundary-attach-count-eq-6'] (asserts 6, measures 4 since T2.49), which is what
@@ -451,15 +494,51 @@ verification_plan:
       re-spawns, so the result is an unbounded, untimed process chain that HANGS validate --pre, the
       full tier and PR CI rather than failing red. Excluding by plan_slug also holds the population
       stable at 28: this plan's steps 3, 6 and 7 graduate commands that likewise contain terraform
-      path literals, so an unexcluded predicate would report 28 pre-graduation and 32 after.
+      path literals, so an unexcluded predicate would report 28 pre-graduation and 32 after. TWO
+      FILTERS, TWO DIFFERENT JOBS -- keep both. The plan_slug filter does the population-stability
+      work; the "materialize_check" filter does the RECURSION-SAFETY work and is the one that must
+      never be dropped, because it holds regardless of how plan_slug is spelled. A
+      present-but-MISTYPED slug is caught by nothing: validate_verification_registry's schema leg
+      checks plan_slug presence only, and it runs BEFORE validate_graduation_completeness (the only
+      check comparing the slug to the plan), so a typo would silently re-open the hang. Zero
+      pre-existing rows contain the literal materialize_check, so this filter drops nothing.
     fix_if: >-
-      Any check_id is listed. Two failure shapes: (a) a row still greps a single file whose content
-      moved -- repoint it to the root; (b) the two grep_count rows below cannot be repointed in
-      their slot at all -- see the registry scope row. Do NOT silence a row by weakening its
+      Any check_id is listed. Three failure shapes: (a) a row greps a single file whose content
+      moved -- repoint it to the root, BUT root-scoping is explicitly NOT the remedy for any row
+      whose assertion is a both-layers cardinality, because a root-scoped total passes on a
+      single-layer grant; (b) the two grep_count rows cannot be repointed in their slot at all;
+      (c) instanceprofile-untagoidc-verbs-both-layers needs a per-file command change with no slot
+      change. See the registry scope row for all three. Do NOT silence a row by weakening its
       assertion; these guard write verbs, boundary attachment, the self-exclusion Deny, PassRole
       conditions and the inline-policy size preconditions.
     graduation: graduate
     graduation_check_id: "registry-rows-green-on-split-roots"
+  - step: 16
+    phase: pre-deploy
+    action: >-
+      Assert the Decision 170 check-accounting ratchet is green. Editing the four repointed
+      entry-point modules triggers validate_check_accounting's touch-it-fix-it leg, which FAILS any
+      edited baselined module that has not adopted examined()/skipped().
+    command: >-
+      bin/venv-python -c 'from scripts.checks.hygiene.validate_check_accounting import validate_check_accounting as v; f=[]; v(f); print("FAILED:",f); raise SystemExit(1 if f else 0)'
+    expected: >-
+      FAILED: [] and exit 0. Reproduced RED on this branch before the declarations are adopted by
+      injecting the plan's changed-file set -- it reports all four modules as "edited on this branch
+      but still declares no examined()/skipped() outcome". Note the four ARE in the 96-entry
+      baseline; read membership with the module's own _load_baseline_entries, not a naive YAML parse.
+    fix_if: >-
+      Any module is listed: adopt the declaration in THAT module per the discrimination_rule --
+      examined(0) for an empty derived domain, skipped(reason) only for an unavailable input or
+      unmet precondition, never the two swapped. "Leave the module unedited" is NOT an available
+      remedy here, since the repoint requires editing all four. Optionally shrink
+      config/check_accounting_baseline.yaml by the four adopted names (shrink-only, removals
+      unrestricted) -- not required for the gate to pass.
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_check_accounting is itself a registered pre-tier check that runs on every PR touching
+      scripts/checks/**; a graduated registry row asserting "that check is green" would duplicate an
+      already-enforced standing gate and, like step 2, states a property that is TRUE on origin/main
+      by construction, so Decision 132's differential gate could not admit it.
 test_obligations:
   - source: scripts/checks/iam_tf/_read_coverage.py
     behavior: >-
@@ -654,8 +733,9 @@ context:
     "Decision-scout verdict + CITE list (verbatim decision ids)": verdict FLAGS_FOUND, 122 of 122
     decisions triaged. CITE list verbatim -- Decision 166, Decision 165, Decision 130, Decision 119,
     Decision 92 (points 4 and 5), Decision 156 (point 4), Decision 129 (clause 4), Decision 77,
-    Decision 35, Decision 163, Decision 126.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE round 1 (7 blocking) -> REVISE round 2 (1 blocking, fail-open detector) -> REVISE round 3 (1 blocking, unexecuted registry rows) -> REVISE round 4 (3 blocking, self-selecting graduated row); all applied. 3-round cap reached at round 3 and escalated; round 4 was human-authorised."
+    Decision 35, Decision 163, Decision 126. ADDED post-rebase: Decision 170 (check-accounting
+    declaration ratchet), which landed in this branch's rebase target and binds Half B.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE round 1 (7 blocking) -> REVISE round 2 (1 blocking, fail-open detector) -> REVISE round 3 (1 blocking, unexecuted registry rows) -> REVISE round 4 (3 blocking, self-selecting graduated row) -> REVISE round 5 (2 blocking: Decision 170 ratchet from the rebase target, third both-layers row); all applied. 3-round cap reached at round 3 and escalated; rounds 4 and 5 were human-authorised."
   - >-
     FLAG 1 resolved into the design (Decision 129 [WARN]): root concatenation risks flipping
     cardinality assertions if attribution is lost. Resolution adopted -- concatenation widens only
@@ -795,6 +875,15 @@ context:
     longest line still 2315. The new iam_tf module added no single-file resolution constant and no
     new pre-tier entry, so it is outside this plan's scope.
   - >-
+    Decision 170 (decided 2026-08-13) landed in 8e17984, the exact commit this branch rebased onto,
+    introducing scripts/checks/hygiene/validate_check_accounting.py. Its touch-it-fix-it leg fails
+    any EDITED baselined check module that has not adopted examined()/skipped(), and four of this
+    plan's scope files are exactly that -- so validate --pre and PR CI would have gone red with no
+    remedy in the plan. METHOD LESSON, recorded because it generalises: the post-rebase
+    re-baselining re-measured seven FIGURES and found only one drifted, but checked no OBLIGATIONS.
+    A rebase sweep must also ask "did the new base add or change a check whose enforcement glob
+    covers this plan's scope?" -- a numeric sweep structurally cannot see that.
+  - >-
     Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 ahead/0 behind);
     no scope-file overlap with main, so no rebase decision was required.
 pre_implementation_checklist:
@@ -846,6 +935,12 @@ execution_steps:
     rot silently after an unrelated refactor because the differential admission gate only re-proves
     newly-added rows"; and propose rec-2390 for closure as satisfied using the evidence in Context.
     Update (do NOT close) rec-3024 with the residual three-file set.
+  - >-
+    In the SAME edit as the repoint, adopt the Decision 170 examined()/skipped() declaration in the
+    four entry-point modules (validate_authority_budget, validate_invoke_implies_resolve,
+    validate_ci_refresh_read_coverage, validate_convergence_writer_isolation). The repoint widens
+    each check's input domain from one file to a root of *.tf files, so the declared examined unit
+    follows from this plan's own design. Run VP step 16 to confirm the ratchet is green.
   - >-
     Run VP step 15 to execute all 28 pre-existing registry rows against the split tree, converting
     the two grep_count rows to command_exit_zero with PER-FILE presence in both _policy.tf and
