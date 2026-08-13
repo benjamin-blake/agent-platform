@@ -16,9 +16,17 @@ import dataclasses
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
-
-from scripts.checks import _marker_guard, registry
+from scripts.checks import registry
+from scripts.checks.contracts._ratchet import (  # noqa: F401 -- re-export after the ratchet split (Decision 128)
+    check_pin_direction,
+    check_pins_bound_to_census,
+    check_ratchet_direction,
+    evaluator_none_grandfathered_max_spec,
+    ratchet_spec,
+    status_active_max_spec,
+    validate_ratchet_pin,
+    validate_ratchet_pins,
+)
 from scripts.contracts_schema import ContractMeta, EvaluatorSpec
 
 # ---------------------------------------------------------------------------
@@ -130,9 +138,20 @@ def _docstring_node_ids(tree: ast.Module) -> set[int]:
 
 
 def module_contains_literal(module_path: Path, literal: str) -> bool:
-    """True iff `literal` appears as an exact string-constant match in `module_path`'s AST, in
-    EXECUTABLE context -- module/class/function docstrings are excluded (comments are never
-    part of the AST to begin with, so they need no separate exclusion)."""
+    """True iff `literal` appears as an exact string-constant match, OR as the final `/`-delimited
+    segment of a path-shaped string-constant, in `module_path`'s AST, in EXECUTABLE context --
+    module/class/function docstrings are excluded (comments are never part of the AST to begin
+    with, so they need no separate exclusion).
+
+    The path-shaped acceptance (migration-step-3-grandfathering) covers a full-path literal like
+    `"docs/contracts/decision-entry.yaml"` -- stronger evidence of reading than a bare basename --
+    per Decision 168's own Significance clause naming the contract as the SoT for the evaluator
+    grammar (docs/contracts/contract-population.yaml evaluator_kinds.check). MATCHER TRAP GUARD: a
+    path-shaped literal containing ANY whitespace is REJECTED even when its final segment equals
+    `literal` -- a long prose annotation string that happens to END with a contract's basename
+    (e.g. scripts/checks/iam_tf/_write_companions.py's sentence ending in
+    "...iam-simulate-fixture.yaml") must never certify as a reading.
+    """
     parsed = _module_source_and_tree(module_path)
     if parsed is None:
         return False
@@ -140,7 +159,10 @@ def module_contains_literal(module_path: Path, literal: str) -> bool:
     docstring_ids = _docstring_node_ids(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstring_ids:
-            if node.value == literal:
+            value = node.value
+            if value == literal:
+                return True
+            if "/" in value and not any(ch.isspace() for ch in value) and value.rsplit("/", 1)[-1] == literal:
                 return True
     return False
 
@@ -393,88 +415,10 @@ def check_conformance_loss(base_shape: str, head_shape: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Ratchet (grandfathered_max pin)
+# Ratchet (grandfathered_max / status_active_max / evaluator_none_grandfathered_max pins) --
+# moved to _ratchet.py (Decision 128 decompose-by-default); re-imported at module top so existing
+# callers reaching through this module's namespace keep working.
 # ---------------------------------------------------------------------------
-
-_RATCHET_REL_PATH = "docs/contracts/contract-population.yaml"
-_RATCHET_TOKEN = "raise-approved"
-_RATCHET_ENTRY_KEY = "grandfathered_max"
-
-
-def ratchet_spec() -> _marker_guard.RegistrySpec:
-    return _marker_guard.RegistrySpec(
-        rel_path=_RATCHET_REL_PATH,
-        token=_RATCHET_TOKEN,
-        gated_direction="up",
-        extractor=_marker_guard.make_flat_extractor(_RATCHET_TOKEN, value_type=int),
-        gates_new_entry=lambda _value: True,
-        label="Contract-population ratchet guardrail (T2.56)",
-    )
-
-
-def validate_ratchet_pin(contracts_dir: Path) -> tuple[int | None, list[str]]:
-    """Strict type/shape check of ratchet.grandfathered_max from the PARSED (not regex) YAML,
-    read from the injected `contracts_dir` -- never _common.ROOT. int, not bool, non-negative."""
-    path = contracts_dir / "contract-population.yaml"
-    if not path.exists():
-        return None, []
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        return None, [f"contract-population.yaml: could not parse for ratchet check: {exc}"]
-    if not isinstance(data, dict):
-        return None, ["contract-population.yaml: not a YAML mapping"]
-    ratchet = data.get("ratchet")
-    if not isinstance(ratchet, dict) or "grandfathered_max" not in ratchet:
-        return None, ["contract-population.yaml: ratchet.grandfathered_max is missing"]
-    value = ratchet["grandfathered_max"]
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None, [f"contract-population.yaml: ratchet.grandfathered_max must be a non-bool int, got {value!r}"]
-    if value < 0:
-        return None, [f"contract-population.yaml: ratchet.grandfathered_max must be non-negative, got {value!r}"]
-    return value, []
-
-
-def check_ratchet_direction(
-    contracts_dir: Path,
-    current_value: int,
-    *,
-    base_reader: Callable[[str], str | None] | None = None,
-) -> list[str]:
-    """Diff-guard over the pin's value, reusing scripts.checks._marker_guard's shared
-    extractor/authorization primitives -- but reading CURRENT text from the injected
-    `contracts_dir` (never _common.ROOT), which is what lets this obey a tmp_path fixture. A
-    base file that does not exist (this plan's own landing PR) or that carries no ratchet entry
-    skips the direction comparison entirely."""
-    spec = ratchet_spec()
-    reader = base_reader or _marker_guard.default_base_reader
-    base_text = reader(spec.rel_path)
-    if base_text is None:
-        return []
-
-    base_entries = spec.extractor(base_text)
-    base_entry = base_entries.get(_RATCHET_ENTRY_KEY)
-    if base_entry is None:
-        return []
-    if current_value <= base_entry.value:
-        return []
-
-    current_path = contracts_dir / "contract-population.yaml"
-    current_text = current_path.read_text(encoding="utf-8")
-    current_entries = spec.extractor(current_text)
-    entry = current_entries.get(_RATCHET_ENTRY_KEY)
-    marker = entry.marker if entry is not None else None
-    if marker is None:
-        return [
-            f"{_RATCHET_ENTRY_KEY}: unauthorized increase {base_entry.value} -> {current_value} "
-            "with no `# raise-approved: dec-NNN` marker."
-        ]
-
-    bodies = _marker_guard.load_decision_bodies()
-    if _marker_guard.authorization_failure(marker, _RATCHET_ENTRY_KEY, bodies):
-        return [f"{_RATCHET_ENTRY_KEY}: {_RATCHET_TOKEN} marker cites {marker}, but its body does not authorize this entry."]
-    return []
-
 
 # ---------------------------------------------------------------------------
 # Census

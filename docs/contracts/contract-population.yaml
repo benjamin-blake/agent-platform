@@ -6,28 +6,43 @@ contract:
   ratified_via: "Decision 168 / PLAN-contracts-first-class-migration"
   description: >-
     The Class D mechanism-contract population gate (T2.56, migration step 3 of
-    audits/contract-first-governance-33c8667.yaml, MECHANISM half only). Self-hosting: this file
-    is itself the first Class D contract, and its own evaluator (validate_contract_drift) is the
-    gate that enforces every rule this document declares -- the file defining the obligation
-    satisfies it, rather than merely asserting it.
+    audits/contract-first-governance-33c8667.yaml). Self-hosting: this file is itself the first
+    Class D contract, and its own evaluator (validate_contract_drift) is the gate that enforces
+    every rule this document declares -- the file defining the obligation satisfies it, rather
+    than merely asserting it. The population sweep (seeding the 21 free-form files as Class D
+    contracts, 20 seedable + exit-criteria-ledger's non-seedable exception) landed under
+    migration-step-3-grandfathering, firing Decision 167 clause 3's dated pre-commitment
+    (per-entry decision-size cap WARN -> hard-fail).
   subject: contract-population
   evaluator:
     check: validate_contract_drift
 
 # Top-level, sibling of `contract:` -- same convention as a ritual document's amendment_log.
-# Empty at authoring time: this file has no prior version to amend against.
-amendment_log: []
+amendment_log:
+  - date: "2026-08-13"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      migration-step-3-grandfathering: widened evaluator_kinds.check to admit path-shaped
+      literals; widened agent_surface to Layer-1 ambient instruction files; replaced
+      none_grandfathered's free-text form with the required EnforcementRoute grammar; added the
+      status_active_max / evaluator_none_grandfathered_max counter pins + the census-binding
+      equality rule; ratcheted grandfathered_max 21 -> 19; recorded exit-criteria-ledger as the
+      single named non-seedable exception with its route.
 
 honesty_clauses:
   not_a_new_bar: >-
     The evaluator obligation makes an already-implicit assertion explicit (the audit's CFG-03
     finding: "a rule with no evaluator is not a rule") rather than adding a new bar. Every Class D
     contract that predates this plan is grandfathered, never retroactively failed.
-  not_step_3_completion: >-
-    This plan is EXPLICITLY NOT migration-step-3 completion and does NOT fire Decision 167 clause
-    3. The completing act is the population sweep (seeding the 21 existing free-form files as
-    grandfathered Class D contracts), which this plan declares but does not perform -- forward-only
-    by design (see the grandfather_only_forms section below).
+  step_3_completion: >-
+    migration-step-3-grandfathering IS migration-step-3 completion for the MECHANISM half of
+    audits/contract-first-governance-33c8667.yaml, and DOES fire Decision 167 clause 3. The
+    completing act is the population sweep: seeding 20 of the 21 free-form files as Class D
+    contracts (12 with a genuinely-resolving evaluator, 8 with a routed debt record) and recording
+    exit-criteria-ledger's non-seedable exception with its own route (see subject_namespace below)
+    -- forward-only in the sense that no BUILDING of the 9 unenforced evaluators happens here
+    (rec-3059's scope), but the population itself is fully seeded.
   subject_uniqueness_is_precision_not_recall: >-
     Subject uniqueness PREVENTS future duplicate-subject claims and DETECTS NONE of CFG-05's
     existing named instances (a precision-optimal, recall-poor detector by design -- it has no
@@ -64,19 +79,37 @@ evaluator_kinds:
     `{check: <name>}`. Resolves iff `<name>` is a member of registry.all_checks() AND of
     pre_sequence()/full_sequence() (registration alone is insufficient), AND the check's own
     module -- or a one-hop scripts/ module it imports -- contains the contract's BASENAME as an
-    exact string-literal match in EXECUTABLE context. Docstrings and `#` comments are excluded;
-    matched on the basename (not a joined path), because the genuine idiom is segmented
-    (validate_placement.py:19 builds `_common.ROOT / "docs" / "contracts" / "file-router.yaml"`
-    piecewise).
+    exact string-literal match, OR as the final `/`-delimited segment of a PATH-SHAPED
+    string-literal (migration-step-3-grandfathering), in EXECUTABLE context. Docstrings and `#`
+    comments are excluded. The genuine idiom is segmented (validate_placement.py:19 builds
+    `_common.ROOT / "docs" / "contracts" / "file-router.yaml"` piecewise, matched on the bare
+    basename segment) -- but a single joined literal (e.g.
+    `_CONTRACT_REL_PATH = "docs/contracts/decision-entry.yaml"`) is admitted too, because a
+    full-path literal is STRONGER evidence of reading than a bare basename (Decision 168's own
+    Significance clause names this contract the SoT for the evaluator grammar; landed under
+    Decision 168 reversal (a), "extend the union, never bypass the resolution bar"). MATCHER TRAP
+    GUARD: a path-shaped literal containing ANY whitespace is REJECTED even when its final segment
+    equals the basename -- a prose sentence that merely ENDS with a contract's basename (verified
+    live instance: scripts/checks/iam_tf/_write_companions.py's annotation string ending in
+    "...iam-simulate-fixture.yaml") must never certify as a reading.
   agent_surface: >-
     `{agent_surface: <repo-relative-path>}`. Resolves iff the named path exists and its text
-    contains the contract's basename -- the non-Python analogue of the check AST scan, for
-    evaluators that are skills or slash commands rather than registered checks.
+    contains the contract's basename -- the non-Python analogue of the check AST scan. Widened
+    (migration-step-3-grandfathering) beyond skills/slash-commands to admit Layer-1 ambient
+    instruction files (AGENTS.md, CLAUDE.md) as legitimate agent_surface targets -- an ambient
+    rule an agent reads on every turn is at least as strong evidence of a genuine evaluator as a
+    skill loaded on demand.
   none_grandfathered: >-
-    `{none_grandfathered: <reason>}`. Never resolves -- it is the grandfather-only form, not a
-    fourth resolving kind. States WHY a file carries no genuine evaluator (a pre-ritual free-form
-    doc pending its own future ratification), rather than a bare countable `{none: ...}` that
-    would carry no explanation.
+    `{none_grandfathered: <EnforcementRoute>}`. Never resolves -- it is the grandfather-only form,
+    not a fourth resolving kind. Since migration-step-3-grandfathering, a bare free-text reason is
+    no longer sufficient: the value is a STRUCTURED debt record
+    (scripts/contracts_schema.EnforcementRoute) with four required non-empty fields -- `reason`
+    (why no evaluator exists yet), `mechanism` (what the future check would assert), `blocker`
+    (what stops building it today), `shape` (`check` or `agent_surface`, the eventual evaluator's
+    kind) -- plus an optional `consumer` (`str | None`, the module/file that would host the
+    future evaluator; null where no consumer module exists at all, e.g. telemetry-lexicon.yaml).
+    An unenforced Class D claim can no longer be filed without a route: the rec-3059 enforcer
+    build inherits a per-file design map instead of a blessed permanent exemption.
 
 grandfather_only_forms:
   status_active: >-
@@ -96,12 +129,12 @@ grandfather_only_forms:
     at all) on a baseline-present file -- that is exactly the population sweep's own shape, and a
     literal reading that failed it would block this plan's declared completing act.
   counters_open_at_zero: >-
-    Both grandfather-only counters (evaluator_none_grandfathered, status_active) open at exactly
-    ZERO at this plan's landing -- verified: no `subject:` key exists anywhere in docs/contracts
-    today, and `active` is not yet a ContractStatus member before this plan's schema edit lands.
-    They are reported in the census every run but deliberately NOT pinned by the ratchet below,
-    because the sweep must be able to raise them once; the kind-change rule is what guards them
-    in the interim, not a pinned ceiling.
+    SUPERSEDED by the three ratchet pins below (migration-step-3-grandfathering) -- this section's
+    original claim (both counters open at ZERO, deliberately unpinned so the sweep could raise
+    them once) described the PRE-SWEEP state. Post-sweep, both grandfather-only counters are
+    pinned by ratchet.status_active_max / ratchet.evaluator_none_grandfathered_max and bound to
+    the live census by EQUALITY (see the ratchet block and census section below) -- the one-time
+    "raise them once" latitude was exactly this sweep, and is now spent.
 
 subject_namespace:
   uniqueness: >-
@@ -115,6 +148,17 @@ subject_namespace:
     `subject` equal that route's `topic` -- the file-router topic BECOMES the file's subject.
     Mismatch FAILS. A Class D file with no matching route is outside this rule's scope (router
     registration completeness is validate_placement's concern, not this gate's).
+  non_seedable_exception: >-
+    docs/contracts/exit-criteria-ledger.yaml is the SINGLE named exception among the 21 free-form
+    files this sweep found: genuinely Class-A-field-shaped (per-ExitCriterion field descriptors),
+    so the Class-A/B smuggling detector correctly rejects it as a Class D envelope -- it stays
+    free-form, not restructured to evade the detector. Its enforcement route (since it cannot
+    carry a Class D envelope at all, this route lives HERE rather than in the file itself):
+    consumer scripts/roadmap/platform_roadmap.py (the ExitCriterion dataclass); mechanism assert
+    exit_criterion_object fields match the dataclass; blocker the file cannot carry a Class D
+    envelope at all (field-shaped); shape check; reason genuinely Class-A-field-shaped content
+    has no Class D home, and restructuring it to fit one would be exactly the smuggling this
+    gate's own detector exists to catch.
 
 change_detection:
   amendment_log: >-
@@ -146,20 +190,50 @@ census:
     forgot-a-bucket guard with independently computed counters -- it is true by construction over
     a mutually exclusive partition and is explicitly NOT claimed as evidence against a vacuous
     pass. Counts are always derived from the scan, never hardcoded.
+  pin_binding: >-
+    (migration-step-3-grandfathering) All three ratchet.*_max pins below are bound to their
+    matching census bucket by EQUALITY, not a ceiling -- validate_contract_drift fails when a pin
+    does NOT EQUAL its live bucket, in EITHER direction. This forces every enforcer landing under
+    rec-3059 (which lowers evaluator_none_grandfathered by converting a none_grandfathered file to
+    a resolving evaluator) to lower the matching pin in the SAME PR, closing the "stale slack left
+    behind" failure mode a `>=` ceiling would permit.
 
 ratchet:
-  # The gate-visible non-ritual population: 37 depth-1 *.yaml files at this plan's landing = 16
-  # ritual + 21 non-ritual, plus 2 grandfathered .md members (verified independently four times).
+  # The gate-visible non-ritual population BEFORE this sweep: 40 depth-1 *.yaml files = 16 ritual
+  # + 3 declared + 21 grandfathered (all 21 non-ritual, since none had yet seeded a Class D
+  # envelope), plus 2 grandfathered .md members (verified independently four times). AFTER this
+  # sweep (migration-step-3-grandfathering): 40 = 16 ritual + 5 declared + 19 grandfathered -- the
+  # headline ratchet moves only 21 -> 19 because the gate buckets status:active as grandfathered
+  # REGARDLESS of evaluator quality (Decision 168 created `active` expressly so the sweep would
+  # not assert ratifications that never happened); the substantive result is 12 of 20 seeded files
+  # carrying a genuinely-resolving evaluator, 8 carrying a routed debt record, 1
+  # (exit-criteria-ledger) non-seedable.
   # ZERO SLACK BY DESIGN -- do not round up. An increase is gated through the RATIFIED
   # raise-approved mechanism (docs/contracts/marker-grammar.yaml tokens.raise-approved), never a
   # private existence-only marker; a decrease always passes; a base in which this file does not
-  # exist skips the direction comparison (this plan's own landing PR).
-  grandfathered_max: 21
+  # exist, or carries no entry for a given pin (both new pins below, on this landing), skips the
+  # direction comparison for that pin.
+  grandfathered_max: 19
+  status_active_max: 16
+  evaluator_none_grandfathered_max: 8
   raise_mechanism: >-
-    An inline `# raise-approved: dec-NNN <reason>` comment on the grandfathered_max entry line,
-    routed through scripts.checks._marker_guard.authorization_failure via the RegistrySpec this
-    file's evaluator (validate_contract_drift, delegating to scripts/checks/contracts/
-    _population.py) constructs -- rel_path docs/contracts/contract-population.yaml, token
-    raise-approved, gated_direction up, flat extractor on grandfathered_max. Registered in
-    docs/contracts/marker-grammar.yaml tokens.raise-approved.used_by. No edit to
-    scripts/checks/_marker_guard.py itself was required.
+    An inline `# raise-approved: dec-NNN <reason>` comment on a pin's entry line, routed through
+    scripts.checks._marker_guard.authorization_failure via the RegistrySpec
+    scripts/checks/contracts/_ratchet.py constructs per pin -- rel_path
+    docs/contracts/contract-population.yaml, token raise-approved, gated_direction up, flat
+    extractor on the pin's own key. Registered in docs/contracts/marker-grammar.yaml
+    tokens.raise-approved.used_by. No edit to scripts/checks/_marker_guard.py itself was required.
+  raisability_asymmetry: >-
+    Verified via _marker_guard.authorization_failure: dec-168's body contains the literal
+    substring `ratchet.grandfathered_max`, so THAT pin can be raised straight back by any future
+    PR citing dec-168 -- the same Decision 166 point 6 KEY-not-VALUE weakness this plan calls out
+    for config/structural_size_budgets.yaml (authorization_failure matches the entry KEY, never
+    its VALUE, so one marker permanently authorizes every future bump of that entry). By contrast
+    `status_active_max` and `evaluator_none_grandfathered_max` are single-segment keys (no `/`, so
+    `_expand_ancestor_candidates` generates no ancestor beyond the bare key itself) named in NO
+    existing Decision body -- dec-168 predates this plan and cannot mention keys this plan
+    invents, so a future `# raise-approved: dec-168 ...` marker on either would FAIL authorization;
+    raising them requires a NEW numbered Decision that names the key. Practical risk is low: all
+    three grandfather forms are closed at birth (grandfather_only_forms above), so the census
+    cannot grow to exploit a raised ceiling without a new baseline-present file, which does not
+    exist.

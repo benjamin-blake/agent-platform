@@ -1,14 +1,16 @@
 """Tests for validate_decisions_size(). Mirror of
 scripts/checks/decisions/validate_decisions_size.py (Decision 134 / Decision 114 parity;
-PLAN-decision-entry-flow-governance / Decision 167 adds the WARN-tier per-entry authoring cap).
+PLAN-decision-entry-flow-governance / Decision 167 adds the per-entry authoring cap, hard-fail
+tier flipped by migration-step-3-grandfathering / T2.56 migration step 3).
 
 The live-byte-only ceiling (_DECISIONS_LIVE_MAX_BYTES, Decision 145's stopgap raise to 500_000)
 was RETIRED by PLAN-decision-scout-bounded-retrieval -- the decision-scout gate no longer reads
 the live file wholesale, so the ceiling that guard existed to size no longer has a referent. Only
 _DECISIONS_LIVE_MAX_H2 (132) and _DECISIONS_COMBINED_MAX_BYTES (780_000) survive as hard-fail
 ceilings; this file covers their boundaries plus a case proving a live file ABOVE the old 500_000
-value now passes on its own while a combined breach still FAILs -- plus the new
-_PER_ENTRY_CAP_BYTES (6_144) WARN-tier per-NEW-entry cap below."""
+value now passes on its own while a combined breach still FAILs -- plus the
+_PER_ENTRY_CAP_BYTES (6_144) hard-fail per-NEW-entry cap below (Decision 167 clause 3, fired by
+migration step 3)."""
 
 from pathlib import Path
 from unittest.mock import patch
@@ -18,7 +20,7 @@ from scripts.checks.decisions.validate_decisions_size import (
     _DECISIONS_LIVE_MAX_H2,
     _PER_ENTRY_CAP_BYTES,
     _decisions_size_issues,
-    _per_entry_cap_warnings,
+    _per_entry_cap_failures,
     validate_decisions_size,
 )
 
@@ -258,39 +260,55 @@ def _write_docs(tmp_path: Path, live_text: str, archive_text: str = "") -> None:
     (docs_dir / "DECISIONS_ARCHIVE.md").write_text(archive_text, encoding="utf-8")
 
 
-class TestPerEntryCapWarningsPureFunction:
-    """_per_entry_cap_warnings(root, baseline_numbers) -- WARN tier, forward-only."""
+class TestPerEntryCap:
+    """test_obligations selector alias for the hard-fail flip -- see
+    TestPerEntryCapFailuresPureFunction below for the full boundary coverage."""
 
-    def test_over_cap_new_entry_warns(self, tmp_path: Path) -> None:
+    def test_new_over_cap_entry_fails(self, tmp_path: Path) -> None:
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES + 1))
-        warnings = _per_entry_cap_warnings(tmp_path, baseline_numbers=set())
-        assert len(warnings) == 1
-        assert "Decision 5" in warnings[0]
-        assert str(_PER_ENTRY_CAP_BYTES) in warnings[0]
+        failures = _per_entry_cap_failures(tmp_path, baseline_numbers=set())
+        assert len(failures) == 1
+        assert "Decision 5" in failures[0]
+
+        historical_failures = _per_entry_cap_failures(tmp_path, baseline_numbers={5})
+        assert historical_failures == [], "a historical entry must still never be measured"
+
+
+class TestPerEntryCapFailuresPureFunction:
+    """_per_entry_cap_failures(root, baseline_numbers) -- hard-fail tier, forward-only.
+    Renamed from _per_entry_cap_warnings / TestPerEntryCapWarningsPureFunction
+    (migration-step-3-grandfathering: Decision 167 clause 3's WARN pre-commitment fires)."""
+
+    def test_over_cap_new_entry_fails(self, tmp_path: Path) -> None:
+        _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES + 1))
+        failures = _per_entry_cap_failures(tmp_path, baseline_numbers=set())
+        assert len(failures) == 1
+        assert "Decision 5" in failures[0]
+        assert str(_PER_ENTRY_CAP_BYTES) in failures[0]
 
     def test_over_cap_historical_entry_is_silent(self, tmp_path: Path) -> None:
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES + 1))
-        warnings = _per_entry_cap_warnings(tmp_path, baseline_numbers={5})
-        assert warnings == []
+        failures = _per_entry_cap_failures(tmp_path, baseline_numbers={5})
+        assert failures == []
 
     def test_new_entry_at_exactly_cap_is_silent(self, tmp_path: Path) -> None:
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES))
-        warnings = _per_entry_cap_warnings(tmp_path, baseline_numbers=set())
-        assert warnings == []
+        failures = _per_entry_cap_failures(tmp_path, baseline_numbers=set())
+        assert failures == []
 
     def test_new_entry_under_cap_is_silent(self, tmp_path: Path) -> None:
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES - 100))
-        warnings = _per_entry_cap_warnings(tmp_path, baseline_numbers=set())
-        assert warnings == []
+        failures = _per_entry_cap_failures(tmp_path, baseline_numbers=set())
+        assert failures == []
 
-    def test_archive_over_cap_new_entry_warns_too(self, tmp_path: Path) -> None:
+    def test_archive_over_cap_new_entry_fails_too(self, tmp_path: Path) -> None:
         _write_docs(tmp_path, "", archive_text=_make_block(9, _PER_ENTRY_CAP_BYTES + 1))
-        warnings = _per_entry_cap_warnings(tmp_path, baseline_numbers=set())
-        assert len(warnings) == 1
-        assert "Decision 9" in warnings[0]
+        failures = _per_entry_cap_failures(tmp_path, baseline_numbers=set())
+        assert len(failures) == 1
+        assert "Decision 9" in failures[0]
 
-    def test_missing_files_yield_no_warnings(self, tmp_path: Path) -> None:
-        assert _per_entry_cap_warnings(tmp_path, baseline_numbers=set()) == []
+    def test_missing_files_yield_no_failures(self, tmp_path: Path) -> None:
+        assert _per_entry_cap_failures(tmp_path, baseline_numbers=set()) == []
 
 
 class TestPerEntryCapThroughRegisteredCheck:
@@ -298,41 +316,54 @@ class TestPerEntryCapThroughRegisteredCheck:
     non-default root always exercises the per-entry sub-check (deterministic for tests,
     bypassing the production changed-files short-circuit; see the module docstring)."""
 
-    def test_over_cap_new_entry_prints_warning_and_never_fails(self, tmp_path: Path, capsys) -> None:
+    def test_over_cap_new_entry_fails_and_prints_fail(self, tmp_path: Path, capsys) -> None:
+        """INVERTED from the pre-flip test_over_cap_new_entry_prints_warning_and_never_fails
+        (which asserted failed == []) -- migration-step-3-grandfathering fires Decision 167
+        clause 3's hard-fail flip; a red result here IS the flip working."""
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES + 1))
         failed: list[str] = []
         validate_decisions_size(failed, root=tmp_path, baseline_reader=lambda r: set())
-        assert failed == []
+        assert "DECISIONS size governance" in failed
         out = capsys.readouterr().out
-        assert "WARN" in out
+        assert "FAIL" in out
         assert "Decision 5" in out
 
     def test_over_cap_historical_entry_produces_no_per_entry_output(self, tmp_path: Path, capsys) -> None:
+        """Re-anchored on the new failure surface: a "WARN not in out" assertion would pass
+        VACUOUSLY post-flip (WARN is never printed by this module at all anymore) -- the real
+        claim is that a historical (baseline-present) entry never appears in the per-entry
+        output or in `failed`, regardless of its size."""
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES + 1))
         failed: list[str] = []
         validate_decisions_size(failed, root=tmp_path, baseline_reader=lambda r: {5})
         assert failed == []
-        assert "WARN" not in capsys.readouterr().out
+        assert "Decision 5" not in capsys.readouterr().out
 
     def test_boundary_at_exactly_cap_is_silent(self, tmp_path: Path, capsys) -> None:
+        """Re-anchored (see test_over_cap_historical_entry_produces_no_per_entry_output above)."""
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES))
         failed: list[str] = []
         validate_decisions_size(failed, root=tmp_path, baseline_reader=lambda r: set())
         assert failed == []
-        assert "WARN" not in capsys.readouterr().out
+        assert "Decision 5" not in capsys.readouterr().out
 
-    def test_unreachable_baseline_advisory_skips_per_entry_cap(self, tmp_path: Path) -> None:
+    def test_unreachable_baseline_advisory_skips_per_entry_cap(self, tmp_path: Path, capsys) -> None:
         """A non-default root with NO injected baseline_reader and no .git directory -- the
         default reader's own reachability check returns the None sentinel; the two stock
-        ceilings still ran above (unaffected)."""
+        ceilings still ran above (unaffected). Re-anchored: also asserts the SKIP message
+        printed, so this proves the skip path fired rather than merely that no over-cap entry
+        happened to be measured."""
         _write_docs(tmp_path, _make_block(5, _PER_ENTRY_CAP_BYTES + 1))
         failed: list[str] = []
         validate_decisions_size(failed, root=tmp_path)
         assert failed == []
+        assert "SKIP" in capsys.readouterr().out
 
-    def test_stock_ceiling_breach_and_per_entry_warning_can_coexist(self, tmp_path: Path, capsys) -> None:
-        """A combined-bytes breach still fails, independent of (and alongside) the WARN-tier
-        per-entry cap on the same entry."""
+    def test_stock_ceiling_breach_and_per_entry_failure_can_coexist(self, tmp_path: Path, capsys) -> None:
+        """INVERTED from the pre-flip test_stock_ceiling_breach_and_per_entry_warning_can_coexist
+        -- a combined-bytes breach and the per-entry hard-fail on the same entry both contribute
+        to `failed` (the label is appended twice; membership is what matters), and both surfaces
+        print their own FAIL line."""
         _write_docs(
             tmp_path,
             _make_block(5, _PER_ENTRY_CAP_BYTES + 1),
@@ -341,4 +372,6 @@ class TestPerEntryCapThroughRegisteredCheck:
         failed: list[str] = []
         validate_decisions_size(failed, root=tmp_path, baseline_reader=lambda r: set())
         assert "DECISIONS size governance" in failed
-        assert "WARN" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "combined" in out
+        assert "Decision 5" in out
