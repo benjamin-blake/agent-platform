@@ -6,7 +6,7 @@ slug: "plan-resolution-content-keyed"
 intent: >-
   Re-key the two plan-verification gates off commit-message convention and onto an explicit,
   schema-validated declaration carried in the plan file itself, so their applicability predicate
-  becomes decidable and their "nothing to do" outcome requires positive evidence rather than the
+  becomes decidable and their "nothing to do" outcome rests on positive evidence rather than the
   absence of a signal. Contributes to the North Star by hardening the verification safety envelope
   that admits every other change.
 plan_type: IMPLEMENTATION
@@ -23,23 +23,30 @@ scope:
   - file: scripts/roadmap/plan_document.py
     action: Modify
     purpose: >-
-      Add the optional `implementation_declared` boolean to PlanDocument. Optional, so the entire
-      existing plan corpus keeps validating unchanged and no schema_version bump is owed; absence
-      means "not yet implemented".
+      Add the optional `implementation_declared` boolean to PlanDocument. Optional and defaulted, so
+      the entire existing corpus keeps validating unchanged and no schema_version bump is owed;
+      absence means "not yet implemented".
   - file: scripts/checks/_common.py
     action: Modify
     purpose: >-
-      Add the content-based plan resolver -- plans whose `implementation_declared` flipped to true
-      in this diff -- and retire feat_commit_slugs once its two consumers stop calling it.
+      Add the content-based plan resolver and retire feat_commit_slugs once no caller remains. The
+      resolver reuses the existing `git show origin/main:<path>` baseline idiom
+      (validate_verification_registry.py:8-31, validate_graduation_completeness.py:133-153) -- the
+      genuinely new part is the two-tree comparison, not the baseline read.
   - file: scripts/checks/verification/validate_vp_replay.py
     action: Modify
     purpose: >-
-      Re-key the implement-PR leg from feat({slug}) commit subjects to the content resolver, and
-      split the output into genuine PASS / FAIL / N-A so "nothing to do" is asserted from positive
-      evidence (no declaration in the diff) rather than inferred from a missing commit subject.
+      Re-key BOTH legs off commit subjects -- the implement leg at :174 and the plan-only leg's
+      co-presence test at :150, which is inside _plan_only_pr_leg (136-165). Split the output into
+      PASS / FAIL / N/A.
   - file: scripts/checks/verification/validate_graduation_completeness.py
     action: Modify
-    purpose: Same re-key and same three-state split for the graduation-registry obligation.
+    purpose: Same re-key at :186 and the same three-state split.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Register scripts/roadmap/plan_document.py in _CONCERN_SPLIT_TEST_PACKAGES so its tests resolve
+      to the tests/test_plan_document/ package created below (Decision 128 decompose-by-default).
   - file: .claude/hooks/edit_scope_guard.py
     action: Modify
     purpose: >-
@@ -49,85 +56,130 @@ scope:
   - file: .claude/skills/implement/SKILL.md
     action: Modify
     purpose: >-
-      Instruct the implement flow to set `implementation_declared: true` in the plan file as part of
-      the change, before the mandatory full-validation run, so the declaration is present in the
-      working tree when the gates resolve.
-  - file: tests/test_plan_document.py
+      Instruct the flow to set `implementation_declared: true` in the plan file BEFORE the mandatory
+      full-validation run. Byte-neutral by compressing the "Run the full gate locally first" preamble
+      (this surface has 6 bytes of headroom and this plan takes no prose raise).
+  - file: .claude/skills/planning/SKILL.md
     action: Modify
-    purpose: Cover the new optional field, its default-absent semantics, and corpus back-compatibility.
+    purpose: >-
+      Correct the now-false hermetic-authoring note at :334-337, which tells every future planning
+      agent that "the implement PR resolves PLAN-{slug}.yaml from feat({slug}) commits on git log
+      origin/main..HEAD". Rewrite to describe declaration-based resolution, byte-neutral (this
+      surface also has 6 bytes of headroom).
+  - file: tests/test_plan_document.py
+    action: Delete
+    purpose: >-
+      At 495 SLOC against the 500 limit for an unregistered file, this cannot absorb the new field's
+      coverage. Decision 128 mandates decomposition over a budget raise; replaced by the
+      concern-split package below.
+  - file: tests/test_plan_document/__init__.py
+    action: Create
+    purpose: Package marker (prepend import mode; every mirror test package carries one).
+  - file: tests/test_plan_document/test_schema.py
+    action: Create
+    purpose: Relocated TestPlanDocumentSchema, TestSchemaVersion2, TestSchemaVersion3.
+  - file: tests/test_plan_document/test_loader_cli.py
+    action: Create
+    purpose: Relocated TestLoader, TestCli, TestValidateIntegration.
+  - file: tests/test_plan_document/test_optional_fields.py
+    action: Create
+    purpose: >-
+      Relocated TestClosesCriteria, TestGraduationDisposition, TestFallbackReevaluation,
+      TestTestObligations, plus the NEW TestImplementationDeclared covering the field and its
+      absent-is-valid back-compatibility.
+  - file: tests/test_coverage_checker/test_coverage_checker_map.py
+    action: Modify
+    purpose: Cover the new concern-split mapping for scripts/roadmap/plan_document.py.
   - file: tests/checks/_common/test_primitives.py
     action: Modify
-    purpose: Cover the content resolver, including the flip-detection and no-declaration cases.
+    purpose: >-
+      Add TestImplementationDeclaredResolver, and remove or re-point the two existing
+      feat_commit_slugs tests at :173 and :187 (the latter co-asserts origin_main_reachable, which
+      survives -- keep that half). This package is _common.py's mapped 100%-coverage home.
   - file: tests/checks/verification/test_validate_vp_replay.py
     action: Modify
     purpose: >-
-      Re-point existing tests at the content resolver and add the mutation-style meta-test -- a
-      resolved plan whose VP step fails must redden the check, proving the gate can still fail.
+      Re-point both legs' tests at the resolver and add TestContentKeyedResolution, including the
+      mutation-style meta-test proving a resolved plan with a failing VP step still reddens the check.
   - file: tests/checks/verification/test_validate_graduation_completeness.py
     action: Modify
-    purpose: Same re-point plus the same can-this-check-actually-fail meta-test.
+    purpose: Same re-point plus TestContentKeyedResolution and the same can-this-check-actually-fail meta-test.
   - file: tests/test_edit_scope_guard.py
     action: Modify
     purpose: Cover the active-plan self-edit exemption, including that non-scope files are still denied.
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      One row per graduated verification_plan step. Each row must discriminate between the
-      pre-change and post-change trees or validate_verification_registry rejects it at admission.
+      One row per graduated verification_plan step. Each test_selector row's node_id must name a
+      class ABSENT at origin/main, or the differential admission gate rejects it as non-discriminating.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
   - >-
-    PlanDocument accepts an optional `implementation_declared` boolean; every plan in
-    docs/plans/ still validates with no edits and no schema_version bump.
+    PlanDocument accepts an optional `implementation_declared` boolean; every plan in docs/plans/
+    still validates with no edits and no schema_version bump.
   - >-
     scripts/checks/_common.py exposes a resolver returning the plans whose `implementation_declared`
-    flipped to true in the current diff against origin/main, and feat_commit_slugs no longer has any
-    caller in scripts/checks/verification/.
+    is true in the working tree and was not true at origin/main, and feat_commit_slugs has no caller
+    anywhere under scripts/checks/.
   - >-
-    validate_vp_replay resolves the implement-PR leg from that declaration; a branch that declares an
-    implementation has its hermetic pre-deploy steps replayed regardless of the branch's commit
-    topology, including when every content commit is an automated checkpoint.
+    The resolver fails loudly on a working-tree read or YAML-parse failure, and treats a baseline
+    that does not resolve at origin/main (a brand-new plan file) as a legitimate "not declared at
+    baseline" rather than an error.
+  - >-
+    validate_vp_replay resolves BOTH legs from the declaration -- the implement leg and the
+    plan-only leg's co-presence test -- so a branch that declares an implementation has its hermetic
+    pre-deploy steps replayed regardless of commit topology, including when every content commit is
+    an automated checkpoint. The plan-only DEFER outcome and its printed reason survive.
   - >-
     validate_graduation_completeness resolves its implement-PR obligation the same way and is
     likewise independent of commit topology.
   - >-
-    Both checks emit three distinct outcomes -- PASS, FAIL, and an explicit N-A line -- where N-A is
-    printed only on positive evidence that no plan declared an implementation in this diff. A missing
-    or unreadable signal is never reported as N-A.
+    Each check's declaration-resolution leg emits three distinct outcomes -- PASS, FAIL, and an
+    explicit `N/A` line printed only on positive evidence that no plan declared an implementation in
+    this diff. The pre-existing origin/main-unreachable SKIP stays a separate, distinct outcome.
   - >-
-    Each check has a mutation-style meta-test proving it can fail - a resolved plan with a failing
-    verification step reddens the check rather than passing.
+    Each check has a mutation-style meta-test proving it can still fail - a resolved plan with a
+    failing verification step reddens the check rather than passing.
   - >-
-    Neither check reads commit subjects to decide applicability; commit message shape imposes no
-    requirement on any branch as a result of this plan.
+    Neither check reads commit subjects to decide applicability, and no check anywhere fails a branch
+    because of what its commit subjects do or do not say.
+  - >-
+    The stale instruction at .claude/skills/planning/SKILL.md:334-337 no longer describes
+    commit-subject resolution.
   - >-
     edit_scope_guard allows an Edit/Write to the active plan's own path and still denies a file
     outside the active plan's Scope.
   - >-
     The implement flow sets the declaration in the plan file before the mandatory full-validation
     run, so the gates resolve it from the working tree without needing any commit to exist.
-  - Every graduated verification_plan step has an admitted verification-registry row.
+  - >-
+    tests/test_plan_document.py is gone, the tests/test_plan_document/ package carries its classes
+    plus the new coverage, every module in it is under 500 SLOC, and the concern-split mapping is
+    registered so scripts/roadmap/plan_document.py resolves to the package.
+  - Every graduated verification_plan step has a registry row admitted by the differential gate.
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Exercise the content resolver -- a plan whose declaration flipped in the diff resolves; a plan
-      already declared at origin/main does not re-resolve; a diff with no declaration resolves
-      nothing; an unreadable plan is an error, never a silent empty result.
+      Exercise the content resolver -- a plan whose declaration flipped resolves; a plan already
+      declared at origin/main does not re-resolve; a diff with no declaration resolves nothing; a
+      plan file ABSENT at origin/main resolves as newly-declared rather than erroring; an unreadable
+      or malformed working-tree plan raises rather than returning an empty list.
     command: bin/venv-python -m pytest tests/checks/_common/test_primitives.py -q
     expected: "All tests pass; output reports `passed` and no failures."
     fix_if: >-
-      A resolver that returns empty on an unreadable or malformed plan reintroduces exactly the
-      absence-as-claim defect this plan exists to remove -- it must raise or fail, never return [].
+      A resolver that returns empty on an unreadable working-tree plan reintroduces exactly the
+      absence-as-claim defect this plan removes. A resolver that ERRORS on a baseline-absent plan
+      breaks this plan's own implement PR, since its plan file is not on origin/main.
     hermetic: false
     graduation: graduate
     graduation_check_id: plan-resolution-content-resolver
   - step: 2
     phase: pre-deploy
     action: >-
-      Exercise validate_vp_replay's re-keyed implement leg, its three-state output, and the
-      mutation-style meta-test proving the check still reddens on a genuinely failing VP step.
+      Exercise validate_vp_replay's two re-keyed legs, its three-state output, and the mutation-style
+      meta-test proving the check still reddens on a genuinely failing VP step.
     command: bin/venv-python -m pytest tests/checks/verification/test_validate_vp_replay.py -q
     expected: "All tests pass; output reports `passed` and no failures."
     fix_if: >-
@@ -148,9 +200,10 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      Prove the schema change is backwards compatible -- the new field validates and the ENTIRE
-      existing plan corpus still passes unmodified.
-    command: bin/venv-python -m pytest tests/test_plan_document.py -q && bin/venv-python -m scripts.roadmap.plan_document
+      Prove the schema change is backwards compatible and the decomposed package carries the coverage
+      -- the new field validates, absence stays valid, and the ENTIRE existing plan corpus still
+      passes unmodified.
+    command: bin/venv-python -m pytest tests/test_plan_document/ -q && bin/venv-python -m scripts.roadmap.plan_document
     expected: "Tests pass, and every plan reports `validates against PlanDocument schema` with exit 0."
     fix_if: >-
       Any existing plan failing means the field was added as required rather than optional; make it
@@ -161,49 +214,63 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Prove the core invariant structurally -- no check in the verification domain resolves plans
-      from commit subjects any more, so commit-message shape imposes no requirement on any branch.
-    command: test -d scripts/checks/verification && test "$(grep -rl 'feat_commit_slugs' scripts/checks/verification/ --include=*.py | wc -l)" = "0"
-    expected: Exit 0 (zero files in the domain reference the commit-subject resolver).
+      Prove the core invariant AND the surface retirement structurally -- no module anywhere under
+      scripts/checks/ references the commit-subject resolver, so commit-message shape imposes no
+      requirement on any branch and the retired helper leaves no stale caller.
+    command: test -d scripts/checks && test "$(grep -rl 'feat_commit_slugs' scripts/checks/ --include=*.py | wc -l)" = "0"
+    expected: Exit 0 (zero files reference the retired resolver; 3 do today).
     fix_if: >-
-      A non-zero count means a consumer still keys on commit subjects and the seam is still open.
-      Today this returns 2 (validate_vp_replay, validate_graduation_completeness), so the step is
-      red before the change and green after.
+      A non-zero count means a consumer still keys on commit subjects, or a rewritten docstring names
+      the retired symbol while explaining the retirement -- describe the change without naming
+      feat_commit_slugs inside scripts/checks/.
     hermetic: true
     graduation: graduate
     graduation_check_id: no-commit-subject-plan-resolution
   - step: 6
     phase: pre-deploy
     action: >-
-      Prove the three-state output landed -- each check emits an explicit N-A marker distinct from
-      PASS, so a not-applicable outcome is greppable and auditable rather than indistinguishable
-      from a successful verification.
+      Prove the three-state output landed -- each check emits the canonical `N/A` marker, distinct
+      from PASS, so a not-applicable outcome is greppable and auditable.
     command: test "$(grep -c 'N/A' scripts/checks/verification/validate_vp_replay.py)" -ge "1" && test "$(grep -c 'N/A' scripts/checks/verification/validate_graduation_completeness.py)" -ge "1"
-    expected: Exit 0 (both checks carry the N-A marker; both are 0 today).
+    expected: Exit 0 (both checks carry the marker; both are 0 today).
     fix_if: >-
-      A zero count means the check still prints PASS for the not-applicable case, which is the
-      conflation this plan removes.
+      A zero count means the check still prints PASS for the not-applicable case. `N/A` is the
+      canonical spelling -- the prose elsewhere in this plan writes N-A only to stay YAML-safe.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      The behavioural assertions at steps 2 and 3 test the three outcomes through the checks' real
-      code paths; this grep only confirms a marker string is present, so a registry row would guard
-      the spelling rather than the behaviour and would go red on any future rewording.
+      Steps 2 and 3 assert the three outcomes through the checks' real code paths; this grep only
+      confirms a marker string is present, so a registry row would guard the spelling rather than the
+      behaviour and would go red on any future rewording.
   - step: 7
     phase: pre-deploy
     action: >-
       Prove the implement flow actually sets the declaration -- if this instruction is ever lost,
       implement sessions silently stop declaring and both gates go quietly not-applicable, which is
-      the same silent-disablement failure in a new place.
+      this plan's own failure mode reappearing one level up.
     command: test "$(grep -c 'implementation_declared' .claude/skills/implement/SKILL.md)" -ge "1"
     expected: Exit 0 (the flow names the field; 0 occurrences today).
     fix_if: >-
       A zero count means nothing in the documented flow sets the declaration, so every future
-      implement PR resolves to not-applicable and verifies nothing.
+      implement PR resolves to N/A and verifies nothing.
     hermetic: true
     graduation: graduate
     graduation_check_id: implement-flow-sets-declaration
   - step: 8
+    phase: pre-deploy
+    action: >-
+      Sweep the instruction surfaces for the retired mechanism -- the planning skill's
+      hermetic-authoring note must no longer tell future planning agents that plans resolve from
+      commit subjects.
+    command: test "$(grep -c 'commits on .git log origin/main..HEAD' .claude/skills/planning/SKILL.md)" = "0"
+    expected: Exit 0 (the stale sentence is gone; 1 occurrence today).
+    fix_if: >-
+      A count of 1 means Layer-4 methodology still describes the retired mechanism, which is the
+      instruction-surface half of this plan's surface-retirement obligation.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: planning-skill-no-commit-subject-resolution
+  - step: 9
     phase: pre-deploy
     action: >-
       Exercise the scope-guard exemption -- the active plan's own path is allowed, a file outside the
@@ -216,15 +283,28 @@ verification_plan:
     hermetic: false
     graduation: graduate
     graduation_check_id: edit-scope-guard-active-plan-exempt
-  - step: 9
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Prove the test-file decomposition landed cleanly -- the monolith is gone, the package exists,
+      and the concern-split mapping resolves so no source file is left without a mapped test home.
+    command: test ! -f tests/test_plan_document.py && test -d tests/test_plan_document && bin/venv-python -m pytest tests/test_coverage_checker/test_coverage_checker_map.py -q
+    expected: "Exit 0 -- the monolith is absent, the package is present, and the mapping tests pass."
+    fix_if: >-
+      If the mapping is not registered, scripts/roadmap/plan_document.py resolves flat to the deleted
+      tests/test_plan_document.py and validate_test_coverage fails with a missing test file.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: plan-document-tests-concern-split
+  - step: 11
     phase: pre-deploy
     action: Run the full local gate before handoff.
     command: bin/venv-python -m scripts.validate
     expected: "Exit 0 with a final `Validation Summary (scope: all)` PASS and no failures."
     fix_if: >-
       Any failure blocks handoff; fix and re-run the full tier from the start. Watch specifically for
-      validate_graduation_completeness, which enforces one admitted registry row per graduated step
-      and is itself being modified by this plan -- run it against its own change deliberately.
+      validate_sloc_limits on every new tests/test_plan_document/ module, and for
+      validate_graduation_completeness, which this plan modifies and must satisfy against its own change.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -234,35 +314,40 @@ verification_plan:
 test_obligations:
   - source: scripts/roadmap/plan_document.py
     behavior: >-
-      The optional implementation_declared field validates when present, defaults to absent, and does
-      not break any existing plan.
+      The optional implementation_declared field validates when present, absence stays valid, and no
+      existing plan breaks.
     verification_step: 4
-    test_selector: tests/test_plan_document.py
+    test_selector: tests/test_plan_document/test_optional_fields.py::TestImplementationDeclared
     red_green_expectation: red before (the field is rejected by extra=forbid), green after.
   - source: scripts/checks/_common.py
     behavior: >-
-      The content resolver returns plans whose declaration flipped in this diff, resolves nothing when
-      none did, and fails loudly rather than returning empty on an unreadable plan.
+      The resolver returns plans whose declaration flipped, resolves nothing when none did, treats a
+      baseline-absent plan as newly-declared, and fails loudly on an unreadable working-tree plan.
     verification_step: 1
-    test_selector: tests/checks/_common/test_primitives.py
+    test_selector: tests/checks/_common/test_primitives.py::TestImplementationDeclaredResolver
     red_green_expectation: red before (the resolver does not exist), green after.
   - source: scripts/checks/verification/validate_vp_replay.py
     behavior: >-
-      Resolves the implement leg from the declaration, is independent of commit topology, emits three
-      distinct outcomes, and still reddens on a genuinely failing VP step.
+      Both legs resolve from the declaration, output is three-state, and the check still reddens on a
+      genuinely failing VP step.
     verification_step: 2
-    test_selector: tests/checks/verification/test_validate_vp_replay.py
+    test_selector: tests/checks/verification/test_validate_vp_replay.py::TestContentKeyedResolution
     red_green_expectation: >-
       red before (a checkpoint-only branch with a declaration resolves nothing and no-ops), green after.
   - source: scripts/checks/verification/validate_graduation_completeness.py
     behavior: Same content-keyed resolution, three-state output, and can-it-fail property.
     verification_step: 3
-    test_selector: tests/checks/verification/test_validate_graduation_completeness.py
+    test_selector: tests/checks/verification/test_validate_graduation_completeness.py::TestContentKeyedResolution
     red_green_expectation: >-
       red before (a checkpoint-only branch with a declaration resolves nothing and no-ops), green after.
+  - source: scripts/test_coverage_checker.py
+    behavior: scripts/roadmap/plan_document.py maps to the tests/test_plan_document/ concern-split package.
+    verification_step: 10
+    test_selector: tests/test_coverage_checker/test_coverage_checker_map.py
+    red_green_expectation: red before (it maps flat to the deleted monolith), green after.
   - source: .claude/hooks/edit_scope_guard.py
     behavior: The active plan's own path is allowed; out-of-scope files are still denied fail-closed.
-    verification_step: 8
+    verification_step: 9
     test_selector: tests/test_edit_scope_guard.py
     red_green_expectation: red before (the active plan path is denied like any other), green after.
   - source: .claude/skills/implement/SKILL.md
@@ -270,9 +355,14 @@ test_obligations:
     verification_step: 7
     command: test "$(grep -c 'implementation_declared' .claude/skills/implement/SKILL.md)" -ge "1"
     red_green_expectation: red before (0 occurrences), green after.
+  - source: .claude/skills/planning/SKILL.md
+    behavior: The hermetic-authoring note no longer describes commit-subject plan resolution.
+    verification_step: 8
+    command: test "$(grep -c 'commits on .git log origin/main..HEAD' .claude/skills/planning/SKILL.md)" = "0"
+    red_green_expectation: red before (1 occurrence at :336), green after.
   - source: config/agent/verification_registry/registry.yaml
     behavior: Every graduated step has a row that survives the differential admission gate.
-    verification_step: 9
+    verification_step: 11
     command: bin/venv-python -m scripts.validate
     red_green_expectation: >-
       red before (validate_graduation_completeness fails a graduate step with no new-in-diff row),
@@ -288,34 +378,50 @@ constraints:
     commit history. The mandatory pre-handoff full-validation run happens before any commit is made,
     so a signal that requires a commit to exist would deadlock it.
   - >-
-    N-A is a positive-evidence outcome. A check may print N-A only when it has established that no
-    plan declared an implementation in this diff. An unreachable origin/main, an unreadable plan, or
-    any other missing input is an error or an explicit SKIP -- never N-A and never PASS.
+    Fail-loud governs the WORKING-TREE read and YAML parse only. A baseline that does not resolve at
+    origin/main is a legitimate "not declared at baseline" -- brand-new plan files are absent there
+    by construction, including THIS plan's own file on its own implement PR. Conflating the two would
+    break the first exercise of the code path.
+  - >-
+    N/A is a positive-evidence outcome and the canonical marker spelling. A check may print it only
+    when it has established that no plan declared an implementation in this diff. An unreachable
+    origin/main stays the pre-existing SKIP -- a different outcome, never folded into N/A or PASS.
+    Call the resolver INSIDE the existing origin_main_reachable guard so that ordering holds. Note
+    _common.get_changed_files() silently falls back to `git diff --name-only HEAD` when the
+    origin/main diff fails; that second degradation path is pre-existing and out of scope, but do not
+    build new N/A semantics on top of it.
   - >-
     The optional field must not force a schema_version bump or any edit to an existing plan. If the
-    corpus needs editing, the field was modelled wrong.
+    corpus needs editing, the field was modelled wrong. Do not back-fill the field onto other plans --
+    that would fabricate implementation history.
+  - >-
+    Decision 128 -- tests/test_plan_document.py is at 495 of 500 SLOC and unregistered, so it is
+    DECOMPOSED, never raised. Every new tests/test_plan_document/ module stays under 500. This plan
+    still takes no budget raise and mints no Decision; decomposition is the sanctioned default that
+    makes both true.
   - >-
     Decision 132's reversal condition authorizes exactly this - revisit the resolution mechanism
     rather than reverting the gate. Do not weaken either gate's failure behaviour while re-keying it.
   - >-
-    Decision 128 -- no scope file crosses its SLOC budget; decompose rather than raise. Both checks
-    are near their existing sizes and the re-key should be net-neutral or smaller.
-  - >-
-    Do not add the new field to any plan other than this one's own implementation. Back-filling the
-    corpus would fabricate implementation history.
+    Both byte-capped skill surfaces have 6 bytes of headroom each. Edits to
+    .claude/skills/implement/SKILL.md and .claude/skills/planning/SKILL.md must be byte-neutral or
+    smaller, absorbed by compressing the paragraph named in the execution steps. No prose raise.
 context:
   - >-
     "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (122 of 122 triaged) --
     dispatched against this plan's PREDECESSOR scope (a turn-boundary checkpoint hook), which this
     plan supersedes. CITE from that run that still applies here - Decision 132 (the trigger seam and
     its reversal condition), Decision 148 (VP-replay legs), Decision 55 (fail loud), Decision 76
-    (two-PR plan/implement flow), Decision 90, Decision 131 (mirror tests), Decision 128. The flags
-    that drove the reshape (Decision 127 prose ceilings, Decision 163, Decision 165, Decision 168)
-    are all MOOT under this scope - it adds no ambient prose, takes no budget raise, mints no
-    Decision, and creates no registry-without-a-reader. Re-dispatch decision-scout if scope widens."
+    (two-PR plan/implement flow), Decision 90, Decision 131 (mirror tests), Decision 128 and Decision
+    130 (SLOC decompose-by-default, now load-bearing for the test decomposition). The flags that drove
+    the reshape (Decision 127 prose ceilings, Decision 163, Decision 165, Decision 168) are MOOT under
+    this scope - it adds no ambient prose, takes no budget raise, mints no Decision, and creates no
+    registry-without-a-reader. Re-dispatch decision-scout if scope widens."
   - >-
-    "gates: decision-scout=FLAGS_FOUND (predecessor scope); plan-critique=REVISE after 3 rounds on
-    the predecessor scope, then re-scoped at human direction; round 1 on this scope pending"
+    "gates: decision-scout=FLAGS_FOUND (predecessor scope); plan-critique=REVISE after 3 rounds on the
+    predecessor scope then re-scoped at human direction, plus REVISE on round 1 of this scope (leg-150
+    contradiction, test-file SLOC ceiling, baseline-absent ambiguity, stale planning-skill instruction,
+    plus 6 specification tightenings); round 2 of this scope pending"
   - >-
     THE DEFECT, stated precisely. Both gates locate the plan they verify by scanning commit subjects
     on `git log origin/main..HEAD` for feat({slug}) (scripts/checks/_common.py feat_commit_slugs,
@@ -334,54 +440,82 @@ context:
     was heuristic inference from which source files changed. This is an explicit, schema-validated
     declaration that merely travels in the diff.
   - >-
-    NOT AN INVENTION -- validate_vp_replay.py:145 ALREADY resolves plans from the diff via
-    _common.plan_paths_from_changed(changed_files) for its plan-only leg; only the implement leg at
-    :174 uses commit subjects. This plan makes the two legs consistent using machinery already
-    present in the same function.
+    PARTIAL REUSE, stated honestly. validate_vp_replay.py:145 already resolves plans from the diff via
+    _common.plan_paths_from_changed(changed_files) for its plan-only leg, and the
+    `git show origin/main:<path>` baseline read is the established idiom in two sibling checks. What
+    is genuinely NEW is the two-tree comparison primitive that combines them. An earlier draft of this
+    plan overstated this as "not an invention"; it is a new primitive built from existing parts.
+  - >-
+    RESOLVER SPECIFICATION, pinned so no improvisation is needed. Candidate set - the plan files
+    already present in `changed_files` (reuse plan_paths_from_changed), NOT a whole-docs/plans scan,
+    which would cost a `git show` per plan. Signature - widen `_implement_pr_leg(root, failed)` to
+    accept `changed_files`, matching the seam both test suites already inject. Placement - call it
+    inside the existing origin_main_reachable guard so SKIP still precedes N/A. Comparison - working
+    tree true AND baseline not-true, where baseline not-true covers both "false" and "file absent at
+    origin/main".
   - >-
     NO COST TO LOSING feat({slug}). Branch commit subjects never reach main - the merging agent
-    composes the squash commit message at merge time (the audit found implement/SKILL.md's
-    "inherits the PR body" claim empirically false). So once nothing resolves plans from feat(), its
-    absence has no downstream consumer. --allow-empty on marker commits remains optional hygiene at
-    most; it is deliberately NOT part of this plan's scope.
+    composes the squash commit message at merge time (the audit found implement/SKILL.md's "inherits
+    the PR body" claim empirically false). So once nothing resolves plans from feat(), its absence has
+    no downstream consumer. --allow-empty on marker commits remains optional hygiene at most and is
+    deliberately NOT in scope.
   - >-
     REJECTED ALTERNATIVES, all three from the predecessor plan. (A) A new guard requiring any
-    recognised commit prefix when checkpoint commits are present - catches total loss only, misses
-    the partial case, and passes while both gates still no-op. (B) The same guard demanding feat()
+    recognised commit prefix when checkpoint commits are present - catches total loss only, misses the
+    partial case, and passes while both gates still no-op. (B) The same guard demanding feat()
     specifically - fails every legitimately plan-less PR, including planning and audit PRs. (C) The
     same predicate relocated into the two existing checks - identical false positives to (B), since
-    any turn-boundary mechanism fires on planning sessions too. The decisive objection to all three
-    is that each would make commit-message shape a VERIFIED requirement, which this repo has
-    deliberately never had - the audit confirms no conformance gate exists, and the only three files
-    touching commit subjects use them for resolution, never verification.
+    any turn-boundary mechanism fires on planning sessions too. The decisive objection to all three is
+    that each would make commit-message shape a VERIFIED requirement, which this repo has deliberately
+    never had - the audit confirms no conformance gate exists, and the only surfaces touching commit
+    subjects use them for resolution, never verification.
   - >-
     FABLE ADVICE-CONSULT informed this design. Industry framing - this is a vacuous-pass / fail-open
     gate problem; the prescription is three-state semantics (PASS / FAIL / NOT-APPLICABLE) where
     not-applicable requires positive evidence of inapplicability, plus mutation-style validation that
     the gate can still fail. Precedent - pytest exits 5 on no-tests-collected, Terraform's
-    -detailed-exitcode separates no-changes from success, and selection-based CI systems (TAP,
-    predictive test selection) treat the selector as trusted computing base keyed on structural
-    inputs, never free-text convention. One piece of that advice is deliberately NOT adopted - it
-    proposed retaining feat({slug}) as a consistency tripwire (declaration-without-marker fails), but
-    that re-introduces a commit-shape obligation to protect a marker that is no longer load-bearing.
+    -detailed-exitcode separates no-changes from success, and selection-based CI systems treat the
+    selector as trusted computing base keyed on structural inputs, never free-text convention. One
+    piece of that advice is deliberately NOT adopted - it proposed retaining feat({slug}) as a
+    consistency tripwire (declaration-without-marker fails), but that re-introduces a commit-shape
+    obligation to protect a marker that is no longer load-bearing.
   - >-
-    SCOPE-GUARD INTERACTION. .claude/hooks/edit_scope_guard.py denies fail-closed for any file
-    outside the active plan's Scope, and this plan makes the implement flow edit the plan file
-    itself. The guard is inert today (nothing sets CLAUDE_ACTIVE_PLAN and no marker file exists), so
-    this is pre-emptive - but without the exemption, activation would later break every implement
-    session unless each plan listed its own path in its own Scope, which is boilerplate that fails
-    closed when forgotten.
+    DISCLOSED RESIDUAL -- the successor seam. The new signal is robust to commit topology but is still
+    written by the same agent at the same step as the old one, so an implement session that skips the
+    plan-file edit entirely yields a silent N/A on both gates. This is strictly narrower than the
+    defect being closed (which fired by accident, with no agent omission required), but it is not
+    zero. VP step 7 guards the instruction's presence; nothing guards an agent ignoring it. Recorded
+    per Decision 132's precedent of stating residual limitations explicitly, so a future reversal has
+    something to point at.
+  - >-
+    SCOPE-GUARD INTERACTION. .claude/hooks/edit_scope_guard.py denies fail-closed for any file outside
+    the active plan's Scope, and this plan makes the implement flow edit the plan file itself. The
+    guard is inert today (nothing sets CLAUDE_ACTIVE_PLAN and no marker file exists), so this is
+    pre-emptive - but without the exemption, activation would later break every implement session
+    unless each plan listed its own path in its own Scope, boilerplate that fails closed when forgotten.
+  - >-
+    GRADUATION ADMISSION RULE, stated because it is easy to violate. validate_verification_registry
+    re-runs each added row against an origin/main worktree AND live, rejecting any row that passes on
+    both. A test_selector row naming a WHOLE FILE that already exists at origin/main passes on both
+    legs and is rejected. Every test_selector node_id in this plan therefore names a class absent at
+    baseline (TestImplementationDeclared, TestImplementationDeclaredResolver,
+    TestContentKeyedResolution) or a file created by this plan, following the
+    tests/test_plan_document.py::TestTestObligations precedent already in the registry.
+  - >-
+    SURFACE-RETIREMENT OBLIGATION (12k trigger 2) is satisfied by two sweeps, not one - VP step 5
+    covers the code surface (no feat_commit_slugs caller under scripts/checks/) and VP step 8 covers
+    the instruction surface (the planning skill's stale note). VP step 10 covers the deleted test
+    monolith.
   - >-
     DEFERRED, and unsafe to build before this lands - a turn-boundary Stop hook that commits and
     pushes checkpoint work so an ephemeral container cannot lose it. Its full design, the harness
-    Stop-hook interaction, the public-repo exposure of `git add -A` (checkpoint pushes are
-    irrevocable publication - unreachable commits stay fetchable by SHA after branch deletion), and
-    a T4.1 progress_note recording the executor-side step-wrapper contract against CD.43's existing
+    Stop-hook interaction, the public-repo exposure of `git add -A` (checkpoint pushes are irrevocable
+    publication - unreachable commits stay fetchable by SHA after branch deletion), and a T4.1
+    progress_note recording the executor-side step-wrapper contract against CD.43's existing
     option_set entry git_as_store_commit_at_step_boundaries, all move to that follow-on plan. Also
-    deferred - switching branch integration from rebase to merge, and substrate-owned freshness
-    (a SubagentStart / UserPromptSubmit TTL-guarded fetch retiring the fetch instructions embedded
-    in gate dispatch prompts). rec-2362 (a duplicated sentence in AGENTS.md) is unbundled and
-    returns to the open queue.
+    deferred - switching branch integration from rebase to merge, and substrate-owned freshness (a
+    SubagentStart / UserPromptSubmit TTL-guarded fetch retiring the fetch instructions embedded in
+    gate dispatch prompts). rec-2362 is unbundled and returns to the open queue.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -389,53 +523,75 @@ pre_implementation_checklist:
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
   - >-
-    Read validate_vp_replay.py and validate_graduation_completeness.py in full before editing -- both
-    have a two-leg structure and disclosed advisory-skip semantics that must survive the re-key.
+    Read validate_vp_replay.py and validate_graduation_completeness.py IN FULL before editing -- both
+    have a two-leg structure, and validate_vp_replay's plan-only leg (136-165) contains a
+    feat_commit_slugs call at :150 that is easy to miss when re-keying only the obvious implement leg.
+  - >-
+    Confirm every relocated test class still passes in its new module before deleting the monolith.
 execution_steps:
   - >-
     Add the optional `implementation_declared: bool = False` field to PlanDocument in
     scripts/roadmap/plan_document.py. Optional and defaulted, so the existing corpus validates
     untouched; do not bump schema_version.
   - >-
-    Add the content resolver to scripts/checks/_common.py - return the plans whose
-    implementation_declared is true in the working tree AND was absent or false at origin/main,
-    reading the baseline via `git show origin/main:<path>` in the style
-    validate_verification_registry already uses. It must raise or fail loudly on an unreadable or
-    malformed plan, never return an empty list, or it recreates the absence-as-claim defect.
+    Add the content resolver to scripts/checks/_common.py per the pinned RESOLVER SPECIFICATION in
+    context - candidate set from plan_paths_from_changed(changed_files), baseline read via
+    `git show origin/main:<path>`, working-tree true AND baseline not-true. Fail loudly on a
+    working-tree read or parse failure; treat a non-resolving baseline as not-declared, never an error.
   - >-
-    Re-key validate_vp_replay's implement-PR leg to the resolver, and split its output into PASS,
-    FAIL and an explicit N-A line. Keep the existing plan-only leg and the origin/main-unreachable
-    advisory SKIP exactly as they are - SKIP and N-A are different outcomes and must stay distinct.
+    Re-key BOTH of validate_vp_replay's legs. The implement leg at :174 resolves from the declaration.
+    The plan-only leg's co-presence test at :150 -- inside _plan_only_pr_leg (136-165) -- becomes
+    declaration-based too - a plan in the diff whose declaration flipped hands off to the implement
+    leg, everything else DEFERs with its printed reason preserved. Split the output into PASS, FAIL
+    and an explicit `N/A` line. Keep the origin/main-unreachable advisory SKIP exactly as it is; SKIP
+    and N/A are different outcomes and must stay distinct.
   - >-
-    Re-key validate_graduation_completeness the same way, with the same three-state split and the
-    same preservation of its existing SKIP semantics.
+    Re-key validate_graduation_completeness at :186 the same way, with the same three-state split and
+    the same preservation of its existing SKIP semantics.
   - >-
-    Retire feat_commit_slugs from scripts/checks/_common.py once neither check calls it. If any
-    consumer outside scripts/checks/verification/ remains, leave the helper and note the caller.
+    Retire feat_commit_slugs from scripts/checks/_common.py once neither check calls it. Describe the
+    retirement in the rewritten docstrings WITHOUT naming the symbol anywhere under scripts/checks/,
+    or VP step 5's sweep goes red on the docstring itself.
   - >-
-    Exempt the active plan's own path in .claude/hooks/edit_scope_guard.py -- resolve the active
-    plan path and allow an edit whose target is exactly that file, leaving every other denial intact.
+    Decompose tests/test_plan_document.py (495 SLOC, 5 from the limit) into the
+    tests/test_plan_document/ package - __init__.py, test_schema.py (TestPlanDocumentSchema,
+    TestSchemaVersion2, TestSchemaVersion3), test_loader_cli.py (TestLoader, TestCli,
+    TestValidateIntegration), test_optional_fields.py (TestClosesCriteria, TestGraduationDisposition,
+    TestFallbackReevaluation, TestTestObligations, plus the new TestImplementationDeclared). Register
+    scripts/roadmap/plan_document.py in scripts/test_coverage_checker.py's
+    _CONCERN_SPLIT_TEST_PACKAGES and cover the new mapping in
+    tests/test_coverage_checker/test_coverage_checker_map.py. Delete the monolith last, after the
+    relocated classes pass.
+  - >-
+    Exempt the active plan's own path in .claude/hooks/edit_scope_guard.py -- resolve the active plan
+    path and allow an edit whose target is exactly that file, leaving every other denial intact.
   - >-
     Update .claude/skills/implement/SKILL.md so the flow sets `implementation_declared: true` in the
-    plan file as part of the change, BEFORE the mandatory full-validation run. Absorb the added bytes
-    by local rewording -- the surface has 6 bytes of headroom and this plan takes no budget raise.
+    plan file BEFORE the mandatory full-validation run. Absorb the bytes by compressing the "Run the
+    full gate locally first" preamble -- this surface has 6 bytes of headroom and no raise is taken.
   - >-
-    Update the four test files - resolver cases, re-keyed leg cases, three-state assertions, the
-    scope-guard exemption, and the two mutation-style meta-tests proving each check still reddens on
-    a genuinely failing verification step.
+    Rewrite .claude/skills/planning/SKILL.md:334-337 so it describes declaration-based resolution
+    instead of feat({slug}) commits on git log origin/main..HEAD. Byte-neutral or smaller; this
+    surface also has 6 bytes of headroom.
   - >-
-    Add one config/agent/verification_registry/registry.yaml row per graduated step, each carrying
-    plan_slug plan-resolution-content-keyed. Each row's command must discriminate between the
-    pre-change and post-change trees or the admission gate rejects it; if a row cannot discriminate,
+    Update the remaining test files - resolver cases (including the baseline-absent case), re-keyed
+    two-leg cases, three-state assertions, the scope-guard exemption, the two mutation-style
+    meta-tests, and the two invalidated feat_commit_slugs tests in
+    tests/checks/_common/test_primitives.py at :173 and :187 (keep the origin_main_reachable half of
+    :187, which survives).
+  - >-
+    Add one config/agent/verification_registry/registry.yaml row per graduated step. Each
+    test_selector row's node_id must name a class ABSENT at origin/main (see the GRADUATION ADMISSION
+    RULE in context) or the differential gate rejects it. If a row genuinely cannot discriminate,
     reclassify that step to waive with a substantive reason rather than weakening the row.
   - >-
-    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
-    and RCA (Decision 55).
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
+    RCA (Decision 55).
   - >-
-    Report - what was implemented, verification results, and explicit confirmation that a branch
-    whose content commits are all automated checkpoints still has its VP steps replayed.
+    Report - what was implemented, verification results, and explicit confirmation that a branch whose
+    content commits are all automated checkpoints still has its VP steps replayed.
 rollback: >-
   Single-PR revert. The change is self-contained - the new field is optional and unused by anything
-  else, and reverting restores commit-subject resolution exactly as it stands today. No data
-  migration, no external state, and no other plan depends on the field until the deferred
-  checkpoint-hook plan lands.
+  else, and reverting restores commit-subject resolution exactly as it stands today. The test
+  decomposition reverts with it. No data migration, no external state, and no other plan depends on
+  the field until the deferred checkpoint-hook plan lands.
