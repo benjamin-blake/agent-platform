@@ -249,9 +249,9 @@ acceptance_criteria:
     in both presubmit tiers, and declares examined()/skipped() rather than relying on the frozen
     check-accounting baseline.
   - >-
-    Decision 171 exists with a well-formed Decision 167 envelope declaring amends [101, 127],
-    BOTH amended entries carry the reciprocal forward-pointer, and the entry is synced to
-    ops_decisions.
+    Decision 171 exists with a well-formed Decision 167 envelope declaring amends [101, 127], BOTH
+    amended entries carry the reciprocal forward-pointer, Decision 127's point-1 enumeration gains
+    the licence-and-attribution class, and the entry is synced to ops_decisions.
   - >-
     No AWS resource, IAM role, S3 bucket, SSM path, Glue database or Lambda is renamed; the
     agent-platform-* infrastructure namespace is untouched.
@@ -321,8 +321,13 @@ verification_plan:
       grep -q '^Additional Use Grant:' LICENSE &&
       awk '/^Additional Use Grant:/,/^Change Date:/' LICENSE
       | grep -qiE 'without limitation|not exhaustive' &&
-      ! awk '/^Licensor:/,/^Change License:/' LICENSE | grep -qE '\[[^]]*\]'
-    expected: Exit 0. Every BUSL parameter is populated and no template placeholder survives.
+      ! awk '/^Licensor:/,/^-----/' LICENSE | grep -qE '\[[^]]*\]'
+    expected: >-
+      Exit 0. Every BUSL parameter is populated and NO bracket placeholder survives anywhere in the
+      Parameters block -- which now includes canonical BUSL-1.1's "please visit: [ ]" line, the
+      alternative-licensing contact slot that sits AFTER Change License: and was outside an earlier
+      range. That slot must point at COMMERCIAL-LICENSE.md or the maintainer address; shipping it
+      empty while the repo advertises commercial licences is the defect this widened range catches.
     fix_if: >-
       An unfilled parameter makes the grant defective. A missing Change Date in particular leaves
       the licence with no conversion trigger at all.
@@ -462,7 +467,10 @@ verification_plan:
       assert len(b.encode()) <= 6144, len(b.encode());
       [__import__('sys').exit('Decision %d lacks the reciprocal forward-pointer' % v)
       for v in (101, 127) if 'Decision 171' not in
-      re.search(r'## Decision %d:.*?(?=\\n## Decision )' % v, t, re.S).group(0)]; print('ok')"
+      re.search(r'## Decision %d:.*?(?=\\n## Decision )' % v, t, re.S).group(0)];
+      assert 'licence-and-attribution' in
+      re.search(r'## Decision 127:.*?(?=\\n## Decision )', t, re.S).group(0),
+      'Decision 127 point 1 lacks the new licence-and-attribution class'; print('ok')"
     expected: >-
       Exit 0. Envelope declares amends [101, 127], carries a significance justification, is within
       the size norm, and BOTH amended entries point back at Decision 171.
@@ -780,7 +788,8 @@ test_obligations:
       grep -q 'environment:tf-gated-apply' terraform/bootstrap/github_ci_apply.tf
     red_green_expectation: >-
       Red if either form is deleted during the dual-trust expansion or the later contraction,
-      green while both are present. Graduated at step 3 as a standing guard.
+      green while both are present. NOT graduated -- step 3's waiver records why the registry row
+      is unsatisfiable across this plan's four PRs.
   - source: terraform/personal/oidc_ci_roles.tf
     behavior: github_ci_branch and github_ci_pr trust both slugs during the transition window.
     verification_step: 2
@@ -862,7 +871,7 @@ test_obligations:
       grep -q '^Additional Use Grant:' LICENSE &&
       awk '/^Additional Use Grant:/,/^Change Date:/' LICENSE
       | grep -qiE 'without limitation|not exhaustive' &&
-      ! awk '/^Licensor:/,/^Change License:/' LICENSE | grep -qE '\[[^]]*\]'
+      ! awk '/^Licensor:/,/^-----/' LICENSE | grep -qE '\[[^]]*\]'
     red_green_expectation: >-
       Red against the current Apache-2.0 LICENSE (no BUSL header, no Parameters block), green
       once the parameterised BUSL text lands.
@@ -1023,9 +1032,10 @@ context:
     BUSL-1.1 was chosen over AGPL and FSL because its default text restricts PRODUCTION USE,
     reaching internal for-profit use by third parties that copyleft and non-compete licences do
     not. Parameters: Licensor "Benjamin Blake"; Change License Apache-2.0; Change Date = flip date
-    + 4 years (BUSL's cap) pinned to the first of the following month; Additional Use Grant is a
-    clarifying restatement of BUSL's baseline permitting non-production use, personal research,
-    evaluation and development. Canonical licence text: https://mariadb.com/bsl11/ -- reproduce
+    + 4 years, rounded DOWN to the exact anniversary (BUSL's cap; never up -- see the Change Date
+    context row); Additional Use Grant is a clarifying restatement of BUSL's baseline permitting
+    non-production use, personal research, evaluation and development, carrying the mandatory
+    non-limitation clause INSIDE the parameter value. Canonical licence text: https://mariadb.com/bsl11/ -- reproduce
     verbatim, filling only the Parameters block.
   - >-
     GitHub's licence detector (licensee) is backed by choosealicense.com, which does NOT include
@@ -1269,13 +1279,17 @@ execution_steps:
     block. Write validate_licence_consistency here (NOT in PR-3): its licence invariant cannot be
     green before LICENSE and LICENSING.md exist. Give it an explicit class-(a) path allowlist WITH
     A PER-PATH PATTERN, an examined() count declaration, and both invariants; register it across
-    all seven surfaces including the verification-registry row for graduated step 3 and the
-    ci_rca_taxonomy row; write the mirror test to 100% line coverage. Then move the current Apache
+    its SIX applicable surfaces including the ci_rca_taxonomy row -- NOT a verification-registry
+    row: nothing in this plan graduates (see VP step 3's waiver), so surface 5 does not apply and
+    authoring that row would red PRs 2-4; write the mirror test to 100% line coverage. Then move the current Apache
     text verbatim to LICENSE-APACHE; write LICENSING.md with the SHA and
     the self-verifying rule; add the COMMERCIAL-LICENSE.md placeholder and its prose_allowlist row;
     rewrite README's H1, License section and CLA note; name the project in PROJECT_CONTEXT. Author
     Decision 171 with its Decision 167 envelope (amends [101, 127]) AND the reciprocal
-    forward-pointer inside BOTH Decision 101 and Decision 127. Re-check the next free decision number at execution time -- a concurrent
+    forward-pointer inside BOTH Decision 101 and Decision 127 -- and add the
+    licence-and-attribution class to Decision 127's point-1 permanent-class enumeration, which is
+    the substantive amendment the 127 edge asserts. Point LICENSE's alternative-licensing contact
+    slot at COMMERCIAL-LICENSE.md rather than leaving its bracket empty. Re-check the next free decision number at execution time -- a concurrent
     PR may have claimed 171. Run VP steps 4-7, 12 and 13, then open and merge the PR.
   - >-
     Post-merge: run VP step 24 to sync Decision 171 to ops_decisions, and file the four follow-on
