@@ -183,8 +183,10 @@ scope:
   - file: tests/checks/misc/test_validate_ghas_probe.py
     action: Modify
     purpose: >-
-      Top up validate_ghas_probe.py from 91% to 100%; the changed-file coverage gate admits no
-      partial coverage on a touched module.
+      Top up validate_ghas_probe.py from 91% to 100% -- the changed-file coverage gate admits no
+      partial coverage on a touched module -- AND add a positive assertion that _default_repo()
+      returns benjamin-blake/theseus with GITHUB_REPOSITORY unset. The sweep's own guard proves
+      only that the old slug is absent; absence is not the same claim as correctness.
   - file: tests/convergence_health/test_approvals.py
     action: Modify
     purpose: Keep changed-file line coverage at 100% for approvals.py.
@@ -576,7 +578,9 @@ verification_plan:
     phase: post-deploy
     action: The fine-grained GHAS_PROBE_TOKEN's repo scope survived the rename.
     command: >-
-      set -o pipefail; H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
+      set -o pipefail; test -n "$PREV_RUN_ID" || { echo "PREV_RUN_ID unset -- capture the newest
+      dispatch run id BEFORE dispatching"; exit 1; };
+      H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
       curl -sf -X POST -H "$H" -H "Accept: application/vnd.github+json"
       https://api.github.com/repos/benjamin-blake/theseus/actions/workflows/ghas-probe.yml/dispatches
       -d '{"ref":"main"}' &&
@@ -728,7 +732,10 @@ test_obligations:
     red_green_expectation: >-
       Red before the Entry is added (name absent from both sequences), green after.
   - source: scripts/checks/misc/validate_ghas_probe.py
-    behavior: The local default repo resolves to the new slug when GITHUB_REPOSITORY is unset.
+    behavior: >-
+      No old-slug reference survives at this path. NOTE the linked command proves ABSENCE only;
+      the positive claim (_default_repo() returns the theseus slug when GITHUB_REPOSITORY is
+      unset) is asserted in the mirror test, which this plan already modifies for coverage.
     verification_step: 9
     command: >-
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
@@ -1228,8 +1235,12 @@ execution_steps:
     not run a routine terraform/github apply until it is done, or that apply will silently rename
     the repository forward again.
   - >-
-    After either branch: run VP steps 17, 18, 19 and 20, then assert a clean (no-op)
-    terraform/github plan so state and reality agree before anything else touches that root.
+    After either branch: run VP steps 17, 18, 19 and 20. Then, ON THE TERRAFORM BRANCH ONLY,
+    assert a clean (no-op) terraform/github plan so state and reality agree before anything else
+    touches that root. Do NOT run that assertion on the API-fallback branch: that branch drifts
+    state deliberately (the github_repository state ID is the repo name), so a non-empty plan there
+    is the expected outcome, not a failure -- the reconcile rec filed in that branch is what closes
+    it, and a routine apply must not run against that root until the reconcile lands.
   - >-
     Live-exercise the FOUR personal-root roles under the new slug per VP step 21 -- a trivial PR
     opened and merged (github_ci_pr, github_ci_branch), a terraform-drift cycle (github_ci_planner)
