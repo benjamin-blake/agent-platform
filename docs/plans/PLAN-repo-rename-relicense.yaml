@@ -121,10 +121,14 @@ scope:
       competes for Decision 171's 6,144 bytes.
 
   # ---- PR-3: reference sweep + trust cleanup (narrow trust promptly after live proof) ----
-  # NOTE: validate_licence_consistency and its four companion registration rows below ship in
-  # PR-4, NOT PR-3 -- the check asserts licence-file consistency, which cannot hold until
-  # LICENSE/LICENSING.md land. Its slug-staleness half is proven red-green by fixtures in the
-  # mirror test, not by tree state, so shipping it whole in PR-4 loses no evidence.
+  # NOTE: validate_licence_consistency and its THREE companion registration rows (_manifest.py,
+  # config/ci_rca_taxonomy.yaml, the mirror test) ship in PR-4, NOT PR-3 -- the check asserts
+  # licence-file consistency, which cannot hold until LICENSE/LICENSING.md land. Its slug-staleness
+  # half is proven red-green by fixtures in the mirror test, not by tree state, so shipping it
+  # whole in PR-4 loses no evidence. The two coverage top-ups below
+  # (tests/checks/misc/test_validate_ghas_probe.py, tests/convergence_health/test_approvals.py)
+  # ship with PR-3 alongside the modules they cover: test_coverage_checker enforces 100% on every
+  # CHANGED Python file, so deferring either to PR-4 reds PR-3's own merge gate.
   - file: scripts/checks/misc/validate_ghas_probe.py
     action: Modify
     purpose: _DEFAULT_REPO slug (the CI path already reads GITHUB_REPOSITORY; only the local default is stale).
@@ -245,7 +249,9 @@ acceptance_criteria:
     Change Date = flip date + 4 years); LICENSE-APACHE holds the verbatim prior Apache text; and
     LICENSING.md states the forward-only boundary in a form that survives squash-merge SHA churn.
   - >-
-    validate_licence_consistency is registered across all seven Decision 169/170 surfaces, passes
+    validate_licence_consistency is registered across SIX of the seven Decision 169/170 surfaces
+    -- surface 5 (a verification_registry row) is owed per GRADUATED verification_plan step and
+    this plan graduates none, per VP step 3's waiver -- passes
     in both presubmit tiers, and declares examined()/skipped() rather than relying on the frozen
     check-accounting baseline.
   - >-
@@ -285,8 +291,10 @@ verification_plan:
       'repo' does not match inside 'github_repos', so this finds scalar survivors only.
     graduation: waive
     graduation_waiver_reason: >-
-      Same transience as step 1 -- the scalar/list distinction exists only during the dual-trust
-      window and is collapsed back at cleanup.
+      The DUAL-SLUG state exists only during the transition window and is narrowed at cleanup, so
+      a standing guard would assert a condition this plan deletes. Note the list local itself is
+      RETAINED at cleanup as a one-element list -- PR-3 must not revert to the scalar, or this very
+      step fails when PR-3 runs it.
   - step: 3
     phase: pre-deploy
     action: Decision 94 invariant -- the apply role's trust carries BOTH sub forms.
@@ -626,8 +634,11 @@ verification_plan:
       done; echo four-personal-roles-ok
     expected: >-
       Prints four-personal-roles-ok. Export RENAME_TS first, as ISO-8601 WITH AN EXPLICIT UTC OFFSET
-      (trailing Z or +00:00). An offset-naive value raises inside the comparison and is reported as
-      STALE -- fail-closed, but misleading.
+      -- use the trailing-Z form specifically, NOT +00:00. Step 22 compares it against GitHub's
+      run_started_at with jq, which is a LEXICOGRAPHIC string compare, and GitHub always returns
+      Z-suffixed; mixing forms only happens to work because the date-time prefixes differ, and it
+      fails open at exact equality. An offset-naive value raises inside the Python comparison in
+      steps 21/22 and is reported as STALE -- fail-closed, but misleading.
       ADMIN-CONTAINER STEP -- needs agent_platform_admin. Drive the exercise deliberately before
       running this: open and merge a trivial PR (github_ci_pr on the PR event, github_ci_branch on
       push), let terraform-drift run (github_ci_planner), run a governed Lambda deploy
@@ -1233,8 +1244,13 @@ execution_steps:
     the gated-apply job. The operator approves the tf-gated-apply Environment. Then run VP steps 14
     and 16. Do not proceed while either is red.
   - >-
-    PR-2 (rename). Flip repository_name to theseus in terraform/github/variables.tf and make the
-    net-neutral substitution in terraform/github/CLAUDE.md. Run VP step 13, open and merge the PR.
+    PR-2 (rename). Flip repository_name to theseus in terraform/github/variables.tf; make the
+    net-neutral substitution across all three old-slug sites in terraform/github/CLAUDE.md; add
+    prevent_destroy to github_repository_environment.tf_gated_apply in terraform/github/environments.tf
+    (it carries no lifecycle block today, so the fail-open destroy path is genuinely open --
+    prevent_destroy is a lifecycle meta-argument and produces NO plan diff, so it does not perturb
+    the operator's "in-place updates only" expected shape); and delete the redundant import block in
+    terraform/github/repo.tf, whose line-2 comment is itself a class-(a) old-slug site. Run VP step 13, open and merge the PR.
   - >-
     PR-2 apply (operator-directed, admin container). Resolve the tf-gated-apply reviewer id FIRST
     -- gated_apply_reviewer_user_ids has no default and its validation rejects an empty list, and
@@ -1292,7 +1308,7 @@ execution_steps:
     block. Write validate_licence_consistency here (NOT in PR-3): its licence invariant cannot be
     green before LICENSE and LICENSING.md exist. Give it an explicit class-(a) path allowlist WITH
     A PER-PATH PATTERN, an examined() count declaration, and both invariants; register it across
-    its SIX applicable surfaces including the ci_rca_taxonomy row -- NOT a verification-registry
+    its six applicable surfaces including the ci_rca_taxonomy row -- NOT a verification-registry
     row: nothing in this plan graduates (see VP step 3's waiver), so surface 5 does not apply and
     authoring that row would red PRs 2-4; write the mirror test to 100% line coverage. Then move the current Apache
     text verbatim to LICENSE-APACHE; write LICENSING.md with the SHA and
@@ -1303,7 +1319,9 @@ execution_steps:
     licence-and-attribution class to Decision 127's point-1 permanent-class enumeration, which is
     the substantive amendment the 127 edge asserts. Point LICENSE's alternative-licensing contact
     slot at COMMERCIAL-LICENSE.md rather than leaving its bracket empty. Re-check the next free decision number at execution time -- a concurrent
-    PR may have claimed 171. Run VP steps 4-7, 12 and 13, then open and merge the PR.
+    PR may have claimed 171. Run VP steps 4-13 -- NOT just 4-7 and 12: steps 8, 9, 10 and 11 all
+    exercise validate_licence_consistency, which ships in THIS PR, and step 9 alone is the linked
+    verification_step for eight test obligations. Then open and merge the PR.
   - >-
     Post-merge: run VP step 24 to sync Decision 171 to ops_decisions, and file the four follow-on
     recs named in Context. Confirm rec-3126 remains open and unbundled.
@@ -1313,12 +1331,17 @@ execution_steps:
   - 'Report: what was implemented, verification results'
 
 rollback: >-
-  BEFORE VP step 23 (trust narrowing) rollback is cheap and needs neither CI nor Terraform: the
+  The cheap-rollback boundary is PR-3's CONTRACTION APPLY, not a VP step: steps 22 and 23 run
+  AFTER those applies and only verify them (step 22's own fix_if opens "WHY THIS IS SAFE DESPITE
+  RUNNING AFTER THE CONTRACTION APPLIES"). An earlier draft of this stanza said "before step 23",
+  which is off by one and would mislead an operator in exactly the window that matters.
+  BEFORE PR-3's contractions apply -- i.e. through PR-1, PR-2 and the step-21 live exercise --
+  rollback is cheap and needs neither CI nor Terraform: the
   owner renames theseus back to agent-platform via Settings or PATCH /repos. The old-slug subs are
   still trusted because cleanup has not run, so CI resumes on the next run. Clear any red
   convergence record via the acknowledge-and-retry unlatch, and route ci_rca recs raised during the
   broken window through normal review (Decision 55/72, forward-fix, never auto-revert).
-  AFTER step 23 a rename-back is NOT a self-contained recovery, and an earlier draft of this plan
+  AFTER those contractions apply, a rename-back is NOT a self-contained recovery, and an earlier draft of this plan
   was wrong to claim it was. Only github_ci_apply lives in the admin-local bootstrap root; the
   OTHER FOUR roles live in terraform/personal, whose sole sanctioned apply channel is
   terraform-apply-sandbox.yml -- which must authenticate as repo:benjamin-blake/agent-platform,
