@@ -1,0 +1,1263 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "class-d-enforcers-wave-2"
+intent: >-
+  Close rec-3059 by converting the last two Class D contracts carrying the never-resolving
+  evaluator.none_grandfathered form to resolving {check: <name>} evaluators, then DELETE the
+  grandfather form from the schema so it is unrepresentable rather than merely unused, and remove
+  the referent-less evaluator_none_grandfathered_max ratchet pin. Advances the platform's
+  verification-is-recursively-improvable thesis to its terminus for this debt class: a rule with no
+  evaluator is not a rule, and the form that permitted such rules stops existing.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-class-d-enforcers-wave-2.yaml
+phase: >-
+  rec-3059 (Critical, open) second and FINAL enforcer wave, completing the first wave landed in #905
+  (PLAN-class-d-contract-enforcers). Parent surface T2.56 (Normative / contract / ADR layering) --
+  this plan closes NONE of T2.56's exit criteria (both concern instruction-layer shrinkage and
+  DECISIONS-as-retrieved-ADR-log), so no closes_criteria is declared. Soft-warn exception category:
+  ad_hoc_rec.
+scope:
+  - file: scripts/checks/contracts/validate_composite_action_shape_rosters.py
+    action: Create
+    purpose: >-
+      Assert composite-action-shape.yaml's declared registries equal the live guard/config surfaces:
+      known_r1_violators keys+pinned_lines vs _R1_KNOWN_VIOLATORS and the baseline r1: section;
+      baseline_file.path vs _BASELINE_REL_PATH; section_allowlist.sections vs
+      _KNOWN_BASELINE_SECTIONS; and that known_r1_conformant[].delegate / closing_instance.script
+      resolve on disk.
+  - file: scripts/checks/contracts/validate_iam_simulate_fixture_shape.py
+    action: Create
+    purpose: >-
+      Run scripts/ci/iam_simulate.py's PURE (AWS-free) validation layer -- load_fixture,
+      build_triples, principal_arn -- against iam-simulate-fixture.yaml with dummy non-numeric
+      placeholders, plus parity legs the existing tests lack: expected_decision_values vs
+      VALID_DECISIONS, declared placeholders vs the tokens the runner substitutes. It does NOT assert
+      "every triple's expected_decision is drawn from the declared list": given the first two legs
+      (build_triples already rejects any value outside VALID_DECISIONS, and leg 2 pins
+      expected_decision_values TO VALID_DECISIONS) that leg is TAUTOLOGICAL -- it could never fail
+      independently, and must not be added. Leg 2 is still genuinely exercised, by VP step 6's
+      expected_decision_values drift perturbation.
+  - file: tests/checks/contracts/test_validate_composite_action_shape_rosters.py
+    action: Create
+    purpose: >-
+      Mirror test (Decision 131) -- green, roster-drift red, pinned_lines-drift red, allowlist-drift
+      red, ABSENT/EMPTY-target red, missing-file and malformed-YAML red.
+  - file: tests/checks/contracts/test_validate_iam_simulate_fixture_shape.py
+    action: Create
+    purpose: >-
+      Mirror test -- green, expected_decision_values-drift red, undeclared-placeholder red,
+      malformed-triple red, ABSENT/EMPTY-target red, missing-file and malformed-YAML red.
+  - file: scripts/checks/contracts/_manifest.py
+    action: Modify
+    purpose: >-
+      Two Entry literals (bare string module=/attr=), each pre=True with pre_globs=None and
+      full_segment="full_after_lint" (Decision 169).
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Two function_to_category rows, both schema_drift -- required by validate_ci_rca_taxonomy check
+      1b (every registered check must resolve to a category).
+  - file: docs/contracts/composite-action-shape.yaml
+    action: Modify
+    purpose: >-
+      Flip evaluator to {check: validate_composite_action_shape_rosters}; amendment_log entry
+      RECORDING THE DELIBERATE DEVIATION from the erased route (see constraints) and the resulting
+      three-way parity set.
+  - file: docs/contracts/iam-simulate-fixture.yaml
+    action: Modify
+    purpose: >-
+      Flip evaluator to {check: validate_iam_simulate_fixture_shape}; amendment_log entry. ALSO correct
+      the header prose, which goes false on this flip: lines 5-10 assert "It is deliberately NOT a
+      validate.py check" and lines 18-23 say "grandfathered with evaluator.none_grandfathered ... see
+      the enforcement_route", naming a block this flip deletes. Comment edits change neither the parsed
+      dict (no amendment obligation) nor effective_lines (non-comment), so this correction is free on
+      both the amendment and the 603-line axes -- but unlisted it would ship a self-contradicting
+      contract.
+  - file: docs/contracts/contract-population.yaml
+    action: Modify
+    purpose: >-
+      Retire the none_grandfathered kind from evaluator_kinds, the grandfather_only_forms subsection,
+      change_detection.evaluator_kind_change (lines 196-199 -- declares the deleted rule and
+      cross-references a deleted sub-key), subject_namespace.non_seedable_exception (records
+      exit-criteria-ledger's route in the deleted model's field shape), the census field, the
+      pin_binding wording and the ratchet pin. Both prose residues are invisible to VP step 9's `bad`
+      leg, which reads only contract.evaluator. Add the
+      RETIREMENT GOVERNANCE NOTE (what was retired, why, reversal path) and an amendment_log entry.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      The contract-population route description names "the grandfather-only forms (status: active,
+      evaluator.none_grandfathered)" -- narrow it to status: active. Class D, so it needs its own
+      new amendment_log[] entry.
+  - file: docs/contracts/verification-registry.yaml
+    action: Modify
+    purpose: >-
+      Add the retirement record to the top-level `governance_notes:` key (a declared
+      ContractDocument field, currently absent from this file) naming the one retired and two
+      re-authored graduated rows, why, and the reversal path. NOTE this file is Class A (ratified,
+      contract_version 4), NOT Class D -- the Class D amendment rule does not apply to it, and adding
+      a new top-level key does not trip the ritual amendment trigger, which fires only on
+      contract.description or a field's description/semantics.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append a dated, number-free annotation to Decision 168's body in one of the RATIFIED
+      amendment_forms shapes (docs/contracts/decision-entry.yaml: trailing_bracket
+      "[Amendment 2026-08-14: ...]" or blockquote_update "> **Update (2026-08-14):** ..."), recording
+      that clause 3's none_grandfathered half is inoperative and pointing at
+      contract-population.yaml's retirement note. Mints NO number and declares NO amends edge.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerate via `bin/venv-python -m scripts.decisions_index` after the annotation --
+      validate_decisions_index_freshness fails on a stale index.
+  - file: scripts/contracts_schema.py
+    action: Modify
+    purpose: >-
+      Delete the EnforcementRoute model and EvaluatorSpec.none_grandfathered; narrow
+      _exactly_one_kind to two kinds. extra="forbid" then makes the old form raise at validation
+      with no new guard code.
+  - file: scripts/checks/contracts/_population.py
+    action: Modify
+    purpose: >-
+      Delete check_evaluator_kind_change (fires only on a head carrying none_grandfathered),
+      resolve_evaluator's none branch, the Census.evaluator_none_grandfathered field and its
+      render() segment, and the retired _ratchet re-export.
+  - file: scripts/checks/contracts/_ratchet.py
+    action: Modify
+    purpose: >-
+      Correct the module docstring and the three-pin wording in validate_ratchet_pins,
+      check_pin_direction and check_pins_bound_to_census (all say "three"), then delete
+      EVALUATOR_NONE_GRANDFATHERED_MAX_KEY, its PIN_KEYS membership,
+      evaluator_none_grandfathered_max_spec and its _SPEC_BY_KEY row. grandfathered_max and
+      status_active_max are untouched and stay equality-bound.
+  - file: scripts/checks/contracts/validate_contract_drift.py
+    action: Modify
+    purpose: >-
+      Delete the new-file none_grandfathered prohibition branch, the `if
+      meta.evaluator.none_grandfathered is None` guard (grandfather_kind collapses to status ==
+      "active"), the census increment and the census_values row; apply rec-3101's cascade suppression
+      to the surviving pin-vs-census binding. ALSO delete the Pass 2 kind-change CALL SITE at lines
+      358-362 together with the base_meta/head_meta locals that exist only to feed it -- deleting
+      _population.check_evaluator_kind_change without its caller is a guaranteed AttributeError. That
+      removal orphans _class_d_meta_from_text (line 418), whose ONLY production caller is line 358:
+      delete it too, and delete its tests in
+      tests/checks/contracts/validate_contract_drift/test_coverage_edges.py -- otherwise it ships
+      production-dead but still test-covered, so no coverage gate fires and nothing surfaces it. Also
+      correct the module docstring (the stale "evaluator-kind-change" phrase is at line 16 of the 2-18
+      block) and the three-pin comment at lines 366-367.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Retire enforcement-route-required-on-none-grandfathered (referent deleted); re-author
+      contracts-grandfather-only-forms-both-directions (its node_id names a deleted test) and
+      contract-census-declared-includes-env-taxonomy (its command asserts on the deleted attribute);
+      add the VP step 5 graduation row.
+  - file: config/structural_size_budgets.yaml
+    action: Modify
+    purpose: >-
+      Lower docs/contracts/iam-simulate-fixture.yaml 608 -> 603 (measured; a decrease is
+      unrestricted and leaves no silent slack). The dec-168 marker text is retained verbatim so the
+      iam-simulate-budget-marker-recited graduated row stays green.
+  - file: tests/checks/contracts/test__ratchet.py
+    action: Modify
+    purpose: >-
+      Update every fixture and assertion to the surviving two-pin set -- but PRESERVE
+      TestPinBinding::test_census_over_pin_fails by name: it is the graduated node of
+      contract-population-pin-bound-to-census and survives untouched, because it exercises only
+      grandfathered_max. validate_verification_registry resolves every node_id on each run, so
+      deleting it reds VP steps 11 and 13.
+  - file: tests/checks/contracts/test__population.py
+    action: Modify
+    purpose: >-
+      SURGICAL deletions only -- there is NO class named TestEvaluatorKindChange (verify by grep before
+      editing; an earlier draft of this plan invented that name). The kind-change tests live inside
+      TestAmendmentLogAndKindChangeDirect (line 417) alongside three amendment_log tests (418-431) and
+      test_conformance_loss_both_directions (476-480) that MUST SURVIVE -- check_amendment_log_for_class_d
+      and check_conformance_loss are not deleted, and _population.py carries no coverage_baseline.yaml
+      entry, so Decision 159 holds it at 100% and a wholesale class deletion reds the full tier. Delete
+      exactly: test_kind_change_requires_both_sides_present (433),
+      test_kind_change_resolving_to_none_grandfathered_fails (449),
+      test_none_grandfathered_kind_never_resolves (308), and narrow the three-kind parametrize (497) to
+      two. Remove the now-dead _COMPLETE_ROUTE helper (ruff will not catch a dead module constant).
+  - file: tests/checks/contracts/validate_contract_drift/test_ratchet.py
+    action: Modify
+    purpose: Two-pin fixtures; add rec-3101's skipped-contract cascade-suppression red path.
+  - file: tests/checks/contracts/validate_contract_drift/test_real_population.py
+    action: Modify
+    purpose: >-
+      Collapse the resolving/routed if-else (lines 78-86) to an unconditional "every seeded contract's
+      evaluator RESOLVES" assertion -- the test becomes the standing proof that the debt class is
+      empty. RENAME the node to test_every_seeded_contract_declares_a_resolving_evaluator: keeping
+      "or_routed" in a name whose routed half this plan deletes is the exact dishonesty this plan
+      enforces against elsewhere. Update the two test_obligations selectors in the same edit; no
+      registry row references this node, so the rename is otherwise free. ALSO correct the class
+      docstring (60-66), which still says the evaluator "either genuinely RESOLVES ... or carries a
+      complete routed none_grandfathered debt record" -- the same "or routed" staleness the rename
+      removes from the node name. No VP leg reaches tests/, so this is instruction-only.
+  - file: tests/checks/contracts/validate_contract_drift/test_grandfather_only.py
+    action: Modify
+    purpose: >-
+      FOUR of the five TestGrandfatherOnly tests construct the retired kind (lines 36, 49, 71, 100),
+      not two -- verify by grep before editing, and DISPOSITION ALL FOUR. Delete line 49 (kind-change),
+      line 71 (arrival-permission), and the whole TestEnforcementRoute class. ALSO DELETE line 36,
+      test_new_file_declaring_none_grandfathered_fails: it exercises the new-file prohibition branch
+      that execution step 5 removes, yet it would KEEP PASSING GREEN, because pydantic's extra="forbid"
+      rejection surfaces as "Contract drift (schema): grand.yaml: ...none_grandfathered..." and the test
+      asserts only that some failure mentions the file and the token. The repo has already recorded this
+      exact trap in the sibling test_census_accounting.py:92-98 ("would keep passing ... while silently
+      ceasing to prove its actual subject") -- a surviving green test whose name asserts a deleted branch
+      is the precise failure mode this plan exists to close. RE-AUTHOR line 100 -- NOT merely a kind swap: once the none_grandfathered guard
+      is deleted EVERY Class D file's evaluator must resolve, so {check: validate_placement} on a fixture
+      named grandf.yaml FAILS (proved by the sibling
+      test_evaluator_does_not_resolve_rejection_is_the_only_failure at test_census_accounting.py:121-133).
+      Rename the fixture to a basename the check module actually contains -- file-router.yaml, the
+      pattern test_evaluator_resolution.py:22-26 uses. This matters because the re-authored node is what
+      contracts-grandfather-only-forms-both-directions gets repointed at. Originally line 100:
+      (test_baseline_present_active_status_loads_without_new_file_prohibition), which asserts failed ==
+      [] and is a status: active leg that must now use a RESOLVING evaluator rather than the retired
+      kind -- it is re-authored, not merely retained.
+  - file: tests/checks/contracts/validate_contract_drift/test_census_accounting.py
+    action: Modify
+    purpose: >-
+      Delete test_new_file_none_grandfathered_rejection_is_the_only_failure; assert the census line
+      no longer carries an evaluator_none_grandfathered field.
+  - file: tests/checks/contracts/validate_contract_drift/test_evaluator_resolution.py
+    action: Modify
+    purpose: Delete test_none_grandfathered_never_resolves (constructs the deleted kind).
+  - file: tests/checks/contracts/validate_contract_drift/test_coverage_edges.py
+    action: Modify
+    purpose: >-
+      Delete TestClassDMetaFromTextDirect (124-156, the file's tail) -- the helper is orphaned when the Pass 2
+      kind-change call site goes, and without this it ships production-dead but still covered, so no
+      coverage gate surfaces it. Also correct the module docstring (line 4), which names
+      _class_d_meta_from_text after this plan deletes it.
+  - file: tests/test_contracts.py
+    action: Modify
+    purpose: >-
+      Delete the none_grandfathered EvaluatorSpec/route tests and the _complete_route helper; add
+      the unrepresentability assertion at the load_contract_meta layer.
+  - file: tests/test_contracts_schema.py
+    action: Modify
+    purpose: >-
+      Delete TestEnforcementRoute and the EnforcementRoute import; re-author test_exactly_one_kind_required (line 310, body 313),
+      the ONLY TestEvaluatorSpec test constructing the retired kind -- test_two_kinds_rejected (319) uses
+      {check, agent_surface} and needs NO edit; add
+      TestEvaluatorSpec::test_none_grandfathered_is_not_a_declarable_kind, VP step 5's graduated node,
+      asserting the FULL unrepresentability claim (see step 5's fix_if).
+  - file: tests/test_iam_simulate.py
+    action: Modify
+    purpose: >-
+      Delete test_real_fixture_builds_cleanly -- promoted into
+      validate_iam_simulate_fixture_shape. Measured zero coverage delta (see context).
+bundled_recommendations:
+  - rec-3059
+  - rec-3101
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    validate_contract_drift passes against the real tree and its census line reports
+    grandfathered=17, status_active=16, skipped=0 and NO evaluator_none_grandfathered field at all.
+  - >-
+    contract-population.yaml declares exactly two ratchet pins (grandfathered_max: 17,
+    status_active_max: 16), both equal to their live census buckets; _ratchet.PIN_KEYS contains
+    exactly those two keys.
+  - >-
+    evaluator.none_grandfathered is UNREPRESENTABLE: EvaluatorSpec.model_validate({"none_grandfathered":
+    <anything>}) raises a pydantic ValidationError via extra="forbid", EnforcementRoute is no longer
+    importable from scripts.contracts_schema, and _population.check_evaluator_kind_change no longer exists.
+  - >-
+    Both new check names are in registry.all_checks(), in pre_sequence()/full_sequence(), and carry a
+    config/ci_rca_taxonomy.yaml function_to_category row of schema_drift.
+  - >-
+    Both contracts' evaluators resolve under contract-population.yaml's evaluator_kinds.check grammar
+    (_population.resolve_evaluator returns True), i.e. each check module contains its own contract
+    basename as an executable-context string literal.
+  - >-
+    Both new checks discriminate: deleting ANY top-level block each reads makes it FAIL (fail-closed),
+    and a semantic drift in either direction makes it FAIL -- both proven live in VP step 6 and
+    guarded durably by red-path tests in each mirror test.
+  - >-
+    All three affected graduated registry rows carry an explicit, executed disposition: one retired,
+    two re-authored and passing; and no registry row references EnforcementRoute or
+    evaluator.none_grandfathered.
+  - >-
+    tests/checks/contracts/validate_contract_drift/test_real_population.py asserts UNCONDITIONALLY
+    that every seeded contract's evaluator resolves -- no routed-debt branch survives.
+  - Both new modules land at 100% line coverage and are mypy-clean under the full tier.
+  - >-
+    docs/contracts/iam-simulate-fixture.yaml's config/structural_size_budgets.yaml pin EQUALS its
+    measured effective-line count with no slack (predicted 603 on both sides), and the entry's
+    dec-168 marker text is unchanged so iam-simulate-budget-marker-recited stays green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the two ci_rca_taxonomy rows exist (leg A) and the two check names are registered and
+      tier-sequenced (leg B).
+    command: bin/venv-python -c 'import yaml; m=yaml.safe_load(open("config/ci_rca_taxonomy.yaml"))["function_to_category"]; N=["validate_composite_action_shape_rosters","validate_iam_simulate_fixture_shape"]; bad=[n for n in N if m.get(n)!="schema_drift"]; assert not bad, bad; print("OK two taxonomy rows")' && bin/venv-python -c 'from scripts.checks import registry; N=["validate_composite_action_shape_rosters","validate_iam_simulate_fixture_shape"]; a=registry.all_checks(); s={x.name for x in [*registry.pre_sequence(),*registry.full_sequence()]}; bad=[(n, n in a, n in s) for n in N if not (n in a and n in s)]; assert not bad, bad; print("OK two registered and sequenced")'
+    expected: Prints 'OK two taxonomy rows' then 'OK two registered and sequenced'; exit 0.
+    fix_if: >-
+      Leg A failing with None means the config/ci_rca_taxonomy.yaml row is absent or misspelled; a
+      wrong value means it is not schema_drift. Leg B failing on the first flag means the
+      @register decoration or the Entry module path is wrong; on the second, the Entry lacks
+      pre=True and full_segment.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Already enforced by two standing checks -- validate_ci_rca_taxonomy check 1b requires a
+      function_to_category row for every registered check, and validate_check_manifests enforces the
+      Entry grammar and graph-node resolution. Graduating this would be a third copy of the same
+      invariant, exactly as waived in wave 1.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm both contracts' evaluators genuinely resolve under the Decision 168 check grammar.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.checks.contracts import _population; from scripts.contracts import load_contract_meta; M={'composite-action-shape.yaml':'validate_composite_action_shape_rosters','iam-simulate-fixture.yaml':'validate_iam_simulate_fixture_shape'}; R=Path('.').resolve(); bad=[]; [bad.append((n,c,load_contract_meta(Path('docs/contracts')/n).evaluator.check,_population.resolve_evaluator(n,load_contract_meta(Path('docs/contracts')/n).evaluator,root=R))) for n,c in M.items() if not (load_contract_meta(Path('docs/contracts')/n).evaluator.check==c and _population.resolve_evaluator(n,load_contract_meta(Path('docs/contracts')/n).evaluator,root=R)[0])]; assert not bad, bad; print('OK: both evaluators resolve')"
+    expected: "Prints 'OK: both evaluators resolve'; exit 0."
+    fix_if: >-
+      'neither <module> nor its one-hop scripts/ imports contain <basename>' means the check module
+      lacks its contract basename as an executable-context string literal -- add it as a module-level
+      constant that is genuinely READ. NOTE the MATCHER TRAP GUARD: a whitespace-containing
+      path-shaped literal is REJECTED even when its final segment matches, which is precisely why
+      scripts/checks/iam_tf/_write_companions.py's prose annotation ending in
+      "...iam-simulate-fixture.yaml" does not certify -- do not rely on it.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_contract_drift already fails any Class D file whose declared evaluator does not
+      resolve; a graduated copy would assert the same thing the gate under test already asserts.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run the population gate against the real tree; assert the surviving pins equal their buckets AND
+      that the retired census field is GONE from the rendered line (absence, not a zero value).
+    command: >-
+      bin/venv-python -c "import io,contextlib; from scripts.checks.contracts.validate_contract_drift import validate_contract_drift as v; f=[]; b=io.StringIO(); ctx=contextlib.redirect_stdout(b); ctx.__enter__(); v(f); ctx.__exit__(None,None,None); o=b.getvalue(); assert f==[], f; c=[l for l in o.splitlines() if 'Census:' in l][0]; print(c); assert ' grandfathered=17' in c and 'status_active=16' in c and 'skipped=0' in c, c; assert 'evaluator_none_grandfathered' not in c, 'retired census field still rendered'"
+    expected: >-
+      Census line prints with grandfathered=17, status_active=16, skipped=0, carries NO
+      evaluator_none_grandfathered field, and the failure list is empty.
+    fix_if: >-
+      'does not equal the live census bucket' means a surviving pin drifted -- pins are
+      equality-bound in BOTH directions. A non-zero skipped count means a contract failed shape,
+      schema or evaluator resolution and was excluded from its bucket (and with rec-3101's fix the
+      pin cascade is now suppressed, so the skip is the only message: fix the skipped contract, never
+      lower the pin). 'retired census field still rendered' means Census.render() was not updated.
+      NOTE the 17/16 values are re-derivable, not assumed -- neither contract's status changes, so a
+      different live number means main moved under this branch; re-derive before editing a pin.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The durable half (every pin EQUALS its live census bucket) is already enforced inside
+      validate_contract_drift, and the specific values 17/16 are a function of the live population --
+      pinning today's numbers into the registry would create a check that any future Class D landing
+      must edit. The field-absence half IS graduated, via step 5's unrepresentability row.
+  - step: 4
+    phase: pre-deploy
+    action: Green path -- both new checks pass against the real tree.
+    command: >-
+      bin/venv-python -c "import importlib; N=['composite_action_shape_rosters','iam_simulate_fixture_shape']; bad={}; [bad.setdefault(n,f) for n in N for f in [[]] if (getattr(importlib.import_module('scripts.checks.contracts.validate_'+n),'validate_'+n)(f), f)[1]]; assert not bad, bad; print('OK: both checks green')"
+    expected: "Prints 'OK: both checks green'; exit 0."
+    fix_if: >-
+      A non-empty failure list names the contract and the disagreeing surface. Decide direction
+      deliberately -- for the composite roster the CODE (the frozen _R1_KNOWN_VIOLATORS constant)
+      wins by Decision 162's membership clause; for the fixture, confirm which side is stale before
+      editing either.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Both checks are themselves registered and dispatched in the --pre and full tiers, so they
+      already run as standing guards. A graduated step that merely invokes them would be a second
+      dispatch path for the same assertions.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      UNREPRESENTABILITY PROOF -- the core claim of this plan. The grandfather kind cannot be declared,
+      its model is gone, its kind-change rule is gone, its census field is gone, and PIN_KEYS carries
+      exactly the two survivors.
+    command: >-
+      bin/venv-python -m pytest tests/test_contracts_schema.py::TestEvaluatorSpec::test_none_grandfathered_is_not_a_declarable_kind -q && bin/venv-python -c "import dataclasses; from scripts.checks.contracts import _population, _ratchet; import scripts.contracts_schema as cs; assert not hasattr(cs, 'EnforcementRoute'), 'EnforcementRoute still exported'; assert 'none_grandfathered' not in cs.EvaluatorSpec.model_fields, cs.EvaluatorSpec.model_fields.keys(); assert not hasattr(_population, 'check_evaluator_kind_change'), 'kind-change rule survived'; assert 'evaluator_none_grandfathered' not in {f.name for f in dataclasses.fields(_population.Census)}, 'census field survived'; assert _ratchet.PIN_KEYS == ('grandfathered_max','status_active_max'), _ratchet.PIN_KEYS; print('OK -- none_grandfathered is unrepresentable')"
+    expected: >-
+      The pytest node passes, then 'OK -- none_grandfathered is unrepresentable'; exit 0.
+    fix_if: >-
+      'EnforcementRoute still exported' or a surviving model field means the schema deletion is
+      incomplete -- EvaluatorSpec's extra="forbid" is what makes the old form raise, so a leftover
+      field silently keeps the kind declarable. A surviving check_evaluator_kind_change or census
+      field means a consumer deletion was missed; grep for the symbol rather than assuming.
+      CHECK_ID HONESTY: none-grandfathered-kind-unrepresentable names the FULL claim, so the graduated
+      node must ASSERT the full claim -- test_none_grandfathered_is_not_a_declarable_kind must cover
+      every assertion in this step's shell leg (model_validate raises, EnforcementRoute absent,
+      EvaluatorSpec.model_fields lacks the key, check_evaluator_kind_change gone, the Census field
+      gone, PIN_KEYS equal to the two survivors), not only the model_validate half. A single-assertion
+      node under this name would be exactly the naming overstatement wave 1 guarded against.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: none-grandfathered-kind-unrepresentable
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      RED-PATH PROOF -- perturb real contracts on throwaway copies and observe the checks FAIL. Two
+      shapes, both on tmp copies, never mutating the working tree. (a) FAIL-CLOSED: delete each
+      top-level block a check reads; a check that iterates an absent target and passes is vacuous.
+      (b) SEMANTIC DRIFT: mutate a pinned_lines ceiling in composite-action-shape.yaml and drop a
+      value from iam-simulate-fixture.yaml's expected_decision_values, and confirm each check fails.
+      (c) NESTED LEGS: perturb two keys that top-level block deletion structurally cannot isolate.
+    command: |
+      bin/venv-python - <<'EOF'
+      import importlib, pathlib, shutil, tempfile, yaml
+      # Every top-level block each check reads -- a single-block mutation would leave the other
+      # assertion legs' vacuity unproven.
+      PAIRS = [
+          ("composite_action_shape_rosters", "composite-action-shape.yaml",
+           ["known_r1_violators", "baseline_file", "known_r1_conformant", "closing_instance"]),
+          ("iam_simulate_fixture_shape", "iam-simulate-fixture.yaml",
+           ["expected_decision_values", "placeholders", "principal", "triples"]),
+      ]
+      REAL = pathlib.Path("docs/contracts")
+
+      def check(suffix):
+          mod = importlib.import_module("scripts.checks.contracts.validate_" + suffix)
+          return getattr(mod, "validate_" + suffix)
+
+      def copy_tree():
+          dest = pathlib.Path(tempfile.mkdtemp()) / "contracts"
+          shutil.copytree(REAL, dest)
+          return dest
+
+      for suffix, filename, blocks in PAIRS:
+          fn = check(suffix)
+          green = []
+          fn(green, contracts_dir=REAL)
+          assert green == [], (suffix, "green path must be clean", green)
+          for block in blocks:
+              tmp = copy_tree()
+              path = tmp / filename
+              doc = yaml.safe_load(path.read_text())
+              assert block in doc, (filename, "expected top-level block absent from the real contract", block)
+              del doc[block]
+              path.write_text(yaml.safe_dump(doc))
+              red = []
+              fn(red, contracts_dir=tmp)
+              assert red, (suffix, block, "VACUOUS -- passed with this assertion target absent")
+              print("fail-closed OK", suffix, block)
+
+      # NESTED perturbations -- two assertion legs that top-level block deletion cannot reach.
+      # section_allowlist lives UNDER baseline_file, so deleting baseline_file kills the path leg
+      # and the allowlist leg together and would let a check that never reads section_allowlist pass
+      # every leg above. The per-triple decision leg is likewise masked: deleting
+      # expected_decision_values or triples trips an earlier leg first.
+      NESTED = [
+          ("composite_action_shape_rosters", "composite-action-shape.yaml",
+           lambda d: d["baseline_file"].pop("section_allowlist"), "section_allowlist"),
+          # NOT a per-triple expected_decision mutation: build_triples (iam_simulate.py:104-106) already
+          # raises on an unknown decision, so that perturbation trips leg 1 and proves nothing about a
+          # later leg. Renaming a declared placeholder KEY leaves legs 1 and 2 green (the runner
+          # substitutes ${account_id} regardless of what the contract declares) and isolates the
+          # declared-vs-substituted parity leg, which no top-level deletion reaches.
+          ("iam_simulate_fixture_shape", "iam-simulate-fixture.yaml",
+           lambda d: d.__setitem__("placeholders", {"acct_id": d["placeholders"]["account_id"],
+                                                    "region": d["placeholders"]["region"]}),
+           "placeholders key parity"),
+      ]
+      for suffix, filename, mutate, label in NESTED:
+          tmp = copy_tree()
+          path = tmp / filename
+          doc = yaml.safe_load(path.read_text())
+          mutate(doc)
+          path.write_text(yaml.safe_dump(doc))
+          red = []
+          check(suffix)(red, contracts_dir=tmp)
+          assert red, (suffix, label, "VACUOUS -- nested assertion leg is never evaluated")
+          print("nested-leg OK", suffix, label)
+
+      tmp = copy_tree()
+      path = tmp / "composite-action-shape.yaml"
+      doc = yaml.safe_load(path.read_text())
+      doc["known_r1_violators"][0]["pinned_lines"] += 1
+      path.write_text(yaml.safe_dump(doc))
+      drift = []
+      check("composite_action_shape_rosters")(drift, contracts_dir=tmp)
+      assert drift, "pinned_lines drift did not fail the roster parity check"
+      print("semantic-drift OK", drift[0])
+
+      tmp = copy_tree()
+      path = tmp / "iam-simulate-fixture.yaml"
+      doc = yaml.safe_load(path.read_text())
+      doc["expected_decision_values"].remove("explicitDeny")
+      path.write_text(yaml.safe_dump(doc))
+      drift = []
+      check("iam_simulate_fixture_shape")(drift, contracts_dir=tmp)
+      assert drift, "expected_decision_values drift did not fail the fixture check"
+      print("semantic-drift OK", drift[0])
+      EOF
+    expected: >-
+      Eight 'fail-closed OK <name> <block>' lines (two checks, four blocks each), then two
+      'nested-leg OK' lines, then two 'semantic-drift OK' lines naming the disagreeing surface. Exit 0.
+    fix_if: >-
+      'VACUOUS -- nested assertion leg is never evaluated' means the check reads its parent block but
+      never the nested key -- the failure top-level deletion structurally cannot surface.
+      'VACUOUS -- passed with this assertion target absent' means that check does not fail closed;
+      make it append a failure when its target block or key is missing, empty or the wrong type. An
+      empty list on a RED leg is the shared signature of two distinct faults -- a check that iterates
+      nothing and passes, OR a check that ignores contracts_dir and silently re-reads the real tree;
+      rule out the second before assuming the first. (An empty GREEN list is the pass condition, not
+      a symptom.) NOTE Decision 159's 100%-coverage floor does NOT discriminate here -- a loop over an
+      absent or empty collection executes every line while asserting nothing, which is exactly what
+      leg (a) exists to catch.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is the one-time live demonstration against the real tree; the durable form is each mirror
+      test's own absent-target and drift red paths (step 7), and graduating both would register the
+      same discrimination twice -- the identical reasoning wave 1 applied to its own step 6.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Durable red-path regression -- run both mirror tests plus the manifest mirror, each of which
+      perturbs a fixture and asserts its check fails.
+    command: bin/venv-python -m pytest tests/checks/contracts/test_validate_composite_action_shape_rosters.py tests/checks/contracts/test_validate_iam_simulate_fixture_shape.py tests/checks/contracts/test__manifest.py -q
+    expected: All tests pass; each new module has at least one green-path and one drift-red-path test.
+    fix_if: >-
+      A red-path test that passes without the fix means the fixture did not actually diverge from the
+      consumer. Assert on the failure MESSAGE content, not merely on list length.
+      tests/checks/contracts/test__manifest.py needs NO edit -- it is already parametrized over
+      _manifest.ENTRIES, so the two new entries are picked up automatically. GRADUATION SCOPE: the
+      check_id names ONE exemplar deliberately -- a test_selector check_spec carries a single node_id,
+      so a name implying it guards both mirror tests would overstate what one row can hold. This
+      mirrors wave 1 exactly, which graduated read-engine-verb-parity-red-path as a single exemplar
+      and stated plainly that its other five red paths were guarded by their own mirror tests and not
+      by the registry. Point node_id at the composite roster-drift red path -- the leg proven against a
+      real three-surface parity set. The iam mirror's red paths are guarded by VP steps 7 and 13, which
+      is not the same as being in the registry, and this plan does not claim otherwise.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: composite-action-roster-parity-red-path
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Graduated-registry disposition proof -- the retired row is gone, the two re-authored rows
+      execute cleanly, and no row still references the deleted surface.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries']; ids={e['check_id'] for e in d}; assert 'enforcement-route-required-on-none-grandfathered' not in ids, 'retired row survived'; assert {'none-grandfathered-kind-unrepresentable','composite-action-roster-parity-red-path'} <= ids, sorted(ids); bad=[e['check_id'] for e in d if ('EnforcementRoute' in str(e) or 'none_grandfathered' in str(e)) and e['check_id'] != 'none-grandfathered-kind-unrepresentable']; assert not bad, bad; print('OK -- registry dispositions clean')" && bin/venv-python -m pytest "tests/checks/contracts/validate_contract_drift/test_grandfather_only.py" -q && bin/venv-python -c "import yaml,subprocess,sys; e=[x for x in yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'] if x['check_id']=='contract-census-declared-includes-env-taxonomy'][0]; r=subprocess.run(e['check_spec']['command'],capture_output=True,text=True); print(r.stdout[-200:], r.stderr[-400:]); sys.exit(r.returncode)"
+    expected: >-
+      'OK -- registry dispositions clean' (BOTH new rows present, the retired row gone, and no OTHER row
+      referencing the deleted surface -- the whitelist is parenthesised so it applies to both branches,
+      not only the none_grandfathered one), then the grandfather-only suite passes, then the re-authored
+      census row's command prints DECLARED-OK and exits 0.
+    fix_if: >-
+      'retired row survived' means the deletion was missed. An AttributeError from the census row's
+      command means its `assert meta.evaluator.none_grandfathered is None` line was not removed. If
+      contracts-grandfather-only-forms-both-directions still names the deleted
+      test_absent_to_none_grandfathered_... node, validate_verification_registry fails on an
+      unresolvable node_id -- repoint it at the surviving status: active leg.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time migration artifact. validate_verification_registry already resolves every row's
+      node_id and materializes every command on each run, so a standing guard asserting the permanent
+      absence of one retired row would be dead weight in the very registry this step is pruning.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep for the retired surface (closure obligation) -- no production module,
+      config or contract still names the deleted kind or model.
+    command: >-
+      bin/venv-python -c "import ast, glob, pathlib, re, yaml; from scripts.checks.contracts._population import _docstring_node_ids; from scripts.contracts_schema import EvaluatorSpec; assert 'none_grandfathered' not in EvaluatorSpec.model_fields, EvaluatorSpec.model_fields.keys(); code=[]; [code.append((str(p), n.lineno)) for p in sorted(list(pathlib.Path('scripts').rglob('*.py')) + list(pathlib.Path('src').rglob('*.py'))) for tr in [ast.parse(p.read_text(encoding='utf-8'))] for d in [_docstring_node_ids(tr)] for n in ast.walk(tr) if (isinstance(n, ast.Name) and n.id == 'EnforcementRoute') or (isinstance(n, ast.alias) and n.name == 'EnforcementRoute') or (isinstance(n, ast.Attribute) and n.attr == 'none_grandfathered') or (isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in d and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value))]; assert not code, code; bad=[q for q in sorted(glob.glob('docs/contracts/*.yaml')) for doc in [yaml.safe_load(open(q, encoding='utf-8'))] if isinstance(doc, dict) and isinstance(doc.get('contract'), dict) and isinstance(doc['contract'].get('evaluator'), dict) and 'none_grandfathered' in doc['contract']['evaluator']]; assert not bad, bad; r=yaml.safe_load(open('docs/contracts/file-router.yaml', encoding='utf-8')); ads=[x.get('topic') for x in r.get('routes', []) if 'none_grandfathered' in str(x.get('description', ''))]; assert not ads, ads; mods=['scripts/contracts_schema.py','scripts/checks/contracts/_population.py','scripts/checks/contracts/_ratchet.py','scripts/checks/contracts/validate_contract_drift.py']; prose=[(m, i+1) for m in mods for i, ln in enumerate(pathlib.Path(m).read_text(encoding='utf-8').splitlines()) if re.search(r'none_grandfathered|EnforcementRoute|evaluator-kind-change|three ratchet pins|three PIN_KEYS|SAME three keys', ln)]; assert not prose, prose; dec=re.search(r'^## Decision 168:.*?(?=^## Decision )', pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8'), re.S|re.M).group(0); assert '[Amendment ' in dec or '> **Update (' in dec, 'Decision 168 carries no amendment_forms annotation'; print('OK -- no executable reference, no stale prose, no live declaration, no router advertisement, Decision 168 annotated')"
+    expected: >-
+      Prints 'OK -- no executable reference, no stale prose, no live declaration, no router advertisement, Decision 168 annotated'; exit 0.
+    fix_if: >-
+      A non-empty `code` names a surviving EXECUTABLE reference in scripts/ or src/; a non-empty `bad`
+      names a contract still DECLARING the kind; a non-empty `ads` names a file-router route still
+      advertising it. PARSED ASSERTIONS THROUGHOUT, NO RAW NAME GREP ANYWHERE IN THIS STEP -- two
+      successive drafts of this plan got that wrong and both were caught at critique, so the reasoning
+      is recorded rather than left to be rediscovered. A grep over scripts/ and src/ CANNOT go green:
+      validate_read_engine_verbs.py:6 and validate_marker_grammar_exports.py:4 carry the token in
+      DOCSTRINGS describing what wave 1 did, and this plan's own context says leave them -- hence
+      _docstring_node_ids, the repo's existing helper for exactly this exclusion. A grep over config/
+      and docs/contracts/ cannot go green either: the token legitimately survives in this plan's own
+      retirement note, in the pre-existing migration-step-3 and wave-1 amendment_log entries
+      (immutable history -- editing them to satisfy a grep would falsify the record), and in the new
+      graduated row's node_id, which VP step 8 explicitly whitelists. Do NOT "simplify" the REPO-WIDE
+      leg back to a grep. The FOUR-MODULE prose leg is deliberately a FULL-TEXT scan and NOT an
+      AST/docstring scan, because a token-only docstring scan reaches only half the prose this plan
+      mandates: three _ratchet.py function docstrings say "three ratchet pins" / "three PIN_KEYS" /
+      "SAME three keys" without either token, validate_contract_drift.py's module docstring says
+      "evaluator-kind-change" (hyphenated), and _population.py:418 plus validate_contract_drift.py:367
+      are `#` comments the AST cannot see at all. The anti-grep rationale above is scoped to the
+      REPO-WIDE leg (whose two wave-1 docstring hits must be tolerated) and does NOT reach a
+      four-module-scoped scan, which is satisfiable once every prose item named in the scope purposes
+      is corrected. A non-empty `prose` names the file and line. The final leg fails if Decision 168
+      carries no amendment_forms annotation, so the record-keeping half cannot be silently skipped.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time migration artifact. Once this PR merges the kind cannot be reintroduced without
+      re-adding the model, which step 5's graduated row already catches -- a standing name-absence
+      grep would accumulate as dead weight beside it.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Size and marker check -- the fixture contract measures its predicted 603 effective lines, its
+      pin equals that, and the dec-168 marker text is unchanged so the
+      iam-simulate-budget-marker-recited graduated row stays green.
+    command: >-
+      bin/venv-python -c "import yaml; from pathlib import Path; from scripts.checks.structural._classify import effective_lines; b=Path('config/structural_size_budgets.yaml').read_text(encoding='utf-8'); eff=effective_lines(Path('docs/contracts/iam-simulate-fixture.yaml').read_text(encoding='utf-8')); pin=yaml.safe_load(b)['budgets']['docs/contracts/iam-simulate-fixture.yaml']; line=[l for l in b.splitlines() if 'iam-simulate-fixture' in l][0]; assert eff==pin, (eff,pin); assert 'dec-168' in line and 'dec-166' not in line, line; print('OK -- pin equals measurement, marker intact')"
+    expected: >-
+      Prints 'OK -- pin equals measurement, marker intact'; exit 0. The predicted value is 603 on both
+      sides; the assertion is eff == pin rather than a hardcoded 603, so a legitimately different
+      measurement still forces the pin to match it instead of silently leaving slack.
+    fix_if: >-
+      A measured value above 603 means the amendment entry ran longer than the deleted route block --
+      TRIM the entry rather than raising the pin (Decision 128/166 reversal (d): decompose or trim,
+      never raise to fit). A measured value BELOW 603 is fine but the pin must be lowered to match;
+      leaving slack is the silent-cap anti-pattern. If the yaml key path errors, the budgets file
+      nests the entry under a different top-level key -- read it rather than guessing.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The 603 value is transient -- the next amendment to this contract legitimately moves it, so a
+      graduated row pinning it would need editing by the very next PR that touches the file. The
+      durable halves are already guarded elsewhere: validate_structural_size_limits enforces the pin
+      as a ceiling on every run, and the marker-recitation half is the existing
+      iam-simulate-budget-marker-recited row (whose staleness is separately filed as rec-3102, not
+      fixed here).
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Two-tier presubmit -- fast tier for the PR loop, then the FULL tier before handoff (Decision
+      163). The full tier is where validate_mypy_ratchet and the 100%-coverage checker run; both are
+      full-tier-only, so a miss escapes --pre and reds main post-merge.
+    command: bin/venv-python -m scripts.validate --pre && bin/venv-python -m scripts.validate
+    expected: Both tiers exit 0. Full tier reports the two new modules at 100% coverage and mypy-clean.
+    fix_if: >-
+      '<file>: N% line coverage (expected 100%)' means a mirror test is missing a red path -- add the
+      uncovered branch, never a coverage_baseline.yaml entry. A mypy regression on a new module must
+      be fixed in the module; the ratchet's implicit baseline for an unregistered file is 0. A
+      validate_check_accounting failure means a new module returned without declaring
+      registry.examined()/registry.skipped() (Decision 170) -- neither is in
+      config/check_accounting_baseline.yaml, whose _BASELINE_SEED is frozen, so the fix is always in
+      the module.
+    hermetic: false
+    graduation: not-applicable
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Closure obligation -- confirm both bundled recs are closed in the warehouse after the
+      Resolves-trailer squash merge (run post-merge, or verify the trailer text pre-merge).
+    command: >-
+      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib; rows={json.loads(l)['id']: json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()}; bad=[r for r in ('rec-3059','rec-3101') if rows.get(r,{}).get('status')!='closed']; assert not bad, bad; print('OK -- rec-3059 and rec-3101 closed')"
+    expected: "Prints 'OK -- rec-3059 and rec-3101 closed'; exit 0."
+    fix_if: >-
+      Still open after merge means rec-autoclose.yml did not fire -- check the squash body carries
+      `Resolves: rec-3059, rec-3101` verbatim, then fall back to `bin/venv-python -m
+      scripts.ops_data_portal --update-rec <id> --status closed --resolution "..."` (Decision 70).
+      Pre-merge this step legitimately fails; it is the post-merge confirmation.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but a one-time closure confirmation for two specific rec
+      ids carries no durable regression risk once this PR merges -- a graduated row would assert the
+      permanent closedness of two recs forever.
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Run every affected test surface by explicit path -- the eight revised modules, the two new
+      mirrors, and the graduation suite. This is the step the schema-deletion test_obligations are
+      proven by, since their evidence is spread across suites no single narrower step collects.
+    command: bin/venv-python -m pytest tests/checks/contracts tests/test_contracts.py tests/test_contracts_schema.py tests/test_iam_simulate.py tests/test_verification_graduation.py tests/checks/verification -q
+    expected: >-
+      All suites pass. The revised tests/checks/contracts suite is the one that cannot pass on main
+      (its two-pin fixtures, its unconditional resolves assertion, and its deleted kind-change class
+      all contradict main's three-pin, three-kind module).
+    fix_if: >-
+      A collection error naming EnforcementRoute or check_evaluator_kind_change means a test module
+      still imports a deleted symbol -- delete the test, never re-add the symbol. A failure in
+      tests/test_verification_graduation.py or tests/checks/verification means a graduated row's
+      node_id or command did not survive the schema deletion; see step 8. NOTE the graduation suites
+      are tests/test_verification_graduation.py and tests/checks/verification/ -- an earlier draft of
+      this plan named a directory `tests/verification_graduation` that does not exist, which exits
+      pytest with code 4 (file or directory not found) rather than failing informatively.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A path-explicit re-run of suites that the standing pytest collection already dispatches on every
+      full-tier run; graduating it would register a second dispatch path for tests that are already
+      permanent regressions. The one claim unique to this plan is graduated separately at step 5.
+test_obligations:
+  - source: scripts/checks/contracts/validate_composite_action_shape_rosters.py
+    behavior: >-
+      The contract's declared known_r1_violators (keys AND pinned_lines), baseline_file.path and
+      section_allowlist.sections must equal the live guard constants and baseline section; a drift in
+      either direction, or an absent/empty target block, must fail.
+    verification_step: 7
+    test_selector: tests/checks/contracts/test_validate_composite_action_shape_rosters.py
+    red_green_expectation: >-
+      Red before (no such module), green after; the drift tests are red against perturbed fixtures and
+      green against the real contract.
+  - source: scripts/checks/contracts/validate_iam_simulate_fixture_shape.py
+    behavior: >-
+      The fixture must pass iam_simulate's pure validation layer, its expected_decision_values must
+      equal VALID_DECISIONS, and its declared placeholders must be exactly the substituted tokens; a
+      malformed triple, a drifted decision vocabulary, a renamed placeholder key, or an absent/empty
+      target must fail.
+    verification_step: 7
+    test_selector: tests/checks/contracts/test_validate_iam_simulate_fixture_shape.py
+    red_green_expectation: Red before, green after; drift fixtures fail, the real contract passes.
+  - source: scripts/contracts_schema.py
+    behavior: >-
+      evaluator.none_grandfathered must be UNDECLARABLE -- EvaluatorSpec's extra="forbid" rejects the
+      key, and EnforcementRoute no longer exists.
+    verification_step: 5
+    test_selector: tests/test_contracts_schema.py::TestEvaluatorSpec::test_none_grandfathered_is_not_a_declarable_kind
+    red_green_expectation: >-
+      Red before (today the key VALIDATES, so an assertion that it raises fails), green after. This is
+      the plan's core claim and its graduated guard.
+  - source: scripts/checks/contracts/_population.py
+    behavior: >-
+      The census carries no evaluator_none_grandfathered bucket and no kind-change rule survives;
+      resolve_evaluator handles exactly two kinds.
+    verification_step: 13
+    test_selector: tests/checks/contracts/test__population.py
+    red_green_expectation: >-
+      Red before (the revised suite drops the kind-change tests for a function this plan deletes and
+      narrows the kind parametrize, so it cannot pass against main's three-kind module), green after.
+  - source: scripts/checks/contracts/_ratchet.py
+    behavior: PIN_KEYS carries exactly grandfathered_max and status_active_max; no third spec resolves.
+    verification_step: 13
+    test_selector: tests/checks/contracts/test__ratchet.py
+    red_green_expectation: Red before (the revised two-pin fixtures fail against the three-pin module), green after.
+  - source: scripts/checks/contracts/validate_contract_drift.py
+    behavior: >-
+      The gate buckets grandfather-by-status only, renders no retired census field, and (rec-3101)
+      does not emit a pin-vs-census cascade when a contract was skipped.
+    verification_step: 13
+    test_selector: tests/checks/contracts/validate_contract_drift/test_ratchet.py
+    red_green_expectation: >-
+      Red before (the skipped-contract cascade-suppression test asserts a single failure where main
+      emits two), green after.
+  - source: docs/contracts/composite-action-shape.yaml
+    behavior: >-
+      The evaluator flips from the never-resolving none_grandfathered form to the roster-parity
+      evaluator, which must genuinely RESOLVE under the Decision 168 check grammar.
+    verification_step: 13
+    test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_a_resolving_evaluator
+    red_green_expectation: >-
+      Red before, green after -- and unlike wave 1's conditional rows this is a genuine red-before:
+      the test's routed-debt branch is DELETED by this plan, so the revised assertion (every seeded
+      contract RESOLVES) fails on main, where this file still carries none_grandfathered.
+  - source: docs/contracts/iam-simulate-fixture.yaml
+    behavior: >-
+      The evaluator flips from the never-resolving none_grandfathered form to the fixture-shape
+      evaluator, which must genuinely RESOLVE under the Decision 168 check grammar.
+    verification_step: 13
+    test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_a_resolving_evaluator
+    red_green_expectation: >-
+      Red before, green after, for the same reason as the row above -- the shared unconditional
+      assertion fails on main for both files.
+  - source: docs/contracts/contract-population.yaml
+    behavior: >-
+      Exactly two ratchet pins remain, both equal to their live census buckets, and the retired kind
+      is absent from the evaluator grammar the gate reads.
+    verification_step: 13
+    test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_real_population_passes_with_baseline_legs_enabled
+    red_green_expectation: >-
+      Green on main (three pins equal three buckets). RED at the intermediate state where the flips
+      have landed but the pin has not (2 against 0). Green once both land in this PR -- which is why
+      the flips and the pin removal cannot be split across PRs.
+  - source: scripts/checks/contracts/_manifest.py
+    behavior: >-
+      Each new Entry's module= path imports and its attr= resolves to the callable registry.resolve()
+      returns. (The ast.Constant bare-literal grammar is owned by validate_check_manifests and tier
+      membership by VP step 1 leg B -- both verified elsewhere, neither by this test.)
+    verification_step: 7
+    test_selector: tests/checks/contracts/test__manifest.py
+    red_green_expectation: >-
+      No edit needed -- already parametrized over _manifest.ENTRIES, so the two new entries are picked
+      up automatically. Red if an Entry names a module that does not import or an attr that does not
+      resolve; green after.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      Both new check names resolve to the schema_drift failure category -- a Priority-0 CI-RCA
+      attribution precondition; validate_ci_rca_taxonomy check 1b fails any registered check missing
+      from the map.
+    verification_step: 1
+    command: bin/venv-python -c 'import yaml; m=yaml.safe_load(open("config/ci_rca_taxonomy.yaml"))["function_to_category"]; N=["validate_composite_action_shape_rosters","validate_iam_simulate_fixture_shape"]; bad=[n for n in N if m.get(n)!="schema_drift"]; assert not bad, bad; print("OK two taxonomy rows")'
+    red_green_expectation: Red before (m.get(n) is None for both), green after the two rows land.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      One row retired, two re-authored to survive the schema deletion, and the
+      none-grandfathered-kind-unrepresentable graduation row present with plan_slug
+      class-d-enforcers-wave-2.
+    verification_step: 13
+    test_selector: tests/test_verification_graduation.py
+    red_green_expectation: >-
+      Red before (the graduate disposition on VP step 5 with no new-in-diff registry row fails
+      validate_graduation_completeness; and the census row's command raises AttributeError once the
+      schema lands), green after.
+  - source: config/structural_size_budgets.yaml
+    behavior: >-
+      The iam-simulate-fixture pin equals the file's measured effective lines with no slack, and its
+      dec-168 marker text is unchanged.
+    verification_step: 10
+    command: >-
+      bin/venv-python -c "import yaml; from pathlib import Path; from scripts.checks.structural._classify import effective_lines; b=Path('config/structural_size_budgets.yaml').read_text(encoding='utf-8'); eff=effective_lines(Path('docs/contracts/iam-simulate-fixture.yaml').read_text(encoding='utf-8')); pin=yaml.safe_load(b)['budgets']['docs/contracts/iam-simulate-fixture.yaml']; line=[l for l in b.splitlines() if 'iam-simulate-fixture' in l][0]; assert eff==pin, (eff,pin); assert 'dec-168' in line and 'dec-166' not in line, line; print('OK -- pin equals measurement, marker intact')"
+    red_green_expectation: >-
+      Red before (608 pin against a 603 file once the flip lands), green after the pin is lowered.
+  - source: docs/contracts/file-router.yaml
+    behavior: >-
+      The contract-population route description no longer advertises evaluator.none_grandfathered as
+      a live grandfather-only form.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "import ast, glob, pathlib, re, yaml; from scripts.checks.contracts._population import _docstring_node_ids; from scripts.contracts_schema import EvaluatorSpec; assert 'none_grandfathered' not in EvaluatorSpec.model_fields, EvaluatorSpec.model_fields.keys(); code=[]; [code.append((str(p), n.lineno)) for p in sorted(list(pathlib.Path('scripts').rglob('*.py')) + list(pathlib.Path('src').rglob('*.py'))) for tr in [ast.parse(p.read_text(encoding='utf-8'))] for d in [_docstring_node_ids(tr)] for n in ast.walk(tr) if (isinstance(n, ast.Name) and n.id == 'EnforcementRoute') or (isinstance(n, ast.alias) and n.name == 'EnforcementRoute') or (isinstance(n, ast.Attribute) and n.attr == 'none_grandfathered') or (isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in d and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value))]; assert not code, code; bad=[q for q in sorted(glob.glob('docs/contracts/*.yaml')) for doc in [yaml.safe_load(open(q, encoding='utf-8'))] if isinstance(doc, dict) and isinstance(doc.get('contract'), dict) and isinstance(doc['contract'].get('evaluator'), dict) and 'none_grandfathered' in doc['contract']['evaluator']]; assert not bad, bad; r=yaml.safe_load(open('docs/contracts/file-router.yaml', encoding='utf-8')); ads=[x.get('topic') for x in r.get('routes', []) if 'none_grandfathered' in str(x.get('description', ''))]; assert not ads, ads; mods=['scripts/contracts_schema.py','scripts/checks/contracts/_population.py','scripts/checks/contracts/_ratchet.py','scripts/checks/contracts/validate_contract_drift.py']; prose=[(m, i+1) for m in mods for i, ln in enumerate(pathlib.Path(m).read_text(encoding='utf-8').splitlines()) if re.search(r'none_grandfathered|EnforcementRoute|evaluator-kind-change|three ratchet pins|three PIN_KEYS|SAME three keys', ln)]; assert not prose, prose; dec=re.search(r'^## Decision 168:.*?(?=^## Decision )', pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8'), re.S|re.M).group(0); assert '[Amendment ' in dec or '> **Update (' in dec, 'Decision 168 carries no amendment_forms annotation'; print('OK -- no executable reference, no stale prose, no live declaration, no router advertisement, Decision 168 annotated')"
+    red_green_expectation: >-
+      Red before, green after. On main the sweep reds on the FIRST assertion (EvaluatorSpec still
+      carries the field), not on `ads` -- but the `ads` leg is independently load-bearing for green,
+      since the route description at lines 341-348 advertises the form and would keep the step red
+      after the schema deletion alone.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The committed index must match the generator output after Decision 168 is annotated -- a stale
+      index fails validate_decisions_index_freshness in both tiers.
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate --pre
+    red_green_expectation: >-
+      Genuinely red before, green after: appending the amendment_forms annotation to DECISIONS.md
+      without regenerating the index makes the freshness gate fail, and
+      `bin/venv-python -m scripts.decisions_index` is what turns it green. Note docs/DECISIONS.md
+      itself needs no obligation row -- .md is in validate_plan_documents' documentation exemption
+      (_DOCUMENTATION_SUFFIXES = .md/.rst/.txt) while .json is not.
+  - source: docs/contracts/verification-registry.yaml
+    behavior: >-
+      A governance note records the retired and re-authored rows, the reason, and the reversal path --
+      the recorded substitute for a numbered Decision.
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate --pre
+    red_green_expectation: >-
+      WAIVER: this row is a prose governance note with no mechanical assertion available -- its
+      correctness is a judgement call the plan-critique and code-review gates make, not something a
+      selector can discriminate. The Class D amendment rule (a parsed-content change requires a new
+      amendment_log entry) is the only machine-checked half, and validate_contract_drift enforces it
+      inside VP step 11.
+  - source: tests/test_iam_simulate.py
+    behavior: >-
+      The promoted real-fixture structural assertion no longer lives here; the remaining
+      content-curation tests (both-directions, by_design, S5, S2, context entries) still pass.
+    verification_step: 13
+    test_selector: tests/test_iam_simulate.py
+    red_green_expectation: >-
+      WAIVER: a deletion has no red-before state to assert -- the surviving suite is green both before
+      and after. The assertion's continuity is proven instead by VP step 4 (the promoted assertion now
+      runs as a registered check) and by the measured zero coverage delta recorded in context.
+constraints:
+  - >-
+    NO NUMBERED DECISION IS MINTED, and this is a deliberate call the human directed, the
+    decision-scout verified, and the plan-critique gate contested -- so the argument is stated in
+    full rather than asserted. (i) DELETION VACATES, IT DOES NOT CONTRADICT. Decision 168 clause 3's
+    two prohibitions ("a new file may never declare it", "may never regress to it") stay trivially
+    true once the kind cannot be declared at all, and "absent -> none_grandfathered is permitted" is a
+    PERMISSION, not a guarantee that the form remains declarable -- vacating a permission contradicts
+    nothing, and nothing in clause 3 commits to the form's continued existence. Decision 149's
+    never-remove-headers rule bars number retirement and destructive merges, not clause vacation, and
+    Decision 168 reversal condition (a) ("extend the union, never bypass the resolution bar") is not
+    violated: removing a NEVER-RESOLVING kind strictly strengthens the bar. Decision 168 clause 4 pins
+    only grandfathered_max, which this plan leaves at 17. (ii) THE UNION IS CONTRACT-RESIDENT BY
+    DECISION 168's OWN WORDS: "the full shape grammar, evaluator-kind union, and change-detection
+    rules live in docs/contracts/contract-population.yaml per Decision 86/127 routing, not restated
+    here" -- so narrowing the union from three kinds to two is a field-semantics change, which
+    decision-entry.yaml's significance.routing.field_semantics sends to a governance note in the
+    OWNING contract and explicitly "Never a numbered Decision". (iii) THE RETIREMENT HALF IS NOT A
+    SEPARABLE COMMITMENT, and this is the point the critique gate pressed. The deleted model, the
+    removed pin and the retired graduated row are not three additional architectural commitments
+    alongside the union narrowing -- they are its ENFORCEMENT COUNTERPARTS, which Decision 86/127
+    collocation requires to move WITH the semantics they enforce. Routing a semantics change to a
+    contract note while routing its own enforcement deletion to a Decision header would institute
+    exactly the two-surface split that collocation rule exists to prevent, and would set a precedent
+    that every future field-semantics narrowing mints a header for its own cleanup. Decision 150's bar
+    ("a durable architectural commitment with reversal-relevant consequences") is met on the
+    reversal-relevance limb by the MECHANISM the field_semantics row prescribes -- a governance note
+    carrying the reversal path -- not by a header. Precedent: contract-population.yaml's own pins were
+    installed and adjusted by contract edits plus amendment entries throughout migration-step-3 and
+    wave 1, never by a per-change Decision. (iv) Do NOT cite Decision 160 point 3 in support of this:
+    its "the amendment is stated only here" presupposes a new Decision as the amendment's home, so it
+    argues for the opposite conclusion. An earlier draft of this plan cited it; the citation was wrong
+    and is deliberately absent. (v) THE THIRD OPTION IS THE ONE TAKEN. The earlier binary framing
+    (mint a Decision, or record only in the contracts) was a false dichotomy against a capability this
+    repo already ratified: decision-entry.yaml's `amendment_forms` sanctions dated, NUMBER-FREE in-place
+    annotation (`trailing_bracket` "[Amendment DATE: ...]", `blockquote_update` "> **Update (DATE):**
+    ..."). Decision 168's body is the surface a retrieval-based reader loads, and neither contract
+    governance note is reachable FROM it -- so the annotation is what actually closes the staleness gap.
+    It mints no number, engages no Decision 150 bar, declares no `amends` edge, conflicts with no
+    Decision 149 rule, and leaves validate_decision_currency's `amended` derivation untouched. The
+    per-entry 6,144-byte authoring cap does NOT apply: _per_entry_cap_failures measures only entries
+    ABSENT from the baseline, and Decision 168 is baseline-present (measured 5,650 bytes), so the
+    annotation needs no trimming to fit. TWO AUTHORING HAZARDS for it:
+    validate_supersession_annotations._EDGE_RE matches "amends Decision N" ANYWHERE in a block, so the
+    annotation must not contain that phrase (write "clause 3's none_grandfathered half is inoperative",
+    never "amends Decision 168"); and per amendment_forms.general_rule a blockquote-bold line TERMINATES
+    a typed id-list field, so the annotation must be appended AFTER the **Related:** line, never
+    inserted mid-entry. THE RECORD IS THEREFORE WRITTEN DOWN THREE PLACES: the
+    Decision 168 annotation, plus governance notes in BOTH
+    contract-population.yaml (Class D, amendment entry required) and verification-registry.yaml (Class
+    A, top-level governance_notes key, no amendment entry required), each naming what was retired,
+    why, and the reversal path (re-add the EnforcementRoute model and the EvaluatorSpec field).
+  - >-
+    DELIBERATE DEVIATION from composite-action-shape.yaml's own recorded enforcement route, which
+    says to have the guard read known_r1_violators from the contract instead of its hardcoded
+    _R1_KNOWN_VIOLATORS copy. Decision 162's R1 MEMBERSHIP clause makes that deviation MANDATORY, not
+    optional: "a config-file edit alone can never admit a third violator; growing the set requires
+    editing the guard's own source in a reviewed change." Collapsing to one contract-side copy would
+    demote a reviewed-code-change bar to a YAML doc edit. Build the parity check instead and record
+    the deviation in the contract's amendment_log entry -- EvaluatorSpec is exactly-one-kind, so the
+    flip DELETES the route text and without the note the deviation leaves no trace (the same
+    precedent wave 1 set for ci-rca-lifecycle.yaml's narrowing).
+  - >-
+    ACCEPTED COST of that deviation, stated precisely because an earlier draft overstated it: the
+    plan does NOT create a third copy. composite-action-shape.yaml already declares
+    known_r1_violators (keys plus pinned_lines 13/9) today, UNASSERTED -- the three-surface lockstep
+    cost is already latent, and this plan converts an existing unverified copy into a machine-asserted
+    parity set, which is what makes the flipped evaluator non-vacuous. What genuinely changes is that
+    a future extraction PR now FAILS CI if it misses one of the three, instead of silently drifting.
+    Verified at planning time: all three surfaces agree today, so the check lands green. State this in
+    the amendment_log entry as the price of Decision 162's admission bar.
+    Note the two constants live in DIFFERENT modules -- _R1_KNOWN_VIOLATORS in
+    validate_composite_action_shell_bodies.py, _KNOWN_BASELINE_SECTIONS in _workflow_shell_bodies.py. Decision 165 does NOT bear against it -- it
+    consolidates copies of a guard MECHANISM, not data rosters, and its drift concern is precisely
+    what the machine-asserted parity closes. Do NOT "simplify" by deleting a copy.
+  - >-
+    Decision 168 evaluator grammar (the load-bearing bar): a {check: name} evaluator resolves ONLY if
+    name is in registry.all_checks() AND in pre_sequence()/full_sequence(), AND the check's own module
+    -- or a one-hop scripts/ import -- contains the contract BASENAME as an exact string literal, or as
+    the final /-delimited segment of a WHITESPACE-FREE path-shaped literal, in EXECUTABLE context.
+    Each new module must therefore carry its OWN basename literal in-module. Do NOT rely on
+    scripts/checks/iam_tf/_write_companions.py's prose annotation ending in
+    "...iam-simulate-fixture.yaml" -- the matcher-trap guard rejects whitespace-containing literals,
+    and that string is the live instance the guard was written against.
+  - >-
+    Decision 104 (one concern per file, retained by Decision 169): ONE registered check per module.
+    Both new checks get their own module under scripts/checks/contracts/, matching wave 1.
+  - >-
+    Decision 169: register via bare-string-literal Entry values in scripts/checks/contracts/_manifest.py.
+    NEVER edit scripts/validate.py. module=/attr= must be plain ast.Constant strings -- an f-string or
+    computed value silently severs the dependency_graph driver->check edge.
+  - >-
+    Decision 170: neither new check is in config/check_accounting_baseline.yaml, and that file's
+    _BASELINE_SEED frozen constant means a config edit alone cannot grandfather them. Both modules
+    MUST call registry.examined(n, unit=...) on a real count and registry.skipped(reason) on every
+    early return -- a bare early return fails validate_check_accounting.
+  - >-
+    Decision 159 (unbaselined files keep 100%): no scripts/checks/contracts/* file carries a
+    config/coverage_baseline.yaml entry, so both new modules must land at 100% LINE COVERAGE. The
+    mirror tests must exercise every red path -- missing file, malformed YAML, absent/empty target and
+    genuine drift. Do not add a coverage_baseline.yaml entry to escape this.
+  - >-
+    Decision 161 (mypy downward ratchet): an unregistered file's implicit baseline is 0 and no
+    contracts-domain file is registered, so both modules must be mypy-clean. validate_mypy_ratchet is
+    FULL-TIER ONLY -- a miss escapes --pre and reds main post-merge as a critical ci_rca rec, which is
+    why VP step 11 runs the full tier before handoff.
+  - >-
+    Class D amendment rule: any parsed-content change to a Class D file REQUIRES a new amendment_log[]
+    entry or validate_contract_drift fails. That is FOUR files here -- composite-action-shape.yaml,
+    iam-simulate-fixture.yaml, contract-population.yaml and file-router.yaml. change_class must come
+    from the closed 8-value vocabulary; use governance_note_add for the evaluator flips and the
+    retirement note, and accepted_values_narrow for contract-population.yaml's evaluator-kind union
+    narrowing. docs/contracts/verification-registry.yaml is the FIFTH contract touched but is CLASS A
+    (ratified, contract_version 4) -- verify this before assuming, because an earlier draft of this
+    plan miscounted it as Class D. Its ritual amendment trigger (check_amendment_for_diff) fires only
+    on contract.description or a field's description/semantics, so adding the new top-level
+    `governance_notes:` key needs no amendment_log entry. Do NOT put the note in contract.description:
+    that WOULD trigger the ritual rule, and _amendment_entry_consistent rejects governance_note_add
+    paired with semantic_break: false, so the prescribed change_class would red the gate.
+  - >-
+    Ratchet pins are equality-bound to the live census in BOTH directions, and the two SURVIVORS do
+    NOT move: neither contract's status changes, so grandfathered stays 17 (16 status:active Class D +
+    1 unshaped, exit-criteria-ledger.yaml) and status_active stays 16. Do NOT ratify either contract
+    -- adding an evaluator never requires ratification. Re-derive both numbers from a live gate run
+    before touching a pin; a Class D file landing on main between planning and implement moves them.
+  - >-
+    THREE graduated verification_registry rows are affected and each needs an EXPLICIT disposition --
+    a census of one is wrong and was the first draft's error. (i) retire
+    enforcement-route-required-on-none-grandfathered (guard_symbol EnforcementRoute, node_id in
+    tests/test_contracts.py -- both deleted); (ii) re-author
+    contracts-grandfather-only-forms-both-directions, whose node_id names
+    test_absent_to_none_grandfathered_on_baseline_present_file_is_permitted, a test this plan deletes;
+    (iii) re-author contract-census-declared-includes-env-taxonomy, whose command executes `assert
+    meta.evaluator.none_grandfathered is None` and would raise AttributeError. Removal is not gated
+    (validate_verification_registry runs differential admission on ADDED entries only), so the honest
+    form is the recorded governance note, not a waiver.
+  - >-
+    Do NOT frame the row removal as exercising a retirement lifecycle. Decision 166 point 6's valve is
+    the CD.29 mark-then-drop archival lifecycle, which is an UNRATIFIED candidate decision conditioned
+    on the 6,000-line ceiling firing (registry.yaml is at 5,655 post-rebase). This is an ordinary removal recorded
+    as a governance note; claiming the lifecycle would pre-empt CD.29.
+  - >-
+    Decision 101 (PUBLIC repo): the fixture check and its mirror test must use NON-NUMERIC dummy
+    placeholders (e.g. "account-id-placeholder" / "region-placeholder"). A literal 12-digit
+    account-id-shaped string would trip the pre-commit never-commit hook. Verified at planning time:
+    non-numeric dummies satisfy both the unresolved-placeholder regex and the no-wildcard rule.
+  - >-
+    Both new checks must accept an injectable `contracts_dir: Path | None = None` (mirroring
+    validate_contract_drift and both wave-1 precedents) and honour it for ALL contract reads, so VP
+    step 6's red-path proof perturbs a temporary copy and never the working tree.
+  - >-
+    Both Entries use pre_globs=None (ungated, always runs in --pre), matching every existing pre=True
+    entry in scripts/checks/contracts/_manifest.py. Do NOT narrow to globs: each assertion has TWO
+    sides, so a glob set must name the contract AND every consumer path, and an incomplete glob is a
+    SILENT --pre skip -- the same vacuous-pass family this plan exists to close. Measured at planning
+    time, each check costs ~50ms (a YAML parse plus one light import), negligible against the fast
+    tier's budget, so ungated is the correct trade despite rec-3117's open budget-breach rec.
+  - >-
+    FAIL CLOSED on a missing assertion target. Every check must append a failure when the block or key
+    it reads is absent, empty or not the expected type -- never iterate nothing and pass. This is the
+    vacuity shape Decision 159's 100%-line-coverage floor CANNOT catch (a loop over an empty
+    collection executes every line while asserting nothing), so each mirror test carries an explicit
+    absent/empty target red path and VP step 6 leg (a) proves it live across all eight blocks.
+  - >-
+    The iam-simulate check must NEVER touch AWS, invoke boto3, or assert a live simulate decision, and
+    must never assert condition-key or identity/boundary-intersection semantics -- those stay a
+    POST-APPLY concern owned by scripts/ci/iam_simulate.py's runner. That boundary is exactly what
+    dissolves the contract's recorded blocker ("wiring it into --pre would red the very PR that fixes a
+    legitimate gap"): a structural check cannot red a gap-fixing PR. Record this in the check's own
+    docstring so a later reader does not "strengthen" it into the live assertion the route warned off.
+  - >-
+    The squash-merge body carries `Resolves: rec-3059, rec-3101`. rec-3059 is listed HERE (wave 1
+    deliberately withheld it because wave-2 files remained); this plan completes it. rec-3103 is
+    MOOTED, not resolved -- its six duplicated EnforcementRoute fixtures vanish with the model; close
+    it separately with that as the resolution rather than via the trailer.
+  - No rescue agents or workaround loops (Decision 55).
+  - Only modify files listed in the Scope table; out-of-scope findings become recommendations, not inline fixes.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (123 of 123 triaged,
+    second dispatch against the delete-the-form approach; a first dispatch against a keep-the-form
+    approach also returned FLAGS_FOUND and its Decision-168 WARN was resolved by changing the design,
+    not by deferring the flag). CITE: Decision 168, Decision 169, Decision 170, Decision 162, Decision
+    165, Decision 166, Decision 159, Decision 161, Decision 160, Decision 150, Decision 149, Decision
+    142, Decision 132, Decision 128, Decision 131, Decision 118, Decision 103, Decision 104, Decision
+    101, Decision 86, Decision 127, Decision 70, Decision 60, Decision 55, Decision 48."
+  - "gates: decision-scout=FLAGS_FOUND (2 dispatches; all flags resolved in-design). plan-critique=REVISE x3, hitting the 3-round convergence cap; all findings from every round applied, human accepted at the cap. Round 1 (6 fixes): unsatisfiable stale-reference grep; verification-registry.yaml miscounted Class D when it is Class A; the retirement half left unrouted plus an inverted Decision 160 citation; two unproven VP-6 legs; a waiver misdescribing wave-1 precedent; six scope undercounts. Round 2 (6 blockers + 1 routing fix): the replacement grep still short-circuited on two wave-1 docstrings; a nonexistent tests/verification_graduation path exiting pytest 4; an iam perturbation tripping an earlier leg against a TAUTOLOGICAL assertion, since dropped; a phantom TestEvaluatorKindChange whose real home holds must-survive coverage; an undispositioned test that would pass green for the wrong reason; a stale amendment-entry instruction; and Decision 168 routed to the ratified number-free amendment_forms mechanism. Round 3 (4 blockers, all enumeration-completeness, none a design flaw; round 3 verified by execution that every round-2 fix landed): contract-population change_detection.evaluator_kind_change residue; a FIFTH production consumer at validate_contract_drift.py:358-362 plus the orphaned _class_d_meta_from_text -- correcting a blast-radius claim this plan had asserted was complete; five stale docstrings invisible to the docstring-excluding sweep, now covered by a narrow docstring leg; and a test node whose name kept an -or_routed half this plan deletes. Round 4 (1 SUBSTANTIVE + 5 MECHANICAL; run against the REBASED tree at origin/main 66603a5): the substantive one was F1 -- VP step 9's four-module prose leg was an AST docstring scan reaching only 5 of the 10 prose items the plan mandates (three _ratchet.py 'three'-wording docstrings carry neither token, validate_contract_drift.py's module docstring says the hyphenated evaluator-kind-change, and two are # comments invisible to the AST), while the step claimed full coverage; widened to a full-text four-module scan, which now flags 35 lines pre-implementation against 5 before. Mechanical: a rebase-stale registry figure (5,566 -> 5,655), two stale line ranges, an unnamed must-survive graduated node in test__ratchet.py, two stale test-side docstrings, and a year-pinned annotation opener. Round 4 verified by execution that all four round-3 fixes landed, that the rebase invalidates nothing (census and 17/16 pins re-derived), and that no design, correctness or scoping fault remains."
+  - >-
+    WHY THIS EXISTS: rec-3059 opened because 21 free-form docs/contracts files were seeded as Class D
+    with a form (evaluator.none_grandfathered) that never resolves BY DESIGN -- nothing enforced their
+    CONTENT, only the kind-change rule stopped regression. Wave 1 (#905) converted six. These are the
+    last two, and this plan does not merely convert them: it deletes the form, so the debt class
+    cannot be re-entered.
+  - >-
+    THE TWO ROUTES ARE TREATED ASYMMETRICALLY, and only ONE is deviated from -- an earlier draft
+    described both as deviations, which was wrong. composite-action-shape: a genuine deviation, because
+    its route contradicts the SAME contract's ratified rules.r1.escape clause (a) and is additionally
+    stale on its own terms (it names `rules/known_r1_violators`, but the roster is a TOP-LEVEL
+    known_r1_violators key). iam-simulate-fixture: NOT a deviation -- its route's `mechanism` reads
+    "Register a check over expected_decision_values / the per-verb placeholders shape (never the
+    condition-key/intersection semantics themselves)", which is verbatim what this plan builds; only
+    its stale `blocker` is re-adjudicated. This is why just one of the two gets a deviation-recording
+    amendment entry. The underlying facts: composite-action-shape's route would delete the frozen constant
+    Decision 162 declares load-bearing (and would additionally trip Decision 170's touch-it-fix-it
+    rule by editing a baselined check's own module). iam-simulate-fixture's route named a blocker
+    ("the reader is a CI script, not a registered check") that dissolves on inspection: the runner's
+    load_fixture/build_triples/principal_arn layer is PURE and boto3-lazy. Verified live at planning
+    time -- all 63 triples validate with dummy placeholders, no credentials, in 53ms.
+  - >-
+    NO-DECISION ARGUMENT, scout-verified in a targeted second dispatch that was asked to answer it
+    adversarially: "no active Decision requires amending Decision 168's body ... 'absent ->
+    none_grandfathered ... is permitted' is a permission, not a guarantee the form remains declarable
+    -- vacating a permission contradicts nothing." The scout's own caveat is honoured: the
+    registry-row retirement is NOT field semantics, so it is recorded as a governance note rather than
+    left silent. See the first constraint.
+  - >-
+    PROMOTION + MEASURED COVERAGE DELTA: tests/test_iam_simulate.py::test_real_fixture_builds_cleanly
+    already asserts most of what the new check asserts, so it is promoted and deleted (wave 1's
+    test_anti_drift precedent). Measured at planning time: scripts/ci/iam_simulate.py reports 143
+    statements / 18 missed / 87% with an IDENTICAL missing-line list before and after the deletion --
+    zero delta. Independently, get_changed_source_files() selects only changed source files under src/
+    or scripts/ and excludes test files, so the coverage gate never fires for a test-only edit. Both
+    branches closed; the deletion is safe. The five remaining real-fixture tests assert fixture CONTENT
+    curation (both directions, by_design justification, the S5 and S2 triples, context-entry shape) --
+    NOT shape -- and are deliberately retained.
+  - >-
+    MEASURED SIZE, not estimated: the projected post-edit docs/contracts/iam-simulate-fixture.yaml was
+    built at planning time and measured at 603 effective lines against its 608 pin (the flip removes a
+    14-line evaluator block and the amendment entry adds ~7). No raise is needed and none is
+    permitted; the pin is LOWERED to 603, which is unrestricted (gated_direction="up") and leaves no
+    silent slack. The dec-168 marker text is untouched so iam-simulate-budget-marker-recited stays
+    green. composite-action-shape.yaml (198 eff) and contract-population.yaml (236 eff) are far under
+    the 500 contracts-class cap.
+  - >-
+    LIVE BASELINE at planning time: census scanned=42 ritual=16 declared=9 grandfathered=17
+    evaluator_none_grandfathered=2 status_active=16 skipped=0, gate passing, pins 17/16/2 all equal to
+    their buckets. Both new check names collision-free against registry.all_checks() (108 checks).
+    Branch 0 commits behind/ahead of origin/main; no ci-rca recs open. tests/checks/contracts and
+    tests/checks/ci_guards green at 606 passed. plan_obligations reports no unmet registration
+    obligations for this Scope table.
+  - >-
+    ARITHMETIC THE PIN VALUES REST ON: grandfathered 17 = 16 status:active Class D files + 1 unshaped
+    baseline-present file (exit-criteria-ledger.yaml, the single named non-seedable exception). That is
+    why deleting the none_grandfathered bucket does NOT collapse grandfathered into status_active --
+    the two pins stay distinct and independently meaningful. Re-derive before editing either.
+  - >-
+    BLAST RADIUS, corrected at round-3 critique -- an earlier draft of this line claimed the
+    enumeration was complete and it was NOT, so the correction is recorded rather than quietly fixed.
+    Production readers of the deleted attribute are _population.check_evaluator_kind_change and FIVE
+    sites in validate_contract_drift.py: lines 250, 258, 265, 270, and the Pass 2 call site at 358-362
+    (with its base_meta/head_meta locals), which is in turn the ONLY production caller of
+    _class_d_meta_from_text (418) -- so that helper is orphaned too, and its test_coverage_edges.py
+    tests keep it covered, meaning no coverage gate would have surfaced the orphan. Docstring mentions in
+    validate_read_engine_verbs.py and validate_marker_grammar_exports.py describe what wave 1 DID and
+    stay historically true -- leave them. Test-side references span eight modules, all in Scope.
+  - >-
+    rec-3103 (extract the duplicated EnforcementRoute test fixture to a shared conftest) is MOOTED by
+    this plan -- the model and all six duplicated fixtures are deleted. Close it with that resolution;
+    do not implement its extraction. rec-3102 (generalize the iam-simulate-budget-marker-recited
+    graduated row off dec-168) was deliberately NOT bundled -- this PR already retires one graduated
+    row and re-authors two, and that row stays green under this plan's edits.
+  - >-
+    OUT-OF-SCOPE FINDING (rec candidate, do NOT fix inline): scripts/ci/iam_simulate.py measures 87%
+    line coverage with NO config/coverage_baseline.yaml entry, so the checker's default holds it to
+    100%. The next PR that modifies that source file will fail the coverage gate on 18 pre-existing
+    uncovered lines unrelated to whatever that PR changes. Pre-existing, unrelated to this change, and
+    the same class wave 1 recorded for scripts/s3_log_store.py.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/* session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - Only the plan-cited decision sections read (168, 169, 170, 162, 165, 166, 160, 159, 161, 150, 149, 132, 128, 131, 104, 101, 86, 70, 55)
+  - docs/contracts/contract-population.yaml read in full -- it is the grammar this plan edits and must still satisfy
+  - docs/contracts/composite-action-shape.yaml and docs/contracts/iam-simulate-fixture.yaml read in full
+  - All 30 files in scope located and readable
+  - Live census re-derived (the 17/16 pin values are re-derived, never assumed)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create scripts/checks/contracts/validate_composite_action_shape_rosters.py -- one
+    @registry.register(...)-decorated check that declares "composite-action-shape.yaml" as a
+    module-level literal it genuinely READS, accepts contracts_dir: Path | None = None, calls
+    registry.examined(n, unit="roster_entries") on the real count and registry.skipped(reason) on
+    every early return, appends failures naming both the contract and the disagreeing surface, and is
+    mypy-clean. Import _R1_KNOWN_VIOLATORS and _KNOWN_BASELINE_SECTIONS lazily in-function (noqa:
+    PLC0415) so registry.all_checks() stays cheap.
+  - >-
+    Create scripts/checks/contracts/validate_iam_simulate_fixture_shape.py on the same skeleton,
+    declaring "iam-simulate-fixture.yaml" in-module. It calls scripts.ci.iam_simulate's
+    load_fixture/build_triples/principal_arn with NON-NUMERIC dummy placeholders, then asserts
+    expected_decision_values == VALID_DECISIONS, declared placeholders == the substituted token set,
+    and NOT a per-triple expected_decision leg, which is tautological given the
+    first two (see the scope purpose). Its docstring must record the deliberate scope boundary (never
+    live decisions, never condition-key/intersection semantics).
+  - >-
+    Add two Entry literals to scripts/checks/contracts/_manifest.py -- bare-string module=/attr=,
+    pre=True with pre_globs=None (UNGATED; do NOT narrow to globs), full_segment="full_after_lint" --
+    and two schema_drift rows to config/ci_rca_taxonomy.yaml.
+  - >-
+    Flip both contracts' evaluator from {none_grandfathered: <route>} to {check: <name>}, replacing
+    the whole route block, and add one new amendment_log[] entry each -- composite-action-shape's
+    entry MUST record the deliberate deviation, the Decision 162 membership clause it rests on, and
+    the accepted three-way-parity cost.
+  - >-
+    Delete the grandfather form: remove EnforcementRoute and EvaluatorSpec.none_grandfathered from
+    scripts/contracts_schema.py, narrow _exactly_one_kind to two kinds, and correct EvaluatorSpec's
+    CLASS DOCSTRING (lines 169-179), which is the primary reader-facing definition of the union and
+    still describes three declarable kinds -- leaving it would contradict acceptance criterion 3.
+    Delete _population.check_evaluator_kind_change AND its Pass 2 call site at
+    validate_contract_drift.py:358-362 (with the base_meta/head_meta locals) plus the now-orphaned
+    _class_d_meta_from_text and its test_coverage_edges.py tests; correct resolve_evaluator's docstring
+    (259-263) and the ratchet section comment (417-421). Delete the
+    Census.evaluator_none_grandfathered field plus its render() segment; NOTE resolve_evaluator's
+    none branch is the function's ONLY terminal return (_population.py:289) -- deleting it naively
+    yields a mypy missing-return and keeping it as an unreachable fall-through yields an uncovered
+    line, and all four modified scripts/ files measure EXACTLY 100% coverage today with no
+    coverage_baseline.yaml entry, so there is no slack for either. Make the agent_surface branch
+    unconditional instead; delete the new-file
+    prohibition branch, the none-guard, the census increment and the census_values row in
+    validate_contract_drift.py so grandfather_kind collapses to status == "active".
+  - >-
+    Delete the pin: remove ratchet.evaluator_none_grandfathered_max from
+    docs/contracts/contract-population.yaml and EVALUATOR_NONE_GRANDFATHERED_MAX_KEY, its PIN_KEYS
+    membership, evaluator_none_grandfathered_max_spec and its _SPEC_BY_KEY row from _ratchet.py, plus
+    the re-export in _population.py. Leave grandfathered_max (17) and status_active_max (16) untouched.
+  - >-
+    Apply rec-3101 in validate_contract_drift.py -- suppress the pin-vs-census cascade when
+    census.skipped > 0 so the surviving message says "fix the skipped contract", never "lower the pin".
+  - >-
+    Rewrite contract-population.yaml's prose for the two-kind union (evaluator_kinds,
+    grandfather_only_forms, counters_open_at_zero, census.fields, census.pin_binding, the ratchet
+    block, raisability_asymmetry, change_detection.evaluator_kind_change -- which declares the very
+    rule this plan deletes AND cross-references a sub-key it removes -- AND
+    subject_namespace.non_seedable_exception -- both LIVE normative
+    section, not amendment history, which still records exit-criteria-ledger's route in the deleted
+    model's exact field shape (consumer/mechanism/blocker/shape); VP step 9's parsed leg cannot see it,
+    so it must be rewritten by hand or the contract keeps describing a retired schema), add the
+    RETIREMENT GOVERNANCE NOTE (what, why, reversal path) and its amendment_log entry; narrow file-router.yaml's contract-population route description with its
+    own amendment_log entry; add the companion governance note to verification-registry.yaml's
+    top-level `governance_notes:` key -- a scalar STRING (the field is typed `str | None`), and with NO
+    amendment_log entry: it is Class A and a new top-level key does not trip check_amendment_for_diff.
+  - >-
+    Disposition all three graduated rows in config/agent/verification_registry/registry.yaml -- retire
+    enforcement-route-required-on-none-grandfathered; repoint
+    contracts-grandfather-only-forms-both-directions at the surviving status: active leg AND record
+    that this NARROWS its claim -- post-deletion "both directions" collapses to the birth direction
+    alone, since _ALLOWED_TRANSITIONS carries no inbound edge to active. Wave 1's precedent for exactly
+    this case (ci-rca-lifecycle) was to record a narrowing rather than silently repoint under an
+    unchanged name; do the same in the verification-registry governance note. Drop the
+    `assert meta.evaluator.none_grandfathered is None` line from
+    contract-census-declared-includes-env-taxonomy's command -- and add the VP step 5 graduation row
+    (check_id none-grandfathered-kind-unrepresentable, primitive_slot test_selector, guard_target
+    scripts/contracts_schema.py, guard_symbol EvaluatorSpec, plan_slug class-d-enforcers-wave-2,
+    graduated_at the implement date, graduated_by implement-agent, check_spec.node_id the new
+    unrepresentability test). AND add VP step 7's graduation row
+    (check_id composite-action-roster-parity-red-path, primitive_slot test_selector, guard_target
+    scripts/checks/contracts/validate_composite_action_shape_rosters.py, guard_symbol
+    validate_composite_action_shape_rosters, plan_slug class-d-enforcers-wave-2, check_spec.node_id the
+    composite mirror's roster-drift red-path node). TWO rows are added and one retired, so the registry
+    nets +1. Keep every row under registry.yaml's 2,315-char longest-line pin -- its longest line sits
+    at EXACTLY 2,315 today, so a longer row fails.
+  - >-
+    Lower config/structural_size_budgets.yaml's docs/contracts/iam-simulate-fixture.yaml entry to the
+    MEASURED post-edit value (predicted 603) without touching its dec-168 marker text.
+  - >-
+    Write the two mirror tests under tests/checks/contracts/, each with a green path plus red paths
+    for drift, ABSENT/EMPTY assertion target, missing file and malformed YAML -- enough to reach 100%
+    line coverage on its module. tests/checks/contracts/test__manifest.py needs NO edit.
+  - >-
+    Update the eight affected test modules: delete the none_grandfathered/EnforcementRoute tests and
+    fixtures; collapse test_real_population.py's if/else to an unconditional resolves assertion; add
+    tests/test_contracts_schema.py::TestEvaluatorSpec::test_none_grandfathered_is_not_a_declarable_kind
+    (VP step 5's graduated node); delete tests/test_iam_simulate.py::test_real_fixture_builds_cleanly;
+    add the rec-3101 cascade-suppression red path. Run `ruff check --fix` afterwards to clear unused
+    imports (F401), which a deletion of this size will produce -- but note ruff will NOT remove the two
+    dead module-level helpers the deletions strand: `_route` (test_grandfather_only.py:9),
+    `_COMPLETE_ROUTE` (test__population.py), and BOTH of test_contracts_schema.py's own
+    `_COMPLETE_ROUTE` (300) and `_route` (328). Delete all four by hand.
+  - >-
+    Annotate Decision 168's body in docs/DECISIONS.md with a dated amendment_forms-conformant line
+    naming contract-population.yaml's retirement note as the live record, then regenerate
+    docs/decisions-index.json with `bin/venv-python -m scripts.decisions_index`. Do NOT mint a number,
+    do NOT add an `amends:` edge, and do NOT edit clause 3's original text -- the convention is
+    append-only annotation.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until pass. VP steps 5 and 6 are the
+    discriminating steps: if the perturbed copy does not fail, the check is vacuous and must be fixed,
+    never the assertion weakened; if the unrepresentability proof passes on main, the test is not
+    asserting what it claims.
+  - >-
+    Close rec-3103 as MOOTED via scripts.ops_data_portal (get_rec_write_guidance() before the update),
+    and file the scripts/ci/iam_simulate.py coverage finding as a new recommendation. Do not fix either
+    inline. ALSO supply an explicit `resolution` string for rec-3059 recording that its stored
+    acceptance command (`grep -q 'none_grandfathered' scripts/checks/contracts/_population.py && ...`)
+    was SUPERSEDED by this plan's deletion of every such reference -- rec-autoclose.yml writes status
+    without executing acceptance, so closure is not blocked, but an unexplained false acceptance
+    command would mislead the next reader of the closed rec.
+  - >-
+    'Report: what was implemented, verification results, the final census line, the disposition of all
+    three graduated registry rows, the measured post-edit size of iam-simulate-fixture.yaml, and
+    confirmation that the squash body carries Resolves: rec-3059, rec-3101.'
+work_areas: []
+rollback: >-
+  Single-PR revert. The two contract flips, the schema deletion, the pin removal and the three
+  graduated-row dispositions are mutually dependent -- reverting any subset alone leaves either an
+  equality-bound pin disagreeing with the live census, or graduated rows referencing a symbol that no
+  longer exists. Revert the whole squash commit or none of it. The reversal path for the retirement
+  itself (should the form ever be needed again) is recorded in contract-population.yaml's and
+  verification-registry.yaml's governance notes: re-add the EnforcementRoute model and the
+  EvaluatorSpec field, which restores the kind and its gate branches.
