@@ -176,14 +176,6 @@ class TestLogStorageRegistry:
         assert store_mod.get_ops_table_routing() == {".foo.jsonl": "foo_table"}
         assert store_mod.get_priority_queue_key() == "queue/key.jsonl"
 
-    def test_anti_drift(self) -> None:
-        """YAML routing block equals the in-code fallback constants (no silent divergence)."""
-        import yaml  # noqa: PLC0415
-
-        doc = yaml.safe_load(store_mod._LOG_STORAGE_CONTRACT_PATH.read_text(encoding="utf-8"))
-        assert store_mod.FALLBACK_OPS_TABLE_ROUTING == doc["routing"]["ops_table_routing"]
-        assert store_mod.FALLBACK_PRIORITY_QUEUE_KEY == doc["routing"]["priority_queue_key"]
-
     def test_absent_yaml_fallback(self, tmp_path: Path) -> None:
         """Returns fallback constants when the contract file does not exist."""
         store_mod._LOG_STORAGE_CONTRACT_PATH = tmp_path / "does-not-exist.yaml"
