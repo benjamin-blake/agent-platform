@@ -105,12 +105,20 @@ scope:
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
-      Add Decision 171 (rename + relicense, amending Decision 101), AND add the reciprocal
+      Add Decision 171 (rename + relicense, amending Decisions 101 AND 127), AND add the reciprocal
       "Amended by Decision 171" forward-pointer inside Decision 101's own block. The pointer must
       name WHICH clauses move: point (b)'s repository-name row only (re-affirming the other four
       as frozen), point (f)'s paid-service deferral (discharged for the licence half), AND point
       (f)'s "secondary aspiration: open-source community" -- BUSL-1.1 is source-available, NOT OSI
       open source, and the CLA/copyright-assignment note changes contribution posture directly.
+      DECISION 127 NEEDS ITS OWN reciprocal pointer plus a substantive amendment: add the
+      licence-and-attribution artefact class to its point-1 permanent-class enumeration. Without
+      the pointer, validate_supersession_annotations reddens post-merge main (it builds an edge per
+      envelope amends id and FAILS unless the victim's block names "Decision 171"); without the
+      class addition, the prose allowlist grows while the taxonomy governing it does not, which is
+      exactly the drift Decision 127 point 3 exists to prevent. Editing 101 and 127 is NOT
+      cap-measured -- validate_decisions_size skips baseline numbers -- so neither annotation
+      competes for Decision 171's 6,144 bytes.
 
   # ---- PR-3: reference sweep + trust cleanup (narrow trust promptly after live proof) ----
   # NOTE: validate_licence_consistency and its four companion registration rows below ship in
@@ -240,8 +248,9 @@ acceptance_criteria:
     in both presubmit tiers, and declares examined()/skipped() rather than relying on the frozen
     check-accounting baseline.
   - >-
-    Decision 171 exists with a well-formed Decision 167 envelope declaring amends [101], Decision
-    101 carries the reciprocal forward-pointer, and the entry is synced to ops_decisions.
+    Decision 171 exists with a well-formed Decision 167 envelope declaring amends [101, 127],
+    BOTH amended entries carry the reciprocal forward-pointer, and the entry is synced to
+    ops_decisions.
   - >-
     No AWS resource, IAM role, S3 bucket, SSM path, Glue database or Lambda is renamed; the
     agent-platform-* infrastructure namespace is untouched.
@@ -441,9 +450,12 @@ verification_plan:
       assert env['number']==171, env; am=env.get('amends') or [];
       assert 101 in am and 127 in am, am; assert (env.get('significance') or {}).get('justification');
       assert len(b.encode()) <= 6144, len(b.encode());
-      c=re.search(r'## Decision 101:.*?(?=\\n## Decision )', t, re.S).group(0);
-      assert 'Decision 171' in c, 'Decision 101 lacks the reciprocal forward-pointer'; print('ok')"
-    expected: Exit 0. Envelope declares amends [101], carries significance, is within the size norm, and 101 points back.
+      [__import__('sys').exit('Decision %d lacks the reciprocal forward-pointer' % v)
+      for v in (101, 127) if 'Decision 171' not in
+      re.search(r'## Decision %d:.*?(?=\\n## Decision )' % v, t, re.S).group(0)]; print('ok')"
+    expected: >-
+      Exit 0. Envelope declares amends [101, 127], carries a significance justification, is within
+      the size norm, and BOTH amended entries point back at Decision 171.
     fix_if: >-
       validate_supersession_annotations builds a graph edge from the envelope's amends list and
       FAILS unless the amended entry names its amender. Without the reciprocal pointer, post-merge
@@ -496,7 +508,10 @@ verification_plan:
       form is the one that breaks gated-apply silently; treat its absence as a hard stop.
   - step: 16
     phase: post-deploy
-    action: CI is green under the OLD slug with dual trust in place (no regression before renaming).
+    action: >-
+      No unrelated regression under the OLD slug with dual trust in place. NOTE this is a
+      weak-positive check only: ci.yml:197-198's assume is continue-on-error, so a green run does
+      NOT prove both slugs are trusted -- steps 14 and 15 are the actual trust evidence.
     command: >-
       curl -sf -H "Authorization: Bearer $(cat ~/.config/gh-mcp/token)"
       -H "Accept: application/vnd.github+json"
@@ -578,7 +593,7 @@ verification_plan:
       sub forms. This is the gate on trust cleanup.
     command: >-
       set -o pipefail; test -n "$RENAME_TS" || { echo "RENAME_TS unset"; exit 1; };
-      for role in branch pr planner deploy apply; do
+      for role in branch pr planner deploy; do
       U=$(aws iam get-role --role-name "agent-platform-github-ci-$role"
       --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
       || { echo "READ FAILED: $role"; exit 1; };
@@ -588,27 +603,23 @@ verification_plan:
       r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
       sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
       || { echo "STALE -- last successful assume predates the rename: $role"; exit 1; };
-      done;
-      C=$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json -
-      --profile agent_platform) || { echo "convergence record unreadable"; exit 1; };
-      echo "$C" | grep -q '"status": *"green"'
-      || { echo "convergence record not green -- gated apply unproven"; exit 1; };
-      echo all-five-roles-ok
+      done; echo four-personal-roles-ok
     expected: >-
-      Prints all-five-roles-ok. Export RENAME_TS (ISO-8601, UTC) as the rename timestamp first.
+      Prints four-personal-roles-ok. Export RENAME_TS (ISO-8601, UTC) as the rename timestamp first.
       ADMIN-CONTAINER STEP -- needs agent_platform_admin. Drive the exercise deliberately before
       running this: open and merge a trivial PR (github_ci_pr on the PR event, github_ci_branch on
       push), let terraform-drift run (github_ci_planner), run a governed Lambda deploy
-      (github_ci_deploy), and drive one gated apply or Reconcile (github_ci_apply). The apply
-      role's two Decision 94 sub forms are NOT distinguishable from RoleLastUsed alone, so the
-      environment form is proven by the second clause: a green convergence record is written SOLELY
-      by a converged apply running under github_ci_apply, and after the rename that apply can only
-      have authenticated on a theseus sub. Drive one gated apply or Reconcile so the record is
-      re-written post-rename; confirm its commit_sha is a post-rename commit, not a stale green.
+      (github_ci_deploy). Do NOT try to drive a gated apply here -- there is no trust diff on main
+      to route one, which is the circularity step 22 exists to break. The apply
+      apply role is DELIBERATELY EXCLUDED from this step -- see step 22. Between PR-2 and PR-3
+      there is no IAM/trust/destroy diff on main to route a gated apply, and the only such diff IS
+      PR-3's own contraction, so requiring apply-role proof here would be circular and
+      unsatisfiable.
       RoleLastUsed lags by up to ~4 hours; re-run rather than concluding failure inside that window.
     fix_if: >-
       RoleLastUsed advances ONLY on a successful sts:AssumeRoleWithWebIdentity, so it cannot be
-      satisfied by a failed assume. Two rejected alternatives, both load-bearing: (a) workflow RUN
+      satisfied by a failed assume. It is EVENT time, so its ~4h reporting lag produces false
+      negatives only -- re-run, never conclude failure inside that window. Two rejected alternatives, both load-bearing: (a) workflow RUN
       conclusions are worthless here -- the assume steps carry continue-on-error: true at
       terraform-drift.yml:91-92, deploy-ducklake-lambdas.yml:125-126 and :300-301, and
       ci.yml:197-198, so a run concludes success even when the assume FAILED; (b) CloudTrail
@@ -616,10 +627,43 @@ verification_plan:
       this itself at terraform/bootstrap/github_ci_apply_policy.tf:493) AND would have been
       fail-open anyway, since lookup-events returns failed AssumeRoleWithWebIdentity events with
       the role ARN intact. Any role not proven is a role whose trust may be wrong -- do NOT run
-      step 22 until all five, plus the apply role's environment sub form, are observed.
+      step 23 until all four, plus the apply role's environment sub form, are observed.
 
   # ---------- PR-4 post-deploy: cleanup and decision sync ----------
   - step: 22
+    phase: post-deploy
+    action: >-
+      PR-3's own gated apply proves the apply role on BOTH Decision 94 sub forms -- and is
+      fail-safe by construction.
+    command: >-
+      set -o pipefail; U=$(aws iam get-role --role-name agent-platform-github-ci-apply
+      --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
+      || { echo "READ FAILED"; exit 1; };
+      test -n "$U" -a "$U" != "None" || { echo "apply role NEVER assumed"; exit 1; };
+      bin/venv-python -c "import sys,datetime as d;
+      u=d.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));
+      r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
+      sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
+      || { echo "apply role not assumed since the rename"; exit 1; };
+      H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
+      curl -sf -H "$H" "https://api.github.com/repos/benjamin-blake/theseus/actions/runs/$PR3_RUN_ID/jobs"
+      | jq -e '[.jobs[] | select(.name | test("gated-apply"))
+      | select(.conclusion == "success")] | length >= 1'
+    expected: >-
+      Exit 0. The apply role was assumed after the rename, and PR-3's gated-apply JOB itself
+      concluded success. ADMIN-CONTAINER STEP. Export PR3_RUN_ID as the run id of PR-3's
+      post-merge terraform-apply-sandbox run.
+    fix_if: >-
+      WHY THIS IS SAFE DESPITE RUNNING AFTER THE CONTRACTION APPLIES: the gated-apply job must
+      AUTHENTICATE before it can apply anything, and post-rename GitHub can only mint theseus subs.
+      So a successful job proves the theseus environment: sub form, and a failed authentication
+      means the job never starts and the old-slug subs are never removed. The destructive change
+      cannot outrun its own proof. Do NOT substitute a convergence-record grep: the routed branch
+      of write-convergence-record preserves the prior status, so a routed-but-unapproved apply
+      leaves a STALE green that passes; and both apply-sandbox and apply-reconcile write green on
+      the ref sub with no environment: declaration, so a green proves the slug but never the sub
+      FORM -- which is exactly the Decision 94 VP9 regression this exists to catch.
+  - step: 23
     phase: post-deploy
     action: After cleanup, no role trusts the old slug, and the apply role keeps both sub forms.
     command: >-
@@ -641,7 +685,7 @@ verification_plan:
       A stale sub is dead trust scope: a future repo created under the old name in this namespace
       would inherit assume rights. Squatting is owner-only in a user namespace, so this is not
       third-party-exploitable, but it must still be removed.
-  - step: 23
+  - step: 24
     phase: post-deploy
     action: Decision 171 reached the warehouse.
     command: >-
@@ -1003,7 +1047,7 @@ context:
     requiring CI. Before the rename every apply runs under a fully working old-slug CI. After it,
     either trust is correct or the recovery is an owner-executed rename-back needing neither CI nor
     Terraform, because the old-slug subs are still trusted. Irreversibility begins only at VP step
-    22, which is gated on step 21's live proof of all five roles.
+    23, which is gated on steps 21 and 22's live proof of all five roles.
   - >-
     github_repository.name is NOT ForceNew: the provider calls Repositories.Edit() then
     d.SetId(repo.GetName()), handling rename natively. github_repository_ruleset.repository is not
@@ -1183,21 +1227,21 @@ execution_steps:
     After either branch: run VP steps 17, 18, 19 and 20, then assert a clean (no-op)
     terraform/github plan so state and reality agree before anything else touches that root.
   - >-
-    Live-exercise all five roles under the new slug per VP step 21 -- trivial PR opened and merged,
-    a terraform-drift cycle, a governed Lambda deploy, and one gated apply or Reconcile. This gates
-    everything after it.
+    Live-exercise the FOUR personal-root roles under the new slug per VP step 21 -- a trivial PR
+    opened and merged (github_ci_pr, github_ci_branch), a terraform-drift cycle (github_ci_planner)
+    and a governed Lambda deploy (github_ci_deploy). The apply role is NOT exercised here: no trust
+    diff exists on main between PR-2 and PR-3 to route a gated apply, and the only one that will is
+    PR-3's own contraction. Step 22 proves the apply role from that apply, which is fail-safe --
+    the job must authenticate on a theseus sub before it can remove anything.
   - >-
     PR-3 (sweep + trust cleanup, NO guard) -- runs BEFORE the relicense so dual trust is narrowed
     promptly after step 21 rather than waiting on licence drafting and legal review. Update the
-    class-(a) slug sites. The check is NOT written here (see PR-4). Write
-    validate_licence_consistency with an explicit class-(a) path allowlist, an examined() count
-    declaration, and both invariants; register it across all seven surfaces including the
-    verification-registry row for graduated step 3 and the ci_rca_taxonomy row; write the mirror
-    test to 100% line coverage. Remove the old-slug subs from both trust roots. Run VP steps 8-13,
-    then open the PR.
+    class-(a) slug sites. The check is NOT written here -- it ships whole in PR-4, because its
+    licence invariant cannot be green before LICENSE and LICENSING.md exist. Remove the old-slug
+    subs from both trust roots. Run VP steps 2 and 13, then open the PR.
   - >-
     PR-3 applies. Bootstrap contraction is again operator-only (file a rec, STOP, human applies);
-    the personal-root contraction routes through gated-apply as before. Then run VP step 22.
+    the personal-root contraction routes through gated-apply as before. Then run VP steps 22 and 23.
   - >-
     Create and push the boundary tag BEFORE writing LICENSING.md's SHA, in the PR-4 working tree:
     git tag -a apache-final "$(git rev-parse origin/main)" -m "Last version released under
@@ -1215,11 +1259,11 @@ execution_steps:
     text verbatim to LICENSE-APACHE; write LICENSING.md with the SHA and
     the self-verifying rule; add the COMMERCIAL-LICENSE.md placeholder and its prose_allowlist row;
     rewrite README's H1, License section and CLA note; name the project in PROJECT_CONTEXT. Author
-    Decision 171 with its Decision 167 envelope (amends [101]) AND the reciprocal forward-pointer
-    inside Decision 101. Re-check the next free decision number at execution time -- a concurrent
+    Decision 171 with its Decision 167 envelope (amends [101, 127]) AND the reciprocal
+    forward-pointer inside BOTH Decision 101 and Decision 127. Re-check the next free decision number at execution time -- a concurrent
     PR may have claimed 171. Run VP steps 4-7, 12 and 13, then open and merge the PR.
   - >-
-    Post-merge: run VP step 23 to sync Decision 171 to ops_decisions, and file the four follow-on
+    Post-merge: run VP step 24 to sync Decision 171 to ops_decisions, and file the four follow-on
     recs named in Context. Confirm rec-3126 remains open and unbundled.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure
@@ -1227,12 +1271,12 @@ execution_steps:
   - 'Report: what was implemented, verification results'
 
 rollback: >-
-  BEFORE VP step 22 (trust narrowing) rollback is cheap and needs neither CI nor Terraform: the
+  BEFORE VP step 23 (trust narrowing) rollback is cheap and needs neither CI nor Terraform: the
   owner renames theseus back to agent-platform via Settings or PATCH /repos. The old-slug subs are
   still trusted because cleanup has not run, so CI resumes on the next run. Clear any red
   convergence record via the acknowledge-and-retry unlatch, and route ci_rca recs raised during the
   broken window through normal review (Decision 55/72, forward-fix, never auto-revert).
-  AFTER step 22 a rename-back is NOT a self-contained recovery, and an earlier draft of this plan
+  AFTER step 23 a rename-back is NOT a self-contained recovery, and an earlier draft of this plan
   was wrong to claim it was. Only github_ci_apply lives in the admin-local bootstrap root; the
   OTHER FOUR roles live in terraform/personal, whose sole sanctioned apply channel is
   terraform-apply-sandbox.yml -- which must authenticate as repo:benjamin-blake/agent-platform,
@@ -1241,9 +1285,8 @@ rollback: >-
   sanctioned recovery is FORWARD-FIX under theseus. If a rename-back is genuinely unavoidable it
   requires an out-of-band operator apply of terraform/personal from the admin container re-adding
   the old-slug subs -- outside Decision 126's routine model, so it is break-glass requiring
-  explicit human direction, and it must be pre-authorised BEFORE step 22 runs, never improvised
-  after. This asymmetry is the reason step 22 is gated on step 21's CloudTrail proof of all five
-  roles.
+  explicit human direction, and it must be pre-authorised BEFORE step 23 runs, never improvised
+  after. This asymmetry is the reason step 23 is gated on step 21's RoleLastUsed proof of the four personal-root roles.
   The relicense half rolls back independently by reverting its own PR; note that any version
   already published under BUSL-1.1 stays available under BUSL-1.1 to whoever holds it, exactly as
   the forward-only rule cuts the other way.
