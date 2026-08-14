@@ -43,8 +43,10 @@ scope:
   - file: .claude/settings.json
     action: Modify
     purpose: >-
-      Register the hook under a new Stop block (Stop supports no matcher field) with an explicit
-      bounded timeout so a hung git operation cannot stall the turn end for the 600s default.
+      Register the hook under a new Stop block with an explicit bounded timeout so a hung git
+      operation cannot stall the turn end for the 600s default. Mirror the existing SessionStart
+      group form; the matcher field is not meaningful for Stop, but its absence is not asserted as a
+      gate (the harness's own Stop registration declares an empty matcher).
   - file: tests/hooks/test_stop_checkpoint_push.py
     action: Create
     purpose: >-
@@ -66,6 +68,14 @@ scope:
       Mirror test (Decision 131) covering the marker seam, the full registered prefix set, merge-commit
       neutrality, and the origin/main-unreachable advisory skip. Must reach 100% coverage of the new
       module (validate_test_coverage scope includes scripts/).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      One new entry per GRADUATED verification_plan step (ten rows, one per graduation_check_id).
+      validate_graduation_completeness's implement-PR leg fails any graduate step with no
+      new-in-diff registry row, and validate_verification_registry re-runs each added row
+      differentially against origin/main and live -- so a row whose command is wrong or vacuous is
+      rejected at admission, not merged.
   - file: config/ci_rca_taxonomy.yaml
     action: Modify
     purpose: >-
@@ -111,10 +121,12 @@ infrastructure_dependencies: []
 acceptance_criteria:
   - >-
     .claude/hooks/stop_checkpoint_push.py exists and is registered under a Stop block in
-    .claude/settings.json with an explicit timeout; the block declares no matcher field.
+    .claude/settings.json with an explicit timeout well under the 600s default.
   - >-
-    On a dirty working tree on a non-main branch the hook creates exactly one commit with subject
-    'wip({branch}): turn checkpoint' and the remote branch ref advances to it.
+    On a dirty working tree on a non-main branch the hook creates exactly one commit whose subject is
+    the shared checkpoint constant rendered as 'wip({branch}): turn checkpoint' (colon included), the
+    guard classifies that exact emitted subject as a checkpoint, and the remote branch ref advances.
+    The hook and the guard import the constant from one definition; no second literal exists.
   - >-
     On a clean tree with local commits ahead of the upstream (or no upstream and ahead of
     origin/main) the hook pushes without creating a commit; on a clean tree with nothing ahead, and
@@ -146,9 +158,14 @@ acceptance_criteria:
     validate_commit_markers is registered in the verification domain manifest, resolves via
     scripts.checks.registry, runs in the --pre tier, and has a config/ci_rca_taxonomy.yaml row.
   - >-
-    All SIX named marker-commit invocations carry --allow-empty -- two in implement/SKILL.md
+    All six LITERAL named marker-commit invocations carry --allow-empty -- two in implement/SKILL.md
     (feat({slug}) and the path-limited roadmap({ids})), one in planning/SKILL.md, two in
-    commands/plan.md, one in commands/audit.md.
+    commands/plan.md, one in commands/audit.md. Prose-form marker-commit instructions elsewhere in
+    those files are a disclosed residual, not part of this criterion.
+  - >-
+    Every graduated VP step has a config/agent/verification_registry/registry.yaml row carrying this
+    plan's slug (ten rows), and each row is admitted by validate_verification_registry's differential
+    gate rather than rejected as non-discriminating.
   - >-
     The duplicated validate.py SSOT sentence appears exactly once in AGENTS.md (rec-2362,
     case-insensitively) and AGENTS.md carries a pointer to the hook.
@@ -226,13 +243,14 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Prove the hook is actually wired -- settings.json declares a Stop block invoking the hook, with
-      a bounded timeout and no matcher field.
+      Prove the hook is actually wired -- settings.json declares a Stop block invoking the hook with a
+      bounded timeout.
     command: bin/venv-python -m pytest tests/hooks/test_stop_checkpoint_push.py::TestSettingsRegistration -q
     expected: "Tests pass; output reports `passed`."
     fix_if: >-
-      The Stop key is absent, the command does not name stop_checkpoint_push.py, no timeout is set, or
-      a matcher field is present (unsupported for Stop and silently ignored).
+      The Stop key is absent, the command does not name stop_checkpoint_push.py, or no timeout is set
+      (leaving the 600s default). Do NOT assert absence of a matcher field -- the harness's own Stop
+      registration declares `"matcher": ""`, so absence is a convention, not a contract.
     hermetic: false
     graduation: graduate
     graduation_check_id: stop-hook-registered-with-timeout
@@ -271,8 +289,11 @@ verification_plan:
     action: >-
       Prove the marker-commit remedy landed on all six literal named invocations, counted per file --
       an aggregate count would pass if one file held them all.
-    command: test "$(grep -c -- '--allow-empty' .claude/skills/implement/SKILL.md)" = "2" && test "$(grep -c -- '--allow-empty' .claude/skills/planning/SKILL.md)" = "1" && test "$(grep -c -- '--allow-empty' .claude/commands/plan.md)" = "2" && test "$(grep -c -- '--allow-empty' .claude/commands/audit.md)" = "1"
-    expected: Exit 0 (2 / 1 / 2 / 1 across the four surfaces).
+    command: test "$(grep -c -- '--allow-empty' .claude/skills/implement/SKILL.md)" -ge "2" && test "$(grep -c -- '--allow-empty' .claude/skills/planning/SKILL.md)" -ge "1" && test "$(grep -c -- '--allow-empty' .claude/commands/plan.md)" -ge "2" && test "$(grep -c -- '--allow-empty' .claude/commands/audit.md)" -ge "1"
+    expected: >-
+      Exit 0 (at least 2 / 1 / 2 / 1 across the four surfaces). Floors, not equalities -- audit.md
+      carries two further prose-form marker-commit instructions at ~:123 and ~:129 that a later plan
+      may legitimately convert, and an equality pinned here would go red on that correct change.
     fix_if: >-
       Any shortfall means a marker commit can still fail with 'nothing to commit' once checkpointing is
       live, stripping its subject from origin/main..HEAD and silently no-opping validate_vp_replay and
@@ -301,9 +322,9 @@ verification_plan:
       Prove the ambient instruction load did NOT grow to pay for this mechanism -- AGENTS.md points at
       the hook, and the load-set total is at or under its budget with the budget itself ratcheted down
       rather than raised.
-    command: grep -q 'stop_checkpoint_push' AGENTS.md && test "$(grep -c 'raise-approved' config/prose_budgets.yaml)" = "2" && test $(( $(wc -c < CLAUDE.md) + $(wc -c < AGENTS.md) )) -le "$(grep -A1 '^S1' config/prose_budgets.yaml | grep -o '[0-9]*$')"
+    command: grep -q 'stop_checkpoint_push' AGENTS.md && test "$(grep -cE '^[^#].*# raise-approved' config/prose_budgets.yaml)" = "2" && test $(( $(wc -c < CLAUDE.md) + $(wc -c < AGENTS.md) )) -le "$(grep -A1 '^S1' config/prose_budgets.yaml | grep -o '[0-9]*$')"
     expected: >-
-      Exit 0 -- the pointer is present, the pre-existing raise-marker count is unchanged at 2 (this
+      Exit 0 -- the pointer is present, the ENTRY-LINE raise-marker count is unchanged at 2 (this
       plan adds none), and the measured load-set is within the registered budget.
     fix_if: >-
       A raise-marker count above 2 means this plan took a budget raise, which its whole premise
@@ -328,6 +349,26 @@ verification_plan:
     graduation_check_id: t41-annotation-cites-cd43-option
   - step: 12
     phase: pre-deploy
+    action: >-
+      Prove every graduated step got its verification-registry row and that each row survived the
+      differential admission gate -- a row whose command passes on BOTH the origin/main worktree and
+      live is rejected as non-discriminating, which is exactly what a vacuous grep would be.
+    command: bin/venv-python -m pytest tests/checks/verification/test_validate_verification_registry.py -q && test "$(grep -c 'plan_slug. git-checkpoint-persistence' config/agent/verification_registry/registry.yaml)" = "10"
+    expected: Exit 0 -- ten rows carry this plan's slug and the registry check's tests pass.
+    fix_if: >-
+      A count below 10 means a graduate step has no row and validate_graduation_completeness will
+      fail the implement PR. An admission rejection means that row's command does not discriminate
+      between the pre-change and post-change trees -- fix the command or reclassify the step to
+      waive with a substantive reason; never weaken the gate.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step asserts the registry's own population for this plan, so graduating it would add a
+      row that asserts the presence of rows including itself -- self-referential and unstable across
+      any future plan. validate_graduation_completeness and validate_verification_registry are the
+      standing enforcement and both already run in the --pre tier.
+  - step: 13
+    phase: pre-deploy
     action: Run the full local gate before handoff.
     command: bin/venv-python -m scripts.validate
     expected: "Exit 0 with a final `Validation Summary (scope: all)` PASS and no failures."
@@ -336,8 +377,13 @@ verification_plan:
       substitute). Watch specifically for validate_test_coverage's 100%-coverage floor on the new
       check module and validate_fallback_reevaluation on this plan file.
     hermetic: false
-    graduation: not-applicable
-  - step: 13
+    graduation: waive
+    graduation_waiver_reason: >-
+      A command_exit_zero row for the full validator is tautological under scripts/validate.py's own
+      _VALIDATE_DEPTH and PYTEST_CURRENT_TEST short-circuit guards -- it exits 0 on BOTH differential
+      legs, so the admission gate rejects it as non-discriminating. This is the repo's established
+      disposition for this step (PLAN-coverage-gate-handoff-integrity and ~25 sibling plans).
+  - step: 14
     phase: post-deploy
     action: >-
       Confirm the bundled recommendation closed after the squash-merge (Resolves trailer to
@@ -379,9 +425,16 @@ test_obligations:
     test_selector: tests/checks/verification/test__manifest.py
     red_green_expectation: >-
       red before (registry.resolve raises for an unregistered name), green after the Entry lands.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Every graduated VP step has a registry row carrying this plan's slug, and each row discriminates
+      between the pre-change and post-change trees (differential admission).
+    verification_step: 12
+    command: test "$(grep -c 'plan_slug. git-checkpoint-persistence' config/agent/verification_registry/registry.yaml)" = "10"
+    red_green_expectation: red before (0 rows carry this slug), green after all ten land and are admitted.
   - source: config/ci_rca_taxonomy.yaml
     behavior: Every registered check has a failure-category row; the new check maps to code_regression.
-    verification_step: 12
+    verification_step: 13
     command: bin/venv-python -m scripts.validate
     red_green_expectation: >-
       red before (validate_ci_rca_taxonomy fails on a registered check with no category row), green
@@ -398,29 +451,31 @@ test_obligations:
       root_ambient_load_set is ratcheted down to the measured size and this plan adds no raise marker
       (the pre-existing count of 2 is unchanged).
     verification_step: 10
-    command: test "$(grep -c 'raise-approved' config/prose_budgets.yaml)" = "2"
+    command: test "$(grep -cE '^[^#].*# raise-approved' config/prose_budgets.yaml)" = "2"
     red_green_expectation: >-
-      green before and after by construction -- this is a regression assertion that the plan never
-      takes a raise, and it fails the moment anyone adds one.
+      green before and after by construction -- a regression assertion that the plan never takes a
+      raise, failing the moment anyone adds one. The count MUST be anchored to entry lines - an
+      unanchored `grep -c 'raise-approved'` returns 3, because the file's header comment at :17
+      contains the literal marker template.
   - source: .claude/skills/implement/SKILL.md
     behavior: Both marker commits -- feat({slug}) and the path-limited roadmap({ids}) -- carry --allow-empty.
     verification_step: 8
-    command: test "$(grep -c -- '--allow-empty' .claude/skills/implement/SKILL.md)" = "2"
+    command: test "$(grep -c -- '--allow-empty' .claude/skills/implement/SKILL.md)" -ge "2"
     red_green_expectation: red before (0 occurrences), green after.
   - source: .claude/skills/planning/SKILL.md
     behavior: The Step-10 revision commit carries --allow-empty, at zero net byte cost.
     verification_step: 8
-    command: test "$(grep -c -- '--allow-empty' .claude/skills/planning/SKILL.md)" = "1"
+    command: test "$(grep -c -- '--allow-empty' .claude/skills/planning/SKILL.md)" -ge "1"
     red_green_expectation: red before (0 occurrences), green after.
   - source: .claude/commands/plan.md
     behavior: Both plan({slug}) marker commits carry --allow-empty.
     verification_step: 8
-    command: test "$(grep -c -- '--allow-empty' .claude/commands/plan.md)" = "2"
+    command: test "$(grep -c -- '--allow-empty' .claude/commands/plan.md)" -ge "2"
     red_green_expectation: red before (0 occurrences), green after.
   - source: .claude/commands/audit.md
     behavior: The audit({slug}) marker commit carries --allow-empty.
     verification_step: 8
-    command: test "$(grep -c -- '--allow-empty' .claude/commands/audit.md)" = "1"
+    command: test "$(grep -c -- '--allow-empty' .claude/commands/audit.md)" -ge "1"
     red_green_expectation: red before (0 occurrences), green after.
   - source: docs/ROADMAP-PLATFORM.yaml
     behavior: >-
@@ -438,8 +493,17 @@ constraints:
     the model; growing the ambient instruction load to describe that mechanism would relocate the work
     into every future session's context rather than removing it. The mechanism documents itself in the
     hook's docstring (AGENTS.md Agent-First collocation rule); AGENTS.md carries a pointer only. The
-    executor half needs no Decision either -- a stateless Lambda in Step Functions has no durable
-    filesystem, so commit-and-push per step is a structural necessity, not a policy choice.
+    justification rests ONLY on the interactive substrate -- the hook imposes no obligation an agent
+    must remember, its behaviour is fully observable in `git log`, and its reversal is removing one
+    settings.json key, all of which route below Decision 150's significance bar. Do NOT argue the
+    no-Decision verdict from executor-side necessity (see the CD.43 constraint below).
+  - >-
+    The checkpoint subject is the literal `wip({branch}): turn checkpoint`, COLON INCLUDED, and the
+    hook and the guard must share ONE constant rather than two hand-copied literals. The guard
+    classifies by prefix grammar and treats unrecognised subjects as neutral, so a colon-less subject
+    would make a checkpointed branch read as carrying zero checkpoint commits -- the guard would pass
+    vacuously and the seam this plan exists to close would silently reopen on a one-character
+    divergence.
   - >-
     Decision 67 executor freeze -- the T4.1 annotation is RECORD-ONLY. Write no executor code, no
     src/lambdas/ persona or glue module, no terraform.
@@ -448,8 +512,13 @@ constraints:
     this CD as authorizing a selection", and T4.1's exit criterion says the backing store is "not
     implied by prepare_workspace's implementation". The annotation must DETAIL CD.43's already-
     enumerated option_set entry git_as_store_commit_at_step_boundaries -- naming it by id -- and must
-    not read as proposing a new option or selecting a store. Recording the option's W2 foreclosure
-    profile is in bounds; choosing it is not.
+    not read as proposing a new option or selecting a store. Recording the option's W1/W2 profile is in
+    bounds; choosing it is not. CRITICALLY, do NOT argue that commit-and-push per step is structurally
+    FORCED (e.g. "a stateless Lambda has no durable filesystem, so there is no choice"). CD.27's
+    layer-2 substrate is "pinned at ratification" by its own title and CD.27 is state pending; Fargate
+    via ECS Run Task is retained in that same CD as an escape hatch and does carry a task-scoped
+    filesystem. Arguing the option is compelled is materially the act of selecting it, which is exactly
+    what CD.43's criteria-only discipline forbids a dependent plan from doing. Describe, never compel.
   - >-
     Never --no-verify, under any path, in the hook or in any flow surface. A rejected checkpoint leaves
     work uncommitted and warns loudly.
@@ -498,8 +567,11 @@ context:
     128, Decision 130, Decision 131, Decision 159, Decision 164, Decision 73, Decision 83. Roadmap
     refs (not in DECISIONS.md): T4.1, T4.2, CD.27, CD.43, GITOPS-02, GITOPS-04."
   - >-
-    "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 1 round (round 2 pending against
-    this reshaped scope)"
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 2 rounds (round 1 - fallback_
+    reevaluation carrier, marker count 5->6, structural force/exit guards, vacuous greps; round 2 -
+    raise-marker grep counted the header template, ten graduation registry rows owed, checkpoint-
+    subject literal divergence, step-12 disposition, CD.43 necessity-claim pre-emption; round 3
+    pending)"
   - >-
     SCOPE RESHAPE at human direction after critique round 1 -- the drafted Decision 170 and BOTH
     prose-budget raises were dropped. Rationale, recorded because it changes how the scout's Decision
@@ -507,9 +579,13 @@ context:
     grow the ambient instruction load, or the work is relocated into every future session's context
     rather than removed; (b) the hook is self-evidencing for the interactive substrate -- an agent that
     needs to understand a checkpoint reads the module, per AGENTS.md's collocation rule; (c) the
-    executor half needs no Decision because a stateless Lambda in Step Functions has no durable
-    filesystem between invocations, so commit-and-push per step is a structural necessity, and a
-    Decision mandating what the substrate already compels is redundant. Consequences -- D127 resolves by
+    reversal cost is one settings.json key, which routes below Decision 150's significance bar. NOTE -
+    an earlier draft of this rationale also argued the executor half needs no Decision because a
+    stateless Lambda has no durable filesystem, making commit-and-push structurally necessary. That
+    argument is WITHDRAWN - CD.27's layer-2 substrate is pinned at ratification and CD.27 is still
+    pending, so necessity cannot be asserted, and asserting it would itself be the CD.43 pre-emption
+    this plan's own constraint forbids. The no-Decision verdict stands on (a)-(c) alone and is stronger
+    without the executor argument. Consequences -- D127 resolves by
     SHRINKING the surface (net +6 bytes on S1, budget ratcheted down, no raise); D165 no longer applies
     (no raise, no marker); D168 no longer applies (the guard owns its registry in-module beside its
     enforcement, so there is no registry-without-a-reader); D163's honesty concern is answered by having
@@ -626,6 +702,39 @@ context:
     commits were unrelated plan documents). Rebased onto origin/main at f4c4f39 during planning at the
     human's direction, before the plan was written.
   - >-
+    DISCLOSED RESIDUAL -- PUBLIC-REPOSITORY EXPOSURE. `git add -A` plus an automatic push publishes every
+    non-gitignored UNTRACKED file to a public repo with no model and no human in the loop. AGENTS.md's
+    public-content boundary (Decisions 73/83/101) forbids AWS account ids, ARNs, ExternalIds,
+    credentials, trading alpha and internal hostnames. The pre-commit chain is the only gate and its
+    confidentiality coverage is narrow - a baselined detect-secrets plus one pygrep matching 12-digit ids
+    INSIDE an ARN, AKIA/ASIA/AIDA key ids, and *_information_hub. A bare account id, an internal
+    hostname, or strategy output sitting in an untracked scratch file passes all of it. Accepted because
+    the alternative (`git add -u`, tracked modifications only) would omit new files, which are the
+    highest-value work a checkpoint protects, and because the same `git add -A` already runs unreviewed
+    in the IMPLEMENTATION Commit Flow today. The hook's docstring must state this boundary, and scratch
+    work belongs outside the repo or in a gitignored path.
+  - >-
+    DISCLOSED RESIDUAL -- CONCURRENCY, not merely ordering, with the harness Stop hook. Claude Code runs
+    the hooks matching one event in PARALLEL, so beyond the two orderings already recorded there is a
+    third outcome - the harness hook's `git diff --quiet` / index inspection racing this hook's `git add
+    -A` and commit, including .git/index.lock contention. That can yield a spurious harness exit 2
+    (blocking a turn end) or a spurious lock failure on our side. Our fail-open covers our half only.
+    Mitigate by treating an index.lock failure as an ordinary fail-open path with a systemMessage, and
+    accept the spurious-block residual; do not attempt to serialize against a hook this repo cannot edit.
+  - >-
+    DISCLOSED RESIDUAL -- VP step 4's structural grep catches `sys.exit(2)` and a literal continue-false,
+    but NOT `raise SystemExit(2)`, `sys.exit(EXIT_BLOCK)`, or a continue-false assembled through a
+    variable. It complements the behavioural exit-0 assertions at step 1; it does not prove the hook can
+    never wedge a turn end.
+  - >-
+    HERMETICITY DISPOSITION, recorded rather than left implicit -- VP steps 1, 5, 6 and 13 are
+    hermetic false despite the local-bare-remote git tests being socket-free, because the planning
+    skill's hermetic-authoring rule keeps pytest-invoking and validate-invoking steps out of
+    validate_vp_replay's replay set (the replay budget is bounded at MAX_AGGREGATE_SECONDS 120 /
+    MAX_REPLAYED_STEPS 20, and a full-suite replay would blow it). The consequence is that this plan's
+    replayable evidence is its seven structural greps; the behavioural proof rides the graduated registry
+    rows and the PR's own CI run instead.
+  - >-
     DEFERRED to a follow-on plan, deliberately not bundled - (a) switching branch integration from rebase
     to merge, which would make the hook's --force-with-lease path vestigial and cuts conflict-resolution
     cost from O(commits) to O(1), a cost this plan's checkpointing multiplies; it needs validate_commit_
@@ -685,9 +794,11 @@ execution_steps:
     JSON. Resolve the repo root from __file__. Branch via CLAUDE_HOOK_BRANCH_OVERRIDE or `git branch
     --show-current`. Refuse silently on - git unavailable, detached HEAD, branch main, or
     mid-rebase/merge/cherry-pick (unmerged paths, or .git/rebase-merge, .git/rebase-apply, MERGE_HEAD,
-    CHERRY_PICK_HEAD present). Then - if the tree is dirty, capture index cleanliness, `git add -A`, `git
-    commit -m "wip({branch}) turn checkpoint"` with the registered subject grammar (pre-commit chain runs;
-    NEVER --no-verify); if the commit fails AND the tree changed because the hooks rewrote files, re-stage
+    CHERRY_PICK_HEAD present). Then - if the tree is dirty, capture index cleanliness, `git add -A`, and
+    commit with the shared checkpoint-subject constant, whose rendered form is `wip({branch}): turn
+    checkpoint` -- colon included, imported by both this hook and the guard from ONE definition, never
+    re-typed (pre-commit chain runs; NEVER --no-verify); if the commit fails AND the tree changed because
+    the hooks rewrote files, re-stage
     and retry EXACTLY ONCE; on final failure restore the index if it was clean, emit a systemMessage
     warning, exit 0. Push when anything is genuinely unpushed, guarded by a containment test so a
     squash-merged branch is never recreated; on non-fast-forward rejection retry --force-with-lease with NO
@@ -720,10 +831,23 @@ execution_steps:
     git_as_store_commit_at_step_boundaries" so VP step 11 can assert it. Record the step-wrapper contract -
     each state-machine step fetches the branch at the SHA handed to it by Step Functions, does its work,
     commits and pushes via wrapper code (the step_commit.py pattern), and returns the new SHA as step
-    output, with retried steps idempotent against remote state by SHA comparison. Note that this is
-    structurally forced rather than chosen - a stateless Lambda has no durable filesystem between
-    invocations - and record the option's W2 foreclosure profile. Select no store. Record-only, no executor
-    code.
+    output, with retried steps idempotent against remote state by SHA comparison. Describe the option's
+    W1 portability and W2 foreclosure profile factually; do NOT write that the shape is forced,
+    necessary, or the only possibility. Select no store. Record-only, no executor code. Keep the literal
+    CD.43 phrase on ONE physical line -- VP step 11's grep is a single-line match and the surrounding
+    progress_note is a wrapped block scalar.
+  - >-
+    Add one config/agent/verification_registry/registry.yaml entry per GRADUATED step (ten rows, one per
+    graduation_check_id, each carrying plan_slug git-checkpoint-persistence). Each row's command must
+    DISCRIMINATE - validate_verification_registry re-runs added rows against an origin/main worktree AND
+    live, and rejects any row that passes on both. If a row cannot discriminate, reclassify that VP step
+    to waive with a substantive reason rather than weakening the row.
+  - >-
+    Authoring traps to avoid, both of which turn a correct implementation red - (a) VP step 3 greps the
+    hook source for a bare --force token, and the module docstring is designated the contract of record
+    and instructed to state limitations, so write "force-with-lease" or "a bare force push" in prose,
+    never the literal flag; (b) VP step 12's registry-row count and VP step 11's CD.43 phrase are both
+    single-line greps against wrapped YAML.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA
     (Decision 55).
