@@ -87,9 +87,12 @@ scope:
       registry row carries tests/test_plan_document.py as its guard_target, so _in_scope_rows
       selects nothing different either way. (2) ADD "scripts/roadmap/plan_document.py", which is
       NOT currently present -- this is load-bearing, not cosmetic: it brings the four repointed
-      plan_document rows plus the pre-existing plan-document-fallback-reevaluation-schema (5 rows
-      total, verified) under TestRegistryRows' standing re-collection guard, partially closing the
-      Decision 132 modified-row gap this plan otherwise defers to rec-3119.
+      plan_document rows under TestRegistryRows' standing re-collection guard (five once this
+      plan's second graduated row lands), partially closing the Decision 132 modified-row gap
+      otherwise deferred to rec-3119. Note the fifth row sharing that guard_target,
+      plan-document-fallback-reevaluation-schema, enters _in_scope_rows but carries no harvestable
+      node_id (command_exit_zero over bin/venv-python -c), so it is NOT re-collected. VP step 3
+      asserts this string landed, because nothing else in the plan fails if it does not.
 bundled_recommendations:
   - rec-3076
 infrastructure_dependencies: []
@@ -124,6 +127,9 @@ acceptance_criteria:
   - >-
     A recommendation is filed for ci-rca-close-then-recur-reopen-backstop, whose guarded test
     method exists nowhere in the repo; that row is NOT mechanically repointed.
+  - >-
+    tests/validate/test_driver_seam.py's IN_SCOPE_PATHS contains
+    "scripts/roadmap/plan_document.py" and no longer contains "tests/test_plan_document.py".
   - The full validate tier passes end to end.
 verification_plan:
   - step: 1
@@ -169,22 +175,29 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: >-
-      Assert the mirror package carries its __init__.py files at BOTH levels (Decision 131) and
-      that the four concern modules exist.
-    command: 'bin/venv-python -c "import pathlib,sys; need=[''tests/roadmap/__init__.py'',''tests/roadmap/plan_document/__init__.py'',''tests/roadmap/plan_document/test_schema.py'',''tests/roadmap/plan_document/test_loader_cli.py'',''tests/roadmap/plan_document/test_optional_fields.py'',''tests/roadmap/plan_document/test_obligations.py'']; missing=[p for p in need if not pathlib.Path(p).is_file()]; print(''missing:'',missing); sys.exit(1 if missing else 0)"'
+      Assert the mirror package carries its __init__.py files at BOTH levels (Decision 131), that
+      the four concern modules exist, AND that the load-bearing IN_SCOPE_PATHS addition landed in
+      tests/validate/test_driver_seam.py. That last assertion exists because nothing else in this
+      plan fails without it: IN_SCOPE_PATHS has exactly one consumer (_in_scope_rows, which
+      filters on guard_target), so TestRegistryRows passes either way -- it just silently covers
+      fewer rows, which is precisely the declared-but-unexecuted shape Decision 163 names.
+    command: 'bin/venv-python -c "import pathlib,sys; need=[''tests/roadmap/__init__.py'',''tests/roadmap/plan_document/__init__.py'',''tests/roadmap/plan_document/test_schema.py'',''tests/roadmap/plan_document/test_loader_cli.py'',''tests/roadmap/plan_document/test_optional_fields.py'',''tests/roadmap/plan_document/test_obligations.py'']; missing=[p for p in need if not pathlib.Path(p).is_file()]; seam=pathlib.Path(''tests/validate/test_driver_seam.py'').read_text(encoding=''utf-8''); missing += [] if ''scripts/roadmap/plan_document.py'' in seam else [''IN_SCOPE_PATHS missing scripts/roadmap/plan_document.py'']; print(''missing:'',missing); sys.exit(1 if missing else 0)"'
     expected: 'Prints "missing: []" and exits 0.'
     fix_if: >-
       Any path listed. tests/roadmap/ is a NEW directory -- both its own __init__.py and the
       nested plan_document/__init__.py are required; creating only the inner one leaves
       tests.roadmap a namespace package and breaks prepend-import-mode collision-freedom.
+      "IN_SCOPE_PATHS missing scripts/roadmap/plan_document.py" means execution step 13 was only
+      half-applied (the replace landed, the add was dropped) -- add the string; it is what puts
+      the repointed rows under the standing re-collection guard.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Close to a file_presence shape, but that slot takes a single path and this asserts six at
-      once; more importantly the durable form is already enforced -- Decision 131's __init__.py
-      requirement and the package's existence are checked repo-wide by validate_test_coverage
-      (which fails with "missing test package" if the package is absent) on every PR. A registry
-      row naming these six paths would restate one-shot migration state.
+      Close to a file_presence shape, but that slot takes a single path and this asserts six
+      paths plus a string membership; more importantly the durable form is already enforced --
+      Decision 131's __init__.py requirement and the package's existence are checked repo-wide by
+      validate_test_coverage (which fails with "missing test package" if the package is absent) on
+      every PR. A registry row naming these paths would restate one-shot migration state.
   - step: 4
     phase: pre-deploy
     action: >-
@@ -226,7 +239,7 @@ verification_plan:
       "stale parent.parent survives" means the class was moved verbatim without the one permitted
       path rewrite -- from two directories deeper that expression resolves to tests/roadmap,
       whose docs/plans glob returns [], so validate_paths([]) reports no failures and the
-      assertion passes VACUOUSLY against 0 plans instead of 336. Do NOT satisfy this step by
+      assertion passes VACUOUSLY against 0 plans instead of 337 (and climbing). Do NOT satisfy this step by
       deleting the assertion; re-root it on REPO_ROOT and add the floor.
     hermetic: true
     graduation: graduate
@@ -306,13 +319,18 @@ verification_plan:
       set -- a registry row restating it would go stale the next time any of those tests moves.
       But a durable form IS partly available and this plan takes it rather than deferring wholly
       to rec-3119: adding "scripts/roadmap/plan_document.py" to IN_SCOPE_PATHS in
-      tests/validate/test_driver_seam.py brings all four repointed plan_document rows (and the
-      pre-existing plan-document-fallback-reevaluation-schema) under
+      tests/validate/test_driver_seam.py brings the FOUR repointed plan_document rows under
       TestRegistryRows::test_in_scope_node_ids_still_collect_under_pytest, which re-collects every
-      in-scope row on every run. scripts/test_coverage_checker.py is ALREADY in that frozenset, so
-      graduated row plan-document-concern-split-mapping inherits the same guard for free. What
-      remains genuinely uncovered is the seven repoints whose guard_targets sit outside that
-      frozenset (the ci_rca and checks rows) -- those stay with rec-3119.
+      in-scope row carrying a harvestable node_id on every run (rising to five once graduated row
+      plan-document-historical-plans-glob-non-vacuous lands, since it carries a node_id).
+      scripts/test_coverage_checker.py is ALREADY in that frozenset, so graduated row
+      plan-document-concern-split-mapping inherits the same guard for free. Precisely NOT covered:
+      the pre-existing plan-document-fallback-reevaluation-schema shares that guard_target and so
+      enters _in_scope_rows, but it is a command_exit_zero row whose command is
+      ["bin/venv-python", "-c", ...] -- _collectible_node_ids harvests only a node_id or the first
+      non-flag token after one ending in "pytest", so it yields nothing and is never re-collected
+      (verified). Also uncovered: the seven repoints whose guard_targets sit outside the frozenset
+      (the ci_rca and checks rows). Both remainders stay with rec-3119.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -440,8 +458,11 @@ constraints:
     Relocate the ten classes VERBATIM, with exactly TWO permitted edits, both inside
     test_all_historical_plans_still_valid_with_field_absent: re-root its docs/plans path on
     REPO_ROOT, and add the in-test floor assertion (assert len(paths) >= 300). No other
-    assertion may be rewritten, no test renamed, no new test case added beyond the single
-    coverage-checker mapping case, and no schema change to scripts/roadmap/plan_document.py.
+    assertion may be rewritten, no test renamed, and no schema change to
+    scripts/roadmap/plan_document.py. Exactly TWO new test cases are permitted, both in
+    tests/test_coverage_checker/test_coverage_checker_map.py:
+    test_maps_scripts_roadmap_plan_document_to_concern_split_package and
+    test_maps_still_grandfathered_roadmap_sibling_to_flat_home.
   - >-
     Do NOT pass -p no:randomly to pytest. pyproject.toml addopts carries --randomly-seed=last,
     so disabling the plugin makes that argument unrecognized and pytest exits 4 before running
@@ -494,7 +515,7 @@ context:
     "plan_documents" and line 510 Path(__file__).parent.parent / "docs" / "plans" (inside
     TestFallbackReevaluation). From two directories deeper BOTH resolve wrong. Line 510 is the
     dangerous one: it fails SILENTLY -- the glob returns [], validate_paths([]) returns no
-    failures, and "assert not failures" passes vacuously against 0 plans instead of 336. The
+    failures, and "assert not failures" passes vacuously against 0 plans instead of 337 (and climbing). The
     in-test floor assertion plus step 5 exist specifically to prove non-vacuity, and step 5
     checks the RELOCATED MODULE's source (not just the helper) because a correctly-rooted helper
     the test never uses would still glob empty. Verified exhaustive: the third candidate,
