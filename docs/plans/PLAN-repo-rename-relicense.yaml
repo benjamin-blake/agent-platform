@@ -93,7 +93,10 @@ scope:
       the precedent is Decision 101(c)'s scoped marketing/** carve-out.
   - file: README.md
     action: Modify
-    purpose: H1 becomes theseus; License section rewritten; CLA/copyright-assignment note added.
+    purpose: >-
+      H1 becomes theseus; License section rewritten; CLA/copyright-assignment note added; AND the
+      "Human portal files" row of the Documentation Model table refreshed to include the new root
+      licence artefacts, which that row currently omits.
   - file: docs/PROJECT_CONTEXT.md
     action: Modify
     purpose: >-
@@ -110,6 +113,10 @@ scope:
       open source, and the CLA/copyright-assignment note changes contribution posture directly.
 
   # ---- PR-3: reference sweep + trust cleanup (narrow trust promptly after live proof) ----
+  # NOTE: validate_licence_consistency and its four companion registration rows below ship in
+  # PR-4, NOT PR-3 -- the check asserts licence-file consistency, which cannot hold until
+  # LICENSE/LICENSING.md land. Its slug-staleness half is proven red-green by fixtures in the
+  # mirror test, not by tree state, so shipping it whole in PR-4 loses no evidence.
   - file: scripts/checks/misc/validate_ghas_probe.py
     action: Modify
     purpose: _DEFAULT_REPO slug (the CI path already reads GITHUB_REPOSITORY; only the local default is stale).
@@ -200,7 +207,7 @@ acceptance_criteria:
   - >-
     LICENSE is parameterised BUSL-1.1 (Licensor "Benjamin Blake", Change License Apache-2.0,
     Change Date = flip date + 4 years); LICENSE-APACHE holds the verbatim prior Apache text; and
-    NOTICE states the forward-only boundary in a form that survives squash-merge SHA churn.
+    LICENSING.md states the forward-only boundary in a form that survives squash-merge SHA churn.
   - >-
     validate_licence_consistency is registered across all seven Decision 169/170 surfaces, passes
     in both presubmit tiers, and declares examined()/skipped() rather than relying on the frozen
@@ -270,8 +277,9 @@ verification_plan:
       grep -qE '^Change Date: *20[0-9]{2}-[0-9]{2}-[0-9]{2}' LICENSE &&
       grep -q '^Change License: *Apache-2.0' LICENSE &&
       grep -q '^Additional Use Grant:' LICENSE &&
-      grep -qiE 'without limitation|not exhaustive' LICENSE &&
-      ! grep -qE '\[(TBD|placeholder|YYYY|name)\]' LICENSE
+      awk '/^Additional Use Grant:/,/^Change Date:/' LICENSE
+      | grep -qiE 'without limitation|not exhaustive' &&
+      ! awk '/^Licensor:/,/^Change License:/' LICENSE | grep -qE '\[[^]]*\]'
     expected: Exit 0. Every BUSL parameter is populated and no template placeholder survives.
     fix_if: >-
       An unfilled parameter makes the grant defective. A missing Change Date in particular leaves
@@ -291,7 +299,7 @@ verification_plan:
     expected: Exit 0. LICENSE-APACHE is byte-identical to the Apache text that governed pre-flip versions.
     fix_if: >-
       Any drift means the preserved licence is not the one those versions were actually released
-      under, which undermines the forward-only claim NOTICE makes.
+      under, which undermines the forward-only claim LICENSING.md makes.
     graduation: waive
     graduation_waiver_reason: >-
       The comparison base is origin/main at flip time, a moving reference that stops being
@@ -310,8 +318,10 @@ verification_plan:
       annotated tag apache-final points at that same commit.
     fix_if: >-
       A mismatch means main advanced after LICENSING.md was written. Rebase onto origin/main,
-      update the SHA, re-point the tag, and re-run. Run this immediately before the final push AND
-      again after the squash-merge lands -- the merge must not move the boundary. The repository
+      update the SHA, re-point the tag, and re-run. Run this immediately before the final push. To
+      re-verify AFTER the squash-merge, compare against the flip commit's FIRST PARENT
+      (git rev-parse HEAD^1), NOT origin/main -- post-merge origin/main IS the flip commit, so
+      re-running the command verbatim is guaranteed to fail and would be a false alarm. The repository
       has ZERO tags today, so "every version published" otherwise has no durable referent; the
       annotated tag is that referent.
     graduation: waive
@@ -735,8 +745,9 @@ test_obligations:
       grep -qE '^Change Date: *20[0-9]{2}-[0-9]{2}-[0-9]{2}' LICENSE &&
       grep -q '^Change License: *Apache-2.0' LICENSE &&
       grep -q '^Additional Use Grant:' LICENSE &&
-      grep -qiE 'without limitation|not exhaustive' LICENSE &&
-      ! grep -qE '\[(TBD|placeholder|YYYY|name)\]' LICENSE
+      awk '/^Additional Use Grant:/,/^Change Date:/' LICENSE
+      | grep -qiE 'without limitation|not exhaustive' &&
+      ! awk '/^Licensor:/,/^Change License:/' LICENSE | grep -qE '\[[^]]*\]'
     red_green_expectation: >-
       Red against the current Apache-2.0 LICENSE (no BUSL header, no Parameters block), green
       once the parameterised BUSL text lands.
@@ -832,7 +843,7 @@ constraints:
     Lambda names stay exactly as they are. Decision 101's other point-(b) rows remain frozen.
   - >-
     The relicense is FORWARD ONLY. Every version published up to the flip commit remains
-    Apache-2.0 irrevocably; make no retroactive claim anywhere in LICENSE, NOTICE, README or
+    Apache-2.0 irrevocably; make no retroactive claim anywhere in LICENSE, LICENSING.md, README or
     Decision 171.
   - >-
     Do not rewrite historical old-slug references in docs/DECISIONS.md run URLs, archived
@@ -874,6 +885,22 @@ context:
     discharges that gate for the licence half only -- it authorises dual licensing, not a built
     commercial surface.
   - >-
+    Decision 171 byte budget is a HARD FAIL, not a warning -- corrected mid-planning after an
+    incorrect fact-check in the other direction. docs/contracts/decision-entry.yaml's
+    size_governance.per_entry_size_norm sets tier: hard-fail, and
+    validate_decisions_size._per_entry_cap_failures appends to `failed` for any new-in-diff entry
+    over 6,144 bytes (the function was renamed from _per_entry_cap_warnings precisely to mark that
+    flip). Recent single-subject entries land at 5,649-5,869 bytes, and 171 must carry TWO subjects
+    plus a split reversal stanza, three row-specific Decision 101 amendments, the GPL-compatibility
+    reasoning, the sole-ownership caveat, the in-place-rename rationale and the prose-class naming.
+    It will be tight. A raise is forbidden by this plan's constraints AND by Decision 167's own
+    reversal conditions. NAMED RELIEF PATH, in order: (1) route mechanism detail to LICENSING.md
+    and the contracts rather than restating it in the entry; (2) compress the Related pointer block
+    to bare ids; (3) move the in-place-over-fresh-repo rationale into LICENSING.md, citing it from
+    the entry. If it still will not fit, STOP and escalate to the operator -- do not raise the cap,
+    and do not split into two entries to evade it, which Decision 167 reversal condition (b) names
+    as split-then-recombine.
+  - >-
     Header budget: docs/DECISIONS.md carries 123 live H2 entries against a 132 ceiling. A single
     entry was chosen over splitting rename and relicence at explicit human direction; the entry
     therefore carries a split reversal stanza so either half can be reversed independently.
@@ -890,7 +917,7 @@ context:
     BUSL-1.1 despite it being a valid SPDX identifier. Do not gate anything on a licence badge
     appearing; record whatever .license.spdx_id returns as an observation, not a failure.
   - >-
-    NOTICE anchors on the last pre-flip commit SHA AND states a self-verifying rule (any snapshot
+    LICENSING.md anchors on the last pre-flip commit SHA AND states a self-verifying rule (any snapshot
     whose root LICENSE is the Apache text is Apache-licensed) so the boundary survives squash-merge
     SHA churn. Verify the SHA immediately before the final push (VP step 6).
   - >-
@@ -1001,6 +1028,31 @@ context:
     diagnostic class discounted elsewhere. That asymmetry is why the GitHub-API rename is a
     first-class execution branch in PR-2, not a footnote.
   - >-
+    Decision 171 must carry a portal-set note. Decision 111 enumerates the curated public portal as
+    README.md, AGENTS.md, EVALUATION-PROMPTS.yaml, .devcontainer/ and SECURITY.md. This plan lands
+    three NEW root portal files (LICENSING.md, CONTRIBUTING.md, COMMERCIAL-LICENSE.md), so that
+    enumeration goes stale on merge. The invariant itself is untouched -- licence artefacts are
+    curated projection, not an operational-data export, so Decision 111's reversal conditions do
+    not fire -- but the entry must say so explicitly rather than leaving the list silently wrong.
+    Record the COMMERCIAL-LICENSE.md placement rationale too: Decision 101(c) names marketing/ as
+    the home for commercial PROSE, and a licence-contact stub at the repo root where licence files
+    conventionally live is deliberately not that.
+  - >-
+    The Co-Authored-By trailer must be addressed head-on, not left implicit. AGENTS.md's own
+    git-ops conventions mandate a Co-Authored-By line naming the assistant on every commit, and 54
+    of the 60 commits visible in this shallow clone carry one; the trailer keeps accruing after the
+    flip. A trailer is a convention rather than an assignment, but a dual-licensing posture resting
+    on sole copyright ownership cannot simply not mention it. Name it in CONTRIBUTING.md and in
+    Decision 171's sole-ownership caveat, and let the follow-on CLA/DCO rec decide whether the
+    convention needs changing. Do NOT quietly drop the trailer as a workaround.
+  - >-
+    Name Decision 171's reversal-stanza FORM explicitly when authoring: decision-entry.yaml
+    distinguishes a plain **Reversal conditions:** marker from the machine-monitored fenced
+    reversal-conditions stanza that scripts/preflight/decision_conditions.py matches on its exact
+    info string. Pick one deliberately. A second fence also costs bytes against the hard 6,144-byte
+    cap, which is the binding constraint here -- prefer the plain marker unless monitoring is
+    genuinely wanted.
+  - >-
     Branch was rebased onto origin/main e86c271 at authoring time; preflight reported 0 commits
     behind, 0 ahead, no uncommitted changes, and an empty ci_rca_unresolved_recs list.
 
@@ -1061,14 +1113,6 @@ execution_steps:
     a terraform-drift cycle, a governed Lambda deploy, and one gated apply or Reconcile. This gates
     everything after it.
   - >-
-    PR-4 (relicense + decision) -- LAST. Fetch the canonical BUSL-1.1 text and fill only its Parameters
-    block; move the current Apache text verbatim to LICENSE-APACHE; write NOTICE with the SHA and
-    the self-verifying rule; add the COMMERCIAL-LICENSE.md placeholder and its prose_allowlist row;
-    rewrite README's H1, License section and CLA note; name the project in PROJECT_CONTEXT. Author
-    Decision 171 with its Decision 167 envelope (amends [101]) AND the reciprocal forward-pointer
-    inside Decision 101. Re-check the next free decision number at execution time -- a concurrent
-    PR may have claimed 171. Run VP steps 4-7, 12 and 13, then open and merge the PR.
-  - >-
     PR-3 (sweep, cleanup, guard) -- runs BEFORE the relicense so dual trust is narrowed promptly
     after step 21 rather than waiting on licence drafting and legal review. Update the class-(a)
     slug sites. Write
@@ -1080,6 +1124,21 @@ execution_steps:
   - >-
     PR-3 applies. Bootstrap contraction is again operator-only (file a rec, STOP, human applies);
     the personal-root contraction routes through gated-apply as before. Then run VP step 22.
+  - >-
+    Create and push the boundary tag BEFORE writing LICENSING.md's SHA, in the PR-4 working tree:
+    git tag -a apache-final "$(git rev-parse origin/main)" -m "Last version released under
+    Apache-2.0; later versions are BUSL-1.1 per Decision 171" && git push origin apache-final.
+    The repository has ZERO tags today, so this is the first durable referent for "every version
+    published up to the flip". A local-only tag is not an anchor -- the push is load-bearing, and
+    VP step 6 asserts the tag resolves to the same commit as LICENSING.md's SHA.
+  - >-
+    PR-4 (relicense + decision) -- LAST. Fetch the canonical BUSL-1.1 text and fill only its Parameters
+    block; move the current Apache text verbatim to LICENSE-APACHE; write LICENSING.md with the SHA and
+    the self-verifying rule; add the COMMERCIAL-LICENSE.md placeholder and its prose_allowlist row;
+    rewrite README's H1, License section and CLA note; name the project in PROJECT_CONTEXT. Author
+    Decision 171 with its Decision 167 envelope (amends [101]) AND the reciprocal forward-pointer
+    inside Decision 101. Re-check the next free decision number at execution time -- a concurrent
+    PR may have claimed 171. Run VP steps 4-7, 12 and 13, then open and merge the PR.
   - >-
     Post-merge: run VP step 23 to sync Decision 171 to ops_decisions, and file the four follow-on
     recs named in Context. Confirm rec-3126 remains open and unbundled.
