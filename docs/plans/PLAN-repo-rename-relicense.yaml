@@ -223,7 +223,7 @@ infrastructure_dependencies:
     EXECUTION CONTEXT, corrected. The DEV container has no `terraform` and no `gh`; `api.github.com`
     is EGRESS-BLOCKED (403 even unauthenticated -- the proxy README says report it, never route
     around it); and only the agent_static/agent_platform profiles exist, so iam:GetRole and
-    cloudtrail:* are both denied. VP steps 14, 15, 16, 17, 18, 19, 20, 21 and 22 are therefore
+    cloudtrail:* are both denied. VP steps 14-23 are therefore
     ADMIN-CONTAINER steps requiring agent_platform_admin and real github.com egress -- they are not
     runnable from a routine CC-web session, and an earlier draft wrongly implied they were. Steps
     1-13 are DEV-runnable (grep/python/git/diff only). All terraform validate/plan stays
@@ -272,7 +272,7 @@ verification_plan:
       breaks every AssumeRoleWithWebIdentity the instant the rename lands.
     graduation: waive
     graduation_waiver_reason: >-
-      The dual-slug state is deliberately transient and is REMOVED by this same plan at step 22.
+      The dual-slug state is deliberately transient and is REMOVED by this same plan at step 23.
       Graduating it would install a standing guard asserting a condition the plan intends to
       delete, which would then fail on every PR after cleanup.
   - step: 2
@@ -658,7 +658,8 @@ verification_plan:
       PR-3's own gated apply proves the apply role on BOTH Decision 94 sub forms -- and is
       fail-safe by construction.
     command: >-
-      set -o pipefail; U=$(aws iam get-role --role-name agent-platform-github-ci-apply
+      set -o pipefail; test -n "$RENAME_TS" || { echo "RENAME_TS unset"; exit 1; };
+      U=$(aws iam get-role --role-name agent-platform-github-ci-apply
       --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
       || { echo "READ FAILED"; exit 1; };
       test -n "$U" -a "$U" != "None" || { echo "apply role NEVER assumed"; exit 1; };
@@ -667,13 +668,20 @@ verification_plan:
       r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
       sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
       || { echo "apply role not assumed since the rename"; exit 1; };
-      H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
-      curl -sf -H "$H" "https://api.github.com/repos/benjamin-blake/theseus/actions/runs/$PR3_RUN_ID/jobs"
+      test -n "$PR3_RUN_ID" || { echo "PR3_RUN_ID unset"; exit 1; };
+      H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)"; B="https://api.github.com/repos/benjamin-blake/theseus";
+      curl -sf -H "$H" "$B/actions/runs/$PR3_RUN_ID"
+      | jq -e --arg ts "$RENAME_TS" '.run_started_at > $ts'
+      || { echo "run $PR3_RUN_ID started BEFORE the rename -- pre-rename evidence, rejected"; exit 1; };
+      curl -sf -H "$H" "$B/actions/runs/$PR3_RUN_ID/jobs"
       | jq -e '[.jobs[] | select(.name | test("gated-apply"))
       | select(.conclusion == "success")] | length >= 1'
     expected: >-
-      Exit 0. The apply role was assumed after the rename, and PR-3's gated-apply JOB itself
-      concluded success. ADMIN-CONTAINER STEP. Export PR3_RUN_ID as the run id of PR-3's
+      Exit 0. ONLY THE JOB ASSERTION IS LOAD-BEARING: RoleLastUsed is per-ROLE, not per-sub-FORM,
+      and advances on the ref-form assume that apply-sandbox performs earlier in the same run, so
+      treat it as corroborating liveness, never as proof of the environment form. The run-start
+      comparison is what rejects pre-rename evidence; the gated-apply job conclusion is what proves
+      the environment sub form. ADMIN-CONTAINER STEP. Export PR3_RUN_ID as the run id of PR-3's
       post-merge terraform-apply-sandbox run, and RENAME_TS as ISO-8601 with an explicit UTC
       offset.
     fix_if: >-
@@ -681,7 +689,12 @@ verification_plan:
       AUTHENTICATE before it can apply anything, and post-rename GitHub can only mint theseus subs.
       So a successful job proves the theseus environment: sub form, and a failed authentication
       means the job never starts and the old-slug subs are never removed. The destructive change
-      cannot outrun its own proof. Do NOT substitute a convergence-record grep: the routed branch
+      cannot outrun its own proof. RECOVERY FOR THE ONE CELL THE HEAL BUTTON CANNOT REACH: if
+      gated-apply fails AT the OIDC step post-rename, write-convergence-record never reaches S3, so
+      the record stays green-with-pending_gated and Reconcile resolves nothing actionable. State is
+      SAFE (contraction unapplied, all personal roles still dual-trusted) but the sanctioned heal
+      button is inert -- repair out-of-band from the admin container by correcting the trust and
+      re-running the workflow, and do not treat Reconcile's silence as convergence. Do NOT substitute a convergence-record grep: the routed branch
       of write-convergence-record preserves the prior status, so a routed-but-unapproved apply
       leaves a STALE green that passes; and both apply-sandbox and apply-reconcile write green on
       the ref sub with no environment: declaration, so a green proves the slug but never the sub
@@ -1309,7 +1322,7 @@ rollback: >-
   was wrong to claim it was. Only github_ci_apply lives in the admin-local bootstrap root; the
   OTHER FOUR roles live in terraform/personal, whose sole sanctioned apply channel is
   terraform-apply-sandbox.yml -- which must authenticate as repo:benjamin-blake/agent-platform,
-  precisely the sub step 22 deleted. Renaming back post-22 therefore CREATES the forbidden state
+  precisely the sub step 23 deleted. Renaming back post-23 therefore CREATES the forbidden state
   this plan's ordering exists to avoid: CI broken, and the repair running through CI. Post-22 the
   sanctioned recovery is FORWARD-FIX under theseus. If a rename-back is genuinely unavoidable it
   requires an out-of-band operator apply of terraform/personal from the admin container re-adding
