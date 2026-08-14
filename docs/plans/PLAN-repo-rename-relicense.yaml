@@ -131,6 +131,12 @@ scope:
     purpose: >-
       Three bare `repo: str = "agent-platform"` defaults building reconcile/apply workflow-run
       URLs. Missed by a full-slug grep; found by the decision-scout gate.
+  - file: bin/setup-cloud-env.sh
+    action: Modify
+    purpose: >-
+      Line 61 names GITHUB_MCP_PAT as single-repo-scoped to agent-platform -- the identical
+      criterion by which ghas-probe.yml:26 is in scope. Line 38's cd /home/user/agent-platform is
+      an on-disk checkout path and must be LEFT ALONE (the directory name is rename-independent).
   - file: .github/workflows/ghas-probe.yml
     action: Modify
     purpose: Credential-header comment naming the GHAS_PROBE_TOKEN's repo scope.
@@ -142,8 +148,12 @@ scope:
   - file: scripts/checks/hygiene/validate_licence_consistency.py
     action: Create
     purpose: >-
-      Registered check guarding two invariants: licence-file/LICENSING.md/README consistency, and no
-      old-slug reference in an explicit class-(a) path allowlist.
+      Registered check guarding two invariants: licence-file/LICENSING.md/README consistency, and
+      no old-slug reference in class-(a) paths. The allowlist is a path->PATTERN map, not a bare
+      path list: escalate.py needs FULL-SLUG matching (line 39 is class-(a) while lines 43/47's
+      s3://agent-platform-data-lake are class-(b) in the SAME file), whereas approvals.py needs
+      BARE-TOKEN matching (repo: str = "agent-platform"). One pattern for both yields either a
+      vacuous pass on approvals.py or a permanent red on escalate.py.
   - file: scripts/checks/hygiene/_manifest.py
     action: Modify
     purpose: Entry literal for the new check (registration surface 3).
@@ -194,8 +204,10 @@ infrastructure_dependencies:
     artifact is formally affected. NO build/deploy/smoke-test step is planned, deliberately: the
     change is a one-line prose substitution inside an existing exit criterion, the asset is
     consumed as agent CONTEXT rather than executed, and both dispatcher functions
-    (agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor) are
-    provisioned but schedule-DISABLED (Decision 61/37/116, AGENTS.md re-enable runbook). A
+    (agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor) are inert:
+    the dispatcher is schedule-disabled (Decision 61/37/116, AGENTS.md re-enable runbook) and
+    findings-processor is S3-event-driven (prod_lambdas.tf, s3:ObjectCreated on agents/*.jsonl)
+    whose only producers ARE those disabled agents. A
     redeploy would ship a doc tweak to a function that never runs. This waiver is explicit
     because validate_lambda_deploy_gating is advisory-only and would not have caught the omission.
   - >-
@@ -378,12 +390,14 @@ verification_plan:
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
     expected: >-
-      Exit 0 with an empty failure list after the sweep. Before the sweep the same command must
-      exit 1 naming each unswept class-(a) path -- run it first to observe red.
+      Exit 0 with an empty failure list. The check ships in PR-4, AFTER PR-3's sweep, so red is
+      NOT observable against the tree -- it is demonstrated by mirror-test fixtures carrying the
+      old slug (step 10). What this step proves is that the check is non-vacuous against the real
+      tree: it must report a non-zero examined() count, never an empty domain.
     fix_if: >-
-      Green before the sweep means the check is vacuous (its path allowlist is wrong or empty).
-      Confirm it reports a non-zero examined() count; a vacuous pass is exactly what Decision 170
-      exists to make visible.
+      A pass with examined(0) is a VACUOUS pass -- the path allowlist is wrong or empty -- and is
+      exactly what Decision 170's declarative channel exists to make visible. Check the declared
+      count, not just the exit code.
     graduation: waive
     graduation_waiver_reason: >-
       The check itself is the standing guard and runs in both presubmit tiers via its manifest
@@ -423,7 +437,9 @@ verification_plan:
     command: >-
       bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text();
       b=re.search(r'## Decision 171:.*?(?=\\n## Decision )', t, re.S).group(0);
-      assert 'amends: [101]' in b, 'envelope missing amends'; assert 'significance:' in b;
+      import yaml; env=yaml.safe_load(re.search(r'\`\`\`yaml\\n(.*?)\`\`\`', b, re.S).group(1));
+      assert env['number']==171, env; am=env.get('amends') or [];
+      assert 101 in am and 127 in am, am; assert (env.get('significance') or {}).get('justification');
       assert len(b.encode()) <= 6144, len(b.encode());
       c=re.search(r'## Decision 101:.*?(?=\\n## Decision )', t, re.S).group(0);
       assert 'Decision 171' in c, 'Decision 101 lacks the reciprocal forward-pointer'; print('ok')"
@@ -542,10 +558,14 @@ verification_plan:
       https://api.github.com/repos/benjamin-blake/theseus/actions/workflows/ghas-probe.yml/dispatches
       -d '{"ref":"main"}' &&
       curl -sf -H "$H" "https://api.github.com/repos/benjamin-blake/theseus/actions/workflows/ghas-probe.yml/runs?event=workflow_dispatch&per_page=1"
-      | jq -e '.workflow_runs[0].conclusion == "success"'
+      | jq -e --argjson prev "$PREV_RUN_ID"
+      '.workflow_runs[0].id > $prev and .workflow_runs[0].conclusion == "success"'
     expected: >-
-      Dispatch accepted AND the resulting run concluded success. Re-run the second half until the
-      run leaves "in_progress"; a null conclusion is not a pass. ADMIN-CONTAINER STEP -- api.github.com
+      Dispatch accepted AND a STRICTLY NEWER run concluded success. Capture PREV_RUN_ID from the
+      same endpoint BEFORE dispatching -- ghas-probe has pre-existing green dispatch runs (AGENTS.md
+      cites run 31536138747 from 2026-08-11), so an unpinned query yields a false pass that never
+      exercises the post-rename token. Re-run the second half until the run leaves "in_progress";
+      a null conclusion is not a pass. ADMIN-CONTAINER STEP -- api.github.com
       is egress-blocked from the DEV container.
     fix_if: >-
       ghas-probe is loud-fail by design: a rotated, expired or mis-scoped token exits non-zero
@@ -568,15 +588,23 @@ verification_plan:
       r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
       sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
       || { echo "STALE -- last successful assume predates the rename: $role"; exit 1; };
-      done; echo all-five-roles-ok
+      done;
+      C=$(aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json -
+      --profile agent_platform) || { echo "convergence record unreadable"; exit 1; };
+      echo "$C" | grep -q '"status": *"green"'
+      || { echo "convergence record not green -- gated apply unproven"; exit 1; };
+      echo all-five-roles-ok
     expected: >-
       Prints all-five-roles-ok. Export RENAME_TS (ISO-8601, UTC) as the rename timestamp first.
       ADMIN-CONTAINER STEP -- needs agent_platform_admin. Drive the exercise deliberately before
       running this: open and merge a trivial PR (github_ci_pr on the PR event, github_ci_branch on
       push), let terraform-drift run (github_ci_planner), run a governed Lambda deploy
       (github_ci_deploy), and drive one gated apply or Reconcile (github_ci_apply). The apply
-      role's two Decision 94 sub forms are NOT distinguishable from RoleLastUsed -- prove the
-      environment form separately by confirming the gated-apply JOB executed after approval.
+      role's two Decision 94 sub forms are NOT distinguishable from RoleLastUsed alone, so the
+      environment form is proven by the second clause: a green convergence record is written SOLELY
+      by a converged apply running under github_ci_apply, and after the rename that apply can only
+      have authenticated on a theseus sub. Drive one gated apply or Reconcile so the record is
+      re-written post-rename; confirm its commit_sha is a post-rename commit, not a stale green.
       RoleLastUsed lags by up to ~4 hours; re-run rather than concluding failure inside that window.
     fix_if: >-
       RoleLastUsed advances ONLY on a successful sts:AssumeRoleWithWebIdentity, so it cannot be
@@ -651,30 +679,37 @@ test_obligations:
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
     red_green_expectation: >-
-      Red before the edit -- the check names this file as carrying the old slug -- green after.
+      Red via a mirror-test fixture naming this path, green against the swept tree.
   - source: scripts/session/github_readiness.py
     behavior: The authenticated readiness probe targets the renamed repository.
     verification_step: 9
     command: >-
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
-    red_green_expectation: Red before the edit, green after; identical mechanism to the row above.
+    red_green_expectation: >-
+      Red via a mirror-test fixture naming this path, green against the swept tree; identical
+      mechanism to the row above.
   - source: scripts/convergence_health/escalate.py
     behavior: Filed acceptance probes reference the renamed repository.
     verification_step: 9
     command: >-
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
-    red_green_expectation: Red before the edit, green after.
+    red_green_expectation: >-
+      Red via a mirror-test fixture naming this path, green against the swept tree.
   - source: scripts/convergence_health/approvals.py
     behavior: >-
       The three default repo parameters build workflow-run URLs against the renamed repository.
-      These are POST-adjacent API paths where a 301 is not followed, so staleness is not benign.
+      (Correction: these are GET URLs consumed by urllib.request.urlopen, which DOES follow a 301
+      with Authorization intact on the same host -- so staleness is survivable, not fatal. The
+      sweep is correct hygiene and the defaults must still move; an earlier draft justified it with
+      a POST/301 claim that is simply untrue of this module.)
     verification_step: 9
     command: >-
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
-    red_green_expectation: Red before the edit, green after.
+    red_green_expectation: >-
+      Red via a mirror-test fixture naming this path, green against the swept tree.
   - source: terraform/bootstrap/github_ci_apply.tf
     behavior: The apply role's trust never loses either Decision 94 sub form.
     verification_step: 3
@@ -729,8 +764,8 @@ test_obligations:
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
     red_green_expectation: >-
-      Red before the sweep -- repo.tf is in the check's class-(a) allowlist and line 2's import
-      comment carries the old slug -- green after.
+      Red is proven by a mirror-test fixture carrying repo.tf's import-comment shape, not by tree
+      state (the check ships after the sweep); green against the swept tree.
   - source: terraform/personal/oidc.tf
     behavior: >-
       Every OIDC sub site consumes the dual-slug list local, so no personal-root role is left
@@ -803,6 +838,17 @@ test_obligations:
     red_green_expectation: >-
       Red before the allowed_globs rows are added (and red if any is parked in the ratchet-only
       grandfathered list instead), green once all three are correctly sanctioned.
+  - source: bin/setup-cloud-env.sh
+    behavior: >-
+      The GITHUB_MCP_PAT comment names the token's real repository scope; the on-disk checkout path
+      at line 38 is deliberately untouched.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red is proven by a mirror-test fixture carrying the old slug at this path, not by tree state
+      (the check ships in PR-4, after PR-3's sweep); green against the swept tree.
   - source: .github/workflows/ghas-probe.yml
     behavior: The credential-header comment names the probe token's real repository scope.
     verification_step: 9
@@ -810,8 +856,8 @@ test_obligations:
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
     red_green_expectation: >-
-      Red before the edit -- this path is in the check's class-(a) allowlist, so the old slug makes
-      it append to failed -- green after.
+      Red is proven by a mirror-test fixture carrying the old slug at this path, not by tree state
+      (the check ships in PR-4, after PR-3's sweep); green against the swept tree.
   - source: docs/ROADMAP-PLATFORM.yaml
     behavior: The T2.10 exit-criterion text names the repository CI trust is actually pinned to.
     verification_step: 9
@@ -819,8 +865,9 @@ test_obligations:
       bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
     red_green_expectation: >-
-      Red before the edit via the same class-(a) allowlist membership, green after. Text-only edit
-      on an existing criterion, so the bare-string roadmap guard does not fire.
+      Red via a mirror-test fixture rather than tree state (the check ships after the sweep); green
+      against the swept tree. Text-only edit on an existing criterion, so the bare-string roadmap
+      guard does not fire.
   - source: config/ci_rca_taxonomy.yaml
     behavior: The new check has a failure-category row so a CI-RCA classification cannot miss it.
     verification_step: 11
@@ -1140,9 +1187,9 @@ execution_steps:
     a terraform-drift cycle, a governed Lambda deploy, and one gated apply or Reconcile. This gates
     everything after it.
   - >-
-    PR-3 (sweep, cleanup, guard) -- runs BEFORE the relicense so dual trust is narrowed promptly
-    after step 21 rather than waiting on licence drafting and legal review. Update the class-(a)
-    slug sites. Write
+    PR-3 (sweep + trust cleanup, NO guard) -- runs BEFORE the relicense so dual trust is narrowed
+    promptly after step 21 rather than waiting on licence drafting and legal review. Update the
+    class-(a) slug sites. The check is NOT written here (see PR-4). Write
     validate_licence_consistency with an explicit class-(a) path allowlist, an examined() count
     declaration, and both invariants; register it across all seven surfaces including the
     verification-registry row for graduated step 3 and the ci_rca_taxonomy row; write the mirror
@@ -1160,7 +1207,12 @@ execution_steps:
     VP step 6 asserts the tag resolves to the same commit as LICENSING.md's SHA.
   - >-
     PR-4 (relicense + decision) -- LAST. Fetch the canonical BUSL-1.1 text and fill only its Parameters
-    block; move the current Apache text verbatim to LICENSE-APACHE; write LICENSING.md with the SHA and
+    block. Write validate_licence_consistency here (NOT in PR-3): its licence invariant cannot be
+    green before LICENSE and LICENSING.md exist. Give it an explicit class-(a) path allowlist WITH
+    A PER-PATH PATTERN, an examined() count declaration, and both invariants; register it across
+    all seven surfaces including the verification-registry row for graduated step 3 and the
+    ci_rca_taxonomy row; write the mirror test to 100% line coverage. Then move the current Apache
+    text verbatim to LICENSE-APACHE; write LICENSING.md with the SHA and
     the self-verifying rule; add the COMMERCIAL-LICENSE.md placeholder and its prose_allowlist row;
     rewrite README's H1, License section and CLA note; name the project in PROJECT_CONTEXT. Author
     Decision 171 with its Decision 167 envelope (amends [101]) AND the reciprocal forward-pointer
