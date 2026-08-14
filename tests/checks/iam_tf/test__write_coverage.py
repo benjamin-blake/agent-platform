@@ -17,10 +17,11 @@ from __future__ import annotations
 
 from scripts.checks import _common
 from scripts.checks.iam_tf._read_coverage import (
-    _BOOTSTRAP_TF_REL,
+    _BOOTSTRAP_DIR_REL,
     _PERSONAL_DIR_REL,
     _parse_bootstrap_statements,
     _parse_managed_policy_statements,
+    _read_root_text,
     _scan_resources,
 )
 from scripts.checks.iam_tf._write_coverage import (
@@ -64,7 +65,7 @@ _COVERED_RESOURCES = [
 
 def _real_apply_statements() -> list[dict]:
     """The REAL apply grant surface: the inline identity policy UNION the managed reads policy."""
-    text = (_common.ROOT / _BOOTSTRAP_TF_REL).read_text(encoding="utf-8")
+    text = _read_root_text(_common.ROOT / _BOOTSTRAP_DIR_REL)
     inline = _parse_bootstrap_statements(text, "github_ci_apply")
     assert inline, "could not parse the real github_ci_apply policy -- has the HCL shape changed?"
     return inline + _parse_managed_policy_statements(text, "github_ci_apply_reads")

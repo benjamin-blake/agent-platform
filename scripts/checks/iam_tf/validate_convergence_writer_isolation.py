@@ -25,12 +25,9 @@ the committed HCL.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from scripts.checks import _common, registry
 from scripts.checks.iam_tf import validate_invoke_implies_resolve as _vir
-
-_OIDC_TF_REL = Path("terraform") / "personal" / "oidc.tf"
 
 _CONVERGENCE_RESOURCE_MARKER = "convergence/personal"
 _PUTOBJECT_ACTIONS = {"s3:PutObject", "s3:*"}
@@ -114,101 +111,127 @@ def _sids(statements: list[dict]) -> str:
     return ", ".join(s["sid"] or "<no-sid>" for s in statements)
 
 
+def _resolve_role_or_fail(role: str, doc_name: str, docs: dict[str, dict], key: str, failed: list[str]) -> list[dict] | None:
+    """Resolve a role's statements; append a fail-loud finding and return None on any unresolvable
+    document (top-level or nested source) rather than letting an empty statement list masquerade
+    as a legitimate pass (Decision 129 clause 4)."""
+    unresolved: list[str] = []
+    statements = _vir._resolve_statements(doc_name, docs, unresolved=unresolved)
+    if unresolved:
+        failed.append(
+            f"{key} {role} references unresolvable policy document(s) {sorted(set(unresolved))!r} -- cannot "
+            "determine whether its convergence-write isolation holds (Decision 129 clause 4: fail loud, "
+            "never a silent pass)"
+        )
+        print(f"  FAIL: {role} references unresolvable document(s) {sorted(set(unresolved))}.")
+        return None
+    return statements
+
+
 @registry.register("validate_convergence_writer_isolation", owner="platform")
 def validate_convergence_writer_isolation(failed: list[str]) -> None:
     """See module docstring for the four assertions (a)-(d)."""
     print("\n=== c2 convergence-writer isolation (T2.49 / DEP-12 hardening item 1, Decision 92 pt2) ===")
     key = "convergence-writer-isolation:"
-    oidc_path = _common.ROOT / _OIDC_TF_REL
-    try:
-        text = oidc_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"{key} cannot read {_OIDC_TF_REL}: {exc}")
-        print(f"  FAIL: cannot read {_OIDC_TF_REL}: {exc}")
+    personal_dir = _common.ROOT / _vir._PERSONAL_DIR_REL
+    personal_files = sorted(personal_dir.glob("*.tf"))
+    text = _vir._read_root_text(personal_dir)
+    if not text:
+        registry.skipped(f"no *.tf file readable under {personal_dir}")
+        failed.append(f"{key} cannot read any *.tf file under {personal_dir}")
+        print(f"  FAIL: cannot read any *.tf file under {personal_dir}")
         return
 
     docs = _parse_full_policy_documents(text)
     role_policy = _vir._parse_role_policy_map(text)
 
     if not docs or not role_policy:
-        failed.append(f"{key} no aws_iam_policy_document / aws_iam_role_policy blocks found in {_OIDC_TF_REL.name}")
+        failed.append(f"{key} no aws_iam_policy_document / aws_iam_role_policy blocks found under {personal_dir}")
         print("  FAIL: no policy documents or role policies parsed -- has the HCL shape changed?")
         return
+
+    registry.examined(len(personal_files), unit="personal_tf_files")
 
     # (a) + (b): the planner's convergence-write must be exactly one, aws:userid-conditioned Allow.
     planner_doc = role_policy.get("github_ci_planner")
     if not planner_doc:
-        failed.append(f"{key} could not resolve github_ci_planner's policy document in {_OIDC_TF_REL.name}")
+        failed.append(f"{key} could not resolve github_ci_planner's policy document under {personal_dir}")
         print("  FAIL: github_ci_planner role_policy -> policy document mapping not found.")
     else:
-        planner_statements = _vir._resolve_statements(planner_doc, docs)
-        writes = _convergence_putobject_allows(planner_statements)
-        if not writes:
-            failed.append(
-                f"{key} github_ci_planner grants NO s3:PutObject Allow on convergence/personal/* -- expected "
-                "exactly one, aws:userid-conditioned to local.convergence_writer_session_name (c2 design)"
-            )
-            print("  FAIL: no convergence-write Allow found on the planner policy.")
-        else:
-            unconditioned = [s for s in writes if not _has_reserved_session_userid_condition(s)]
-            if unconditioned:
+        planner_statements = _resolve_role_or_fail("github_ci_planner", planner_doc, docs, key, failed)
+        if planner_statements is not None:
+            writes = _convergence_putobject_allows(planner_statements)
+            if not writes:
                 failed.append(
-                    f"{key} github_ci_planner has {len(unconditioned)} convergence-write Allow(s) NOT "
-                    f"aws:userid-conditioned to local.convergence_writer_session_name (sid(s): {_sids(unconditioned)}) "
-                    "-- every s3:PutObject Allow on convergence/personal/* MUST carry this condition (Decision 92 "
-                    "pt2 fail-closed; an unconditioned second Allow is a FAIL-OPEN regression)"
+                    f"{key} github_ci_planner grants NO s3:PutObject Allow on convergence/personal/* -- expected "
+                    "exactly one, aws:userid-conditioned to local.convergence_writer_session_name (c2 design)"
                 )
-                print(f"  FAIL: {len(unconditioned)} unconditioned convergence-write Allow(s): {_sids(unconditioned)}")
-            elif len(writes) > 1:
-                failed.append(
-                    f"{key} github_ci_planner has {len(writes)} convergence-write Allow statements (expected "
-                    f"exactly 1; sid(s): {_sids(writes)}) -- consolidate to a single conditioned Allow"
-                )
-                print(f"  FAIL: {len(writes)} convergence-write Allow statements (expected 1): {_sids(writes)}")
+                print("  FAIL: no convergence-write Allow found on the planner policy.")
             else:
-                print(
-                    "  PASS: exactly one convergence-write Allow, aws:userid-conditioned to the "
-                    f"reserved session (sid={writes[0]['sid']})."
-                )
+                unconditioned = [s for s in writes if not _has_reserved_session_userid_condition(s)]
+                if unconditioned:
+                    failed.append(
+                        f"{key} github_ci_planner has {len(unconditioned)} convergence-write Allow(s) NOT "
+                        f"aws:userid-conditioned to local.convergence_writer_session_name (sid(s): "
+                        f"{_sids(unconditioned)}) -- every s3:PutObject Allow on convergence/personal/* MUST "
+                        "carry this condition (Decision 92 pt2 fail-closed; an unconditioned second Allow is a "
+                        "FAIL-OPEN regression)"
+                    )
+                    print(f"  FAIL: {len(unconditioned)} unconditioned convergence-write Allow(s): {_sids(unconditioned)}")
+                elif len(writes) > 1:
+                    failed.append(
+                        f"{key} github_ci_planner has {len(writes)} convergence-write Allow statements (expected "
+                        f"exactly 1; sid(s): {_sids(writes)}) -- consolidate to a single conditioned Allow"
+                    )
+                    print(f"  FAIL: {len(writes)} convergence-write Allow statements (expected 1): {_sids(writes)}")
+                else:
+                    print(
+                        "  PASS: exactly one convergence-write Allow, aws:userid-conditioned to the "
+                        f"reserved session (sid={writes[0]['sid']})."
+                    )
 
     # (c): github_ci_branch retains its explicit DenyConvergenceRecordWrite.
     branch_doc = role_policy.get("github_ci_branch")
     if not branch_doc:
-        failed.append(f"{key} could not resolve github_ci_branch's policy document in {_OIDC_TF_REL.name}")
+        failed.append(f"{key} could not resolve github_ci_branch's policy document under {personal_dir}")
         print("  FAIL: github_ci_branch role_policy -> policy document mapping not found.")
     else:
-        branch_statements = _vir._resolve_statements(branch_doc, docs)
-        has_deny = any(
-            s["effect"] == "Deny"
-            and _CONVERGENCE_RESOURCE_MARKER in s["resources_raw"]
-            and any(a in _PUTOBJECT_ACTIONS for a in s["actions"])
-            for s in branch_statements
-        )
-        if not has_deny:
-            failed.append(
-                f"{key} github_ci_branch is missing its DenyConvergenceRecordWrite statement "
-                "(explicit Deny on s3:PutObject convergence/personal/*)"
+        branch_statements = _resolve_role_or_fail("github_ci_branch", branch_doc, docs, key, failed)
+        if branch_statements is not None:
+            has_deny = any(
+                s["effect"] == "Deny"
+                and _CONVERGENCE_RESOURCE_MARKER in s["resources_raw"]
+                and any(a in _PUTOBJECT_ACTIONS for a in s["actions"])
+                for s in branch_statements
             )
-            print("  FAIL: github_ci_branch's DenyConvergenceRecordWrite is missing.")
-        else:
-            print("  PASS: github_ci_branch retains DenyConvergenceRecordWrite.")
+            if not has_deny:
+                failed.append(
+                    f"{key} github_ci_branch is missing its DenyConvergenceRecordWrite statement "
+                    "(explicit Deny on s3:PutObject convergence/personal/*)"
+                )
+                print("  FAIL: github_ci_branch's DenyConvergenceRecordWrite is missing.")
+            else:
+                print("  PASS: github_ci_branch retains DenyConvergenceRecordWrite.")
 
-    # (d): github_ci_pr stays read-only on convergence (no PutObject grant at all).
+    # (d): github_ci_pr stays read-only on convergence (no PutObject grant at all). The unresolvable
+    # branch matters MOST here: an absent grant is what a PASS looks like, so an unresolved document
+    # must never fall through to "no writes found" -- see the module docstring's "live hazard" note.
     pr_doc = role_policy.get("github_ci_pr")
     if not pr_doc:
-        failed.append(f"{key} could not resolve github_ci_pr's policy document in {_OIDC_TF_REL.name}")
+        failed.append(f"{key} could not resolve github_ci_pr's policy document under {personal_dir}")
         print("  FAIL: github_ci_pr role_policy -> policy document mapping not found.")
     else:
-        pr_statements = _vir._resolve_statements(pr_doc, docs)
-        pr_writes = _convergence_putobject_allows(pr_statements)
-        if pr_writes:
-            failed.append(
-                f"{key} github_ci_pr grants s3:PutObject Allow on convergence/personal/* (sid(s): "
-                f"{_sids(pr_writes)}) -- it must stay read-only on the convergence record"
-            )
-            print(f"  FAIL: github_ci_pr has convergence-write grant(s): {_sids(pr_writes)}")
-        else:
-            print("  PASS: github_ci_pr stays read-only on the convergence record (no PutObject grant).")
+        pr_statements = _resolve_role_or_fail("github_ci_pr", pr_doc, docs, key, failed)
+        if pr_statements is not None:
+            pr_writes = _convergence_putobject_allows(pr_statements)
+            if pr_writes:
+                failed.append(
+                    f"{key} github_ci_pr grants s3:PutObject Allow on convergence/personal/* (sid(s): "
+                    f"{_sids(pr_writes)}) -- it must stay read-only on the convergence record"
+                )
+                print(f"  FAIL: github_ci_pr has convergence-write grant(s): {_sids(pr_writes)}")
+            else:
+                print("  PASS: github_ci_pr stays read-only on the convergence record (no PutObject grant).")
 
 
 if __name__ == "__main__":  # pragma: no cover

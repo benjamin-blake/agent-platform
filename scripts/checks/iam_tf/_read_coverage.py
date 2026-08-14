@@ -112,7 +112,20 @@ NON_AWS_TYPES = {"neon_project", "neon_role", "neon_database"}
 NO_GRANT_TYPES = {"null_resource"}
 
 _PERSONAL_DIR_REL = Path("terraform") / "personal"
-_BOOTSTRAP_TF_REL = Path("terraform") / "bootstrap" / "github_ci_apply.tf"
+_BOOTSTRAP_DIR_REL = Path("terraform") / "bootstrap"
+
+
+def _read_root_text(root_dir: Path) -> str:
+    """Concatenate every *.tf file's text in a terraform root, sorted by filename.
+
+    Root-wide parsing widens ONLY the resolution pool (a `local.<name>` or
+    `data.aws_iam_policy_document.<name>` indirection can now resolve across sibling files in the
+    same root) -- every statement/local stays keyed to its own named resource, never to its
+    position within this concatenation. A missing/empty root (no *.tf files) returns "" rather
+    than raising, so every caller can fail loud on that one shared condition.
+    """
+    return "\n".join(p.read_text(encoding="utf-8") for p in sorted(root_dir.glob("*.tf")))
+
 
 ROLE_APPLY = "apply"
 ROLE_PLANNER = "planner"

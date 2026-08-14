@@ -5,14 +5,15 @@ import os
 from pathlib import Path
 
 from scripts.checks import _common, registry
+from scripts.checks.iam_tf._read_coverage import _BOOTSTRAP_DIR_REL, _read_root_text
 
 
 @registry.register("validate_authority_budget", owner="platform")
 def validate_authority_budget(failed: list[str]) -> None:
-    """Drift-assertion gate: the authority budget agrees with the github_ci_apply.tf HCL.
+    """Drift-assertion gate: the authority budget agrees with the terraform/bootstrap/ HCL.
 
     v2 (Decision 144 / T2.48, boundary-carrying agent-platform-* prefix):
-    (a) boundary_policy_name appears in terraform/bootstrap/github_ci_apply.tf.
+    (a) boundary_policy_name appears somewhere under terraform/bootstrap/.
     (b) in_budget_managed_role_prefix maps to the IAMRoleWriteBounded Resource role/<prefix>* in the HCL.
     (c) Apply-role self-exclusion: the explicit DenySelfInlinePolicyWrite carve-out of the apply role's
         own ARN exists in the HCL (the widened prefix necessarily matches agent-platform-github-ci-apply,
@@ -24,6 +25,9 @@ def validate_authority_budget(failed: list[str]) -> None:
 
     Eligible for both --pre and full tiers (pure Python, sub-second file reads). Override budget path
     via TF_AUTHORITY_BUDGET env var (test isolation; default: terraform/bootstrap/authority_budget.json).
+    Root-wide (all four assertions read the WHOLE terraform/bootstrap/ root, not a single file):
+    the boundary name, the IAMRoleWriteBounded prefix and the DenySelfInlinePolicyWrite carve-out
+    all live in the identity/boundary policy files, not in the retained github_ci_apply.tf.
     """
     print("\n=== Authority-budget drift gate (T2.25 / T2.48 / Decision 92 point 5 / Decision 144) ===")
     budget_path_env = os.environ.get("TF_AUTHORITY_BUDGET")
@@ -33,24 +37,28 @@ def validate_authority_budget(failed: list[str]) -> None:
     try:
         budget = json.loads(budget_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
+        registry.skipped(f"cannot read or parse {budget_path}: {exc}")
         failed.append(f"authority-budget: cannot read or parse {budget_path}: {exc}")
         print(f"  FAIL: cannot load budget table: {exc}")
         return
 
-    hcl_path = _common.ROOT / "terraform" / "bootstrap" / "github_ci_apply.tf"
-    try:
-        hcl_text = hcl_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"authority-budget: cannot read {hcl_path.name}: {exc}")
-        print(f"  FAIL: cannot read HCL: {exc}")
+    bootstrap_dir = _common.ROOT / _BOOTSTRAP_DIR_REL
+    bootstrap_files = sorted(bootstrap_dir.glob("*.tf"))
+    hcl_text = _read_root_text(bootstrap_dir)
+    if not hcl_text:
+        registry.skipped(f"no *.tf file readable under {bootstrap_dir}")
+        failed.append(f"authority-budget: cannot read any *.tf file under {bootstrap_dir}")
+        print(f"  FAIL: cannot read HCL under {bootstrap_dir}")
         return
+    hcl_name = str(_BOOTSTRAP_DIR_REL)
+    registry.examined(len(bootstrap_files), unit="bootstrap_tf_files")
 
     # (a) boundary name must appear as ":policy/<name>" or a quoted literal in the HCL. Bounded matching
     # (H1, code-review 2026-06-29): bare substring matching is too broad across comments/other strings.
     boundary_name = budget.get("boundary_policy_name", "")
     if f":policy/{boundary_name}" not in hcl_text and f'"{boundary_name}"' not in hcl_text:
         failed.append(
-            f"authority-budget: boundary_policy_name {boundary_name!r} not found in {hcl_path.name} -- "
+            f"authority-budget: boundary_policy_name {boundary_name!r} not found under {hcl_name} -- "
             "budget and HCL are out of sync"
         )
         print(f"  FAIL: boundary_policy_name {boundary_name!r} missing from HCL.")
@@ -59,9 +67,9 @@ def validate_authority_budget(failed: list[str]) -> None:
 
     prefix = budget.get("in_budget_managed_role_prefix")
     if prefix:
-        _check_v2_prefix(budget, hcl_text, hcl_path.name, prefix, failed)
+        _check_v2_prefix(budget, hcl_text, hcl_name, prefix, failed)
     else:
-        _check_v1_enumerated(budget, hcl_text, hcl_path.name, failed)
+        _check_v1_enumerated(budget, hcl_text, hcl_name, failed)
 
     _check_in_budget_actions(budget, bool(prefix), failed)
 

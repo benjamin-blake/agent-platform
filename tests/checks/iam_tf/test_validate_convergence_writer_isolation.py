@@ -330,6 +330,107 @@ resource "aws_iam_role_policy" "github_ci_planner" {{
         assert len(branch_findings) == 1, failed
         assert "could not resolve github_ci_branch" in branch_findings[0]
 
+    def test_resolves_planner_document_from_sibling_tf_file(self, tmp_path: Path) -> None:
+        """terraform-decompose-oidc-rename: github_ci_planner (and its convergence-write Allow)
+        moves to oidc_pipeline_roles.tf while github_ci_branch/github_ci_pr stay in oidc.tf. The
+        exactly-one-conditioned-Allow cardinality assertion must hold across that file boundary."""
+        personal_dir = tmp_path / "terraform" / "personal"
+        personal_dir.mkdir(parents=True, exist_ok=True)
+        (personal_dir / "oidc.tf").write_text(
+            f"""
+data "aws_iam_policy_document" "github_ci_branch" {{
+  statement {{
+    sid    = "S3ReadWrite"
+    effect = "Allow"
+    actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = ["${{aws_s3_bucket.data_lake.arn}}/*"]
+  }}
+{_DEFAULT_BRANCH_DENY}
+}}
+
+resource "aws_iam_role_policy" "github_ci_branch" {{
+  name   = "test-branch"
+  role   = "test-branch-role"
+  policy = data.aws_iam_policy_document.github_ci_branch.json
+}}
+
+data "aws_iam_policy_document" "github_ci_pr" {{
+{_DEFAULT_PR_STATEMENTS}
+}}
+
+resource "aws_iam_role_policy" "github_ci_pr" {{
+  name   = "test-pr"
+  role   = "test-pr-role"
+  policy = data.aws_iam_policy_document.github_ci_pr.json
+}}
+""",
+            encoding="utf-8",
+        )
+        (personal_dir / "oidc_pipeline_roles.tf").write_text(
+            f"""
+data "aws_iam_policy_document" "github_ci_planner" {{
+{_GOOD_CONVERGENCE_STATEMENT}
+}}
+
+resource "aws_iam_role_policy" "github_ci_planner" {{
+  name   = "test-planner"
+  role   = "test-planner-role"
+  policy = data.aws_iam_policy_document.github_ci_planner.json
+}}
+""",
+            encoding="utf-8",
+        )
+        # RED proof: reading only oidc.tf (the pre-repoint single-file behaviour) never sees the
+        # planner role at all -- it lives in the sibling file.
+        single_file_role_policy_names = set()
+        for line in (personal_dir / "oidc.tf").read_text(encoding="utf-8").splitlines():
+            if "github_ci_planner" in line:
+                single_file_role_policy_names.add("github_ci_planner")
+        assert not single_file_role_policy_names
+
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_convergence_writer_isolation(failed)
+        assert failed == [], failed
+
+    def test_decoy_convergence_reference_in_unrelated_sibling_neither_satisfies_nor_breaks(self, tmp_path: Path) -> None:
+        """FLAG 1 (Decision 129 [WARN]) regression: the real second convergence-referencing file is
+        terraform/personal/platform_roles.tf (a Deny statement, Sid=DenyStateAndConvergenceWrite,
+        outside any of the three checked roles' policies). Root-wide parsing must widen ONLY the
+        resolution pool -- a convergence/personal/* reference in a file that is not one of
+        github_ci_branch/github_ci_pr/github_ci_planner's OWN policy document must neither satisfy
+        assertion (a)/(b) (the planner still needs its own well-formed Allow) nor break assertions
+        (c)/(d) (an unrelated Deny does not stand in for github_ci_branch's own Deny, and does not
+        get misread as a github_ci_pr grant)."""
+        _write_oidc_fixture(tmp_path, planner_statements="")  # planner: no convergence write at all
+        decoy_dir = tmp_path / "terraform" / "personal"
+        (decoy_dir / "platform_roles.tf").write_text(
+            """
+data "aws_iam_policy_document" "platform_dev" {
+  statement {
+    sid       = "DenyStateAndConvergenceWrite"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "platform_dev" {
+  name   = "platform-dev"
+  role   = "platform-dev-role"
+  policy = data.aws_iam_policy_document.platform_dev.json
+}
+""",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_convergence_writer_isolation(failed)
+        # Still fails -- the planner's OWN document grants nothing -- but for the real reason, not
+        # because the decoy's Deny in a sibling, unrelated role policy was picked up as a stand-in.
+        assert len(failed) == 1, failed
+        assert "github_ci_planner grants NO s3:PutObject Allow" in failed[0]
+
     def test_missing_pr_role_fails_loud(self, tmp_path: Path) -> None:
         personal_dir = tmp_path / "terraform" / "personal"
         personal_dir.mkdir(parents=True, exist_ok=True)
@@ -363,3 +464,50 @@ resource "aws_iam_role_policy" "github_ci_planner" {{
         pr_findings = [f for f in failed if "github_ci_pr" in f]
         assert len(pr_findings) == 1, failed
         assert "could not resolve github_ci_pr" in pr_findings[0]
+
+    def test_planner_document_reference_unresolvable_fails_loud(self, tmp_path: Path) -> None:
+        """Decision 129 clause 4, via _resolve_role_or_fail: github_ci_planner's role_policy
+        resolves to a document NAME, but no aws_iam_policy_document with that name exists
+        anywhere in the parsed root (a dangling reference -- a split repoint left the document
+        behind, or a typo). Distinct from test_missing_planner_role_fails_loud, where the
+        role_policy MAPPING itself has no entry at all -- here the mapping resolves, but the
+        document it points at does not. Must fail loud, never fall through as 'grants nothing'."""
+        personal_dir = tmp_path / "terraform" / "personal"
+        personal_dir.mkdir(parents=True, exist_ok=True)
+        (personal_dir / "oidc.tf").write_text(
+            f"""
+data "aws_iam_policy_document" "github_ci_branch" {{
+{_DEFAULT_BRANCH_DENY}
+}}
+
+resource "aws_iam_role_policy" "github_ci_branch" {{
+  name   = "test-branch"
+  role   = "test-branch-role"
+  policy = data.aws_iam_policy_document.github_ci_branch.json
+}}
+
+data "aws_iam_policy_document" "github_ci_pr" {{
+{_DEFAULT_PR_STATEMENTS}
+}}
+
+resource "aws_iam_role_policy" "github_ci_pr" {{
+  name   = "test-pr"
+  role   = "test-pr-role"
+  policy = data.aws_iam_policy_document.github_ci_pr.json
+}}
+
+resource "aws_iam_role_policy" "github_ci_planner" {{
+  name   = "test-planner"
+  role   = "test-planner-role"
+  policy = data.aws_iam_policy_document.github_ci_planner_dangling.json
+}}
+""",
+            encoding="utf-8",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_convergence_writer_isolation(failed)
+        planner_findings = [f for f in failed if "github_ci_planner" in f]
+        assert len(planner_findings) == 1, failed
+        assert "references unresolvable policy document" in planner_findings[0]
+        assert "github_ci_planner_dangling" in planner_findings[0]

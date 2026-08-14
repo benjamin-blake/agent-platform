@@ -22,10 +22,11 @@ import pytest
 from scripts.checks import _common
 from scripts.checks.iam_tf import _write_companions as companions
 from scripts.checks.iam_tf._read_coverage import (
-    _BOOTSTRAP_TF_REL,
+    _BOOTSTRAP_DIR_REL,
     _parse_bootstrap_statements,
     _parse_boundary_dataplane_statement,
     _parse_managed_policy_statements,
+    _read_root_text,
 )
 from scripts.checks.iam_tf._write_companions import (
     LIFECYCLE_COMPANIONS,
@@ -120,7 +121,7 @@ def _write_bootstrap(tmp_path: Path, body: str) -> None:
 
 
 def _real_apply_statements() -> list[dict]:
-    text = (_common.ROOT / _BOOTSTRAP_TF_REL).read_text(encoding="utf-8")
+    text = _read_root_text(_common.ROOT / _BOOTSTRAP_DIR_REL)
     inline = _parse_bootstrap_statements(text, "github_ci_apply")
     assert inline, "could not parse the real github_ci_apply policy -- has the HCL shape changed?"
     return inline + _parse_managed_policy_statements(text, "github_ci_apply_reads")
@@ -399,10 +400,11 @@ class TestPassRoleCondition:
     def test_unreadable_bootstrap_fails_loud_on_both_re_reads(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Both boundary re-reads own their own loud failure.
 
-        The lambda create row makes iam:PassRole live, so the checker re-reads github_ci_apply.tf
-        twice -- once for the DataPlaneAllow ceiling, once for the PassRole condition. When the file
-        is unreadable NEITHER may fall through silently, and each finding must name which assertion
-        was lost, or an operator cannot tell what stopped being checked.
+        The lambda create row makes iam:PassRole live, so the checker re-reads the whole
+        terraform/bootstrap root twice -- once for the DataPlaneAllow ceiling, once for the
+        PassRole condition. When no *.tf file is readable NEITHER may fall through silently, and
+        each finding must name which assertion was lost, or an operator cannot tell what stopped
+        being checked.
         """
         monkeypatch.setattr(_common, "ROOT", tmp_path)
         failed: list[str] = []
@@ -411,7 +413,7 @@ class TestPassRoleCondition:
         assert all(f.startswith("k: cannot re-read") for f in failed)
         assert any("for the boundary-ceiling check" in f for f in failed)
         assert any("for the PassRole-condition check" in f for f in failed)
-        assert all("github_ci_apply.tf" in f for f in failed)
+        assert all("terraform/bootstrap" in f for f in failed)
 
     def test_unconditioned_passrole_fails_loud(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Decision 143 worst-verb scoping: CreateFunction's PassRole companion must be conditioned."""
@@ -514,7 +516,7 @@ class TestRealTree:
         every other check in this file. A permissions boundary whose DataPlaneAllow grants "*" is not
         a ceiling, so this assertion is meaningful whichever way the wildcard got there.
         """
-        boundary = _parse_boundary_dataplane_statement((_common.ROOT / _BOOTSTRAP_TF_REL).read_text(encoding="utf-8"))
+        boundary = _parse_boundary_dataplane_statement(_read_root_text(_common.ROOT / _BOOTSTRAP_DIR_REL))
         assert boundary is not None, "the real boundary DataPlaneAllow statement no longer parses"
         assert "*" not in boundary["actions"], boundary["actions"]
         # The parse must also reach the END of the array: the last-declared verb is the one a

@@ -23,6 +23,7 @@ from scripts.checks.iam_tf._read_coverage import (
     _parse_bootstrap_statements,
     _parse_boundary_dataplane_statement,
     _parse_managed_policy_statements,
+    _read_root_text,
     _resolve_resource_name,
     _resolve_role_statements,
     _resolve_value,
@@ -352,6 +353,12 @@ data "aws_secretsmanager_secret_version" "neon_api_key" {
         resources, _locals_map, attr_index = _scan_resources(personal_dir)
         assert ("data:aws_secretsmanager_secret_version", "neon_api_key", "neon.tf") in resources
         assert attr_index[("data:aws_secretsmanager_secret_version", "neon_api_key")]["secret_id"] == '"neon-api-key"'
+
+    def test_read_root_text_concatenates_sorted_tf_files(self, tmp_path: Path) -> None:
+        """Coverage-scope anchor -- the per-file gate runs only this mapped file (Decision 128)."""
+        (tmp_path / "b.tf").write_text("second", encoding="utf-8")
+        (tmp_path / "a.tf").write_text("first", encoding="utf-8")
+        assert _read_root_text(tmp_path) == "first\nsecond"
 
 
 class TestClassifyAndResolveName:
