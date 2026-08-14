@@ -29,9 +29,10 @@ from __future__ import annotations
 
 from scripts.checks import _common
 from scripts.checks.iam_tf._read_coverage import (
-    _BOOTSTRAP_TF_REL,
+    _BOOTSTRAP_DIR_REL,
     _action_matches,
     _parse_boundary_dataplane_statement,
+    _read_root_text,
 )
 from scripts.checks.iam_tf._write_coverage import (
     _ALARM_PREFIX,
@@ -365,21 +366,21 @@ def _load_boundary_actions(failed: list[str], key: str) -> tuple[str, ...] | Non
     """Parse the github_ci_apply_boundary DataPlaneAllow ceiling. Appends + returns None on failure.
 
     The orchestrator facade passes only the identity/reads apply_statements, never the boundary
-    document, so every boundary assertion re-reads github_ci_apply.tf itself. That re-read goes
-    through _read_coverage._parse_boundary_dataplane_statement, which is built on the shared policy
-    locator and therefore follows the rec-2793 hoisted-local indirection.
+    document, so every boundary assertion re-reads the whole terraform/bootstrap root. That re-read
+    goes through _read_coverage._parse_boundary_dataplane_statement, which is built on the shared
+    policy locator and therefore follows the rec-2793 hoisted-local indirection AND the split across
+    sibling .tf files in the same root.
     """
-    bootstrap_path = _common.ROOT / _BOOTSTRAP_TF_REL
-    try:
-        bootstrap_text = bootstrap_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"{key} cannot re-read {bootstrap_path} for the boundary-ceiling check: {exc}")
+    bootstrap_dir = _common.ROOT / _BOOTSTRAP_DIR_REL
+    bootstrap_text = _read_root_text(bootstrap_dir)
+    if not bootstrap_text:
+        failed.append(f"{key} cannot re-read any *.tf file under {bootstrap_dir} for the boundary-ceiling check")
         return None
     boundary_stmt = _parse_boundary_dataplane_statement(bootstrap_text)
     if boundary_stmt is None:
         failed.append(
-            f"{key} could not locate the github_ci_apply_boundary DataPlaneAllow statement in "
-            f"{bootstrap_path.name} -- has the boundary HCL shape changed?"
+            f"{key} could not locate the github_ci_apply_boundary DataPlaneAllow statement under "
+            f"{bootstrap_dir} -- has the boundary HCL shape changed?"
         )
         return None
     return tuple(boundary_stmt["actions"])
@@ -466,11 +467,10 @@ def check_lifecycle_companions(apply_statements: list[dict], failed: list[str], 
 
 def _check_passrole_condition(failed: list[str], key: str) -> None:
     """Decision 143 worst-verb scoping: an unconditioned iam:PassRole over-grants (any service, any pass)."""
-    bootstrap_path = _common.ROOT / _BOOTSTRAP_TF_REL
-    try:
-        bootstrap_text = bootstrap_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"{key} cannot re-read {bootstrap_path} for the PassRole-condition check: {exc}")
+    bootstrap_dir = _common.ROOT / _BOOTSTRAP_DIR_REL
+    bootstrap_text = _read_root_text(bootstrap_dir)
+    if not bootstrap_text:
+        failed.append(f"{key} cannot re-read any *.tf file under {bootstrap_dir} for the PassRole-condition check")
         return
     if not all(marker in bootstrap_text for marker in _PASSROLE_CONDITION_MARKERS):
         failed.append(

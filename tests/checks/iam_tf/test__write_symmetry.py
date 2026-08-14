@@ -20,10 +20,11 @@ import pytest
 from scripts.checks import _common
 from scripts.checks.iam_tf import _write_symmetry as symmetry
 from scripts.checks.iam_tf._read_coverage import (
-    _BOOTSTRAP_TF_REL,
+    _BOOTSTRAP_DIR_REL,
     TRANSITIVE_TYPES,
     _parse_bootstrap_statements,
     _parse_managed_policy_statements,
+    _read_root_text,
 )
 from scripts.checks.iam_tf._write_symmetry import (
     ALIAS_TAG_PAIRS,
@@ -47,7 +48,7 @@ def _stmt(actions: list[str], resources: list[str], effect: str = "Allow") -> di
 
 
 def _real_apply_statements() -> list[dict]:
-    text = (_common.ROOT / _BOOTSTRAP_TF_REL).read_text(encoding="utf-8")
+    text = _read_root_text(_common.ROOT / _BOOTSTRAP_DIR_REL)
     inline = _parse_bootstrap_statements(text, "github_ci_apply")
     assert inline, "could not parse the real github_ci_apply policy -- has the HCL shape changed?"
     return inline + _parse_managed_policy_statements(text, "github_ci_apply_reads")

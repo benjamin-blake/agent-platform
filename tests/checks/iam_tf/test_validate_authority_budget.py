@@ -100,6 +100,40 @@ def test_v1_extra_role_not_in_hcl_fails(tmp_path: Path) -> None:
     assert any("some-role-not-in-hcl" in f for f in failed)
 
 
+def test_v2_resolves_across_sibling_tf_files(tmp_path: Path) -> None:
+    """terraform-decompose-oidc-rename: ALL FOUR v2 assertions read text that, after the split,
+    lives in github_ci_apply_policy.tf (the IAMRoleWriteBounded prefix + the
+    DenySelfInlinePolicyWrite carve-out) and github_ci_apply_boundary.tf (the boundary_policy_name
+    literal), never in the retained github_ci_apply.tf. Root-wide reading must resolve all four."""
+    bootstrap = tmp_path / "terraform" / "bootstrap"
+    bootstrap.mkdir(parents=True, exist_ok=True)
+    (bootstrap / "github_ci_apply.tf").write_text("# retained -- role/trust only in the real split\n", encoding="utf-8")
+    (bootstrap / "github_ci_apply_policy.tf").write_text(
+        '# IAMRoleWriteBounded Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]\n'
+        "# DenySelfInlinePolicyWrite Resource = "
+        '["arn:aws:iam::1234567890:role/agent-platform-github-ci-apply"]\n',
+        encoding="utf-8",
+    )
+    (bootstrap / "github_ci_apply_boundary.tf").write_text(
+        'resource "aws_iam_policy" "github_ci_apply_boundary" {\n  name = "agent-platform-github-ci-apply-boundary"\n}\n',
+        encoding="utf-8",
+    )
+    budget_path = tmp_path / "budget.json"
+    budget_path.write_text(json.dumps(_V2_BUDGET), encoding="utf-8")
+
+    # RED proof: reading only the retained github_ci_apply.tf (the pre-repoint single-file
+    # behaviour), none of the four assertions can find their markers.
+    single_file_text = (bootstrap / "github_ci_apply.tf").read_text(encoding="utf-8")
+    assert "agent-platform-github-ci-apply-boundary" not in single_file_text
+    assert "role/agent-platform-*" not in single_file_text
+    assert "DenySelfInlinePolicyWrite" not in single_file_text
+
+    failed: list[str] = []
+    with patch("scripts.checks._common.ROOT", tmp_path), patch.dict("os.environ", {"TF_AUTHORITY_BUDGET": str(budget_path)}):
+        validate_authority_budget(failed)
+    assert failed == [], failed
+
+
 def test_v1_apply_role_self_grant_fails(tmp_path: Path) -> None:
     hcl = _SYNTH_HCL + '\n# "arn:aws:iam::1234567890:role/agent-platform-github-ci-apply"\n'
     budget = {
@@ -128,8 +162,8 @@ def test_unparseable_budget_fails(tmp_path: Path) -> None:
 def test_missing_hcl_fails(tmp_path: Path) -> None:
     budget_path = tmp_path / "budget.json"
     budget_path.write_text(json.dumps(_V2_BUDGET), encoding="utf-8")
-    # _common.ROOT patched to a dir with NO terraform/bootstrap/github_ci_apply.tf.
+    # _common.ROOT patched to a dir with NO terraform/bootstrap/*.tf files at all.
     failed: list[str] = []
     with patch("scripts.checks._common.ROOT", tmp_path), patch.dict("os.environ", {"TF_AUTHORITY_BUDGET": str(budget_path)}):
         validate_authority_budget(failed)
-    assert any("cannot read" in f and "github_ci_apply.tf" in f for f in failed)
+    assert any("cannot read" in f and "terraform/bootstrap" in f for f in failed)

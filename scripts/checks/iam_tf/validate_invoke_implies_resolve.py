@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scripts.checks import _common, registry
 
-_OIDC_TF_REL = Path("terraform") / "personal" / "oidc.tf"
+_PERSONAL_DIR_REL = Path("terraform") / "personal"
 
 _DATA_BLOCK_RE = re.compile(r'data\s+"aws_iam_policy_document"\s+"(?P<name>\w+)"\s*\{')
 _ROLE_POLICY_BLOCK_RE = re.compile(r'resource\s+"aws_iam_role_policy"\s+"(?P<role>\w+)"\s*\{')
@@ -22,6 +22,17 @@ _DUCKLAKE_INVOKE_MARKERS = ("ducklake_writer", "ducklake_reader")
 _INVOKE_ACTIONS = {"lambda:InvokeFunction", "lambda:*"}
 _SSM_READ_ACTIONS = {"ssm:Get*", "ssm:*"}
 _SSM_RESOURCE_MARKER = "parameter/agent-platform"
+
+
+def _read_root_text(root_dir: Path) -> str:
+    """Concatenate every *.tf file's text in a terraform root, sorted by filename.
+
+    Deliberately NOT imported from _read_coverage: _read_coverage imports THIS module (for
+    _extract_block / _QUOTED_RE / _parse_policy_documents / etc.), so importing back from it here
+    would be a circular import. This is the same two-line concatenation as
+    _read_coverage._read_root_text -- kept in sync by hand, not by import.
+    """
+    return "\n".join(p.read_text(encoding="utf-8") for p in sorted(root_dir.glob("*.tf")))
 
 
 def _extract_block(text: str, open_brace_idx: int) -> str:
@@ -87,9 +98,23 @@ def _parse_role_policy_map(text: str) -> dict[str, str]:
     return mapping
 
 
-def _resolve_statements(doc_name: str, docs: dict[str, dict], _seen: set[str] | None = None) -> list[dict]:
+def _resolve_statements(
+    doc_name: str,
+    docs: dict[str, dict],
+    _seen: set[str] | None = None,
+    unresolved: list[str] | None = None,
+) -> list[dict]:
     """Transitively resolve a policy document's own statements plus every statement
-    contributed by its (possibly nested) source_policy_documents."""
+    contributed by its (possibly nested) source_policy_documents.
+
+    `unresolved` (optional, backward-compatible default None): when a `doc_name` -- top-level or
+    any nested source -- is not a key in `docs`, it is appended here rather than merely dropped.
+    Decision 129 clause 4 (fail-loud on both indirections): a caller that ignores `unresolved` gets
+    the pre-existing behaviour (a missing document silently contributes zero statements); a caller
+    that checks it can distinguish "genuinely resolves to nothing invoking" from "could not be
+    resolved at all" -- the vacuous-pass hazard root-wide parsing widens (more documents now live in
+    sibling files, so more names can go missing from `docs` if a split repoint is incomplete).
+    """
     if _seen is None:
         _seen = set()
     if doc_name in _seen:
@@ -97,10 +122,12 @@ def _resolve_statements(doc_name: str, docs: dict[str, dict], _seen: set[str] | 
     _seen.add(doc_name)
     doc = docs.get(doc_name)
     if doc is None:
+        if unresolved is not None:
+            unresolved.append(doc_name)
         return []
     resolved: list[dict] = []
     for source_name in doc["sources"]:
-        resolved.extend(_resolve_statements(source_name, docs, _seen))
+        resolved.extend(_resolve_statements(source_name, docs, _seen, unresolved))
     resolved.extend(doc["statements"])
     return resolved
 
@@ -130,17 +157,24 @@ def validate_invoke_implies_resolve(failed: list[str]) -> None:
     aws_iam_policy_document -- the fallback src/common/iceberg_reader.py and
     scripts/ops_data_portal.py use to resolve the DuckLake Function URL when DUCKLAKE_*_URL is
     unset. A role that invokes without SSM loses that fallback (rec-2363 and predecessors
-    rec-2223/2251/2276). Parses terraform/personal/oidc.tf text and resolves
-    source_policy_documents composition transitively -- no boto3, no AWS call, no terraform
-    invocation (Decision 119 / Decision 55), so this runs credential-free in --pre and full.
+    rec-2223/2251/2276). Parses every *.tf file under terraform/personal/ (root-wide, not a single
+    file) and resolves source_policy_documents composition transitively, including across sibling
+    files in the root -- no boto3, no AWS call, no terraform invocation (Decision 119 / Decision
+    55), so this runs credential-free in --pre and full.
+
+    Decision 129 clause 4 (fail-loud on both indirections): a role whose OWN policy document, or
+    any document it transitively sources, cannot be resolved in the parsed root FAILS rather than
+    taking the "PASS (vacuous)" branch -- an unresolvable document is not evidence the role doesn't
+    invoke, it is evidence the parse couldn't tell. This is distinguished from the legitimately
+    vacuous case (every referenced document resolves; none of them invokes the DuckLake reader/writer).
     """
     print("\n=== CI role invoke-implies-resolve invariant (T2.34:c2) ===")
-    oidc_path = _common.ROOT / _OIDC_TF_REL
-    try:
-        text = oidc_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"invoke-implies-resolve: cannot read {_OIDC_TF_REL}: {exc}")
-        print(f"  FAIL: cannot read {_OIDC_TF_REL}: {exc}")
+    personal_dir = _common.ROOT / _PERSONAL_DIR_REL
+    text = _read_root_text(personal_dir)
+    if not text:
+        registry.skipped(f"no *.tf file readable under {personal_dir}")
+        failed.append(f"invoke-implies-resolve: cannot read any *.tf file under {personal_dir}")
+        print(f"  FAIL: cannot read any *.tf file under {personal_dir}")
         return
 
     docs = _parse_policy_documents(text)
@@ -148,13 +182,23 @@ def validate_invoke_implies_resolve(failed: list[str]) -> None:
 
     if not docs or not role_policy:
         failed.append(
-            f"invoke-implies-resolve: no aws_iam_policy_document / aws_iam_role_policy blocks found in {_OIDC_TF_REL}"
+            f"invoke-implies-resolve: no aws_iam_policy_document / aws_iam_role_policy blocks found under {personal_dir}"
         )
         print("  FAIL: no policy documents or role policies parsed -- has the HCL shape changed?")
         return
 
+    registry.examined(len(role_policy), unit="ci_roles")
     for role, doc_name in sorted(role_policy.items()):
-        statements = _resolve_statements(doc_name, docs)
+        unresolved: list[str] = []
+        statements = _resolve_statements(doc_name, docs, unresolved=unresolved)
+        if unresolved:
+            failed.append(
+                f"invoke-implies-resolve: role {role!r} (policy document {doc_name!r}) references "
+                f"unresolvable policy document(s) {sorted(set(unresolved))!r} -- cannot determine whether "
+                "it invokes the DuckLake reader/writer (Decision 129 clause 4: fail loud, never PASS vacuous)"
+            )
+            print(f"  FAIL: {role} references unresolvable document(s) {sorted(set(unresolved))}.")
+            continue
         if not _invokes_ducklake(statements):
             print(f"  PASS (vacuous): {role} does not invoke the DuckLake reader/writer.")
             continue

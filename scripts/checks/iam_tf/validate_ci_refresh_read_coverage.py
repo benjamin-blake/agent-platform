@@ -19,7 +19,7 @@ import re
 
 from scripts.checks import _common, registry
 from scripts.checks.iam_tf._read_coverage import (
-    _BOOTSTRAP_TF_REL,
+    _BOOTSTRAP_DIR_REL,
     _PERSONAL_DIR_REL,
     ROLE_APPLY,
     _action_matches,  # noqa: F401 -- re-exported for tests
@@ -29,6 +29,7 @@ from scripts.checks.iam_tf._read_coverage import (
     _literal_or_prefix_match,  # noqa: F401 -- re-exported for tests
     _parse_bootstrap_statements,
     _parse_managed_policy_statements,
+    _read_root_text,
     _resolve_resource_name,  # noqa: F401 -- re-exported for tests
     _resolve_role_statements,
     _resolve_value,  # noqa: F401 -- re-exported for tests
@@ -87,25 +88,22 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
     key = "ci-refresh-read-coverage:"
 
     personal_dir = _common.ROOT / _PERSONAL_DIR_REL
-    bootstrap_tf = _common.ROOT / _BOOTSTRAP_TF_REL
-    oidc_tf = personal_dir / "oidc.tf"
+    bootstrap_dir = _common.ROOT / _BOOTSTRAP_DIR_REL
 
-    try:
-        bootstrap_text = bootstrap_tf.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"{key} cannot read {bootstrap_tf}: {exc}")
-        print(f"  FAIL: cannot read bootstrap HCL: {exc}")
+    bootstrap_text = _read_root_text(bootstrap_dir)
+    if not bootstrap_text:
+        failed.append(f"{key} cannot read any *.tf file under {bootstrap_dir}")
+        print(f"  FAIL: cannot read bootstrap HCL under {bootstrap_dir}")
         return
-    try:
-        oidc_text = oidc_tf.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"{key} cannot read {oidc_tf}: {exc}")
-        print(f"  FAIL: cannot read oidc.tf: {exc}")
+    personal_text = _read_root_text(personal_dir)
+    if not personal_text:
+        failed.append(f"{key} cannot read any *.tf file under {personal_dir}")
+        print(f"  FAIL: cannot read terraform/personal HCL under {personal_dir}")
         return
 
     inline_statements = _parse_bootstrap_statements(bootstrap_text, "github_ci_apply")
     if not inline_statements:
-        failed.append(f"{key} no statements parsed from the github_ci_apply policy in {bootstrap_tf.name}")
+        failed.append(f"{key} no statements parsed from the github_ci_apply policy under {bootstrap_dir}")
         print("  FAIL: could not parse the apply role's inline policy statements -- has the HCL shape changed?")
         return
 
@@ -128,9 +126,9 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
             f"= {len(apply_statements)} effective statements"
         )
 
-    planner_statements = _resolve_role_statements(oidc_text)
+    planner_statements = _resolve_role_statements(personal_text)
     if planner_statements is None:
-        failed.append(f"{key} could not resolve github_ci_planner role policy in {oidc_tf.name}")
+        failed.append(f"{key} could not resolve github_ci_planner role policy under {personal_dir}")
         print("  FAIL: could not resolve the planner role policy document -- has the HCL shape changed?")
         return
 
@@ -148,6 +146,7 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
         failed.extend(findings)
         if was_checked:
             checked += 1
+    registry.examined(checked, unit="grant_requiring_resources")
 
     # Design (a) discovery + (b) mandatory-declaration companions + (c) the two mechanical scope
     # rules. Each is a sibling sub-check orchestrated HERE, not nested inside another checker: the

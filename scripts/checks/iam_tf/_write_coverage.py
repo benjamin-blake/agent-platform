@@ -295,8 +295,8 @@ def check_write_coverage(
         spec = WRITE_COVERAGE[rtype]
         if not _write_grant_present(apply_statements, spec):
             failed.append(
-                f"{key} apply-role write-managed type {rtype!r} has no covering write grant in "
-                f"github_ci_apply.tf (expected {spec['write_actions']} on a Resource matching "
+                f"{key} apply-role write-managed type {rtype!r} has no covering write grant under "
+                f"terraform/bootstrap/ (expected {spec['write_actions']} on a Resource matching "
                 f"{spec['resource_marker']!r}) -- DEP-01 write-surface gap (rec-2703/rec-2757)"
             )
 
