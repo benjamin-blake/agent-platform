@@ -34,8 +34,12 @@ scope:
       Run scripts/ci/iam_simulate.py's PURE (AWS-free) validation layer -- load_fixture,
       build_triples, principal_arn -- against iam-simulate-fixture.yaml with dummy non-numeric
       placeholders, plus parity legs the existing tests lack: expected_decision_values vs
-      VALID_DECISIONS, declared placeholders vs the tokens the runner substitutes, and every
-      triple's expected_decision drawn from the declared list.
+      VALID_DECISIONS, declared placeholders vs the tokens the runner substitutes. It does NOT assert
+      "every triple's expected_decision is drawn from the declared list": given the first two legs
+      (build_triples already rejects any value outside VALID_DECISIONS, and leg 2 pins
+      expected_decision_values TO VALID_DECISIONS) that leg is TAUTOLOGICAL -- it could never fail
+      independently, and must not be added. Leg 2 is still genuinely exercised, by VP step 6's
+      expected_decision_values drift perturbation.
   - file: tests/checks/contracts/test_validate_composite_action_shape_rosters.py
     action: Create
     purpose: >-
@@ -75,8 +79,12 @@ scope:
   - file: docs/contracts/contract-population.yaml
     action: Modify
     purpose: >-
-      Retire the none_grandfathered kind from evaluator_kinds, the grandfather_only_forms
-      subsection, the census field, the pin_binding wording and the ratchet pin; add the
+      Retire the none_grandfathered kind from evaluator_kinds, the grandfather_only_forms subsection,
+      change_detection.evaluator_kind_change (lines 196-199 -- declares the deleted rule and
+      cross-references a deleted sub-key), subject_namespace.non_seedable_exception (records
+      exit-criteria-ledger's route in the deleted model's field shape), the census field, the
+      pin_binding wording and the ratchet pin. Both prose residues are invisible to VP step 9's `bad`
+      leg, which reads only contract.evaluator. Add the
       RETIREMENT GOVERNANCE NOTE (what was retired, why, reversal path) and an amendment_log entry.
   - file: docs/contracts/file-router.yaml
     action: Modify
@@ -121,7 +129,9 @@ scope:
   - file: scripts/checks/contracts/_ratchet.py
     action: Modify
     purpose: >-
-      Delete EVALUATOR_NONE_GRANDFATHERED_MAX_KEY, its PIN_KEYS membership,
+      Correct the module docstring and the three-pin wording in validate_ratchet_pins,
+      check_pin_direction and check_pins_bound_to_census (all say "three"), then delete
+      EVALUATOR_NONE_GRANDFATHERED_MAX_KEY, its PIN_KEYS membership,
       evaluator_none_grandfathered_max_spec and its _SPEC_BY_KEY row. grandfathered_max and
       status_active_max are untouched and stay equality-bound.
   - file: scripts/checks/contracts/validate_contract_drift.py
@@ -129,8 +139,16 @@ scope:
     purpose: >-
       Delete the new-file none_grandfathered prohibition branch, the `if
       meta.evaluator.none_grandfathered is None` guard (grandfather_kind collapses to status ==
-      "active"), the census increment and the census_values row; apply rec-3101's cascade
-      suppression to the surviving pin-vs-census binding.
+      "active"), the census increment and the census_values row; apply rec-3101's cascade suppression
+      to the surviving pin-vs-census binding. ALSO delete the Pass 2 kind-change CALL SITE at lines
+      358-362 together with the base_meta/head_meta locals that exist only to feed it -- deleting
+      _population.check_evaluator_kind_change without its caller is a guaranteed AttributeError. That
+      removal orphans _class_d_meta_from_text (line 418), whose ONLY production caller is line 358:
+      delete it too, and delete its tests in
+      tests/checks/contracts/validate_contract_drift/test_coverage_edges.py -- otherwise it ships
+      production-dead but still test-covered, so no coverage gate fires and nothing surfaces it. Also
+      correct the module docstring (lines 13-17, "amendment log, evaluator-kind-change, and
+      conformance-loss") and the three-pin comment at lines 366-367.
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
@@ -166,8 +184,12 @@ scope:
   - file: tests/checks/contracts/validate_contract_drift/test_real_population.py
     action: Modify
     purpose: >-
-      Collapse the resolving/routed if-else to an unconditional "every seeded contract's evaluator
-      RESOLVES" assertion -- the test becomes the standing proof that the debt class is empty.
+      Collapse the resolving/routed if-else (lines 78-86) to an unconditional "every seeded contract's
+      evaluator RESOLVES" assertion -- the test becomes the standing proof that the debt class is
+      empty. RENAME the node to test_every_seeded_contract_declares_a_resolving_evaluator: keeping
+      "or_routed" in a name whose routed half this plan deletes is the exact dishonesty this plan
+      enforces against elsewhere. Update the two test_obligations selectors in the same edit; no
+      registry row references this node, so the rename is otherwise free.
   - file: tests/checks/contracts/validate_contract_drift/test_grandfather_only.py
     action: Modify
     purpose: >-
@@ -180,7 +202,13 @@ scope:
       asserts only that some failure mentions the file and the token. The repo has already recorded this
       exact trap in the sibling test_census_accounting.py:92-98 ("would keep passing ... while silently
       ceasing to prove its actual subject") -- a surviving green test whose name asserts a deleted branch
-      is the precise failure mode this plan exists to close. RE-AUTHOR line 100
+      is the precise failure mode this plan exists to close. RE-AUTHOR line 100 -- NOT merely a kind swap: once the none_grandfathered guard
+      is deleted EVERY Class D file's evaluator must resolve, so {check: validate_placement} on a fixture
+      named grandf.yaml FAILS (proved by the sibling
+      test_evaluator_does_not_resolve_rejection_is_the_only_failure at test_census_accounting.py:121-133).
+      Rename the fixture to a basename the check module actually contains -- file-router.yaml, the
+      pattern test_evaluator_resolution.py:22-26 uses. This matters because the re-authored node is what
+      contracts-grandfather-only-forms-both-directions gets repointed at. Originally line 100:
       (test_baseline_present_active_status_loads_without_new_file_prohibition), which asserts failed ==
       [] and is a status: active leg that must now use a RESOLVING evaluator rather than the retired
       kind -- it is re-authored, not merely retained.
@@ -192,6 +220,12 @@ scope:
   - file: tests/checks/contracts/validate_contract_drift/test_evaluator_resolution.py
     action: Modify
     purpose: Delete test_none_grandfathered_never_resolves (constructs the deleted kind).
+  - file: tests/checks/contracts/validate_contract_drift/test_coverage_edges.py
+    action: Modify
+    purpose: >-
+      Delete the _class_d_meta_from_text tests (126-154) -- the helper is orphaned when the Pass 2
+      kind-change call site goes, and without this it ships production-dead but still covered, so no
+      coverage gate surfaces it.
   - file: tests/test_contracts.py
     action: Modify
     purpose: >-
@@ -200,9 +234,9 @@ scope:
   - file: tests/test_contracts_schema.py
     action: Modify
     purpose: >-
-      Delete TestEnforcementRoute and the EnforcementRoute import; re-author the two TestEvaluatorSpec
-      tests that construct the retired kind (test_exactly_one_kind_required at 310 and
-      test_two_kinds_rejected at 319) to use the two surviving kinds; add
+      Delete TestEnforcementRoute and the EnforcementRoute import; re-author test_exactly_one_kind_required (line 310, body 313),
+      the ONLY TestEvaluatorSpec test constructing the retired kind -- test_two_kinds_rejected (319) uses
+      {check, agent_surface} and needs NO edit; add
       TestEvaluatorSpec::test_none_grandfathered_is_not_a_declarable_kind, VP step 5's graduated node,
       asserting the FULL unrepresentability claim (see step 5's fix_if).
   - file: tests/test_iam_simulate.py
@@ -338,7 +372,7 @@ verification_plan:
     command: >-
       bin/venv-python -m pytest tests/test_contracts_schema.py::TestEvaluatorSpec::test_none_grandfathered_is_not_a_declarable_kind -q && bin/venv-python -c "import dataclasses; from scripts.checks.contracts import _population, _ratchet; import scripts.contracts_schema as cs; assert not hasattr(cs, 'EnforcementRoute'), 'EnforcementRoute still exported'; assert 'none_grandfathered' not in cs.EvaluatorSpec.model_fields, cs.EvaluatorSpec.model_fields.keys(); assert not hasattr(_population, 'check_evaluator_kind_change'), 'kind-change rule survived'; assert 'evaluator_none_grandfathered' not in {f.name for f in dataclasses.fields(_population.Census)}, 'census field survived'; assert _ratchet.PIN_KEYS == ('grandfathered_max','status_active_max'), _ratchet.PIN_KEYS; print('OK -- none_grandfathered is unrepresentable')"
     expected: >-
-      The pytest node passes, then 'OK: none_grandfathered is unrepresentable'; exit 0.
+      The pytest node passes, then 'OK -- none_grandfathered is unrepresentable'; exit 0.
     fix_if: >-
       'EnforcementRoute still exported' or a surviving model field means the schema deletion is
       incomplete -- EvaluatorSpec's extra="forbid" is what makes the old form raise, so a leftover
@@ -522,9 +556,9 @@ verification_plan:
       Stale-reference sweep for the retired surface (closure obligation) -- no production module,
       config or contract still names the deleted kind or model.
     command: >-
-      bin/venv-python -c "import ast, glob, pathlib, yaml; from scripts.checks.contracts._population import _docstring_node_ids; from scripts.contracts_schema import EvaluatorSpec; assert 'none_grandfathered' not in EvaluatorSpec.model_fields, EvaluatorSpec.model_fields.keys(); code=[]; [code.append((str(p), n.lineno)) for p in sorted(list(pathlib.Path('scripts').rglob('*.py')) + list(pathlib.Path('src').rglob('*.py'))) for tr in [ast.parse(p.read_text(encoding='utf-8'))] for d in [_docstring_node_ids(tr)] for n in ast.walk(tr) if (isinstance(n, ast.Name) and n.id == 'EnforcementRoute') or (isinstance(n, ast.alias) and n.name == 'EnforcementRoute') or (isinstance(n, ast.Attribute) and n.attr == 'none_grandfathered') or (isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in d and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value))]; assert not code, code; bad=[q for q in sorted(glob.glob('docs/contracts/*.yaml')) for doc in [yaml.safe_load(open(q, encoding='utf-8'))] if isinstance(doc, dict) and isinstance(doc.get('contract'), dict) and isinstance(doc['contract'].get('evaluator'), dict) and 'none_grandfathered' in doc['contract']['evaluator']]; assert not bad, bad; r=yaml.safe_load(open('docs/contracts/file-router.yaml', encoding='utf-8')); ads=[x.get('topic') for x in r.get('routes', []) if 'none_grandfathered' in str(x.get('description', ''))]; assert not ads, ads; print('OK -- no executable reference, no live declaration, no router advertisement')"
+      bin/venv-python -c "import ast, glob, pathlib, re, yaml; from scripts.checks.contracts._population import _docstring_node_ids; from scripts.contracts_schema import EvaluatorSpec; assert 'none_grandfathered' not in EvaluatorSpec.model_fields, EvaluatorSpec.model_fields.keys(); code=[]; [code.append((str(p), n.lineno)) for p in sorted(list(pathlib.Path('scripts').rglob('*.py')) + list(pathlib.Path('src').rglob('*.py'))) for tr in [ast.parse(p.read_text(encoding='utf-8'))] for d in [_docstring_node_ids(tr)] for n in ast.walk(tr) if (isinstance(n, ast.Name) and n.id == 'EnforcementRoute') or (isinstance(n, ast.alias) and n.name == 'EnforcementRoute') or (isinstance(n, ast.Attribute) and n.attr == 'none_grandfathered') or (isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in d and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value))]; assert not code, code; bad=[q for q in sorted(glob.glob('docs/contracts/*.yaml')) for doc in [yaml.safe_load(open(q, encoding='utf-8'))] if isinstance(doc, dict) and isinstance(doc.get('contract'), dict) and isinstance(doc['contract'].get('evaluator'), dict) and 'none_grandfathered' in doc['contract']['evaluator']]; assert not bad, bad; r=yaml.safe_load(open('docs/contracts/file-router.yaml', encoding='utf-8')); ads=[x.get('topic') for x in r.get('routes', []) if 'none_grandfathered' in str(x.get('description', ''))]; assert not ads, ads; mods=['scripts/contracts_schema.py','scripts/checks/contracts/_population.py','scripts/checks/contracts/_ratchet.py','scripts/checks/contracts/validate_contract_drift.py']; prose=[(m, n.lineno) for m in mods for tr in [ast.parse(pathlib.Path(m).read_text(encoding='utf-8'))] for ds in [_docstring_node_ids(tr)] for n in ast.walk(tr) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) in ds and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value)]; assert not prose, prose; dec=re.search(r'^## Decision 168:.*?(?=^## Decision )', pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8'), re.S|re.M).group(0); assert '[Amendment 2026-' in dec or '> **Update (' in dec, 'Decision 168 carries no amendment_forms annotation'; print('OK -- no executable reference, no stale docstring, no live declaration, no router advertisement, Decision 168 annotated')"
     expected: >-
-      Prints 'OK -- no executable reference, no live declaration, no router advertisement'; exit 0.
+      Prints 'OK -- no executable reference, no stale docstring, no live declaration, no router advertisement, Decision 168 annotated'; exit 0.
     fix_if: >-
       A non-empty `code` names a surviving EXECUTABLE reference in scripts/ or src/; a non-empty `bad`
       names a contract still DECLARING the kind; a non-empty `ads` names a file-router route still
@@ -538,7 +572,11 @@ verification_plan:
       retirement note, in the pre-existing migration-step-3 and wave-1 amendment_log entries
       (immutable history -- editing them to satisfy a grep would falsify the record), and in the new
       graduated row's node_id, which VP step 8 explicitly whitelists. Do NOT "simplify" any leg back
-      to a grep.
+      to a grep. A non-empty `prose` names a DOCSTRING in one of the four modified modules that still
+      describes the retired kind -- the repo-wide leg excludes docstrings by construction, so this
+      narrow leg is what closes the descriptive-prose half for the modules this plan guts (see the
+      scope purposes for the specific docstrings). The final leg fails if Decision 168 carries no
+      amendment_forms annotation, so the record-keeping half cannot be silently skipped.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -691,7 +729,7 @@ test_obligations:
       The evaluator flips from the never-resolving none_grandfathered form to the roster-parity
       evaluator, which must genuinely RESOLVE under the Decision 168 check grammar.
     verification_step: 13
-    test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
+    test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_a_resolving_evaluator
     red_green_expectation: >-
       Red before, green after -- and unlike wave 1's conditional rows this is a genuine red-before:
       the test's routed-debt branch is DELETED by this plan, so the revised assertion (every seeded
@@ -701,7 +739,7 @@ test_obligations:
       The evaluator flips from the never-resolving none_grandfathered form to the fixture-shape
       evaluator, which must genuinely RESOLVE under the Decision 168 check grammar.
     verification_step: 13
-    test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_resolving_or_routed_evaluator
+    test_selector: tests/checks/contracts/validate_contract_drift/test_real_population.py::TestRealPopulationRegression::test_every_seeded_contract_declares_a_resolving_evaluator
     red_green_expectation: >-
       Red before, green after, for the same reason as the row above -- the shared unconditional
       assertion fails on main for both files.
@@ -760,7 +798,7 @@ test_obligations:
       a live grandfather-only form.
     verification_step: 9
     command: >-
-      bin/venv-python -c "import ast, glob, pathlib, yaml; from scripts.checks.contracts._population import _docstring_node_ids; from scripts.contracts_schema import EvaluatorSpec; assert 'none_grandfathered' not in EvaluatorSpec.model_fields, EvaluatorSpec.model_fields.keys(); code=[]; [code.append((str(p), n.lineno)) for p in sorted(list(pathlib.Path('scripts').rglob('*.py')) + list(pathlib.Path('src').rglob('*.py'))) for tr in [ast.parse(p.read_text(encoding='utf-8'))] for d in [_docstring_node_ids(tr)] for n in ast.walk(tr) if (isinstance(n, ast.Name) and n.id == 'EnforcementRoute') or (isinstance(n, ast.alias) and n.name == 'EnforcementRoute') or (isinstance(n, ast.Attribute) and n.attr == 'none_grandfathered') or (isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in d and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value))]; assert not code, code; bad=[q for q in sorted(glob.glob('docs/contracts/*.yaml')) for doc in [yaml.safe_load(open(q, encoding='utf-8'))] if isinstance(doc, dict) and isinstance(doc.get('contract'), dict) and isinstance(doc['contract'].get('evaluator'), dict) and 'none_grandfathered' in doc['contract']['evaluator']]; assert not bad, bad; r=yaml.safe_load(open('docs/contracts/file-router.yaml', encoding='utf-8')); ads=[x.get('topic') for x in r.get('routes', []) if 'none_grandfathered' in str(x.get('description', ''))]; assert not ads, ads; print('OK -- no executable reference, no live declaration, no router advertisement')"
+      bin/venv-python -c "import ast, glob, pathlib, re, yaml; from scripts.checks.contracts._population import _docstring_node_ids; from scripts.contracts_schema import EvaluatorSpec; assert 'none_grandfathered' not in EvaluatorSpec.model_fields, EvaluatorSpec.model_fields.keys(); code=[]; [code.append((str(p), n.lineno)) for p in sorted(list(pathlib.Path('scripts').rglob('*.py')) + list(pathlib.Path('src').rglob('*.py'))) for tr in [ast.parse(p.read_text(encoding='utf-8'))] for d in [_docstring_node_ids(tr)] for n in ast.walk(tr) if (isinstance(n, ast.Name) and n.id == 'EnforcementRoute') or (isinstance(n, ast.alias) and n.name == 'EnforcementRoute') or (isinstance(n, ast.Attribute) and n.attr == 'none_grandfathered') or (isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in d and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value))]; assert not code, code; bad=[q for q in sorted(glob.glob('docs/contracts/*.yaml')) for doc in [yaml.safe_load(open(q, encoding='utf-8'))] if isinstance(doc, dict) and isinstance(doc.get('contract'), dict) and isinstance(doc['contract'].get('evaluator'), dict) and 'none_grandfathered' in doc['contract']['evaluator']]; assert not bad, bad; r=yaml.safe_load(open('docs/contracts/file-router.yaml', encoding='utf-8')); ads=[x.get('topic') for x in r.get('routes', []) if 'none_grandfathered' in str(x.get('description', ''))]; assert not ads, ads; mods=['scripts/contracts_schema.py','scripts/checks/contracts/_population.py','scripts/checks/contracts/_ratchet.py','scripts/checks/contracts/validate_contract_drift.py']; prose=[(m, n.lineno) for m in mods for tr in [ast.parse(pathlib.Path(m).read_text(encoding='utf-8'))] for ds in [_docstring_node_ids(tr)] for n in ast.walk(tr) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) in ds and ('none_grandfathered' in n.value or 'EnforcementRoute' in n.value)]; assert not prose, prose; dec=re.search(r'^## Decision 168:.*?(?=^## Decision )', pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8'), re.S|re.M).group(0); assert '[Amendment 2026-' in dec or '> **Update (' in dec, 'Decision 168 carries no amendment_forms annotation'; print('OK -- no executable reference, no stale docstring, no live declaration, no router advertisement, Decision 168 annotated')"
     red_green_expectation: >-
       Red before, green after. On main the sweep reds on the FIRST assertion (EvaluatorSpec still
       carries the field), not on `ads` -- but the `ads` leg is independently load-bearing for green,
@@ -830,7 +868,12 @@ constraints:
     Decision 149 rule, and leaves validate_decision_currency's `amended` derivation untouched. The
     per-entry 6,144-byte authoring cap does NOT apply: _per_entry_cap_failures measures only entries
     ABSENT from the baseline, and Decision 168 is baseline-present (measured 5,650 bytes), so the
-    annotation needs no trimming to fit. THE RECORD IS THEREFORE WRITTEN DOWN THREE PLACES: the
+    annotation needs no trimming to fit. TWO AUTHORING HAZARDS for it:
+    validate_supersession_annotations._EDGE_RE matches "amends Decision N" ANYWHERE in a block, so the
+    annotation must not contain that phrase (write "clause 3's none_grandfathered half is inoperative",
+    never "amends Decision 168"); and per amendment_forms.general_rule a blockquote-bold line TERMINATES
+    a typed id-list field, so the annotation must be appended AFTER the **Related:** line, never
+    inserted mid-entry. THE RECORD IS THEREFORE WRITTEN DOWN THREE PLACES: the
     Decision 168 annotation, plus governance notes in BOTH
     contract-population.yaml (Class D, amendment entry required) and verification-registry.yaml (Class
     A, top-level governance_notes key, no amendment entry required), each naming what was retired,
@@ -969,7 +1012,7 @@ context:
     165, Decision 166, Decision 159, Decision 161, Decision 160, Decision 150, Decision 149, Decision
     142, Decision 132, Decision 128, Decision 131, Decision 118, Decision 103, Decision 104, Decision
     101, Decision 86, Decision 127, Decision 70, Decision 60, Decision 55, Decision 48."
-  - "gates: decision-scout=FLAGS_FOUND (2 dispatches; all flags resolved in-design). plan-critique=REVISE x2 -> round 1: 6 fixes (unsatisfiable stale-reference grep; verification-registry.yaml miscounted Class D when it is Class A; the retirement half left unrouted and an inverted Decision 160 citation; two unproven VP-6 legs; a waiver misdescribing wave 1 precedent; six scope undercounts). round 2: 6 blockers + 1 routing fix (the replacement grep still short-circuited on two wave-1 docstrings; a nonexistent tests/verification_graduation path exiting pytest 4; an iam perturbation tripping an earlier leg against a TAUTOLOGICAL assertion, now dropped; a phantom TestEvaluatorKindChange class whose real home holds must-survive coverage; an undispositioned test that would pass green for the wrong reason; a stale amendment-entry instruction; and Decision 168 annotated via the ratified number-free amendment_forms mechanism). All applied, re-dispatched"
+  - "gates: decision-scout=FLAGS_FOUND (2 dispatches; all flags resolved in-design). plan-critique=REVISE x3, hitting the 3-round convergence cap; all findings from every round applied, human accepted at the cap. Round 1 (6 fixes): unsatisfiable stale-reference grep; verification-registry.yaml miscounted Class D when it is Class A; the retirement half left unrouted plus an inverted Decision 160 citation; two unproven VP-6 legs; a waiver misdescribing wave-1 precedent; six scope undercounts. Round 2 (6 blockers + 1 routing fix): the replacement grep still short-circuited on two wave-1 docstrings; a nonexistent tests/verification_graduation path exiting pytest 4; an iam perturbation tripping an earlier leg against a TAUTOLOGICAL assertion, since dropped; a phantom TestEvaluatorKindChange whose real home holds must-survive coverage; an undispositioned test that would pass green for the wrong reason; a stale amendment-entry instruction; and Decision 168 routed to the ratified number-free amendment_forms mechanism. Round 3 (4 blockers, all enumeration-completeness, none a design flaw; round 3 verified by execution that every round-2 fix landed): contract-population change_detection.evaluator_kind_change residue; a FIFTH production consumer at validate_contract_drift.py:358-362 plus the orphaned _class_d_meta_from_text -- correcting a blast-radius claim this plan had asserted was complete; five stale docstrings invisible to the docstring-excluding sweep, now covered by a narrow docstring leg; and a test node whose name kept an -or_routed half this plan deletes."
   - >-
     WHY THIS EXISTS: rec-3059 opened because 21 free-form docs/contracts files were seeded as Class D
     with a form (evaluator.none_grandfathered) that never resolves BY DESIGN -- nothing enforced their
@@ -1029,9 +1072,13 @@ context:
     why deleting the none_grandfathered bucket does NOT collapse grandfathered into status_active --
     the two pins stay distinct and independently meaningful. Re-derive before editing either.
   - >-
-    BLAST RADIUS, enumerated at planning time rather than discovered at implement time: production
-    readers of the deleted attribute are exactly _population.check_evaluator_kind_change and four
-    lines in validate_contract_drift.py (250, 258, 265, 270). Docstring mentions in
+    BLAST RADIUS, corrected at round-3 critique -- an earlier draft of this line claimed the
+    enumeration was complete and it was NOT, so the correction is recorded rather than quietly fixed.
+    Production readers of the deleted attribute are _population.check_evaluator_kind_change and FIVE
+    sites in validate_contract_drift.py: lines 250, 258, 265, 270, and the Pass 2 call site at 358-362
+    (with its base_meta/head_meta locals), which is in turn the ONLY production caller of
+    _class_d_meta_from_text (418) -- so that helper is orphaned too, and its test_coverage_edges.py
+    tests keep it covered, meaning no coverage gate would have surfaced the orphan. Docstring mentions in
     validate_read_engine_verbs.py and validate_marker_grammar_exports.py describe what wave 1 DID and
     stay historically true -- leave them. Test-side references span eight modules, all in Scope.
   - >-
@@ -1052,7 +1099,7 @@ pre_implementation_checklist:
   - Only the plan-cited decision sections read (168, 169, 170, 162, 165, 166, 160, 159, 161, 150, 149, 132, 128, 131, 104, 101, 86, 70, 55)
   - docs/contracts/contract-population.yaml read in full -- it is the grammar this plan edits and must still satisfy
   - docs/contracts/composite-action-shape.yaml and docs/contracts/iam-simulate-fixture.yaml read in full
-  - All 27 files in scope located and readable
+  - All 30 files in scope located and readable
   - Live census re-derived (the 17/16 pin values are re-derived, never assumed)
   - Acceptance criteria understood and verifiable
 execution_steps:
@@ -1069,8 +1116,9 @@ execution_steps:
     declaring "iam-simulate-fixture.yaml" in-module. It calls scripts.ci.iam_simulate's
     load_fixture/build_triples/principal_arn with NON-NUMERIC dummy placeholders, then asserts
     expected_decision_values == VALID_DECISIONS, declared placeholders == the substituted token set,
-    and every triple's expected_decision drawn from the declared list. Its docstring must record the
-    deliberate scope boundary (never live decisions, never condition-key/intersection semantics).
+    and NOT a per-triple expected_decision leg, which is tautological given the
+    first two (see the scope purpose). Its docstring must record the deliberate scope boundary (never
+    live decisions, never condition-key/intersection semantics).
   - >-
     Add two Entry literals to scripts/checks/contracts/_manifest.py -- bare-string module=/attr=,
     pre=True with pre_globs=None (UNGATED; do NOT narrow to globs), full_segment="full_after_lint" --
@@ -1082,8 +1130,13 @@ execution_steps:
     the accepted three-way-parity cost.
   - >-
     Delete the grandfather form: remove EnforcementRoute and EvaluatorSpec.none_grandfathered from
-    scripts/contracts_schema.py and narrow _exactly_one_kind to two kinds; delete
-    _population.check_evaluator_kind_change and the
+    scripts/contracts_schema.py, narrow _exactly_one_kind to two kinds, and correct EvaluatorSpec's
+    CLASS DOCSTRING (lines 169-179), which is the primary reader-facing definition of the union and
+    still describes three declarable kinds -- leaving it would contradict acceptance criterion 3.
+    Delete _population.check_evaluator_kind_change AND its Pass 2 call site at
+    validate_contract_drift.py:358-362 (with the base_meta/head_meta locals) plus the now-orphaned
+    _class_d_meta_from_text and its test_coverage_edges.py tests; correct resolve_evaluator's docstring
+    (259-263) and the ratchet section comment (417-421). Delete the
     Census.evaluator_none_grandfathered field plus its render() segment; NOTE resolve_evaluator's
     none branch is the function's ONLY terminal return (_population.py:289) -- deleting it naively
     yields a mypy missing-return and keeping it as an unreachable fall-through yields an uncovered
@@ -1103,7 +1156,9 @@ execution_steps:
   - >-
     Rewrite contract-population.yaml's prose for the two-kind union (evaluator_kinds,
     grandfather_only_forms, counters_open_at_zero, census.fields, census.pin_binding, the ratchet
-    block, raisability_asymmetry, AND subject_namespace.non_seedable_exception -- a LIVE normative
+    block, raisability_asymmetry, change_detection.evaluator_kind_change -- which declares the very
+    rule this plan deletes AND cross-references a sub-key it removes -- AND
+    subject_namespace.non_seedable_exception -- both LIVE normative
     section, not amendment history, which still records exit-criteria-ledger's route in the deleted
     model's exact field shape (consumer/mechanism/blocker/shape); VP step 9's parsed leg cannot see it,
     so it must be rewritten by hand or the contract keeps describing a retired schema), add the
@@ -1145,8 +1200,9 @@ execution_steps:
     (VP step 5's graduated node); delete tests/test_iam_simulate.py::test_real_fixture_builds_cleanly;
     add the rec-3101 cascade-suppression red path. Run `ruff check --fix` afterwards to clear unused
     imports (F401), which a deletion of this size will produce -- but note ruff will NOT remove the two
-    dead module-level helpers the deletions strand: `_route` (test_grandfather_only.py:9) and
-    `_COMPLETE_ROUTE` (test__population.py). Delete both by hand.
+    dead module-level helpers the deletions strand: `_route` (test_grandfather_only.py:9),
+    `_COMPLETE_ROUTE` (test__population.py), and BOTH of test_contracts_schema.py's own
+    `_COMPLETE_ROUTE` (300) and `_route` (328). Delete all four by hand.
   - >-
     Annotate Decision 168's body in docs/DECISIONS.md with a dated amendment_forms-conformant line
     naming contract-population.yaml's retirement note as the live record, then regenerate
