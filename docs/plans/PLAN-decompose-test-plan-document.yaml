@@ -81,11 +81,15 @@ scope:
   - file: tests/validate/test_driver_seam.py
     action: Modify
     purpose: >-
-      IN_SCOPE_PATHS (line 43) carries the literal "tests/test_plan_document.py" from a prior
-      plan's scope manifest. Replace it with the four new module paths so a repo-wide live-code
-      sweep can assert zero references. Verified behaviourally inert: no registry row carries
-      tests/test_plan_document.py as its guard_target, so _in_scope_rows selects nothing
-      different either way.
+      Two edits to IN_SCOPE_PATHS. (1) Line 43 carries the literal "tests/test_plan_document.py"
+      from a prior plan's scope manifest -- replace it with the four new module paths so a
+      repo-wide live-code sweep can assert zero references. Verified behaviourally inert: no
+      registry row carries tests/test_plan_document.py as its guard_target, so _in_scope_rows
+      selects nothing different either way. (2) ADD "scripts/roadmap/plan_document.py", which is
+      NOT currently present -- this is load-bearing, not cosmetic: it brings the four repointed
+      plan_document rows plus the pre-existing plan-document-fallback-reevaluation-schema (5 rows
+      total, verified) under TestRegistryRows' standing re-collection guard, partially closing the
+      Decision 132 modified-row gap this plan otherwise defers to rec-3119.
 bundled_recommendations:
   - rec-3076
 infrastructure_dependencies: []
@@ -184,17 +188,23 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: >-
-      Run the relocated suite and assert the exact 29 / 11 / 36 / 23 split, totalling the 99
-      tests the monolith collected on origin/main. Catches a class silently dropped or
-      duplicated during the move.
-    command: bin/venv-python -m pytest tests/roadmap/plan_document/ -q
-    expected: 99 passed, 0 failed, 0 errors.
+      Assert the exact PER-MODULE 29 / 11 / 36 / 23 split and then run the whole relocated
+      suite. The per-module counts are the point: a class misfiled into the wrong module still
+      totals 99 and still passes, but silently erodes the headroom in test_optional_fields.py
+      that this plan exists to create.
+    command: 'bash -c ''fail=0; for pair in test_schema.py:29 test_loader_cli.py:11 test_optional_fields.py:36 test_obligations.py:23; do m=${pair%%:*}; e=${pair##*:}; n=$(bin/venv-python -m pytest tests/roadmap/plan_document/$m --collect-only -q 2>/dev/null | grep -oE "[0-9]+ tests? collected" | grep -oE "^[0-9]+"); if [ "$n" != "$e" ]; then echo "MISMATCH $m expected $e got $n"; fail=1; else echo "OK $m=$n"; fi; done; bin/venv-python -m pytest tests/roadmap/plan_document/ -q || fail=1; exit $fail'''
+    expected: >-
+      Four OK lines (test_schema.py=29, test_loader_cli.py=11, test_optional_fields.py=36,
+      test_obligations.py=23), then 99 passed; exits 0.
     fix_if: >-
-      Fewer than 99 collected means a class was dropped in the split; more means one was copied
-      into two modules. Cross-check per module against the intended grouping (test_schema 29,
-      test_loader_cli 11, test_optional_fields 36, test_obligations 23). Import errors on
-      _base/_mutate mean the helper import from tests.fixtures.plan_document_helpers is missing
-      or misaliased.
+      A MISMATCH line names the module and the delta -- a class landed in the wrong module. Move
+      it to the grouping in the Scope table rather than adjusting the expected count; the counts
+      are derived from the monolith and are correct (per-class: TestPlanDocumentSchema 14,
+      TestSchemaVersion2 8, TestSchemaVersion3 7, TestLoader 4, TestCli 4,
+      TestValidateIntegration 3, TestClosesCriteria 11, TestGraduationDisposition 12,
+      TestFallbackReevaluation 13, TestTestObligations 23). A count of -1 or empty means the
+      module failed to collect at all. Import errors on _base/_mutate mean the helper import from
+      tests.fixtures.plan_document_helpers is missing or misaliased.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -277,10 +287,11 @@ verification_plan:
   - step: 8
     phase: pre-deploy
     action: >-
-      Assert every repointed node_id both COLLECTS and PASSES. Decision 132's differential
-      admission gate keys on check_id, so in-place repoints are structurally outside it -- this
-      step is the compensating evidence, and it deliberately runs the nodes rather than merely
-      collecting them.
+      Assert the 9 pytest-node repoints both COLLECT and PASS. (The other 2 repoints -- the
+      grep_count row's path and the syspath row's directory token -- carry no pytest node and are
+      covered by step 7's existence check only.) Decision 132's differential admission gate keys
+      on check_id, so in-place repoints are structurally outside it; this step is the
+      compensating evidence, and it runs the nodes rather than merely collecting them.
     command: 'bin/venv-python -m pytest "tests/roadmap/plan_document/test_obligations.py::TestTestObligations" "tests/roadmap/plan_document/test_schema.py::TestSchemaVersion3" "tests/roadmap/plan_document/test_schema.py::TestSchemaVersion2::test_v2_phase_pre_merge_rejected" "tests/roadmap/plan_document/test_optional_fields.py::TestGraduationDisposition" "tests/ci_rca/taxonomy/test_load_and_classify.py::TestEnumerateWorkflowNames::test_real_workflows_dir" "tests/ci_rca/taxonomy/test_convergence.py::TestConvergenceFingerprintDistinctness::test_distinct_fingerprints_across_convergence_starved_environment" "tests/ci_rca/evidence/test_fingerprint.py::TestBundleEmissionFanOut::test_single_failing_check_emits_exactly_one_bundle" "tests/checks/ops_governance/test_validate_deploy_channel_conformance.py" "tests/checks/hygiene/test_validate_prose_allowlist.py" -q'
     expected: All collected and passing; exit 0.
     fix_if: >-
@@ -291,12 +302,17 @@ verification_plan:
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      No red/green and no durable form is obtainable. This step exists to compensate for a
-      structural gap in Decision 132's gate (_added_entries keys on check_id, so a row repointed
-      in place is invisible to it), and its node list is this migration's exact repoint set --
-      a registry row restating that list would go stale the next time any of those tests moves,
-      and would itself be a row nothing re-proves. The durable fix for modified-row coverage is
-      already tracked as rec-3119.
+      No red/green is obtainable, and this step's own node list is this migration's exact repoint
+      set -- a registry row restating it would go stale the next time any of those tests moves.
+      But a durable form IS partly available and this plan takes it rather than deferring wholly
+      to rec-3119: adding "scripts/roadmap/plan_document.py" to IN_SCOPE_PATHS in
+      tests/validate/test_driver_seam.py brings all four repointed plan_document rows (and the
+      pre-existing plan-document-fallback-reevaluation-schema) under
+      TestRegistryRows::test_in_scope_node_ids_still_collect_under_pytest, which re-collects every
+      in-scope row on every run. scripts/test_coverage_checker.py is ALREADY in that frozenset, so
+      graduated row plan-document-concern-split-mapping inherits the same guard for free. What
+      remains genuinely uncovered is the seven repoints whose guard_targets sit outside that
+      frozenset (the ci_rca and checks rows) -- those stay with rec-3119.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -454,7 +470,7 @@ context:
     Decision 163, Decision 48, Decision 55. RELATED: Decision 103, Decision 159, Decision 148,
     Decision 85, Decision 104, Decision 124, Decision 80, Decision 165, Decision 166.
     CONTRADICT: none."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)"
   - >-
     Unblocks PLAN-plan-resolution-content-keyed, which must add coverage for a new PlanDocument
     field and has no headroom at 495/500 in the current monolith. After the four-way split the
@@ -614,7 +630,11 @@ execution_steps:
   - >-
     Modify tests/test_coverage_checker/test_coverage_checker_map.py -- add
     test_maps_scripts_roadmap_plan_document_to_concern_split_package, mirroring the existing
-    test_maps_scripts_sync_ops_to_concern_split_package case. Run VP steps 1 and 2.
+    test_maps_scripts_sync_ops_to_concern_split_package case, AND a companion
+    test_maps_still_grandfathered_roadmap_sibling_to_flat_home asserting plan_audit.py and
+    find_plan.py still resolve to their flat homes -- the file carries two precedents for exactly
+    this pairing after a concern-split registration (lines 82 and 105), and it guards against a
+    future change over-generalising the roadmap family. Run VP steps 1 and 2.
   - >-
     Modify config/agent/verification_registry/registry.yaml -- apply the 11 repoints from the
     Context repoint map. Edit rows IN PLACE; do not change any check_id, do not delete any row.
@@ -629,11 +649,16 @@ execution_steps:
     plan-document-historical-plans-glob-non-vacuous (primitive_slot test_selector, guard_target
     scripts/roadmap/plan_document.py, node_id
     tests/roadmap/plan_document/test_optional_fields.py::TestFallbackReevaluation::test_all_historical_plans_still_valid_with_field_absent).
-    Both are NEW check_ids and will run Decision 132's differential admission gate.
+    Both rows also need plan_slug: decompose-test-plan-document and a graduated_at date --
+    _schema_errors requires graduated_at, and validate_graduation_completeness's implement-PR leg
+    matches on check_id AND plan_slug == doc.slug, so omitting either costs a round-trip. Both are
+    NEW check_ids and will run Decision 132's differential admission gate.
   - >-
     Modify tests/validate/test_driver_seam.py -- in IN_SCOPE_PATHS replace
-    "tests/test_plan_document.py" with the four new module paths, preserving alphabetical
-    placement.
+    "tests/test_plan_document.py" with the four new module paths, AND add
+    "scripts/roadmap/plan_document.py" (currently absent). Preserve alphabetical placement. The
+    added string is what puts the repointed rows under TestRegistryRows' standing guard; do not
+    drop it as a tidy-up.
   - >-
     Delete tests/test_plan_document.py. Run ruff check --fix afterwards to catch F401 unused
     imports left anywhere by the move (tests/CLAUDE.md).
