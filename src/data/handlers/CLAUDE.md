@@ -12,7 +12,7 @@ ops-compaction are `terraform/personal`-managed (`terraform/personal/prod_lambda
 `terraform/personal`-managed DuckLake Lambdas (`ducklake_writer`/`ducklake_reader`/
 `ducklake_maintenance`/`ducklake_catalog_dr`, under `src/lambdas/`), which decoupled later (#544)
 after an initial coupled period. Do not conflate the two classes — see `src/lambdas/CLAUDE.md` and
-`docs/contracts/environment-taxonomy.md` section 5.
+`environment-taxonomy.yaml` (conformance).
 
 **Routine deploy channel: `.github/workflows/deploy-prod-lambdas.yml` (T2.43)** — push-to-main
 touching this directory's source paths, or `workflow_dispatch`. It assumes the merged

@@ -7,7 +7,7 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 ## Hard rules
 - **Optional artifacts**: Always wrap `filemd5()` and `file()` calls on optional artifacts with `try()`. Bad: `source_code_hash = filemd5("build/lambda.zip")`. Good: `source_code_hash = try(filemd5("build/lambda.zip"), md5(file("module_file.tf")))`.
 - **ASCII tag values**: Plain ASCII hyphens (`-`) only in Lambda tag values. No em dashes — they fail in AWS API serialisation.
-- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply model: see `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection (sole SoT, Decision 77). Short form: sandbox auto-applies behind the deterministic guard; in-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying roles now auto-apply (T2.25); trust/destroy/out-of-budget IAM route to gated-apply. SIT/PROD remain human-gated and are future-state. See `planning` skill, Step 4 (Infrastructure Assessment).
+- **Plan before apply**: Plans modifying `.tf` files must present `terraform plan` output to the human before any `terraform apply`. Apply model: see `environment-taxonomy.yaml` Axis A + Guard classification subsection (sole SoT, Decision 77). Short form: sandbox auto-applies behind the deterministic guard; in-budget IAM inline-policy/attachment UPDATEs on managed boundary-carrying roles now auto-apply (T2.25); trust/destroy/out-of-budget IAM route to gated-apply. SIT/PROD remain human-gated and are future-state. See `planning` skill, Step 4 (Infrastructure Assessment).
 - **IAM precedence**: If a change modifies IAM (`*.tf` IAM resources or roles attached to Lambdas), `terraform apply` must precede any Lambda code deploy.
 
 ## AWS context
@@ -75,7 +75,7 @@ are recoverable from the **remote Terraform state in S3**, which IS the source o
 path. Local/manual apply is operator-only break-glass, not a routine agent action -- see
 "Operator-only / break-glass" below. Full intent -> trigger -> recovery wayfinding:
 `docs/contracts/deploy-paths.yaml`. Guard classification (what auto-applies vs what blocks) is
-authoritative SOLELY in `docs/contracts/environment-taxonomy.md` Axis A + Guard classification
+authoritative SOLELY in `environment-taxonomy.yaml` Axis A + Guard classification
 (T2.25 / Decision 92 point 5) -- the table below names the channel, it does not restate that
 classification.
 

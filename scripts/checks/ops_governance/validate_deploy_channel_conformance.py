@@ -3,19 +3,21 @@
 Compares the ACTUAL terraform/personal state (does each Lambda's aws_lambda_function resource
 carry lifecycle { ignore_changes = [source_code_hash] }?) against the textual SoT surfaces that
 describe it -- docs/contracts/build-lambda.yaml's deploy_channels + docs/contracts/
-environment-taxonomy.md section 5's conformance-status paragraph(s) -- and fails if either has
-drifted from reality. This is the guard against the #544 drift class: the code shipped decoupled
-but the docs kept describing it as coupled.
+environment-taxonomy.yaml's typed conformance.ducklake_class / conformance.prod_class fields --
+and fails if either has drifted from reality. This is the guard against the #544 drift class: the
+code shipped decoupled but the docs kept describing it as coupled.
 
-Covers TWO classes, each with its own actual-state scan + taxonomy paragraph (T2.43 extension):
+Covers TWO classes, each with its own actual-state scan + typed conformance field (T2.43
+extension; CFG-11 conversion repointed the taxonomy read from prose-paragraph regex matching to
+the typed field):
   - ducklake (terraform/personal/ducklake*.tf; build-lambda.yaml deploy_channels.ducklake_functions;
-    environment-taxonomy.md's "**Conformance status" paragraph -- the ORIGINAL, unwidened check).
+    environment-taxonomy.yaml's conformance.ducklake_class -- the ORIGINAL, unwidened check).
   - prod (terraform/personal/prod_lambdas.tf; build-lambda.yaml deploy_channels.prod_functions /
-    .ops_compaction; environment-taxonomy.md's second "**Conformance status (prod class"
-    paragraph). The prod class additionally gets a completeness check (governed_channel +
-    break_glass_only both populated) since its channel_class value
-    ("decoupled_build_pipeline") does not use the ducklake class's _decoupled/_coupled suffix
-    convention, so there is no channel_class-vs-actual comparison to make for it.
+    .ops_compaction; environment-taxonomy.yaml's conformance.prod_class). The prod class
+    additionally gets a completeness check (governed_channel + break_glass_only both populated)
+    since its channel_class value ("decoupled_build_pipeline") does not use the ducklake class's
+    _decoupled/_coupled suffix convention, so there is no channel_class-vs-actual comparison to
+    make for it.
 """
 
 from __future__ import annotations
@@ -28,14 +30,6 @@ _DUCKLAKE_TF_GLOB = "ducklake*.tf"
 _PROD_TF_GLOB = "prod_lambdas.tf"
 _IGNORE_CHANGES_RE = re.compile(r"ignore_changes\s*=\s*\[[^\]]*source_code_hash[^\]]*\]")
 _FUNCTION_BLOCK_RE = re.compile(r'resource\s+"aws_lambda_function"\s+"(\w+)"\s*\{')
-
-# The prod class's conformance paragraph is worded distinctly ("(prod class") so this marker
-# never collides with the ducklake paragraph's plain "**Conformance status" marker below --
-# re.search always returns the FIRST match, and the ducklake paragraph is written earlier in
-# section 5, so the unqualified ducklake marker keeps resolving to the ducklake paragraph
-# regardless of where the prod paragraph sits.
-_DUCKLAKE_TAXONOMY_MARKER = r"\*\*Conformance status"
-_PROD_TAXONOMY_MARKER = r"\*\*Conformance status \(prod class"
 
 _PROD_CHANNEL_KEYS = ("prod_functions", "ops_compaction")
 
@@ -177,49 +171,48 @@ def _prod_channels_complete(failed: list[str]) -> bool:
 
 def _taxonomy_state(
     failed: list[str],
-    marker: str = _DUCKLAKE_TAXONOMY_MARKER,
+    class_key: str = "ducklake_class",
     label: str = "ducklake",
 ) -> bool | None:
-    """Parse environment-taxonomy.md for a '<marker>' paragraph (scoped narrower than all of
-    section 5, which may legitimately discuss layers' coupling separately) for a whole-word
-    DECOUPLED or COUPLED marker. Word-boundary matching means \\bCOUPLED\\b does not
-    false-positive inside DECOUPLED (no boundary between the 'E' and 'C').
+    """Read docs/contracts/environment-taxonomy.yaml's typed conformance.<class_key> field.
 
-    Generalised (T2.43) via marker + label so the same paragraph-parsing logic serves both the
+    Generalised (T2.43) via class_key + label so the same typed-field read serves both the
     ducklake class (default args, unchanged behaviour) and the prod class
-    (marker=_PROD_TAXONOMY_MARKER, label="prod")."""
-    path = _common.ROOT / "docs" / "contracts" / "environment-taxonomy.md"
+    (class_key="prod_class", label="prod"). A MISSING key fails loudly rather than defaulting --
+    a typed read that silently defaults on a missing key is exactly the silent-pass shape this
+    check must not introduce (CFG-11 conversion)."""
+    import yaml as _yaml  # noqa: PLC0415
+
+    path = _common.ROOT / "docs" / "contracts" / "environment-taxonomy.yaml"
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        failed.append(f"Deploy-channel conformance: cannot read {path}: {exc}")
+        data = _yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, _yaml.YAMLError) as exc:
+        failed.append(f"Deploy-channel conformance: cannot read/parse {path}: {exc}")
         return None
 
-    para_match = re.search(marker + r".*?(?=\n\n|\Z)", text, re.DOTALL)
-    if not para_match:
-        failed.append(f"Deploy-channel conformance: {path} has no '{label}' conformance-status paragraph.")
-        return None
-    paragraph = para_match.group(0)
-
-    has_decoupled = re.search(r"\bDECOUPLED\b", paragraph) is not None
-    has_coupled = re.search(r"\bCOUPLED\b", paragraph) is not None
-    if has_decoupled and has_coupled:
+    conformance = (data or {}).get("conformance") if isinstance(data, dict) else None
+    if not isinstance(conformance, dict) or class_key not in conformance:
         failed.append(
-            f"Deploy-channel conformance: {path} {label} conformance-status paragraph contains both "
-            "DECOUPLED and COUPLED markers -- ambiguous conformance status."
+            f"Deploy-channel conformance: {path} missing conformance.{class_key} -- cannot determine "
+            f"claimed {label} conformance state."
         )
         return None
-    if has_decoupled:
+
+    value = conformance.get(class_key)
+    if value == "DECOUPLED":
         return True
-    if has_coupled:
+    if value == "COUPLED":
         return False
-    failed.append(f"Deploy-channel conformance: {path} {label} conformance-status paragraph has no DECOUPLED/COUPLED marker.")
+    failed.append(
+        f"Deploy-channel conformance: {path} conformance.{class_key} value {value!r} is neither "
+        "'DECOUPLED' nor 'COUPLED' -- ambiguous conformance status."
+    )
     return None
 
 
 @registry.register("validate_deploy_channel_conformance", owner="platform")
 def validate_deploy_channel_conformance(failed: list[str]) -> None:
-    """Fail if build-lambda.yaml or environment-taxonomy.md disagree with the actual
+    """Fail if build-lambda.yaml or environment-taxonomy.yaml disagree with the actual
     terraform/personal ignore_changes=[source_code_hash] state, for EITHER the ducklake class or
     the prod class (T2.43 -- closes the ducklake-only blind spot)."""
     print("\n=== Deploy-channel conformance gate (Decision 125/126) ===")
@@ -240,23 +233,24 @@ def validate_deploy_channel_conformance(failed: list[str]) -> None:
             )
         if taxonomy_state != actual:
             failed.append(
-                "Deploy-channel conformance: environment-taxonomy.md section 5 claims "
+                "Deploy-channel conformance: environment-taxonomy.yaml conformance.ducklake_class claims "
                 f"{'DECOUPLED' if taxonomy_state else 'COUPLED'} but terraform/personal is actually "
-                f"{'decoupled' if actual else 'coupled'} -- update the conformance-status paragraph."
+                f"{'decoupled' if actual else 'coupled'} -- update the conformance.ducklake_class field."
             )
 
     # --- prod class (T2.43 extension) ---
     actual_prod = _actual_decoupled_state(failed, glob_pattern=_PROD_TF_GLOB, class_label="prod")
-    prod_taxonomy_state = _taxonomy_state(failed, marker=_PROD_TAXONOMY_MARKER, label="prod")
+    prod_taxonomy_state = _taxonomy_state(failed, class_key="prod_class", label="prod")
     _prod_channels_complete(failed)
 
     if actual_prod is not None and prod_taxonomy_state is not None and prod_taxonomy_state != actual_prod:
         failed.append(
-            "Deploy-channel conformance: environment-taxonomy.md section 5's prod-class paragraph "
+            "Deploy-channel conformance: environment-taxonomy.yaml conformance.prod_class "
             f"claims {'DECOUPLED' if prod_taxonomy_state else 'COUPLED'} but terraform/personal is "
-            f"actually {'decoupled' if actual_prod else 'coupled'} -- update the prod conformance-status paragraph."
+            f"actually {'decoupled' if actual_prod else 'coupled'} -- update the conformance.prod_class field."
         )
 
+    registry.examined(2, unit="deploy_channel_classes")
     if len(failed) == pre_count:
         print(
             "  PASS: docs and terraform/personal agree "

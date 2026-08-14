@@ -177,13 +177,13 @@ entries:
       mode: exists
   - check_id: environment-taxonomy-stale-lambda-note-removed
     primitive_slot: grep_count
-    guard_target: docs/contracts/environment-taxonomy.md
+    guard_target: docs/contracts/environment-taxonomy.yaml
     guard_symbol: null
     plan_slug: lambda-deploy-channel-defaults
     graduated_at: "2026-07-10"
     graduated_by: implement-agent
     check_spec:
-      path: docs/contracts/environment-taxonomy.md
+      path: docs/contracts/environment-taxonomy.yaml
       pattern: No such Lambda exists today
       operator: eq
       count: 0
@@ -1268,17 +1268,26 @@ entries:
         grep -q LAMBDA_ARTIFACT_SHA .github/workflows/terraform-apply-sandbox.yml && grep -qF 'lambda-packages/$' .github/workflows/terraform-apply-sandbox.yml && grep -q LAMBDA_ARTIFACT_SHA .github/workflows/reconcile.yml
   - check_id: env-taxonomy-section6-lockfile-committed
     primitive_slot: command_exit_zero
-    guard_target: docs/contracts/environment-taxonomy.md
+    guard_target: docs/contracts/environment-taxonomy.yaml
     guard_symbol: null
     plan_slug: terraform-t2-42-path-hardening
     graduated_at: '2026-07-21'
     graduated_by: implement-agent
     check_spec:
+      # Re-expressed against the YAML structure (CFG-11 conversion): the markdown section-6 awk
+      # extraction cannot match YAML (no column-0 "## 6." heading exists in the converted file --
+      # section 6 is the `lockfile` top-level key), so this reads that key directly instead of a
+      # path-swapped awk range.
       command:
-      - sh
+      - bin/venv-python
       - -c
       - |
-        sec=$(awk '/^## 6\./{f=1} /^## 7\./{f=0} f' docs/contracts/environment-taxonomy.md); printf '%s' "$sec" | grep -qi committed && printf '%s' "$sec" | grep -qF '.terraform.lock.hcl' && ! printf '%s' "$sec" | grep -qF 'RECOMMENDED (non-blocking, follow-on): un-ignore and commit'
+        import yaml
+        d = yaml.safe_load(open("docs/contracts/environment-taxonomy.yaml", encoding="utf-8"))
+        sec = str(d.get("lockfile", ""))
+        assert "committed" in sec.lower(), "lockfile section missing 'committed'"
+        assert ".terraform.lock.hcl" in sec, "lockfile section missing '.terraform.lock.hcl'"
+        assert "RECOMMENDED (non-blocking, follow-on): un-ignore and commit" not in sec
   - check_id: convergence-record-write-single-copy
     primitive_slot: command_exit_zero
     guard_target: .github/actions/write-convergence-record/action.yml
@@ -2256,13 +2265,13 @@ entries:
       node_id: tests/test_convergence_infra_error_acceptance.py::test_dispatch_ref_side_checkout_wiring
   - check_id: environment-taxonomy-records-infra-error
     primitive_slot: grep_count
-    guard_target: docs/contracts/environment-taxonomy.md
+    guard_target: docs/contracts/environment-taxonomy.yaml
     guard_symbol: null
     plan_slug: convergence-red-artifact-fetch
     graduated_at: '2026-07-26'
     graduated_by: implement-agent
     check_spec:
-      path: docs/contracts/environment-taxonomy.md
+      path: docs/contracts/environment-taxonomy.yaml
       pattern: infra_error
       operator: gte
       count: 1
@@ -5583,3 +5592,169 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/checks/roadmap/test_check_graduation_guard.py::TestBaseDerivation
+  - check_id: contract-census-declared-includes-env-taxonomy
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/contract-population.yaml
+    guard_symbol: null
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      # Asserts environment-taxonomy.yaml's OWN bucket classification (class_d shape,
+      # non-active status, non-grandfathered evaluator, evaluator resolves -- the precise
+      # definition of the population gate's "declared" bucket), rather than pinning the
+      # whole-repo census line's exact total -- a repo-wide `declared=N` total is a shared
+      # resource other concurrent contract conversions also move, and pinning it here would
+      # make this permanent guard spuriously fail on every unrelated future contract addition.
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml
+        from pathlib import Path
+        from scripts.checks.contracts import _population
+        from scripts.contracts import load_contract_meta
+        from scripts.checks.contracts.validate_contract_drift import validate_contract_drift
+        failed = []
+        validate_contract_drift(failed)
+        assert failed == [], failed
+        p = Path('docs/contracts/environment-taxonomy.yaml')
+        data = yaml.safe_load(p.read_text(encoding='utf-8'))
+        shape = _population.classify_file(data)
+        assert shape == 'class_d', shape
+        meta = load_contract_meta(p)
+        assert meta.status.value != 'active', meta.status.value
+        assert meta.evaluator.none_grandfathered is None, 'grandfather-only evaluator form'
+        resolves, detail = _population.resolve_evaluator('environment-taxonomy.yaml', meta.evaluator, root=Path('.'))
+        assert resolves, detail
+        print('DECLARED-OK')
+  - check_id: env-taxonomy-evaluator-resolves
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/environment-taxonomy.yaml
+    guard_symbol: null
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from pathlib import Path
+        from scripts.checks.contracts import _population
+        from scripts.contracts import load_contract_meta
+        m = load_contract_meta(Path('docs/contracts/environment-taxonomy.yaml'))
+        r, d = _population.resolve_evaluator('environment-taxonomy.yaml', m.evaluator, root=Path('.'))
+        print(r, d)
+        assert r, d
+  - check_id: deploy-channel-conformance-missing-key-fails
+    primitive_slot: test_selector
+    guard_target: scripts/checks/ops_governance/validate_deploy_channel_conformance.py
+    guard_symbol: _taxonomy_state
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ops_governance/test_validate_deploy_channel_conformance.py::TestValidateDeployChannelConformance::test_ducklake_missing_conformance_key_fails
+  - check_id: env-taxonomy-md-no-live-citations
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/environment-taxonomy.yaml
+    guard_symbol: null
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - sh
+      - -c
+      - |
+        git grep -l "environment-taxonomy\.md" -- . ':!audits/' ':!docs/plans/' ':!docs/audit-prompts/' ':!docs/DECISIONS.md' ':!docs/decisions-index.json' | tee /dev/stderr | wc -l | grep -qx 0
+  - check_id: env-taxonomy-md-deleted-and-delisted
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/file-router.yaml
+    guard_symbol: null
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      # Token-split (name/ext) so this check_spec's own text never contains the retired
+      # contract's basename joined to its old extension as one contiguous substring -- that
+      # exact join is what the sibling env-taxonomy-md-no-live-citations check sweeps for
+      # repo-wide, and a registry entry whose own definition must reference the retired
+      # filename would otherwise self-trip it.
+      command:
+      - sh
+      - -c
+      - |
+        name="environment-taxonomy"; ext=".md"
+        test ! -f "docs/contracts/${name}${ext}" && ! grep -q "${name}${ext}" docs/contracts/file-router.yaml && echo CLEAN
+  - check_id: env-taxonomy-yaml-within-contracts-class
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/environment-taxonomy.yaml
+    guard_symbol: null
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        from scripts.checks.structural import _classify
+        import pathlib
+        p='docs/contracts/environment-taxonomy.yaml'
+        t=pathlib.Path(p).read_text(encoding='utf-8')
+        e=_classify.effective_lines(t)
+        L=_classify.longest_line(t)
+        c=_classify.classify_path(p, text=t)
+        reg=pathlib.Path('config/structural_size_budgets.yaml').read_text(encoding='utf-8')
+        print(c, e, L)
+        assert c == 'contracts', c
+        assert e <= 500, e
+        assert L <= 2000, L
+        assert p not in reg, 'a budgets entry was added -- use the defer-detail relief valve instead'
+  - check_id: t-1-19-ledger-upgraded
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - |
+        import yaml
+        from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap
+        f=[]
+        validate_platform_roadmap(f)
+        assert not f, f
+        d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+        t=[i for i in d['tier_items'] if i['id']=='T-1.19'][0]
+        assert t['status']=='deferred_post_mvp', t['status']
+        assert all(isinstance(c, dict) and 'id' in c for c in t['exit_criteria']), t['exit_criteria']
+        assert not any('docs/REPORT-' in p for p in t['files_in_scope']), t['files_in_scope']
+        print('T-1.19 OK')
+  - check_id: env-taxonomy-yaml-allowlisted-by-lint
+    primitive_slot: test_selector
+    guard_target: scripts/checks/iam_tf/validate_environment_taxonomy.py
+    guard_symbol: validate_environment_taxonomy
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/iam_tf/test_validate_environment_taxonomy.py::TestValidateEnvironmentTaxonomy::test_taxonomy_yaml_allowlisted
+  - check_id: env-taxonomy-no-dangling-anchor-refs
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/environment-taxonomy.yaml
+    guard_symbol: null
+    plan_slug: cfg-11-environment-taxonomy-conversion
+    graduated_at: "2026-08-13"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - sh
+      - -c
+      - |
+        test -z "$(git grep -nE 'environment-taxonomy[^ \"]*#' -- . ':!audits/' ':!docs/plans/' ':!docs/audit-prompts/' ':!docs/DECISIONS.md' ':!docs/decisions-index.json')" && test -z "$(git grep -nE 'environment-taxonomy\.yaml.{0,60}[Ss]ection [0-9]' -- . ':!audits/' ':!docs/plans/' ':!docs/audit-prompts/' ':!docs/DECISIONS.md' ':!docs/decisions-index.json')" && echo NO-DANGLING-ANCHORS

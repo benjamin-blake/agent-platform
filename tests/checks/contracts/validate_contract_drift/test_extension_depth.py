@@ -44,14 +44,18 @@ class TestExtensionDepth:
         validate_contract_drift(failed, contracts_dir=tmp_path)
         assert any("sub/nested.yaml" in f and "extension" in f for f in failed), failed
 
-    def test_two_baseline_md_members_pass_as_grandfathered(self, tmp_path, install_fake_git, write_contract, FakeGit) -> None:
+    def test_single_baseline_md_member_passes_as_grandfathered(
+        self, tmp_path, install_fake_git, write_contract, FakeGit
+    ) -> None:
+        """The environment-taxonomy markdown contract was converted to the declared Class D contract
+        environment-taxonomy.yaml (CFG-11 conversion) -- delegate-cli.md is now the sole
+        remaining baseline-present grandfathered .md member."""
         write_contract(tmp_path, "delegate-cli.md", "# delegate cli\n")
-        write_contract(tmp_path, "environment-taxonomy.md", "# env taxonomy\n")
         install_fake_git(
             FakeGit(
                 merge_base_rc=0,
                 merge_base="BASE0000",
-                ls_tree=["docs/contracts/delegate-cli.md", "docs/contracts/environment-taxonomy.md"],
+                ls_tree=["docs/contracts/delegate-cli.md"],
             )
         )
         failed: list[str] = []

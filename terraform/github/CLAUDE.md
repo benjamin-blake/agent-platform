@@ -12,7 +12,7 @@ protection), the `main` branch-protection ruleset, Actions permissions, and the
 
 The `terraform-apply-sandbox.yml` workflow path filter is `terraform/personal/**`. This module
 (`terraform/github/**`) matches nothing in that filter and is intentionally excluded. Adding it
-to any auto-apply workflow is FORBIDDEN (Decision 77 / `docs/contracts/environment-taxonomy.md`):
+to any auto-apply workflow is FORBIDDEN (Decision 77 / `environment-taxonomy.yaml`):
 `terraform_apply_guard.py` is AWS-IAM-only and cannot inspect `github_*` resource diffs; a
 branch-protection change applied ungated could lock out the push-to-main flow the workflow depends
 on. Apply this module locally, by hand, every time.

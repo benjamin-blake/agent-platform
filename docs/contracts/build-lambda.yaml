@@ -18,7 +18,14 @@ contract:
   evaluator:
     check: validate_deploy_channel_conformance
 
-amendment_log: []
+amendment_log:
+  - date: "2026-08-13"
+    semantic_break: false
+    change_class: prose_improvement
+    summary: >-
+      CFG-11 conversion: deploy_channels.ducklake_functions.see repointed from the deleted
+      deleted markdown contract's anchor to the environment-taxonomy.yaml conformance key
+      path.
 
 version: 1
 contract_version: 1
@@ -97,14 +104,14 @@ verified_against:
   - "scripts/build_lambda.py (LAMBDA_SIZE_LIMIT_BYTES, _LAMBDA_FUNCTION_NAMES, _OPS_COMPACTION_FUNCTION_NAME, _OPS_COMPACTION_ZIP_KEY, _DUCKLAKE_FUNCTION_ZIP_KEYS, DUCKLAKE_LAYER_NAMES, build_parser() flags)"
 
 # Deploy CHANNEL per build-artifact class (Decision 125). Pointer-only: the authoritative
-# apply-model / guard classification lives SOLELY in docs/contracts/environment-taxonomy.md
+# apply-model / guard classification lives SOLELY in docs/contracts/environment-taxonomy.yaml
 # section 5 (Decision 92 point 5 sole-SoT) -- this section names which channel-class each
 # artifact belongs to, it does not restate the classification itself.
 deploy_channels:
   ducklake_functions:  # ducklake_function_zip_keys targets above
     root: terraform/personal
     channel_class: terraform_personal_ignore_changes_decoupled  # #544 landed the decoupling (Decision 125/126)
-    see: docs/contracts/environment-taxonomy.md#5-lambda-codeinfra-decoupling-principle-personal-account-lambdas
+    see: docs/contracts/environment-taxonomy.yaml (conformance)
     governed_channel: .github/workflows/deploy-ducklake-lambdas.yml  # T2.38 (five-job split, hotfix follow-up to the 2026-07-24 ops_decisions incident): the DEFAULT channel -- push-to-main (ducklake source paths) or workflow_dispatch; assumes the merged agent-platform-github-ci-deploy role (T2.49 / DEP-12, UpdateFunctionCode-only on function:agent-platform-*). deploy-maintenance builds+uploads ALL artifacts once and deploys maintenance + maintenance-smoke (ungated) -> maintenance-smoke + reconcile-gate (the latter invoking validate_reconcile_pending_gate --deploy-gate, refusing the serving leg while any reconcile_scope=ducklake table has a non-empty pending_reconcile) -> deploy-serving (--ducklake-deploy-only for writer/reader/catalog-dr) -> smoke (--lambda-attach/--lambda-reader)
     break_glass_only: "bin/venv-python -m scripts.build_lambda --ducklake-only --deploy"  # genuinely NON-DEFAULT now that governed_channel exists (T2.38) -- retained as a fallback for when the governed channel cannot run (mirrors the agent_platform_admin human-gated IAM-apply precedent), not the routine agent path
   prod_functions:  # data-pipeline.zip targets above

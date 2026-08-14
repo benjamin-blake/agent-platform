@@ -1208,7 +1208,7 @@ candidate_decisions:
       - "Each of T2.20-T2.25 is a standalone IMPLEMENTATION plan (Decision 67 STRATEGIC suspension); none authored STRATEGIC."
       - "Ratified at Wave 1 as Decision 92 (2026-06-19) via the DECISIONS.md-edit + --backfill-decisions-md path, superseding this candidate's pending_log_decision_lambda clause (Decision 84 + Decision 90/91 precedent)."
       - "The Environment reviewer gate is an authorization boundary, not a routine quality gate: post-T2.25 only out-of-budget / trust-policy / destroy changes route to it (in-budget IAM auto-passes under the bootstrap-defined permissions boundary + guard budget). Environment escalation through the future-state platform promotion train is NOT a substitute (it verifies behavior, not authority); subagent review at the gate is advisory, never the lock. (Amended 2026-06-10; detail points 6-9.)"
-    enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; pipeline-writer-identity-only write-IAM; record in its own S3 prefix outside tfstate/; applies serialized via concurrency group; red clears only via workflow_dispatch acknowledge-and-retry; refusals dedupe against the open rec) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (github_ci_apply OIDC trust lists refs/heads/main AND environment:tf-gated-apply per Decision 94/VP9); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); authority budget post-T2.23/T2.25: permissions boundary on github_ci_apply + boundary-propagation condition keys + deterministic in-budget/out-of-budget guard classification, definitions resident in terraform/bootstrap/ (pipeline-unwritable), Environment gate reserved for out-of-budget changes and budget amendments, ratchet widen-on-track-record / narrow-on-incident; apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.md; ratified via a numbered Decision when T2.20 ships."
+    enforcement_mechanism: "Server-side convergence precondition (apply refuses on red record; always-run red-on-failure write; pipeline-writer-identity-only write-IAM; record in its own S3 prefix outside tfstate/; applies serialized via concurrency group; red clears only via workflow_dispatch acknowledge-and-retry; refusals dedupe against the open rec) + advisory terraform-converged status; net-new least-priv fork-gated github_ci_plan role for speculative plan + apply-saved-plan (terraform serial-staleness fail-closed, stale=STOP); GitHub Environment required-reviewer gating job execution for the guard fail-closed set (github_ci_apply OIDC trust lists refs/heads/main AND environment:tf-gated-apply per Decision 94/VP9); terraform/bootstrap/ privilege tier for the CI/CD role own IAM (absorbs rec-2079); authority budget post-T2.23/T2.25: permissions boundary on github_ci_apply + boundary-propagation condition keys + deterministic in-budget/out-of-budget guard classification, definitions resident in terraform/bootstrap/ (pipeline-unwritable), Environment gate reserved for out-of-budget changes and budget amendments, ratchet widen-on-track-record / narrow-on-incident; apply-failure -> ci-rca, drift -> ops portal (alarm-only); apply-model convention consolidated to environment-taxonomy.yaml; ratified via a numbered Decision when T2.20 ships."
 
   - id: CD.36
     title: Recommendation relevance is a governed lifecycle state, not an executor judgement
@@ -1959,16 +1959,37 @@ tier_items:
     files_in_scope:
       - docs/contracts/delegate-cli.yaml
       - docs/contracts/delegate-cli.md
-      - docs/REPORT-delegate-cli-consumer-identification.md
+      - docs/plans/reports/REPORT-delegate-cli-consumer-identification.md
     exit_criteria:
-      - "REPORT deliverable enumerates all current uses of delegate-cli in the codebase (grep audit)"
-      - "Plan either (a) identifies a canonical consumer + lands the YAML conversion wired to it, OR (b) documents 'no consumer; defer conversion' in the REPORT and leaves the .md in place pending future consumer"
-      - "Step 10 multi-perspective critique converges"
+      - id: c1
+        text: "REPORT deliverable enumerates all current uses of delegate-cli in the codebase (grep audit)"
+        status: open
+      - id: c2
+        text: "Plan either (a) identifies a canonical consumer + lands the YAML conversion wired to it, OR (b) documents 'no consumer; defer conversion' in the REPORT and leaves the .md in place pending future consumer"
+        status: open
+      - id: c3
+        text: "Step 10 multi-perspective critique converges"
+        status: open
     related_candidate_decisions: [CD.25]
     effort: S
     strategic: false
     status: deferred_post_mvp
     progress_note: "Parked deferred_post_mvp (Decision 93; MVP-triage audit 7d57a0d / RMAP-28): Contract-conversion tail with a self-describing fallback ('no consumer; defer conversion'). No consumer of delegate-cli is required to close a loop iteration. Transitive active dependents: none. Deferral valid under the no-live-dep rule. Reactivate post-MVP (the consumer-identification grep can run at reactivation)."
+    note: >-
+      CFG-11 dedup correction (2026-08-13): the CFG-11 audit finding's roadmap_crossref recorded
+      dedup_hit_count: 0 with the note "no owner covers the .md pair's gate invisibility" -- that
+      was WRONG. This item already owned delegate-cli.md's eventual conversion; the audit artifact
+      is write-once and is not edited, so the correction is recorded here instead. Following the
+      CFG-11 conversion of the now-deleted environment-taxonomy markdown contract to
+      environment-taxonomy.yaml, delegate-cli.md is now the SOLE remaining baseline .md contract:
+      still outside the Class D population census
+      (contract-population.yaml's grandfathered .md allowlist) and, because
+      config/structural_size_budgets.yaml drops .md at layer 1, outside the structural size engine
+      too. At 35 effective lines / 2,908 bytes this carries no realistic size risk today, and this
+      item's eventual conversion closes BOTH holes for free (a converted docs/contracts/*.yaml
+      classifies into the contracts size class automatically) -- a conscious deferral, not an
+      oversight. This item has never ruled convert-vs-RETIRE for delegate-cli.md; that call is
+      still open for whichever session reactivates this item post-MVP.
 
   - id: T-1.20
     tier: T-1
@@ -4406,11 +4427,11 @@ tier_items:
   - id: T2.25
     tier: T2
     name: "Terraform CI/CD: convention synchronization + guard narrowing + confirm CD.35 ratification (Wave X)"
-    intent: "Consolidate the apply-model convention (today duplicated across AGENTS.md:24, terraform/CLAUDE.md:10, and docs/contracts/environment-taxonomy.md:35-36) into environment-taxonomy.md as the single source of truth; reduce AGENTS.md + terraform/CLAUDE.md to a one-line reference; light-touch the implement skill's..."
+    intent: "Consolidate the apply-model convention (today duplicated across AGENTS.md:24, terraform/CLAUDE.md:10, and docs/contracts/environment-taxonomy.yaml (axis_a / guard_classification)) into environment-taxonomy.yaml as the single source of truth; reduce AGENTS.md + terraform/CLAUDE.md to a one-line reference; light-touch the implement skill's..."
     depends_on: [T2.20, T2.21, T2.22, T2.23]
     files_in_scope: []
     exit_criteria:
-      - "The apply-model statement lives in ONE source of truth (environment-taxonomy.md); the others reference it; prompt_compliance.py passes"
+      - "The apply-model statement lives in ONE source of truth (environment-taxonomy.yaml); the others reference it; prompt_compliance.py passes"
       - "The guard is narrowed to plan-content policy; native controls (required checks + Environment) own authorization (INTENT 5.9 division verified)"
       - "The guard classifies IAM diffs against the bootstrap-defined budget: an in-budget IAM change auto-applies; an out-of-budget change routes to the tf-gated-apply Environment (both demonstrated)"
       - "Ratchet criteria (widen-on-track-record per change-class, narrow-on-incident, budget amendments via bootstrap tier only) are stated in the ratification Decision text; concrete authority-budget/ratchet classification is present in Decision 92 or a filed amendment"
@@ -5186,7 +5207,7 @@ tier_items:
       - id: c1
         text: >-
           docs/contracts/deploy-paths.yaml exists as a navigation index registered in
-          file-router.yaml, pointing to environment-taxonomy.md for guard classification
+          file-router.yaml, pointing to environment-taxonomy.yaml for guard classification
           rather than restating it
         status: met
         met_by: deployment-model-foundation
@@ -5267,7 +5288,7 @@ tier_items:
     intent: |
       Close the residual terraform/personal supply-chain and drift gaps surfaced by the Fable
       review: an undocumented aws_lambda_layer_version replace policy, an uncommitted provider
-      lock file (environment-taxonomy.md section 6), a fixed (non-content-addressed) S3 key for
+      lock file (environment-taxonomy.yaml lockfile), a fixed (non-content-addressed) S3 key for
       uploaded Lambda zips, and un-deduped/untested workflow bash for the build step (rec-2659).
     depends_on: []
     files_in_scope:
@@ -5286,7 +5307,7 @@ tier_items:
       - id: c2
         text: >-
           terraform/personal/.terraform.lock.hcl is committed (un-ignored) so the apply runner
-          pins provider versions to a reviewed lock, per environment-taxonomy.md section 6
+          pins provider versions to a reviewed lock, per environment-taxonomy.yaml lockfile
         status: open
       - id: c3
         text: >-
@@ -5345,9 +5366,9 @@ tier_items:
       - id: c5
         text: >-
           docs/contracts/build-lambda.yaml deploy_channels.prod_functions / .ops_compaction carry
-          governed_channel + break_glass_only; environment-taxonomy.md section 5 covers the prod
-          class's conformance status; validate_deploy_channel_conformance.py validates the prod
-          class (same registration, no registry churn)
+          governed_channel + break_glass_only; environment-taxonomy.yaml conformance covers the
+          prod class's conformance status; validate_deploy_channel_conformance.py validates the
+          prod class (same registration, no registry churn)
         status: met
         met_by: prod-lambda-provision-deploy-channel
       - id: c6
@@ -5626,7 +5647,7 @@ tier_items:
       - terraform/personal/oidc.tf
       - terraform/personal/platform_roles.tf
       - scripts/checks/iam_tf.py
-      - docs/contracts/environment-taxonomy.md
+      - docs/contracts/environment-taxonomy.yaml
       - docs/DECISIONS.md  # re-ground Decision 143's exec-role-CREATE mechanism text; record the 98/92 amendments as realized
     exit_criteria:
       - id: c1

@@ -2628,6 +2628,14 @@ prose-architecture doc; this Decision is the rationale record, `environment-taxo
 sole classification SoT), Decision 55 / Decision 72 (RCA-first; the physical decoupling and the
 masked-drift observability gap are follow-on recs, never inline-patched here).
 
+> **Update (2026-08-13):** `docs/contracts/environment-taxonomy.md` (this Decision's own title
+> parenthetical, unedited per Decision 149 never-remove-headers) was converted to the declared
+> Class D contract `docs/contracts/environment-taxonomy.yaml` (CFG-11 conversion, per Decision
+> 168's Class D mechanism). Section 5's conformance-status content is now the typed
+> `conformance.ducklake_class` / `conformance.prod_class` fields; the content this Decision
+> ratifies conformance to is unchanged -- only the file format and path changed; cite
+> `docs/contracts/environment-taxonomy.yaml` going forward.
+
 ---
 
 ## Decision 124: Ratify extending the Decision 80 pt 3 / Decision 104 facade-decomposition pattern to the ops-data layer (Decided)
@@ -4889,6 +4897,12 @@ sandbox where no real capital is at risk.
 Integration), Decision 73 (Two-Tier CI + promotion train), Decision 67 (STRATEGIC deferral; its
 Lambda-deploy clause was lifted by Decision 79), Decision 72 (RCA-as-Plan-Source), Decision 89 (branch protection unavailable), CD.21 (GitHub-hosted
 OIDC CI), `docs/contracts/environment-taxonomy.md`, `docs/INTENT-ci-cd-architecture.md` section 6.
+
+> **Update (2026-08-13):** `docs/contracts/environment-taxonomy.md` was converted to the declared
+> Class D contract `docs/contracts/environment-taxonomy.yaml` (CFG-11 conversion, per Decision
+> 168's Class D mechanism). The two-axis vocabulary reservation and apply-model / guard
+> classification content named by this Decision is unchanged -- only the file format and path
+> changed; cite `docs/contracts/environment-taxonomy.yaml` going forward.
 
 ---
 

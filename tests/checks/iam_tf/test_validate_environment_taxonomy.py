@@ -55,6 +55,16 @@ class TestValidateEnvironmentTaxonomy:
         )
         assert failed == []
 
+    def test_taxonomy_yaml_allowlisted(self, tmp_path: Path) -> None:
+        """The converted Class D contract (CFG-11 conversion) is allowlisted at its NEW path --
+        it legitimately spans both axes and must not trip its own vocabulary lint."""
+        failed = self._run(
+            tmp_path,
+            {"docs/contracts/environment-taxonomy.yaml": "axis_a:\n  sandbox:\n    apply_gating: sandbox phase\n"},
+            ["docs/contracts/environment-taxonomy.yaml"],
+        )
+        assert failed == []
+
     def test_github_and_tests_paths_skipped(self, tmp_path: Path) -> None:
         failed = self._run(
             tmp_path,
