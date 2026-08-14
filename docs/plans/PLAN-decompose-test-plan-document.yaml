@@ -363,12 +363,12 @@ verification_plan:
       fabricated repoint.
     command: 'bin/venv-python -c "import pathlib,sys; p=pathlib.Path(''config/agent/verification_registry/registry.yaml''); eff=len([l for l in p.read_text(encoding=''utf-8'').splitlines() if l.strip() and not l.strip().startswith(chr(35))]); print(''effective'',eff,''budget 6000''); sys.exit(0 if eff<6000 else 1)"'
     expected: >-
-      Effective line count under 6000 (5,566 at plan time; ~5,592 after 2 graduated rows land);
+      Effective line count under 6000 (5,655 at plan time; ~5,681 after 2 graduated rows land);
       exits 0.
     fix_if: >-
       At or above 6000. Do NOT raise the budget in config/structural_size_budgets.yaml --
       Decision 166 point 6 pre-commits the response to the CD.29 mark-then-drop archival
-      lifecycle, NEVER a second raise. This plan adds only 2 rows against 434 lines of headroom,
+      lifecycle, NEVER a second raise. This plan adds only 2 rows against 345 lines of headroom,
       so exceeding the cap means far more was appended than planned; remove the excess.
     hermetic: true
     graduation: waive
@@ -583,9 +583,9 @@ context:
     because their guarded cases do not exist on origin/main, so the revert leg fails honestly.
   - >-
     DECISION 166 CEILING (scout WARN). config/agent/verification_registry/registry.yaml is at
-    5,566 effective lines against the 6000 budget declared at
-    config/structural_size_budgets.yaml:184 (# raise-approved: dec-166) -- 434 lines of headroom,
-    and 430 entries measure ~12.9 lines per row. This plan adds 2 rows (~26 lines, ~6% of
+    5,655 effective lines against the 6000 budget declared at
+    config/structural_size_budgets.yaml:184 (# raise-approved: dec-166) -- 345 lines of headroom,
+    and 437 entries measure ~12.9 lines per row. This plan adds 2 rows (~26 lines, ~8% of
     headroom); the ceiling is NOT a reason to decline graduation (Decision 166 point 6
     pre-commits ceiling pressure to archival, not to withholding guards). Step 10 asserts the cap
     holds.
@@ -607,8 +607,15 @@ context:
     TestLoader 4, TestCli 4, TestValidateIntegration 3 (= 11); TestClosesCriteria 11,
     TestGraduationDisposition 12, TestFallbackReevaluation 13 (= 36); TestTestObligations 23.
   - >-
-    Branch was 0 commits behind origin/main at planning time; no Scope file overlapped
-    main_files_changed_since_branch, so no rebase was deferred.
+    Branch was 0 commits behind origin/main at planning time. It was later rebased onto
+    origin/main (PLAN-class-d-enforcers-wave-2, #907), which DID touch one scope file --
+    config/agent/verification_registry/registry.yaml grew from 5,566 to 5,655 effective lines
+    (437 entries, headroom 434 -> 345). Every substantive baseline was re-verified post-rebase and
+    is unchanged: all 11 repoint check_ids still present, step 6 counts still 4/5/1/1/1, step 7
+    still 7 dangling rows excluding the superseded one, still 5 rows carrying
+    guard_target: scripts/roadmap/plan_document.py, and neither new graduated check_id collides.
+    Only the size figures were restated. Re-check the ceiling figure at implement time if main has
+    advanced again -- step 10 asserts the bound, not the stated number.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
