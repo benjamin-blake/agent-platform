@@ -153,6 +153,16 @@ scope:
   - file: tests/checks/hygiene/test_validate_licence_consistency.py
     action: Create
     purpose: Mirror test (registration surface 6); must reach 100% line coverage on the new module.
+  - file: tests/session/test_github_readiness.py
+    action: Create
+    purpose: >-
+      github_readiness.py has NO mirror test today, so a Modify row would fail the changed-file
+      100%-coverage gate outright (coverage reports the module never imported).
+  - file: tests/checks/misc/test_validate_ghas_probe.py
+    action: Modify
+    purpose: >-
+      Top up validate_ghas_probe.py from 91% to 100%; the changed-file coverage gate admits no
+      partial coverage on a touched module.
   - file: tests/convergence_health/test_approvals.py
     action: Modify
     purpose: Keep changed-file line coverage at 100% for approvals.py.
@@ -189,9 +199,14 @@ infrastructure_dependencies:
     redeploy would ship a doc tweak to a function that never runs. This waiver is explicit
     because validate_lambda_deploy_gating is advisory-only and would not have caught the omission.
   - >-
-    Provider/CLI reality in the DEV container: neither `terraform` nor `gh` is installed. Every
-    local VP step is grep/python/aws/curl only; all terraform validate/plan is CI-delegated to the
-    required terraform-validate check and the speculative-plan job (Decision 119 posture).
+    EXECUTION CONTEXT, corrected. The DEV container has no `terraform` and no `gh`; `api.github.com`
+    is EGRESS-BLOCKED (403 even unauthenticated -- the proxy README says report it, never route
+    around it); and only the agent_static/agent_platform profiles exist, so iam:GetRole and
+    cloudtrail:* are both denied. VP steps 14, 15, 16, 17, 18, 19, 20, 21 and 22 are therefore
+    ADMIN-CONTAINER steps requiring agent_platform_admin and real github.com egress -- they are not
+    runnable from a routine CC-web session, and an earlier draft wrongly implied they were. Steps
+    1-13 are DEV-runnable (grep/python/git/diff only). All terraform validate/plan stays
+    CI-delegated to the required terraform-validate check and the speculative-plan job.
 
 acceptance_criteria:
   - >-
@@ -223,7 +238,6 @@ verification_plan:
   # ---------- PR-1 pre-deploy: structural proof before any apply ----------
   - step: 1
     phase: pre-deploy
-    hermetic: true
     action: Both slugs present in the trust locals of both roots.
     command: >-
       grep -q 'benjamin-blake/theseus' terraform/personal/oidc.tf &&
@@ -241,7 +255,6 @@ verification_plan:
       delete, which would then fail on every PR after cleanup.
   - step: 2
     phase: pre-deploy
-    hermetic: true
     action: No scalar local.github_repo survivor anywhere in either root.
     command: "! grep -rn 'local\\.github_repo\\b' terraform/personal/ terraform/bootstrap/"
     expected: Exit 0 (no matches). Every sub site consumes the list local, not the old scalar.
@@ -254,7 +267,6 @@ verification_plan:
       window and is collapsed back at cleanup.
   - step: 3
     phase: pre-deploy
-    hermetic: true
     action: Decision 94 invariant -- the apply role's trust carries BOTH sub forms.
     command: >-
       grep -q 'ref:refs/heads/main' terraform/bootstrap/github_ci_apply.tf &&
@@ -268,7 +280,6 @@ verification_plan:
     graduation_check_id: bootstrap-apply-trust-both-sub-forms
   - step: 4
     phase: pre-deploy
-    hermetic: true
     action: BUSL-1.1 parameter block is complete with no unfilled placeholders.
     command: >-
       grep -q 'Business Source License 1.1' LICENSE &&
@@ -291,11 +302,10 @@ verification_plan:
       assertions a second time from a second home, creating two places to drift.
   - step: 5
     phase: pre-deploy
-    hermetic: true
     action: LICENSE-APACHE is the verbatim pre-flip Apache text, not a paraphrase.
     command: >-
-      git show origin/main:LICENSE > /tmp/pre-flip-licence.txt &&
-      diff -q /tmp/pre-flip-licence.txt LICENSE-APACHE
+      git show origin/main:LICENSE > "${TMPDIR:-/tmp}/pre-flip-licence.txt" &&
+      diff -q "${TMPDIR:-/tmp}/pre-flip-licence.txt" LICENSE-APACHE
     expected: Exit 0. LICENSE-APACHE is byte-identical to the Apache text that governed pre-flip versions.
     fix_if: >-
       Any drift means the preserved licence is not the one those versions were actually released
@@ -332,7 +342,6 @@ verification_plan:
       validate_licence_consistency.
   - step: 7
     phase: pre-deploy
-    hermetic: true
     action: COMMERCIAL-LICENSE.md is sanctioned by the prose allowlist.
     command: >-
       bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/file-router.yaml'));
@@ -349,10 +358,9 @@ verification_plan:
       a registry row would duplicate a check that already runs in both tiers.
   - step: 8
     phase: pre-deploy
-    hermetic: true
     action: The new check declares examined()/skipped() per Decision 170 and is not baselined.
     command: >-
-      grep -qE 'registry\.(examined|skipped)\(' scripts/checks/hygiene/validate_licence_consistency.py &&
+      grep -qE '(registry\.)?(examined|skipped)\(' scripts/checks/hygiene/validate_licence_consistency.py &&
       ! grep -q 'validate_licence_consistency' config/check_accounting_baseline.yaml
     expected: Exit 0. The module declares an outcome and does not appear in the frozen baseline.
     fix_if: >-
@@ -549,28 +557,38 @@ verification_plan:
       Every one of the five roles authenticates live under the new slug, including both apply-role
       sub forms. This is the gate on trust cleanup.
     command: >-
-      set -o pipefail; R=$(aws cloudtrail lookup-events
-      --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity
-      --start-time "$RENAME_TS" --max-results 500 --profile agent_platform_admin
-      --query 'Events[].CloudTrailEvent' --output text) && test -n "$R" &&
+      set -o pipefail; test -n "$RENAME_TS" || { echo "RENAME_TS unset"; exit 1; };
       for role in branch pr planner deploy apply; do
-      echo "$R" | grep -q "agent-platform-github-ci-$role"
-      || { echo "NO post-rename AssumeRoleWithWebIdentity for: $role"; exit 1; }; done;
-      echo "$R" | grep -q 'tf-gated-apply'
-      || { echo "apply role environment: sub form unproven"; exit 1; }; echo all-five-roles-ok
+      U=$(aws iam get-role --role-name "agent-platform-github-ci-$role"
+      --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
+      || { echo "READ FAILED: $role"; exit 1; };
+      test -n "$U" -a "$U" != "None" || { echo "NEVER ASSUMED: $role"; exit 1; };
+      bin/venv-python -c "import sys,datetime as d;
+      u=d.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));
+      r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
+      sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
+      || { echo "STALE -- last successful assume predates the rename: $role"; exit 1; };
+      done; echo all-five-roles-ok
     expected: >-
-      Prints all-five-roles-ok. Export RENAME_TS as the rename timestamp first, so only
-      post-rename events count. Drive the exercise deliberately: open and merge a trivial PR
-      (github_ci_pr on the PR event, github_ci_branch on push), let terraform-drift run
-      (github_ci_planner), run a governed Lambda deploy (github_ci_deploy), and drive one gated
-      apply or Reconcile (github_ci_apply, environment sub form).
+      Prints all-five-roles-ok. Export RENAME_TS (ISO-8601, UTC) as the rename timestamp first.
+      ADMIN-CONTAINER STEP -- needs agent_platform_admin. Drive the exercise deliberately before
+      running this: open and merge a trivial PR (github_ci_pr on the PR event, github_ci_branch on
+      push), let terraform-drift run (github_ci_planner), run a governed Lambda deploy
+      (github_ci_deploy), and drive one gated apply or Reconcile (github_ci_apply). The apply
+      role's two Decision 94 sub forms are NOT distinguishable from RoleLastUsed -- prove the
+      environment form separately by confirming the gated-apply JOB executed after approval.
+      RoleLastUsed lags by up to ~4 hours; re-run rather than concluding failure inside that window.
     fix_if: >-
-      Read CloudTrail, NOT workflow run conclusions. Run-level success is NOT evidence that OIDC
-      worked: the assume steps carry continue-on-error: true at terraform-drift.yml:91-92,
-      deploy-ducklake-lambdas.yml:125-126 and :300-301, and ci.yml:197-198, so a run concludes
-      success even when AssumeRoleWithWebIdentity FAILED. CloudTrail records the STS call itself
-      and cannot be masked. Any role not proven is a role whose trust may be wrong -- do NOT run
-      step 22 until all five plus both apply sub forms are observed.
+      RoleLastUsed advances ONLY on a successful sts:AssumeRoleWithWebIdentity, so it cannot be
+      satisfied by a failed assume. Two rejected alternatives, both load-bearing: (a) workflow RUN
+      conclusions are worthless here -- the assume steps carry continue-on-error: true at
+      terraform-drift.yml:91-92, deploy-ducklake-lambdas.yml:125-126 and :300-301, and
+      ci.yml:197-198, so a run concludes success even when the assume FAILED; (b) CloudTrail
+      lookup-events is DENIED to both available profiles (verified 2026-08-14; the repo records
+      this itself at terraform/bootstrap/github_ci_apply_policy.tf:493) AND would have been
+      fail-open anyway, since lookup-events returns failed AssumeRoleWithWebIdentity events with
+      the role ARN intact. Any role not proven is a role whose trust may be wrong -- do NOT run
+      step 22 until all five, plus the apply role's environment sub form, are observed.
 
   # ---------- PR-4 post-deploy: cleanup and decision sync ----------
   - step: 22
@@ -757,8 +775,8 @@ test_obligations:
       forward-only boundary statement is backed by the actual prior licence.
     verification_step: 5
     command: >-
-      git show origin/main:LICENSE > /tmp/pre-flip-licence.txt &&
-      diff -q /tmp/pre-flip-licence.txt LICENSE-APACHE
+      git show origin/main:LICENSE > "${TMPDIR:-/tmp}/pre-flip-licence.txt" &&
+      diff -q "${TMPDIR:-/tmp}/pre-flip-licence.txt" LICENSE-APACHE
     red_green_expectation: >-
       Red before the file exists or if it is paraphrased/re-wrapped, green when byte-identical to
       the pre-flip LICENSE.
@@ -1052,6 +1070,15 @@ context:
     info string. Pick one deliberately. A second fence also costs bytes against the hard 6,144-byte
     cap, which is the binding constraint here -- prefer the plain marker unless monitoring is
     genuinely wanted.
+  - >-
+    HERMETIC MARKERS DELIBERATELY ABSENT (structural, do not "restore" them). validate_vp_replay
+    re-executes every (pre-deploy AND hermetic) step against the tree of whichever PR carries a
+    feat({slug}) commit. This plan spans FOUR PRs, and a step's preconditions hold only inside its
+    own PR: steps 4/5/7/8 assert BUSL/LICENSING.md/prose-globs/the new check, all absent in PR-1;
+    steps 1/2 assert the dual-slug state that PR-3 deliberately reverses. Marking any of them
+    hermetic makes each PR fail the other PRs' steps. The steps still run at implement time -- only
+    the cross-PR replay is disabled. If a future revision collapses this into a single PR, or
+    splits it into four plan slugs, revisit these markers then and not before.
   - >-
     Branch was rebased onto origin/main e86c271 at authoring time; preflight reported 0 commits
     behind, 0 ahead, no uncommitted changes, and an empty ci_rca_unresolved_recs list.
