@@ -161,7 +161,11 @@ scope:
       path list: escalate.py needs FULL-SLUG matching (line 39 is class-(a) while lines 43/47's
       s3://agent-platform-data-lake are class-(b) in the SAME file), whereas approvals.py needs
       BARE-TOKEN matching (repo: str = "agent-platform"). One pattern for both yields either a
-      vacuous pass on approvals.py or a permanent red on escalate.py.
+      vacuous pass on approvals.py or a permanent red on escalate.py. The check ALSO carries the
+      BUSL parameter assertions (Licensor, Licensed Work, Change Date, Change License, Additional
+      Use Grant present and non-placeholder, with the non-limitation clause inside the grant value)
+      -- VP step 4's graduation waiver names this check as their standing home, so omitting them
+      would make that waiver false.
   - file: scripts/checks/hygiene/_manifest.py
     action: Modify
     purpose: Entry literal for the new check (registration surface 3).
@@ -171,11 +175,6 @@ scope:
   - file: tests/checks/hygiene/test_validate_licence_consistency.py
     action: Create
     purpose: Mirror test (registration surface 6); must reach 100% line coverage on the new module.
-  - file: tests/session/test_github_readiness.py
-    action: Create
-    purpose: >-
-      github_readiness.py has NO mirror test today, so a Modify row would fail the changed-file
-      100%-coverage gate outright (coverage reports the module never imported).
   - file: tests/checks/misc/test_validate_ghas_probe.py
     action: Modify
     purpose: >-
@@ -188,7 +187,11 @@ scope:
     action: Modify
     purpose: >-
       One graduated row for VP step 3 (registration surface 5): the Decision 94 both-sub-forms
-      invariant becomes a standing regression guard.
+      invariant becomes a standing regression guard. LANDS IN PR-1, not PR-3/PR-4:
+      validate_graduation_completeness's implement-PR leg keys on feat({slug}) commits and demands
+      a NEW-IN-DIFF registry row in the same PR as the graduated step. Step 3 is a PR-1 step, so
+      deferring the row reds the --pre gate on PR-1, PR-2 and PR-3. The row is a self-contained
+      command_exit_zero spec needing nothing from the later PRs.
 
 bundled_recommendations: []
 
@@ -509,7 +512,7 @@ verification_plan:
   - step: 16
     phase: post-deploy
     action: >-
-      No unrelated regression under the OLD slug with dual trust in place. NOTE this is a
+      ADMIN-CONTAINER STEP. No unrelated regression under the OLD slug with dual trust in place. NOTE this is a
       weak-positive check only: ci.yml:197-198's assume is continue-on-error, so a green run does
       NOT prove both slugs are trusted -- steps 14 and 15 are the actual trust evidence.
     command: >-
@@ -525,7 +528,7 @@ verification_plan:
   # ---------- PR-2 post-deploy: the rename ----------
   - step: 17
     phase: post-deploy
-    action: The repository answers at the new slug with its identity and history intact.
+    action: ADMIN-CONTAINER STEP. The repository answers at the new slug with its identity and history intact.
     command: >-
       curl -sf -H "Authorization: Bearer $(cat ~/.config/gh-mcp/token)"
       -H "Accept: application/vnd.github+json"
@@ -537,7 +540,7 @@ verification_plan:
       is an explicit non-goal -- revert immediately.
   - step: 18
     phase: post-deploy
-    action: The old URL redirects rather than 404s, so historical references still resolve.
+    action: ADMIN-CONTAINER STEP. The old URL redirects rather than 404s, so historical references still resolve.
     command: >-
       test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat ~/.config/gh-mcp/token)"
       https://api.github.com/repos/benjamin-blake/agent-platform)" = "301"
@@ -548,13 +551,13 @@ verification_plan:
       repository or the redirect breaks permanently.
   - step: 19
     phase: post-deploy
-    action: Repo-attached configuration survived the rename (the verification list IS the deliverable).
+    action: ADMIN-CONTAINER STEP. Repo-attached configuration survived the rename (the verification list IS the deliverable).
     command: >-
       B="https://api.github.com/repos/benjamin-blake/theseus"; H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
       curl -sf -H "$H" "$B/rulesets" | jq -e 'map(select(.name=="main-protection")) | length == 1' &&
       curl -sf -H "$H" "$B/environments/tf-gated-apply" | jq -e '.protection_rules | length > 0' &&
-      curl -sf -H "$H" "$B/actions/variables" | jq -e '.variables | map(.name) | index("AWS_ACCOUNT_ID") != null' &&
-      curl -sf -H "$H" "$B/actions/secrets" | jq -e '.secrets | map(.name) | index("GHAS_PROBE_TOKEN") != null' &&
+      curl -sf -H "$H" "$B/actions/variables?per_page=100" | jq -e '.variables | map(.name) | index("AWS_ACCOUNT_ID") != null' &&
+      curl -sf -H "$H" "$B/actions/secrets?per_page=100" | jq -e '.secrets | map(.name) | index("GHAS_PROBE_TOKEN") != null' &&
       curl -sf -H "$H" "$B/codeowners/errors" | jq -e '.errors | length == 0' &&
       curl -sf -H "$H" "$B" | jq -e '.security_and_analysis.secret_scanning.status == "enabled"
       and .security_and_analysis.secret_scanning_push_protection.status == "enabled"' && echo config-intact
@@ -605,7 +608,9 @@ verification_plan:
       || { echo "STALE -- last successful assume predates the rename: $role"; exit 1; };
       done; echo four-personal-roles-ok
     expected: >-
-      Prints four-personal-roles-ok. Export RENAME_TS (ISO-8601, UTC) as the rename timestamp first.
+      Prints four-personal-roles-ok. Export RENAME_TS first, as ISO-8601 WITH AN EXPLICIT UTC OFFSET
+      (trailing Z or +00:00). An offset-naive value raises inside the comparison and is reported as
+      STALE -- fail-closed, but misleading.
       ADMIN-CONTAINER STEP -- needs agent_platform_admin. Drive the exercise deliberately before
       running this: open and merge a trivial PR (github_ci_pr on the PR event, github_ci_branch on
       push), let terraform-drift run (github_ci_planner), run a governed Lambda deploy
@@ -652,7 +657,8 @@ verification_plan:
     expected: >-
       Exit 0. The apply role was assumed after the rename, and PR-3's gated-apply JOB itself
       concluded success. ADMIN-CONTAINER STEP. Export PR3_RUN_ID as the run id of PR-3's
-      post-merge terraform-apply-sandbox run.
+      post-merge terraform-apply-sandbox run, and RENAME_TS as ISO-8601 with an explicit UTC
+      offset.
     fix_if: >-
       WHY THIS IS SAFE DESPITE RUNNING AFTER THE CONTRACTION APPLIES: the gated-apply job must
       AUTHENTICATE before it can apply anything, and post-rename GitHub can only mint theseus subs.
@@ -791,8 +797,8 @@ test_obligations:
       B="https://api.github.com/repos/benjamin-blake/theseus"; H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
       curl -sf -H "$H" "$B/rulesets" | jq -e 'map(select(.name=="main-protection")) | length == 1' &&
       curl -sf -H "$H" "$B/environments/tf-gated-apply" | jq -e '.protection_rules | length > 0' &&
-      curl -sf -H "$H" "$B/actions/variables" | jq -e '.variables | map(.name) | index("AWS_ACCOUNT_ID") != null' &&
-      curl -sf -H "$H" "$B/actions/secrets" | jq -e '.secrets | map(.name) | index("GHAS_PROBE_TOKEN") != null' &&
+      curl -sf -H "$H" "$B/actions/variables?per_page=100" | jq -e '.variables | map(.name) | index("AWS_ACCOUNT_ID") != null' &&
+      curl -sf -H "$H" "$B/actions/secrets?per_page=100" | jq -e '.secrets | map(.name) | index("GHAS_PROBE_TOKEN") != null' &&
       curl -sf -H "$H" "$B/codeowners/errors" | jq -e '.errors | length == 0' &&
       curl -sf -H "$H" "$B" | jq -e '.security_and_analysis.secret_scanning.status == "enabled"
       and .security_and_analysis.secret_scanning_push_protection.status == "enabled"' && echo config-intact
