@@ -125,8 +125,9 @@ acceptance_criteria:
     config/agent/verification_registry/registry.yaml stays under its 6000 effective-line
     structural budget (config/structural_size_budgets.yaml:184) after the 2 graduated rows land.
   - >-
-    A recommendation is filed for ci-rca-close-then-recur-reopen-backstop, whose guarded test
-    method exists nowhere in the repo; that row is NOT mechanically repointed.
+    Two recommendations are filed and their ids recorded in the PR body: one for
+    ci-rca-close-then-recur-reopen-backstop (guarded method exists nowhere; NOT mechanically
+    repointed) and one for the ci-rca-workflow-count-drift-no-hardcoded-len fidelity narrowing.
   - >-
     tests/validate/test_driver_seam.py's IN_SCOPE_PATHS contains
     "scripts/roadmap/plan_document.py" and no longer contains "tests/test_plan_document.py".
@@ -177,11 +178,12 @@ verification_plan:
     action: >-
       Assert the mirror package carries its __init__.py files at BOTH levels (Decision 131), that
       the four concern modules exist, AND that the load-bearing IN_SCOPE_PATHS addition landed in
-      tests/validate/test_driver_seam.py. That last assertion exists because nothing else in this
+      tests/validate/test_driver_seam.py -- asserted by importing the frozenset and testing
+      MEMBERSHIP, not by grepping the file, so adding the path in a comment cannot false-pass. That last assertion exists because nothing else in this
       plan fails without it: IN_SCOPE_PATHS has exactly one consumer (_in_scope_rows, which
       filters on guard_target), so TestRegistryRows passes either way -- it just silently covers
       fewer rows, which is precisely the declared-but-unexecuted shape Decision 163 names.
-    command: 'bin/venv-python -c "import pathlib,sys; need=[''tests/roadmap/__init__.py'',''tests/roadmap/plan_document/__init__.py'',''tests/roadmap/plan_document/test_schema.py'',''tests/roadmap/plan_document/test_loader_cli.py'',''tests/roadmap/plan_document/test_optional_fields.py'',''tests/roadmap/plan_document/test_obligations.py'']; missing=[p for p in need if not pathlib.Path(p).is_file()]; seam=pathlib.Path(''tests/validate/test_driver_seam.py'').read_text(encoding=''utf-8''); missing += [] if ''scripts/roadmap/plan_document.py'' in seam else [''IN_SCOPE_PATHS missing scripts/roadmap/plan_document.py'']; print(''missing:'',missing); sys.exit(1 if missing else 0)"'
+    command: 'bin/venv-python -c "import pathlib,sys; need=[''tests/roadmap/__init__.py'',''tests/roadmap/plan_document/__init__.py'',''tests/roadmap/plan_document/test_schema.py'',''tests/roadmap/plan_document/test_loader_cli.py'',''tests/roadmap/plan_document/test_optional_fields.py'',''tests/roadmap/plan_document/test_obligations.py'']; missing=[p for p in need if not pathlib.Path(p).is_file()]; from tests.validate.test_driver_seam import IN_SCOPE_PATHS as _isp; missing += [] if ''scripts/roadmap/plan_document.py'' in _isp else [''IN_SCOPE_PATHS missing scripts/roadmap/plan_document.py'']; print(''missing:'',missing); sys.exit(1 if missing else 0)"'
     expected: 'Prints "missing: []" and exits 0.'
     fix_if: >-
       Any path listed. tests/roadmap/ is a NEW directory -- both its own __init__.py and the
@@ -414,7 +416,15 @@ verification_plan:
       fix the row, never delete the gate. Fix forward and re-run to completion -- per
       handoff_policy, do not commit on a timeout.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating this step is structurally impossible, not merely unattractive:
+      validate_verification_registry runs INSIDE scripts.validate, so a registry row invoking the
+      full tier would be self-referential, and the differential admission gate would refuse it as
+      tautological (origin/main is green, so the revert leg passes instead of failing). The
+      obligation this step discharges is already structurally enforced by validate_handoff_full_tier
+      per Decision 163. Closest precedents PLAN-validate-driver-test-seams and
+      PLAN-validate-facade-manifest-dispatch waive this step for the same reason.
 test_obligations:
   - source: scripts/test_coverage_checker.py
     behavior: >-
@@ -491,7 +501,7 @@ context:
     Decision 163, Decision 48, Decision 55. RELATED: Decision 103, Decision 159, Decision 148,
     Decision 85, Decision 104, Decision 124, Decision 80, Decision 165, Decision 166.
     CONTRADICT: none."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 4 round(s) (3 REVISE, then PROCEED)"
   - >-
     Unblocks PLAN-plan-resolution-content-keyed, which must add coverage for a new PlanDocument
     field and has no headroom at 495/500 in the current monolith. After the four-way split the
@@ -546,8 +556,8 @@ context:
     tests/ci_rca/taxonomy/ package. Pre-split it covered the whole monolith; post-repoint a
     reintroduced "len(names) == N" in a sibling module (e.g. test_convergence.py) would go
     unguarded. Verified the count-0 assertion still holds today (0 matches in the target and 0
-    across the whole package). Accepted knowingly rather than silently; widening it needs a
-    second row or a slot that takes a directory, neither of which belongs in this plan.
+    across the whole package). Accepted knowingly rather than silently, and TRACKED: execution files a rec for it
+    (widening needs a second row or a directory-capable slot, neither of which belongs here).
   - >-
     THE 12TH ROW IS NOT REPOINTABLE. ci-rca-close-then-recur-reopen-backstop names
     tests/test_ops_data_portal.py::TestCiRcaFingerprintDedup::test_close_then_recur_backstop_reopens_recently_closed_match_once.
@@ -684,10 +694,16 @@ execution_steps:
     Delete tests/test_plan_document.py. Run ruff check --fix afterwards to catch F401 unused
     imports left anywhere by the move (tests/CLAUDE.md).
   - >-
-    File the recommendation for ci-rca-close-then-recur-reopen-backstop -- call
-    get_rec_write_guidance() first, then file_rec() via scripts.ops_data_portal. Record the
-    returned rec id in the PR body. Do NOT add it to bundled_recommendations (it is opened by
-    this plan, not closed by it).
+    File TWO recommendations -- call get_rec_write_guidance() first, then file_rec() via
+    scripts.ops_data_portal for each. (a) ci-rca-close-then-recur-reopen-backstop: the graduated
+    row whose guarded method exists nowhere; repoint-vs-retire needs a ci-rca semantics
+    judgement. (b) The ci-rca-workflow-count-drift-no-hardcoded-len fidelity loss: this plan
+    knowingly narrows that grep_count guard from the pre-split monolith to ONE module of the
+    five-module tests/ci_rca/taxonomy/ package, because GrepCountCheck.run() reads a single file
+    and cannot take a directory; widening it needs a second row or a directory-capable slot.
+    Record both returned rec ids in the PR body. Do NOT add either to bundled_recommendations
+    (they are opened by this plan, not closed by it) -- this keeps the repo norm that out-of-scope
+    findings become recommendations rather than silent acceptances.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure
     stop and RCA (Decision 55).
