@@ -35,6 +35,15 @@ scope:
     purpose: >-
       Record the immutable-subject migration as a numbered Decision (172; see context on the 171 gap)
       with reversal conditions and the pre-stage-before-future-renames playbook.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerated derivation carrying the Decision 172 entry.
+      validate_decisions_index_freshness is pre=True with NO pre_globs, so it runs on every --pre
+      regardless of diff, and check_index_freshness hard-fails on any drift between the committed
+      index and the live DECISIONS.md derivation. No hook or workflow regenerates it (verified);
+      both prior new-Decision commits modified it by hand. Without this row PR-1 -- the outage fix
+      -- reds on --pre and on VP step 10.
   - file: .github/workflows/terraform-apply-sandbox.yml
     action: Modify
     purpose: >-
@@ -128,9 +137,11 @@ acceptance_criteria:
     patterns, and NO NEW wildcard is introduced into any sub condition (the pre-existing agent/* and
     refs/pull/* ref globs are unchanged and expected).
   - >-
-    All five CI roles record a successful sts:AssumeRoleWithWebIdentity dated after the fix, proving
-    the minted immutable sub matches trust (this is also PLAN-repo-rename-relicense's VP step 21
-    evidence, currently unusable).
+    The four roles this plan drives (branch, pr, planner, apply) each record a successful
+    sts:AssumeRoleWithWebIdentity dated after the fix, proving the minted immutable sub matches trust
+    (this is also PLAN-repo-rename-relicense's VP step 21 evidence, currently unusable).
+    github_ci_deploy is recorded as PENDING, not claimed: nothing in this plan drives it -- it
+    advances on the next ducklake/prod deploy, and its evidence is filed as a follow-on rec.
   - >-
     The new guard fails on all three masking shapes -- (a) missing id, (b) id referenced only in
     positive == 'success' gates, (c) a .conclusion-only reference -- and passes on the four
@@ -198,7 +209,9 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Prove the new fail-open guard discriminates: it must fire on each of the three masking shapes
-      (assume step with no id; id referenced only in positive == 'success' gates) and stay silent on
+      (a: assume step with no id; b: id referenced only in positive == 'success' gates; c: a
+      .conclusion-only reference, which continue-on-error forces to success and so can never
+      classify) and stay silent on
       the four sanctioned sites that carry a negative-branch classifier -- INCLUDING ci.yml's
       mirror_oidc, whose classifier is the double-quoted shell form
       if [ "${{ steps.mirror_oidc.outcome }}" != "success" ] inside a run: body.
@@ -206,8 +219,8 @@ verification_plan:
     expected: >-
       exit 0; fixtures cover single-quoted != 'success', double-quoted != "success", the
       ${{ ... }}-split form where != is separated from outcome by the closing braces and a quote, a
-      step with no id, a step whose id appears only in positive gates, and a step without
-      continue-on-error (ignored entirely).
+      step with no id, a step whose id appears only in positive gates, a step referencing only
+      .conclusion, and a step without continue-on-error (ignored entirely).
     fix_if: >-
       If the guard passes on a fixture missing its classifier, the predicate is matching any
       steps.<id>.outcome reference rather than a NEGATIVE-branch reference; tighten it. If it fires
@@ -494,6 +507,11 @@ constraints:
     sanctioned from masking sites structurally (Decision 163: remove the exception path, do not build
     a gate around it).
   - >-
+    Keep the advisory-status job green by making scripts/ci/convergence_advisory.py never raise --
+    NOT by adding continue-on-error: true to the adapter run: step. Adding it would pull that body
+    into validate_masked_errexit_steps' population and acquire a sixth registration obligation (its
+    VAR=$(...) positional-guard rule) for no benefit.
+  - >-
     Agents never self-direct terraform apply. The break-glass apply happens only after a human reviews
     the plan output and explicitly directs it (Decision 126).
   - No rescue agents or workaround loops (Decision 55). Forward-fix only; never auto-revert.
@@ -544,10 +562,17 @@ context:
     current forward direction on the write axis).
   - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
   - >-
-    TWO-PR EXECUTION, one plan. PR-1 = the trust restore (terraform/personal/oidc.tf,
-    terraform/bootstrap/github_ci_apply.tf, the invariant test, DECISIONS.md) followed by the
-    human-directed break-glass apply. PR-2 = the masking closure (the two workflows, the new guard,
-    _manifest.py, ci_rca_taxonomy.yaml, the mirror test). PR-2's post-deploy verification REQUIRES
+    TWO-PR EXECUTION, one plan. execution_steps is authoritative on the split; this is its summary.
+    PR-1 = the trust restore: terraform/personal/oidc.tf, terraform/bootstrap/github_ci_apply.tf,
+    tests/checks/iam_tf/test_oidc_trust_slug_invariants.py, docs/DECISIONS.md,
+    docs/decisions-index.json, .github/workflows/ci.yml (identity anchor) and
+    config/composite_action_body_baseline.yaml (that anchor's r3_workflows entry) -- followed by the
+    human-directed break-glass apply. PR-2 = the masking closure:
+    .github/workflows/terraform-apply-sandbox.yml, .github/workflows/terraform-drift.yml,
+    scripts/ci/convergence_advisory.py, tests/test_convergence_advisory.py,
+    scripts/checks/ci_guards/validate_oidc_failopen_guards.py, scripts/checks/ci_guards/_manifest.py,
+    config/ci_rca_taxonomy.yaml, tests/checks/ci_guards/test_validate_oidc_failopen_guards.py, and
+    config/composite_action_body_baseline.yaml again (three more r3_workflows entries). PR-2's post-deploy verification REQUIRES
     PR-1 applied: until OIDC works, CI cannot authenticate to prove any masking fix. Do not reorder.
   - >-
     Plan-only and workflow-only PRs still merge during the outage: pr-validate uses no AWS, and
@@ -645,7 +670,13 @@ execution_steps:
     amending the dual-slug ruling that Decision 171 will carry. Include reversal conditions and the
     pre-stage-before-future-renames playbook (a future rename changes only the NAME halves; trusting a
     not-yet-mintable sub is harmless, so pre-stage additively before renaming). Use the typed yaml
-    envelope with a significance routing token per Decision 167/150.
+    envelope with a significance routing token per Decision 167/150. Reversal conditions must use the
+    typed reversal-stanza grammar (id / kind / description) that validate_reversal_stanzas enforces --
+    a malformed typed stanza hard-fails, while a prose paragraph is simply unmonitored. Keep the entry
+    under the 6,144-byte per-entry cap (validate_decisions_size, hard fail on new-in-diff entries;
+    mean existing entry is ~4.9 KB, so this is achievable but not generous). THEN run
+    bin/venv-python -m scripts.decisions_index --write and commit the regenerated
+    docs/decisions-index.json in the SAME commit.
   - >-
     PR-1 step 6 -- run VP steps 1, 2, 3, 6, 9 and 10, then commit, push, open PR-1, and merge on green.
     Confirm on the PR run that the identity-anchor printed ids equal the pinned literals BEFORE
@@ -682,7 +713,7 @@ execution_steps:
     terraform-drift.yml:198-225 rather than inventing one. This extraction is REQUIRED before any line
     is added to that workflow (529/529 structural budget).
   - >-
-    PR-2 step 2 -- create tests/test_convergence_advisory.py covering all five outcomes above, flat
+    PR-2 step 2 -- create tests/test_convergence_advisory.py covering all SIX outcomes above, flat
     under tests/ per the scripts/ci convention.
   - >-
     PR-2 step 3 -- .github/workflows/terraform-apply-sandbox.yml advisory-status: ADD actions/checkout@v7
@@ -694,7 +725,10 @@ execution_steps:
     module (Decision 162), give the assume step an id, and add a negative-branch classifier. DO NOT
     RENAME the advisory-status step: its baseline key is the hyphen-slug of its name
     (".github/workflows/terraform-apply-sandbox.yml::advisory-status::read-convergence-record-and-post-advisory-terraform-converged-status",
-    ceiling 26) -- renaming mints an unregistered key and orphans the old one. Register every NEW
+    ceiling 26) -- renaming mints an unregistered key and orphans the old one. For the same reason do
+    NOT add an id: to that run: step either: the key grammar is "step's own id, else hyphen-slug of
+    name", so adding an id re-keys it identically to a rename. The id goes on the ASSUME step, which
+    is a uses: step and is never scanned by this guard. Register every NEW
     run: body added here in r3_workflows. Keep the JOB green -- it must never red a PR, and
     terraform-converged must remain a non-required check (Decision 83).
   - >-
