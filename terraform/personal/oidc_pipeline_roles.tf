@@ -60,10 +60,13 @@ resource "aws_iam_role" "github_ci_planner" {
           }
           StringLike = {
             # Dual-slug transition (Decision 171): both slugs trusted for the reserved-session
-            # main-sub statement during the transition window.
-            "token.actions.githubusercontent.com:sub" = [
-              for repo in local.github_repos : "repo:${repo}:ref:refs/heads/main"
-            ]
+            # main-sub statement during the transition window. Same flatten([for ...]) idiom as
+            # every other sub site, so an audit can confirm at a glance that none was missed.
+            "token.actions.githubusercontent.com:sub" = flatten([
+              for repo in local.github_repos : [
+                "repo:${repo}:ref:refs/heads/main"
+              ]
+            ])
           }
         }
       },
@@ -245,10 +248,13 @@ resource "aws_iam_role" "github_ci_deploy" {
           }
           StringLike = {
             # Dual-slug transition (Decision 171): both slugs trusted for the deploy role's
-            # single main-sub statement during the transition window.
-            "token.actions.githubusercontent.com:sub" = [
-              for repo in local.github_repos : "repo:${repo}:ref:refs/heads/main"
-            ]
+            # single main-sub statement during the transition window. Same flatten([for ...])
+            # idiom as every other sub site, so an audit can confirm none was missed.
+            "token.actions.githubusercontent.com:sub" = flatten([
+              for repo in local.github_repos : [
+                "repo:${repo}:ref:refs/heads/main"
+              ]
+            ])
           }
         }
       }

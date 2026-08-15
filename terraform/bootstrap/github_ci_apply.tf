@@ -13,7 +13,9 @@
 locals {
   # Dual-slug transition (Decision 171 / PLAN-repo-rename-relicense): mirrors
   # terraform/personal/oidc.tf's local.github_repos -- both slugs trusted simultaneously while
-  # the rename lands, narrowed back to a one-element list at PR-3 cleanup (VP step 23).
+  # the rename lands, narrowed back to a one-element list at PR-3 cleanup (VP steps 21-23).
+  # This list MUST stay identical to terraform/personal's; the two roots cannot reference each
+  # other, so agreement is enforced by tests/checks/iam_tf/test_oidc_trust_slug_invariants.py.
   github_repos = ["benjamin-blake/agent-platform", "benjamin-blake/theseus"]
 }
 

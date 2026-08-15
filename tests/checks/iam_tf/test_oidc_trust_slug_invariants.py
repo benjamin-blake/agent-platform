@@ -1,0 +1,106 @@
+"""Standing guards for the OIDC trust invariants PLAN-repo-rename-relicense depends on.
+
+Two DURABLE invariants -- deliberately chosen to survive the plan's PR-3 contraction, which
+narrows local.github_repos back to a one-element list:
+
+  1. Decision 94 both-sub-forms: the bootstrap apply role's trust carries BOTH the
+     ref:refs/heads/main form (routine auto-apply) and the environment:tf-gated-apply form
+     (the gated-apply job, where GitHub OVERRIDES sub to the environment claim). Dropping the
+     environment form silently ungates every gated apply -- the VP9 regression Decision 94 was
+     written to prevent, and the exact failure class the rename window makes easy to hit.
+
+  2. Cross-root slug-list agreement: terraform/personal and terraform/bootstrap each declare
+     their own local.github_repos (no cross-root resource reference is possible). The two lists
+     must stay identical, or a contraction can narrow one root and miss the other -- a divergence
+     otherwise caught only post-deploy by VP step 23, after the destructive apply has landed.
+
+Neither assertion pins the NUMBER of trusted slugs: the dual-slug state is transient by design,
+so a count assertion would fail the moment the plan's own cleanup lands (tests/CLAUDE.md
+"Test-count coupling").
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_PERSONAL_LOCALS = _REPO_ROOT / "terraform" / "personal" / "oidc.tf"
+_BOOTSTRAP_APPLY = _REPO_ROOT / "terraform" / "bootstrap" / "github_ci_apply.tf"
+
+_GITHUB_REPOS_RE = re.compile(r"github_repos\s*=\s*\[(?P<body>[^\]]*)\]", re.S)
+_SLUG_RE = re.compile(r'"([^"]+)"')
+
+
+def _declared_slugs(path: Path) -> list[str]:
+    """Return the slug list declared by `local.github_repos` in a Terraform root."""
+    match = _GITHUB_REPOS_RE.search(path.read_text(encoding="utf-8"))
+    assert match is not None, f"{path} declares no local.github_repos list"
+    return _SLUG_RE.findall(match.group("body"))
+
+
+def _apply_role_trust_block() -> str:
+    """Return the github_ci_apply assume_role_policy block text."""
+    text = _BOOTSTRAP_APPLY.read_text(encoding="utf-8")
+    start = text.index('resource "aws_iam_role" "github_ci_apply"')
+    policy_start = text.index("assume_role_policy", start)
+    return text[policy_start:]
+
+
+class TestDecision94BothSubForms:
+    def test_apply_role_trusts_the_ref_sub_form(self) -> None:
+        assert ":ref:refs/heads/main" in _apply_role_trust_block(), (
+            "github_ci_apply lost the ref:refs/heads/main sub form -- the routine "
+            "auto-apply path can no longer authenticate."
+        )
+
+    def test_apply_role_trusts_the_environment_sub_form(self) -> None:
+        assert ":environment:tf-gated-apply" in _apply_role_trust_block(), (
+            "github_ci_apply lost the environment:tf-gated-apply sub form -- GitHub overrides "
+            "sub to the environment claim for a job declaring environment:, so every gated "
+            "apply now fails to authenticate (Decision 94 VP9 regression)."
+        )
+
+    def test_both_sub_forms_are_trusted_for_every_declared_slug(self) -> None:
+        """Each trusted slug must carry both forms, not one form each."""
+        block = _apply_role_trust_block()
+        for form in (":ref:refs/heads/main", ":environment:tf-gated-apply"):
+            assert block.count(form) >= 1, f"apply role does not trust the {form} sub form"
+        # The forms are emitted per-slug inside one comprehension body, so both appear
+        # exactly once in the template regardless of how many slugs are trusted.
+        assert block.index(":ref:refs/heads/main") < block.index(":environment:tf-gated-apply"), (
+            "Decision 94 sub forms are no longer emitted from a single per-slug body -- "
+            "verify both forms are still expanded for every slug."
+        )
+
+
+class TestCrossRootSlugAgreement:
+    def test_both_roots_declare_a_slug_list(self) -> None:
+        assert _declared_slugs(_PERSONAL_LOCALS), "terraform/personal declares no slugs"
+        assert _declared_slugs(_BOOTSTRAP_APPLY), "terraform/bootstrap declares no slugs"
+
+    def test_slug_lists_are_identical_across_roots(self) -> None:
+        personal = _declared_slugs(_PERSONAL_LOCALS)
+        bootstrap = _declared_slugs(_BOOTSTRAP_APPLY)
+        assert personal == bootstrap, (
+            "terraform/personal and terraform/bootstrap trust different repository slugs "
+            f"(personal={personal}, bootstrap={bootstrap}). A contraction narrowed one root "
+            "and missed the other; the roles in the missed root trust a dead or unintended slug."
+        )
+
+    def test_slug_lists_have_no_duplicates(self) -> None:
+        for path in (_PERSONAL_LOCALS, _BOOTSTRAP_APPLY):
+            slugs = _declared_slugs(path)
+            assert len(slugs) == len(set(slugs)), f"{path} declares a duplicate slug: {slugs}"
+
+
+class TestNoScalarSurvivor:
+    def test_no_root_reintroduces_the_scalar_local(self) -> None:
+        """A scalar local.github_repo means some sub site trusts a single slug."""
+        scalar = re.compile(r"local\.github_repo\b")
+        for root in ("personal", "bootstrap"):
+            for tf_file in sorted((_REPO_ROOT / "terraform" / root).glob("*.tf")):
+                assert not scalar.search(tf_file.read_text(encoding="utf-8")), (
+                    f"{tf_file} references the scalar local.github_repo -- every sub site must "
+                    "iterate local.github_repos so no role is left trusting a single slug."
+                )
