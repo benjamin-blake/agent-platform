@@ -1,0 +1,1357 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "repo-rename-relicense"
+intent: >-
+  Promote the already-ratified Theseus brand from presentation-layer-only to the repository
+  identity by renaming benjamin-blake/agent-platform -> benjamin-blake/theseus in place, and flip
+  future versions from Apache-2.0 to a BUSL-1.1 source-available posture, so the platform the
+  North Star describes can be commercialised without abandoning the public curated portal.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-repo-rename-relicense.yaml
+phase: >-
+  Platform governance. No tier_item: this is ad-hoc work originating in audit PR #898
+  (audits/private-repo-self-hosted-ci-9a545d2.yaml, Q1 intent I-B, Q9 licence branch, BEN-01).
+  Soft-warn exception category user_explicit_out_of_scope, so the Tier Item Freshness Gate does
+  not fire.
+
+scope:
+  # ---- PR-1: pre-rename dual trust (gated apply + operator admin apply) ----
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Replace scalar local.github_repo with local.github_repos holding both slugs; this file owns
+      the local that all four personal-root roles interpolate.
+  - file: terraform/personal/oidc_ci_roles.tf
+    action: Modify
+    purpose: >-
+      Expand github_ci_branch (2 subs) and github_ci_pr (2 subs) to iterate local.github_repos,
+      yielding 8 entries during transition.
+  - file: terraform/personal/oidc_pipeline_roles.tf
+    action: Modify
+    purpose: >-
+      Expand github_ci_planner (1 main sub + 2 pr subs) and github_ci_deploy (1 main sub) to
+      iterate local.github_repos, yielding 8 entries during transition.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Dual-slug the apply role across BOTH Decision 94 sub forms (ref:refs/heads/main and
+      environment:tf-gated-apply), yielding 4 entries during transition.
+
+  # ---- PR-2: the rename (operator-directed terraform/github apply) ----
+  - file: terraform/github/variables.tf
+    action: Modify
+    purpose: repository_name default flips from agent-platform to theseus.
+  - file: terraform/github/environments.tf
+    action: Modify
+    purpose: >-
+      Add prevent_destroy to the tf-gated-apply Environment. It currently has none, and a destroy
+      fails OPEN: GitHub recreates a protection-rule-free environment on first job reference while
+      the OIDC environment: sub still matches, silently ungating every gated apply.
+  - file: terraform/github/repo.tf
+    action: Modify
+    purpose: >-
+      Delete the now-redundant import block (id = var.repository_name). The resource is in state,
+      so it is a no-op, but it is coupled to the variable this plan flips.
+  - file: terraform/github/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Net-neutral slug substitution across ALL THREE old-slug occurrences (lines 6, 88, 91: the
+      module subject line, the "import the existing agent-platform repository" sentence, and the
+      import fallback command). This file sits at EXACTLY its 5253-byte prose budget, so the
+      net-neutral constraint must be computed across all three substitutions, not two.
+
+  # ---- PR-4: relicense + decision record (LAST -- see the F8 ordering note in context) ----
+  - file: LICENSE
+    action: Modify
+    purpose: Parameterised BUSL-1.1 replaces the Apache-2.0 text.
+  - file: LICENSE-APACHE
+    action: Create
+    purpose: Verbatim Apache-2.0 text, preserved as the governing licence for pre-flip versions.
+  - file: LICENSING.md
+    action: Create
+    purpose: >-
+      Forward-only licence boundary statement, anchored on an annotated tag and the last pre-flip
+      SHA. Deliberately NOT named NOTICE: pre-flip snapshots are Apache-licensed and Apache-2.0
+      section 4(d) gives that filename a specific redistribution meaning this file does not carry.
+  - file: CONTRIBUTING.md
+    action: Create
+    purpose: >-
+      Contribution posture and copyright-assignment statement. Dual licensing depends on sole
+      copyright ownership, which GitHub ToS inbound=outbound does NOT supply.
+  - file: COMMERCIAL-LICENSE.md
+    action: Create
+    purpose: Placeholder commercial-licence contact stub; no legal terms, no pricing.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Add COMMERCIAL-LICENSE.md, LICENSING.md and CONTRIBUTING.md to prose_allowlist.allowed_globs
+      under one named permanent class ("licence-and-attribution artefacts"), never
+      grandfathered_globs, which is ratchet-only and may not grow. Decision 171 names the class;
+      the precedent is Decision 101(c)'s scoped marketing/** carve-out.
+  - file: README.md
+    action: Modify
+    purpose: >-
+      H1 becomes theseus; License section rewritten; CLA/copyright-assignment note added; AND the
+      "Human portal files" row of the Documentation Model table refreshed to include the new root
+      licence artefacts, which that row currently omits.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Title line names the project Theseus. No slug string exists in this file today, so this is a
+      naming edit, not a substitution. Only 36 bytes of prose-budget headroom -- keep it net-neutral.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 171 (rename + relicense, amending Decisions 101 AND 127), AND add the reciprocal
+      "Amended by Decision 171" forward-pointer inside Decision 101's own block. The pointer must
+      name WHICH clauses move: point (b)'s repository-name row only (re-affirming the other four
+      as frozen), point (f)'s paid-service deferral (discharged for the licence half), AND point
+      (f)'s "secondary aspiration: open-source community" -- BUSL-1.1 is source-available, NOT OSI
+      open source, and the CLA/copyright-assignment note changes contribution posture directly.
+      DECISION 127 NEEDS ITS OWN reciprocal pointer plus a substantive amendment: add the
+      licence-and-attribution artefact class to its point-1 permanent-class enumeration. Without
+      the pointer, validate_supersession_annotations reddens post-merge main (it builds an edge per
+      envelope amends id and FAILS unless the victim's block names "Decision 171"); without the
+      class addition, the prose allowlist grows while the taxonomy governing it does not, which is
+      exactly the drift Decision 127 point 3 exists to prevent. Editing 101 and 127 is NOT
+      cap-measured -- validate_decisions_size skips baseline numbers -- so neither annotation
+      competes for Decision 171's 6,144 bytes.
+
+  # ---- PR-3: reference sweep + trust cleanup (narrow trust promptly after live proof) ----
+  # NOTE: validate_licence_consistency and its THREE companion registration rows (_manifest.py,
+  # config/ci_rca_taxonomy.yaml, the mirror test) ship in PR-4, NOT PR-3 -- the check asserts
+  # licence-file consistency, which cannot hold until LICENSE/LICENSING.md land. Its slug-staleness
+  # half is proven red-green by fixtures in the mirror test, not by tree state, so shipping it
+  # whole in PR-4 loses no evidence. The two coverage top-ups below
+  # (tests/checks/misc/test_validate_ghas_probe.py, tests/convergence_health/test_approvals.py)
+  # ship with PR-3 alongside the modules they cover: test_coverage_checker enforces 100% on every
+  # CHANGED Python file, so deferring either to PR-4 reds PR-3's own merge gate.
+  - file: scripts/checks/misc/validate_ghas_probe.py
+    action: Modify
+    purpose: _DEFAULT_REPO slug (the CI path already reads GITHUB_REPOSITORY; only the local default is stale).
+  - file: scripts/session/github_readiness.py
+    action: Modify
+    purpose: Hardcoded api.github.com/repos/<slug> URL in the authenticated readiness probe.
+  - file: scripts/convergence_health/escalate.py
+    action: Modify
+    purpose: Acceptance-probe command string embedding the old slug.
+  - file: scripts/convergence_health/approvals.py
+    action: Modify
+    purpose: >-
+      Three bare `repo: str = "agent-platform"` defaults building reconcile/apply workflow-run
+      URLs. Missed by a full-slug grep; found by the decision-scout gate.
+  - file: bin/setup-cloud-env.sh
+    action: Modify
+    purpose: >-
+      Line 61 names GITHUB_MCP_PAT as single-repo-scoped to agent-platform -- the identical
+      criterion by which ghas-probe.yml:26 is in scope. Line 38's cd /home/user/agent-platform is
+      an on-disk checkout path and must be LEFT ALONE (the directory name is rename-independent).
+  - file: .github/workflows/ghas-probe.yml
+    action: Modify
+    purpose: Credential-header comment naming the GHAS_PROBE_TOKEN's repo scope.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Exit-criterion prose naming the trusted repo. Text-only edit on an existing criterion, so
+      the bare-string guard (which keys on added/removed `- id:` lines) does not fire.
+  - file: scripts/checks/hygiene/validate_licence_consistency.py
+    action: Create
+    purpose: >-
+      Registered check guarding two invariants: licence-file/LICENSING.md/README consistency, and
+      no old-slug reference in class-(a) paths. The allowlist is a path->PATTERN map, not a bare
+      path list: escalate.py needs FULL-SLUG matching (line 39 is class-(a) while lines 43/47's
+      s3://agent-platform-data-lake are class-(b) in the SAME file), whereas approvals.py needs
+      BARE-TOKEN matching (repo: str = "agent-platform"). One pattern for both yields either a
+      vacuous pass on approvals.py or a permanent red on escalate.py. The check ALSO carries the
+      BUSL parameter assertions (Licensor, Licensed Work, Change Date, Change License, Additional
+      Use Grant present and non-placeholder, with the non-limitation clause inside the grant value)
+      -- VP step 4's graduation waiver names this check as their standing home, so omitting them
+      would make that waiver false. A THIRD pattern class is required for bin/setup-cloud-env.sh:
+      line 61's "single-repo (agent-platform)" is class-(a), but line 38's cd /home/user/... is a
+      checkout path and line 205's s3://agent-platform-data-lake is class-(b) -- and a bare-token
+      pattern matches all three, since `-` is a word boundary. Pin that path to a line-anchored or
+      context-qualified pattern, and make VP step 9 assert PER-PATH coverage of the allowlist
+      rather than only an aggregate examined() count, or a silently-dropped path is invisible.
+  - file: scripts/checks/hygiene/_manifest.py
+    action: Modify
+    purpose: Entry literal for the new check (registration surface 3).
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: function_to_category row for the new check (registration surface 4).
+  - file: tests/checks/hygiene/test_validate_licence_consistency.py
+    action: Create
+    purpose: Mirror test (registration surface 6); must reach 100% line coverage on the new module.
+  - file: tests/checks/misc/test_validate_ghas_probe.py
+    action: Modify
+    purpose: >-
+      Top up validate_ghas_probe.py from 91% to 100% -- the changed-file coverage gate admits no
+      partial coverage on a touched module -- AND add a positive assertion that _default_repo()
+      returns benjamin-blake/theseus with GITHUB_REPOSITORY unset. The sweep's own guard proves
+      only that the old slug is absent; absence is not the same claim as correctness.
+  - file: tests/convergence_health/test_approvals.py
+    action: Modify
+    purpose: Keep changed-file line coverage at 100% for approvals.py.
+
+bundled_recommendations: []
+
+infrastructure_dependencies:
+  - >-
+    terraform/personal (oidc.tf, oidc_ci_roles.tf, oidc_pipeline_roles.tf): assume_role_policy
+    diff -> terraform_apply_guard.py exits 2 (fail-closed) -> gated-apply job behind the
+    tf-gated-apply Environment. CI applies the saved plan.bin; no re-plan (Decision 77 no-TOCTOU).
+  - >-
+    terraform/bootstrap (github_ci_apply.tf): NO CI apply path and none may be added -- the root
+    exists to break the self-grant cycle (T2.23). Operator-only, agent_platform_admin profile,
+    admin container. The agent authors the diff and files a rec; a human executes the apply.
+  - >-
+    terraform/github (variables.tf): NO CI apply path; human-gated operator-directed apply only
+    (Decision 77). Verified appliable from the admin container 2026-08-14: terraform init
+    succeeds, integrations/github v6.12.1 signature-verified, state readable, 5 managed resources.
+  - >-
+    LAMBDA DEPLOY-GATING WAIVER (Decision 79 / CD.16 + CD.24). compute_affected_artifacts() over
+    this scope returns {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']} -- that file is an
+    assets: entry of src/lambdas/data-pipeline/manifest.yaml, which is status: active, so the
+    artifact is formally affected. NO build/deploy/smoke-test step is planned, deliberately: the
+    change is a one-line prose substitution inside an existing exit criterion, the asset is
+    consumed as agent CONTEXT rather than executed, and both dispatcher functions
+    (agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor) are inert:
+    the dispatcher is schedule-disabled (Decision 61/37/116, AGENTS.md re-enable runbook) and
+    findings-processor is S3-event-driven (prod_lambdas.tf, s3:ObjectCreated on agents/*.jsonl)
+    whose only producers ARE those disabled agents. A
+    redeploy would ship a doc tweak to a function that never runs. This waiver is explicit
+    because validate_lambda_deploy_gating is advisory-only and would not have caught the omission.
+  - >-
+    EXECUTION CONTEXT, corrected. The DEV container has no `terraform` and no `gh`; `api.github.com`
+    is EGRESS-BLOCKED (403 even unauthenticated -- the proxy README says report it, never route
+    around it); and only the agent_static/agent_platform profiles exist, so iam:GetRole and
+    cloudtrail:* are both denied. VP steps 14-23 are therefore
+    ADMIN-CONTAINER steps requiring agent_platform_admin and real github.com egress -- they are not
+    runnable from a routine CC-web session, and an earlier draft wrongly implied they were. Steps
+    1-13 are DEV-runnable (grep/python/git/diff only). All terraform validate/plan stays
+    CI-delegated to the required terraform-validate check and the speculative-plan job.
+
+acceptance_criteria:
+  - >-
+    The repository resolves at github.com/benjamin-blake/theseus with history, issues, pull
+    requests, stars and the commit/PR reference graph intact, and the old URL 301-redirects to it.
+  - >-
+    All five OIDC roles authenticate live under the theseus slug -- github_ci_branch,
+    github_ci_pr, github_ci_planner, github_ci_deploy, and github_ci_apply on BOTH of its
+    Decision 94 sub forms -- each proven by a real assume-role, never by inspecting Terraform.
+  - >-
+    After cleanup, no role's trust policy still references benjamin-blake/agent-platform, and
+    github_ci_apply retains both sub forms under the new slug.
+  - >-
+    LICENSE is parameterised BUSL-1.1 (Licensor "Benjamin Blake", Change License Apache-2.0,
+    Change Date = flip date + 4 years); LICENSE-APACHE holds the verbatim prior Apache text; and
+    LICENSING.md states the forward-only boundary in a form that survives squash-merge SHA churn.
+  - >-
+    validate_licence_consistency is registered across SIX of the seven Decision 169/170 surfaces
+    -- surface 5 (a verification_registry row) is owed per GRADUATED verification_plan step and
+    this plan graduates none, per VP step 3's waiver -- passes
+    in both presubmit tiers, and declares examined()/skipped() rather than relying on the frozen
+    check-accounting baseline.
+  - >-
+    Decision 171 exists with a well-formed Decision 167 envelope declaring amends [101, 127], BOTH
+    amended entries carry the reciprocal forward-pointer, Decision 127's point-1 enumeration gains
+    the licence-and-attribution class, and the entry is synced to ops_decisions.
+  - >-
+    No AWS resource, IAM role, S3 bucket, SSM path, Glue database or Lambda is renamed; the
+    agent-platform-* infrastructure namespace is untouched.
+
+verification_plan:
+  # ---------- PR-1 pre-deploy: structural proof before any apply ----------
+  - step: 1
+    phase: pre-deploy
+    action: Both slugs present in the trust locals of both roots.
+    command: >-
+      grep -q 'benjamin-blake/theseus' terraform/personal/oidc.tf &&
+      grep -q 'benjamin-blake/agent-platform' terraform/personal/oidc.tf &&
+      grep -q 'benjamin-blake/theseus' terraform/bootstrap/github_ci_apply.tf &&
+      grep -q 'benjamin-blake/agent-platform' terraform/bootstrap/github_ci_apply.tf
+    expected: Exit 0. Both roots name both slugs.
+    fix_if: >-
+      Non-zero means a root still carries a single slug. Renaming with only one slug trusted
+      breaks every AssumeRoleWithWebIdentity the instant the rename lands.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The dual-slug state is deliberately transient and is REMOVED by this same plan at step 23.
+      Graduating it would install a standing guard asserting a condition the plan intends to
+      delete, which would then fail on every PR after cleanup.
+  - step: 2
+    phase: pre-deploy
+    action: No scalar local.github_repo survivor anywhere in either root.
+    command: "! grep -rn 'local\\.github_repo\\b' terraform/personal/ terraform/bootstrap/"
+    expected: Exit 0 (no matches). Every sub site consumes the list local, not the old scalar.
+    fix_if: >-
+      A match means a sub entry was missed and that role will trust only one slug. Note \b after
+      'repo' does not match inside 'github_repos', so this finds scalar survivors only.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The DUAL-SLUG state exists only during the transition window and is narrowed at cleanup, so
+      a standing guard would assert a condition this plan deletes. Note the list local itself is
+      RETAINED at cleanup as a one-element list -- PR-3 must not revert to the scalar, or this very
+      step fails when PR-3 runs it.
+  - step: 3
+    phase: pre-deploy
+    action: Decision 94 invariant -- the apply role's trust carries BOTH sub forms.
+    command: >-
+      grep -q 'ref:refs/heads/main' terraform/bootstrap/github_ci_apply.tf &&
+      grep -q 'environment:tf-gated-apply' terraform/bootstrap/github_ci_apply.tf
+    expected: Exit 0. Both the ref form and the environment form are present.
+    fix_if: >-
+      Losing the environment form silently breaks the gated-apply path -- the job assumes a sub
+      GitHub overrides to the environment claim. This is the exact VP9 regression Decision 94 was
+      written to prevent, and it must hold before, during and after the dual-trust window.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible and genuinely worth graduating, but NOT graduatable from this plan.
+      validate_graduation_completeness's implement-PR leg fires on any feat(repo-rename-relicense)
+      commit and demands a NEW-IN-DIFF registry row; _new_registry_rows excludes any check_id
+      already on the origin/main baseline. This plan spans four PRs, each carrying such a commit,
+      so a row in PR-1 satisfies PR-1 and then fails PRs 2-4 once it is baselined -- there is NO
+      placement of one row that satisfies all four. Same cross-PR structural class as the dropped
+      hermetic markers. The invariant is still asserted in-plan by this step and by the
+      terraform/bootstrap/github_ci_apply.tf test obligation; a follow-on rec graduates
+      bootstrap-apply-trust-both-sub-forms from a single-PR plan where new-in-diff is satisfiable.
+  - step: 4
+    phase: pre-deploy
+    action: BUSL-1.1 parameter block is complete with no unfilled placeholders.
+    command: >-
+      grep -q 'Business Source License 1.1' LICENSE &&
+      grep -q '^Licensor: *Benjamin Blake' LICENSE &&
+      grep -q '^Licensed Work:' LICENSE &&
+      grep -qE '^Change Date: *20[0-9]{2}-[0-9]{2}-[0-9]{2}' LICENSE &&
+      grep -q '^Change License: *Apache-2.0' LICENSE &&
+      grep -q '^Additional Use Grant:' LICENSE &&
+      awk '/^Additional Use Grant:/,/^Change Date:/' LICENSE
+      | grep -qiE 'without limitation|not exhaustive' &&
+      ! awk '/^Licensor:/,/^-----/' LICENSE | grep -qE '\[[^]]*\]'
+    expected: >-
+      Exit 0. Every BUSL parameter is populated and NO bracket placeholder survives anywhere in the
+      Parameters block -- which now includes canonical BUSL-1.1's "please visit: [ ]" line, the
+      alternative-licensing contact slot that sits AFTER Change License: and was outside an earlier
+      range. That slot must point at COMMERCIAL-LICENSE.md or the maintainer address; shipping it
+      empty while the repo advertises commercial licences is the defect this widened range catches.
+    fix_if: >-
+      An unfilled parameter makes the grant defective. A missing Change Date in particular leaves
+      the licence with no conversion trigger at all.
+    graduation: waive
+    graduation_waiver_reason: >-
+      This invariant IS graduated, but as the registered check validate_licence_consistency (a
+      scope row) rather than as a verification-registry row. A registry row would invoke the same
+      assertions a second time from a second home, creating two places to drift.
+  - step: 5
+    phase: pre-deploy
+    action: LICENSE-APACHE is the verbatim pre-flip Apache text, not a paraphrase.
+    command: >-
+      git show origin/main:LICENSE > "${TMPDIR:-/tmp}/pre-flip-licence.txt" &&
+      diff -q "${TMPDIR:-/tmp}/pre-flip-licence.txt" LICENSE-APACHE
+    expected: Exit 0. LICENSE-APACHE is byte-identical to the Apache text that governed pre-flip versions.
+    fix_if: >-
+      Any drift means the preserved licence is not the one those versions were actually released
+      under, which undermines the forward-only claim LICENSING.md makes.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The comparison base is origin/main at flip time, a moving reference that stops being
+      meaningful once the flip has landed; a standing guard would compare against the wrong tree
+      forever after. The durable half (LICENSE-APACHE exists and is Apache text) is covered by
+      validate_licence_consistency.
+  - step: 6
+    phase: pre-deploy
+    action: LICENSING.md's boundary SHA equals the last pre-flip commit, and an annotated tag anchors it.
+    command: >-
+      test "$(grep -oE '[0-9a-f]{40}' LICENSING.md | head -1)" = "$(git rev-parse origin/main)" &&
+      git rev-parse -q --verify refs/tags/apache-final >/dev/null &&
+      test "$(git rev-list -n1 apache-final)" = "$(git rev-parse origin/main)"
+    expected: >-
+      Exit 0. The SHA in LICENSING.md is the tip of main this branch was cut from, and the
+      annotated tag apache-final points at that same commit.
+    fix_if: >-
+      A mismatch means main advanced after LICENSING.md was written. Rebase onto origin/main,
+      update the SHA, re-point the tag, and re-run. Run this immediately before the final push. To
+      re-verify AFTER the squash-merge, compare against the flip commit's FIRST PARENT
+      (git rev-parse HEAD^1), NOT origin/main -- post-merge origin/main IS the flip commit, so
+      re-running the command verbatim is guaranteed to fail and would be a false alarm. The repository
+      has ZERO tags today, so "every version published" otherwise has no durable referent; the
+      annotated tag is that referent.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same moving-reference problem as step 5: the assertion is anchored on origin/main at flip
+      time, so a standing guard would compare against the wrong tree forever after the flip lands.
+      The durable half (LICENSING.md exists and names a real commit) is covered by
+      validate_licence_consistency.
+  - step: 7
+    phase: pre-deploy
+    action: COMMERCIAL-LICENSE.md is sanctioned by the prose allowlist.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/file-router.yaml'));
+      a=set(d['prose_allowlist']['allowed_globs']); g=set(d['prose_allowlist']['grandfathered_globs']);
+      w={'COMMERCIAL-LICENSE.md','LICENSING.md','CONTRIBUTING.md'};
+      assert w <= a, w - a; assert not (w & g), w & g; print('sanctioned')"
+    expected: Exit 0. All three new tracked .md files are sanctioned; none is parked in the ratchet-only list.
+    fix_if: >-
+      validate_prose_allowlist scans every tracked .md repo-wide and fails an unsanctioned one.
+      grandfathered_globs may only shrink, so parking it there is not an option.
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_prose_allowlist is itself the standing repo-wide guard for exactly this property;
+      a registry row would duplicate a check that already runs in both tiers.
+  - step: 8
+    phase: pre-deploy
+    action: The new check declares examined()/skipped() per Decision 170 and is not baselined.
+    command: >-
+      grep -qE '(registry\.)?(examined|skipped)\(' scripts/checks/hygiene/validate_licence_consistency.py &&
+      ! grep -q 'validate_licence_consistency' config/check_accounting_baseline.yaml
+    expected: Exit 0. The module declares an outcome and does not appear in the frozen baseline.
+    fix_if: >-
+      validate_check_accounting AST-scans every registered check and fails an undeclared,
+      unbaselined one. The baseline is bounded by a frozen _BASELINE_SEED and has no marker escape
+      grammar, so a new check cannot be grandfathered -- it must declare.
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_check_accounting already enforces this for every registered check in both tiers;
+      a per-plan registry row would guard one check against a rule that is already universal.
+  - step: 9
+    phase: pre-deploy
+    action: The new check passes against the swept tree, and would have failed before the sweep.
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    expected: >-
+      Exit 0 with an empty failure list. The check ships in PR-4, AFTER PR-3's sweep, so red is
+      NOT observable against the tree -- it is demonstrated by mirror-test fixtures carrying the
+      old slug (step 10). What this step proves is that the check is non-vacuous against the real
+      tree: it must report a non-zero examined() count, never an empty domain.
+    fix_if: >-
+      A pass with examined(0) is a VACUOUS pass -- the path allowlist is wrong or empty -- and is
+      exactly what Decision 170's declarative channel exists to make visible. Check the declared
+      count, not just the exit code.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The check itself is the standing guard and runs in both presubmit tiers via its manifest
+      Entry; graduating a VP step that invokes the same callable adds a second registration of one
+      guard.
+  - step: 10
+    phase: pre-deploy
+    action: Mirror test passes and the new module is fully covered.
+    command: >-
+      bin/venv-python -m pytest tests/checks/hygiene/test_validate_licence_consistency.py -q
+    expected: All tests pass.
+    fix_if: >-
+      test_coverage_checker enforces 100% line coverage on every CHANGED Python file, so partial
+      coverage of the new module fails the merge gate even if the tests themselves pass.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The mirror test is already a permanent part of the suite and runs on every full-tier
+      execution; a registry test_selector row would schedule the same file twice.
+  - step: 11
+    phase: pre-deploy
+    action: The new check is dispatchable through the real registry, not merely defined.
+    command: >-
+      bin/venv-python -c "from scripts.checks import registry;
+      n={s.name for s in registry.pre_sequence()} | {s.name for s in registry.full_sequence()};
+      assert 'validate_licence_consistency' in n, sorted(n)[:8]; print('dispatchable')"
+    expected: Exit 0, prints dispatchable.
+    fix_if: >-
+      Absence means the hygiene _manifest.py Entry is missing or misspelled. A module with a
+      @register decoration but no Entry is never dispatched -- it silently does nothing.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Manifest/registry integrity is already covered by tests/checks/registry/test_manifest_contracts.py
+      and the domain manifest test, both of which run repo-wide rather than per-plan.
+  - step: 12
+    phase: pre-deploy
+    action: Decision 171's envelope is well-formed and Decision 101 carries the reciprocal pointer.
+    command: >-
+      bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text();
+      b=re.search(r'## Decision 171:.*?(?=\\n## Decision )', t, re.S).group(0);
+      import yaml; env=yaml.safe_load(re.search(r'\`\`\`yaml\\n(.*?)\`\`\`', b, re.S).group(1));
+      assert env['number']==171, env; am=env.get('amends') or [];
+      assert 101 in am and 127 in am, am; assert (env.get('significance') or {}).get('justification');
+      assert len(b.encode()) <= 6144, len(b.encode());
+      [__import__('sys').exit('Decision %d lacks the reciprocal forward-pointer' % v)
+      for v in (101, 127) if 'Decision 171' not in
+      re.search(r'## Decision %d:.*?(?=\\n## Decision )' % v, t, re.S).group(0)];
+      assert 'licence-and-attribution' in
+      re.search(r'## Decision 127:.*?(?=\\n## Decision )', t, re.S).group(0),
+      'Decision 127 point 1 lacks the new licence-and-attribution class'; print('ok')"
+    expected: >-
+      Exit 0. Envelope declares amends [101, 127], carries a significance justification, is within
+      the size norm, and BOTH amended entries point back at Decision 171.
+    fix_if: >-
+      validate_supersession_annotations builds a graph edge from the envelope's amends list and
+      FAILS unless the amended entry names its amender. Without the reciprocal pointer, post-merge
+      main goes red and spawns a critical ci_rca rec.
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_decision_entry_conformance and validate_supersession_annotations already enforce
+      envelope well-formedness and edge reciprocity for every entry; this step is a pre-flight
+      rehearsal of guards that already exist.
+  - step: 13
+    phase: pre-deploy
+    action: Pre-handoff full-tier validation (Decision 163), run in EACH of the four PRs.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 on a completed run.
+    fix_if: >-
+      A timeout is not a pass -- handoff_policy.timeout_disposition is blocked, so resume later
+      and rerun from the start. Do not commit or open the PR on an incomplete run.
+    graduation: not-applicable
+
+  # ---------- PR-1 post-deploy: live trust proof ----------
+  - step: 14
+    phase: post-deploy
+    action: After the personal-root gated apply, all four personal roles trust the new slug live.
+    command: >-
+      set -o pipefail; for r in agent-platform-github-ci-branch agent-platform-github-ci-pr
+      agent-platform-github-ci-planner agent-platform-github-ci-deploy; do
+      D=$(aws iam get-role --role-name "$r" --profile agent_platform_admin
+      --query 'Role.AssumeRolePolicyDocument' --output json) || { echo "READ FAILED: $r"; exit 1; };
+      test -n "$D" || { echo "EMPTY doc: $r"; exit 1; };
+      echo "$D" | grep -q 'benjamin-blake/theseus'
+      || { echo "MISSING theseus sub: $r"; exit 1; }; done; echo all-four-ok
+    expected: Prints all-four-ok. Read from live IAM, never from the Terraform plan.
+    fix_if: >-
+      A missing role means its sub list was not expanded. Do NOT proceed to the rename -- that
+      role's workflows will fail to authenticate the moment the slug changes.
+  - step: 15
+    phase: post-deploy
+    action: After the operator bootstrap apply, the apply role carries all four sub entries.
+    command: >-
+      set -o pipefail; T=$(aws iam get-role --role-name agent-platform-github-ci-apply
+      --profile agent_platform_admin --query 'Role.AssumeRolePolicyDocument' --output json) &&
+      test -n "$T" &&
+      echo "$T" | grep -q 'theseus:ref:refs/heads/main' &&
+      echo "$T" | grep -q 'theseus:environment:tf-gated-apply' &&
+      echo "$T" | grep -q 'agent-platform:ref:refs/heads/main' &&
+      echo "$T" | grep -q 'agent-platform:environment:tf-gated-apply' && echo four-subs-ok
+    expected: Prints four-subs-ok -- two slugs times two Decision 94 sub forms.
+    fix_if: >-
+      Fewer than four means the operator apply did not land or dropped a form. The environment
+      form is the one that breaks gated-apply silently; treat its absence as a hard stop.
+  - step: 16
+    phase: post-deploy
+    action: >-
+      ADMIN-CONTAINER STEP. No unrelated regression under the OLD slug with dual trust in place. NOTE this is a
+      weak-positive check only: ci.yml:197-198's assume is continue-on-error, so a green run does
+      NOT prove both slugs are trusted -- steps 14 and 15 are the actual trust evidence.
+    command: >-
+      curl -sf -H "Authorization: Bearer $(cat ~/.config/gh-mcp/token)"
+      -H "Accept: application/vnd.github+json"
+      "https://api.github.com/repos/benjamin-blake/agent-platform/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=1"
+      | jq -e '.workflow_runs[0].conclusion == "success"'
+    expected: jq exits 0 -- the most recent push-to-main CI run succeeded with both slugs trusted.
+    fix_if: >-
+      Red here means dual trust itself broke something. Fix before renaming; this is the last
+      moment where the old slug is still the live name and rollback is free.
+
+  # ---------- PR-2 post-deploy: the rename ----------
+  - step: 17
+    phase: post-deploy
+    action: ADMIN-CONTAINER STEP. The repository answers at the new slug with its identity and history intact.
+    command: >-
+      curl -sf -H "Authorization: Bearer $(cat ~/.config/gh-mcp/token)"
+      -H "Accept: application/vnd.github+json"
+      https://api.github.com/repos/benjamin-blake/theseus
+      | jq -e '.name == "theseus" and .full_name == "benjamin-blake/theseus" and .private == false'
+    expected: jq exits 0. Name flipped, still public.
+    fix_if: >-
+      A 404 means the apply did not land. If .private is true the apply changed visibility, which
+      is an explicit non-goal -- revert immediately.
+  - step: 18
+    phase: post-deploy
+    action: ADMIN-CONTAINER STEP. The old URL redirects rather than 404s, so historical references still resolve.
+    command: >-
+      test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat ~/.config/gh-mcp/token)"
+      https://api.github.com/repos/benjamin-blake/agent-platform)" = "301"
+    expected: HTTP 301.
+    fix_if: >-
+      Anything else means the redirect is absent and every archived plan, DECISIONS run URL and
+      audit reference to the old slug is now dead. The old name must never be reused for a new
+      repository or the redirect breaks permanently.
+  - step: 19
+    phase: post-deploy
+    action: ADMIN-CONTAINER STEP. Repo-attached configuration survived the rename (the verification list IS the deliverable).
+    command: >-
+      B="https://api.github.com/repos/benjamin-blake/theseus"; H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
+      curl -sf -H "$H" "$B/rulesets" | jq -e 'map(select(.name=="main-protection")) | length == 1' &&
+      curl -sf -H "$H" "$B/environments/tf-gated-apply" | jq -e '.protection_rules | length > 0' &&
+      curl -sf -H "$H" "$B/actions/variables?per_page=100" | jq -e '.variables | map(.name) | index("AWS_ACCOUNT_ID") != null' &&
+      curl -sf -H "$H" "$B/actions/secrets?per_page=100" | jq -e '.secrets | map(.name) | index("GHAS_PROBE_TOKEN") != null' &&
+      curl -sf -H "$H" "$B/codeowners/errors" | jq -e '.errors | length == 0' &&
+      curl -sf -H "$H" "$B" | jq -e '.security_and_analysis.secret_scanning.status == "enabled"
+      and .security_and_analysis.secret_scanning_push_protection.status == "enabled"' && echo config-intact
+    expected: >-
+      Prints config-intact -- ruleset, gated-apply Environment with reviewers, Actions variable,
+      Actions secret, CODEOWNERS parsing clean, and GHAS secret scanning plus push protection.
+    fix_if: >-
+      Any failure identifies exactly which repo-attached setting did not survive. Rename is
+      expected to preserve all of these; this step exists to prove it rather than assume it.
+  - step: 20
+    phase: post-deploy
+    action: The fine-grained GHAS_PROBE_TOKEN's repo scope survived the rename.
+    command: >-
+      set -o pipefail; test -n "$PREV_RUN_ID" || { echo "PREV_RUN_ID unset -- capture the newest
+      dispatch run id BEFORE dispatching"; exit 1; };
+      H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
+      curl -sf -X POST -H "$H" -H "Accept: application/vnd.github+json"
+      https://api.github.com/repos/benjamin-blake/theseus/actions/workflows/ghas-probe.yml/dispatches
+      -d '{"ref":"main"}' &&
+      curl -sf -H "$H" "https://api.github.com/repos/benjamin-blake/theseus/actions/workflows/ghas-probe.yml/runs?event=workflow_dispatch&per_page=1"
+      | jq -e --argjson prev "$PREV_RUN_ID"
+      '.workflow_runs[0].id > $prev and .workflow_runs[0].conclusion == "success"'
+    expected: >-
+      Dispatch accepted AND a STRICTLY NEWER run concluded success. Capture PREV_RUN_ID from the
+      same endpoint BEFORE dispatching -- ghas-probe has pre-existing green dispatch runs (AGENTS.md
+      cites run 31536138747 from 2026-08-11), so an unpinned query yields a false pass that never
+      exercises the post-rename token. Re-run the second half until the run leaves "in_progress";
+      a null conclusion is not a pass. ADMIN-CONTAINER STEP -- api.github.com
+      is egress-blocked from the DEV container.
+    fix_if: >-
+      ghas-probe is loud-fail by design: a rotated, expired or mis-scoped token exits non-zero
+      rather than skipping. A failure here means the PAT is repo-name-scoped rather than
+      repo-ID-scoped and must be re-minted against the new name.
+  - step: 21
+    phase: post-deploy
+    action: >-
+      Every one of the five roles authenticates live under the new slug, including both apply-role
+      sub forms. This is the gate on trust cleanup.
+    command: >-
+      set -o pipefail; test -n "$RENAME_TS" || { echo "RENAME_TS unset"; exit 1; };
+      for role in branch pr planner deploy; do
+      U=$(aws iam get-role --role-name "agent-platform-github-ci-$role"
+      --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
+      || { echo "READ FAILED: $role"; exit 1; };
+      test -n "$U" -a "$U" != "None" || { echo "NEVER ASSUMED: $role"; exit 1; };
+      bin/venv-python -c "import sys,datetime as d;
+      u=d.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));
+      r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
+      sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
+      || { echo "STALE -- last successful assume predates the rename: $role"; exit 1; };
+      done; echo four-personal-roles-ok
+    expected: >-
+      Prints four-personal-roles-ok. Export RENAME_TS first, as ISO-8601 WITH AN EXPLICIT UTC OFFSET
+      -- use the trailing-Z form specifically, NOT +00:00. Step 22 compares it against GitHub's
+      run_started_at with jq, which is a LEXICOGRAPHIC string compare, and GitHub always returns
+      Z-suffixed; mixing forms only happens to work because the date-time prefixes differ, and it
+      fails open at exact equality. An offset-naive value raises inside the Python comparison in
+      steps 21/22 and is reported as STALE -- fail-closed, but misleading.
+      ADMIN-CONTAINER STEP -- needs agent_platform_admin. Drive the exercise deliberately before
+      running this: open and merge a trivial PR (github_ci_pr on the PR event, github_ci_branch on
+      push), let terraform-drift run (github_ci_planner), run a governed Lambda deploy
+      (github_ci_deploy). Do NOT try to drive a gated apply here -- there is no trust diff on main
+      to route one, which is the circularity step 22 exists to break. The apply
+      apply role is DELIBERATELY EXCLUDED from this step -- see step 22. Between PR-2 and PR-3
+      there is no IAM/trust/destroy diff on main to route a gated apply, and the only such diff IS
+      PR-3's own contraction, so requiring apply-role proof here would be circular and
+      unsatisfiable.
+      RoleLastUsed lags by up to ~4 hours; re-run rather than concluding failure inside that window.
+    fix_if: >-
+      RoleLastUsed advances ONLY on a successful sts:AssumeRoleWithWebIdentity, so it cannot be
+      satisfied by a failed assume. It is EVENT time, so its ~4h reporting lag produces false
+      negatives only -- re-run, never conclude failure inside that window. Two rejected alternatives, both load-bearing: (a) workflow RUN
+      conclusions are worthless here -- the assume steps carry continue-on-error: true at
+      terraform-drift.yml:91-92, deploy-ducklake-lambdas.yml:125-126 and :300-301, and
+      ci.yml:197-198, so a run concludes success even when the assume FAILED; (b) CloudTrail
+      lookup-events is DENIED to both available profiles (verified 2026-08-14; the repo records
+      this itself at terraform/bootstrap/github_ci_apply_policy.tf:493) AND would have been
+      fail-open anyway, since lookup-events returns failed AssumeRoleWithWebIdentity events with
+      the role ARN intact. Any role not proven is a role whose trust may be wrong -- do NOT run
+      step 23 until all four, plus the apply role's environment sub form, are observed.
+
+  # ---------- PR-4 post-deploy: cleanup and decision sync ----------
+  - step: 22
+    phase: post-deploy
+    action: >-
+      PR-3's own gated apply proves the apply role on BOTH Decision 94 sub forms -- and is
+      fail-safe by construction.
+    command: >-
+      set -o pipefail; test -n "$RENAME_TS" || { echo "RENAME_TS unset"; exit 1; };
+      U=$(aws iam get-role --role-name agent-platform-github-ci-apply
+      --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
+      || { echo "READ FAILED"; exit 1; };
+      test -n "$U" -a "$U" != "None" || { echo "apply role NEVER assumed"; exit 1; };
+      bin/venv-python -c "import sys,datetime as d;
+      u=d.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));
+      r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
+      sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
+      || { echo "apply role not assumed since the rename"; exit 1; };
+      test -n "$PR3_RUN_ID" || { echo "PR3_RUN_ID unset"; exit 1; };
+      H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)"; B="https://api.github.com/repos/benjamin-blake/theseus";
+      curl -sf -H "$H" "$B/actions/runs/$PR3_RUN_ID"
+      | jq -e --arg ts "$RENAME_TS" '.run_started_at > $ts'
+      || { echo "run $PR3_RUN_ID started BEFORE the rename -- pre-rename evidence, rejected"; exit 1; };
+      curl -sf -H "$H" "$B/actions/runs/$PR3_RUN_ID/jobs"
+      | jq -e '[.jobs[] | select(.name | test("gated-apply"))
+      | select(.conclusion == "success")] | length >= 1'
+    expected: >-
+      Exit 0. ONLY THE JOB ASSERTION IS LOAD-BEARING: RoleLastUsed is per-ROLE, not per-sub-FORM,
+      and advances on the ref-form assume that apply-sandbox performs earlier in the same run, so
+      treat it as corroborating liveness, never as proof of the environment form. The run-start
+      comparison is what rejects pre-rename evidence; the gated-apply job conclusion is what proves
+      the environment sub form. ADMIN-CONTAINER STEP. Export PR3_RUN_ID as the run id of PR-3's
+      post-merge terraform-apply-sandbox run, and RENAME_TS as ISO-8601 with an explicit UTC
+      offset.
+    fix_if: >-
+      WHY THIS IS SAFE DESPITE RUNNING AFTER THE CONTRACTION APPLIES: the gated-apply job must
+      AUTHENTICATE before it can apply anything, and post-rename GitHub can only mint theseus subs.
+      So a successful job proves the theseus environment: sub form, and a failed authentication
+      means the job never starts and the old-slug subs are never removed. The destructive change
+      cannot outrun its own proof. RECOVERY FOR THE ONE CELL THE HEAL BUTTON CANNOT REACH: if
+      gated-apply fails AT the OIDC step post-rename, write-convergence-record never reaches S3, so
+      the record stays green-with-pending_gated and Reconcile resolves nothing actionable. State is
+      SAFE (contraction unapplied, all personal roles still dual-trusted) but the sanctioned heal
+      button is inert -- repair out-of-band from the admin container by correcting the trust and
+      re-running the workflow, and do not treat Reconcile's silence as convergence. Do NOT substitute a convergence-record grep: the routed branch
+      of write-convergence-record preserves the prior status, so a routed-but-unapproved apply
+      leaves a STALE green that passes; and both apply-sandbox and apply-reconcile write green on
+      the ref sub with no environment: declaration, so a green proves the slug but never the sub
+      FORM -- which is exactly the Decision 94 VP9 regression this exists to catch.
+  - step: 23
+    phase: post-deploy
+    action: After cleanup, no role trusts the old slug, and the apply role keeps both sub forms.
+    command: >-
+      set -o pipefail; for r in agent-platform-github-ci-branch agent-platform-github-ci-pr
+      agent-platform-github-ci-planner agent-platform-github-ci-deploy
+      agent-platform-github-ci-apply; do
+      D=$(aws iam get-role --role-name "$r" --profile agent_platform_admin
+      --query 'Role.AssumeRolePolicyDocument' --output json) || { echo "READ FAILED: $r"; exit 1; };
+      test -n "$D" || { echo "EMPTY doc -- cannot certify cleanup: $r"; exit 1; };
+      echo "$D" | grep -q 'benjamin-blake/agent-platform'
+      && { echo "STALE old-slug sub still trusted: $r"; exit 1; }; done;
+      T=$(aws iam get-role --role-name agent-platform-github-ci-apply
+      --profile agent_platform_admin --query 'Role.AssumeRolePolicyDocument' --output json) &&
+      test -n "$T" &&
+      echo "$T" | grep -q 'theseus:ref:refs/heads/main' &&
+      echo "$T" | grep -q 'theseus:environment:tf-gated-apply' && echo cleanup-ok
+    expected: Prints cleanup-ok. Old slug gone from all five; both Decision 94 forms retained.
+    fix_if: >-
+      A stale sub is dead trust scope: a future repo created under the old name in this namespace
+      would inherit assume rights. Squatting is owner-only in a user namespace, so this is not
+      third-party-exploitable, but it must still be removed.
+  - step: 24
+    phase: post-deploy
+    action: Decision 171 reached the warehouse.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md &&
+      bin/venv-python -m scripts.sync.ops sync &&
+      grep -q '"id": "dec-171"' logs/.decisions-index.jsonl
+    expected: Backfill succeeds and dec-171 appears in the refreshed read cache.
+    fix_if: >-
+      DECISIONS.md is the numbering authority and ops_decisions is rebuilt from it. Never write
+      the row directly -- re-run the backfill after fixing the entry.
+
+test_obligations:
+  - source: scripts/checks/hygiene/validate_licence_consistency.py
+    behavior: >-
+      Licence-file consistency and the absence of old-slug references in class-(a) paths stay
+      guarded on every PR, with a non-vacuous examined() count.
+    verification_step: 10
+    test_selector: tests/checks/hygiene/test_validate_licence_consistency.py
+    red_green_expectation: >-
+      Red before the module exists (import error), green after; and within the test, a fixture
+      tree carrying the old slug must make the check append to failed.
+  - source: scripts/checks/hygiene/_manifest.py
+    behavior: The new Entry is dispatched by the real registry rather than merely declared.
+    verification_step: 11
+    command: >-
+      bin/venv-python -c "from scripts.checks import registry;
+      n={s.name for s in registry.pre_sequence()} | {s.name for s in registry.full_sequence()};
+      assert 'validate_licence_consistency' in n, sorted(n)[:8]; print('dispatchable')"
+    red_green_expectation: >-
+      Red before the Entry is added (name absent from both sequences), green after.
+  - source: scripts/checks/misc/validate_ghas_probe.py
+    behavior: >-
+      No old-slug reference survives at this path. NOTE the linked command proves ABSENCE only;
+      the positive claim (_default_repo() returns the theseus slug when GITHUB_REPOSITORY is
+      unset) is asserted in the mirror test, which this plan already modifies for coverage.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red via a mirror-test fixture naming this path, green against the swept tree.
+  - source: scripts/session/github_readiness.py
+    behavior: The authenticated readiness probe targets the renamed repository.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red via a mirror-test fixture naming this path, green against the swept tree; identical
+      mechanism to the row above.
+  - source: scripts/convergence_health/escalate.py
+    behavior: Filed acceptance probes reference the renamed repository.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red via a mirror-test fixture naming this path, green against the swept tree.
+  - source: scripts/convergence_health/approvals.py
+    behavior: >-
+      The three default repo parameters build workflow-run URLs against the renamed repository.
+      (Correction: these are GET URLs consumed by urllib.request.urlopen, which DOES follow a 301
+      with Authorization intact on the same host -- so staleness is survivable, not fatal. The
+      sweep is correct hygiene and the defaults must still move; an earlier draft justified it with
+      a POST/301 claim that is simply untrue of this module.)
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red via a mirror-test fixture naming this path, green against the swept tree.
+  - source: terraform/bootstrap/github_ci_apply.tf
+    behavior: The apply role's trust never loses either Decision 94 sub form.
+    verification_step: 3
+    command: >-
+      grep -q 'ref:refs/heads/main' terraform/bootstrap/github_ci_apply.tf &&
+      grep -q 'environment:tf-gated-apply' terraform/bootstrap/github_ci_apply.tf
+    red_green_expectation: >-
+      Red if either form is deleted during the dual-trust expansion or the later contraction,
+      green while both are present. NOT graduated -- step 3's waiver records why the registry row
+      is unsatisfiable across this plan's four PRs.
+  - source: terraform/personal/oidc_ci_roles.tf
+    behavior: github_ci_branch and github_ci_pr trust both slugs during the transition window.
+    verification_step: 2
+    command: "! grep -rn 'local\\.github_repo\\b' terraform/personal/ terraform/bootstrap/"
+    red_green_expectation: >-
+      Red while any scalar-local survivor remains (that role would trust one slug only), green
+      once every sub site iterates the list.
+  - source: terraform/personal/oidc_pipeline_roles.tf
+    behavior: github_ci_planner and github_ci_deploy trust both slugs during the transition window.
+    verification_step: 2
+    command: "! grep -rn 'local\\.github_repo\\b' terraform/personal/ terraform/bootstrap/"
+    red_green_expectation: Red on any scalar survivor, green once all eight sub entries are expanded.
+  - source: tests/convergence_health/test_approvals.py
+    behavior: approvals.py keeps 100% line coverage after its default parameters change.
+    verification_step: 13
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      This file is a test, not a behaviour source; its own obligation is discharged by the
+      changed-file coverage gate inside the full-tier run rather than by a separate red-green pair.
+  - source: terraform/github/environments.tf
+    behavior: >-
+      The tf-gated-apply Environment cannot be destroyed by a Terraform run, so the gated-apply
+      job can never silently become ungated.
+    verification_step: 19
+    command: >-
+      B="https://api.github.com/repos/benjamin-blake/theseus"; H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)";
+      curl -sf -H "$H" "$B/rulesets" | jq -e 'map(select(.name=="main-protection")) | length == 1' &&
+      curl -sf -H "$H" "$B/environments/tf-gated-apply" | jq -e '.protection_rules | length > 0' &&
+      curl -sf -H "$H" "$B/actions/variables?per_page=100" | jq -e '.variables | map(.name) | index("AWS_ACCOUNT_ID") != null' &&
+      curl -sf -H "$H" "$B/actions/secrets?per_page=100" | jq -e '.secrets | map(.name) | index("GHAS_PROBE_TOKEN") != null' &&
+      curl -sf -H "$H" "$B/codeowners/errors" | jq -e '.errors | length == 0' &&
+      curl -sf -H "$H" "$B" | jq -e '.security_and_analysis.secret_scanning.status == "enabled"
+      and .security_and_analysis.secret_scanning_push_protection.status == "enabled"' && echo config-intact
+    red_green_expectation: >-
+      Red if the Environment exists with zero protection rules -- the fail-open shape GitHub
+      auto-creates on first job reference after a destroy -- green when reviewers are attached.
+  - source: terraform/github/repo.tf
+    behavior: >-
+      No stale old-slug import instruction survives, and the redundant import block coupled to the
+      flipped variable is gone.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red is proven by a mirror-test fixture carrying repo.tf's import-comment shape, not by tree
+      state (the check ships after the sweep); green against the swept tree.
+  - source: terraform/personal/oidc.tf
+    behavior: >-
+      Every OIDC sub site consumes the dual-slug list local, so no personal-root role is left
+      trusting a single slug across the rename moment.
+    verification_step: 2
+    command: "! grep -rn 'local\\.github_repo\\b' terraform/personal/ terraform/bootstrap/"
+    red_green_expectation: >-
+      Red while the scalar local survives anywhere (that role trusts one slug only), green once
+      every sub site iterates local.github_repos.
+  - source: terraform/github/variables.tf
+    behavior: The repository_name default drives the live repository name to theseus.
+    verification_step: 17
+    command: >-
+      curl -sf -H "Authorization: Bearer $(cat ~/.config/gh-mcp/token)"
+      -H "Accept: application/vnd.github+json"
+      https://api.github.com/repos/benjamin-blake/theseus
+      | jq -e '.name == "theseus" and .full_name == "benjamin-blake/theseus" and .private == false'
+    red_green_expectation: >-
+      Red before the operator apply (the new slug 404s), green after. Runs from the admin
+      container, not the DEV container -- see the execution-context constraint.
+  - source: LICENSE
+    behavior: >-
+      LICENSE is complete, parameterised BUSL-1.1 with every Parameter populated and no template
+      placeholder surviving.
+    verification_step: 4
+    command: >-
+      grep -q 'Business Source License 1.1' LICENSE &&
+      grep -q '^Licensor: *Benjamin Blake' LICENSE &&
+      grep -q '^Licensed Work:' LICENSE &&
+      grep -qE '^Change Date: *20[0-9]{2}-[0-9]{2}-[0-9]{2}' LICENSE &&
+      grep -q '^Change License: *Apache-2.0' LICENSE &&
+      grep -q '^Additional Use Grant:' LICENSE &&
+      awk '/^Additional Use Grant:/,/^Change Date:/' LICENSE
+      | grep -qiE 'without limitation|not exhaustive' &&
+      ! awk '/^Licensor:/,/^-----/' LICENSE | grep -qE '\[[^]]*\]'
+    red_green_expectation: >-
+      Red against the current Apache-2.0 LICENSE (no BUSL header, no Parameters block), green
+      once the parameterised BUSL text lands.
+  - source: LICENSE-APACHE
+    behavior: >-
+      The Apache text governing every pre-flip version is preserved byte-identically, so the
+      forward-only boundary statement is backed by the actual prior licence.
+    verification_step: 5
+    command: >-
+      git show origin/main:LICENSE > "${TMPDIR:-/tmp}/pre-flip-licence.txt" &&
+      diff -q "${TMPDIR:-/tmp}/pre-flip-licence.txt" LICENSE-APACHE
+    red_green_expectation: >-
+      Red before the file exists or if it is paraphrased/re-wrapped, green when byte-identical to
+      the pre-flip LICENSE.
+  - source: LICENSING.md
+    behavior: >-
+      The licence-boundary statement names the correct last-Apache commit, so no published
+      version is mis-attributed in either direction.
+    verification_step: 6
+    command: >-
+      test "$(grep -oE '[0-9a-f]{40}' LICENSING.md | head -1)" = "$(git rev-parse origin/main)"
+    red_green_expectation: >-
+      Red when the file is absent or its SHA has drifted from the branch base, green when the
+      anchor matches the last pre-flip commit.
+  - source: docs/contracts/file-router.yaml
+    behavior: >-
+      All three new root .md files are a sanctioned prose class, so the repo-wide tracked-.md
+      guard does not fail on them.
+    verification_step: 7
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/file-router.yaml'));
+      a=set(d['prose_allowlist']['allowed_globs']); g=set(d['prose_allowlist']['grandfathered_globs']);
+      w={'COMMERCIAL-LICENSE.md','LICENSING.md','CONTRIBUTING.md'};
+      assert w <= a, w - a; assert not (w & g), w & g; print('sanctioned')"
+    red_green_expectation: >-
+      Red before the allowed_globs rows are added (and red if any is parked in the ratchet-only
+      grandfathered list instead), green once all three are correctly sanctioned.
+  - source: bin/setup-cloud-env.sh
+    behavior: >-
+      The GITHUB_MCP_PAT comment names the token's real repository scope; the on-disk checkout path
+      at line 38 is deliberately untouched.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red is proven by a mirror-test fixture carrying the old slug at this path, not by tree state
+      (the check ships in PR-4, after PR-3's sweep); green against the swept tree.
+  - source: .github/workflows/ghas-probe.yml
+    behavior: The credential-header comment names the probe token's real repository scope.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red is proven by a mirror-test fixture carrying the old slug at this path, not by tree state
+      (the check ships in PR-4, after PR-3's sweep); green against the swept tree.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: The T2.10 exit-criterion text names the repository CI trust is actually pinned to.
+    verification_step: 9
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_licence_consistency import
+      validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
+    red_green_expectation: >-
+      Red via a mirror-test fixture rather than tree state (the check ships after the sweep); green
+      against the swept tree. Text-only edit on an existing criterion, so the bare-string roadmap
+      guard does not fire.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: The new check has a failure-category row so a CI-RCA classification cannot miss it.
+    verification_step: 11
+    command: >-
+      bin/venv-python -c "from scripts.checks import registry;
+      n={s.name for s in registry.pre_sequence()} | {s.name for s in registry.full_sequence()};
+      assert 'validate_licence_consistency' in n, sorted(n)[:8]; print('dispatchable')"
+    waiver_reason: >-
+      Pure registration config with no behaviour of its own. Roster completeness is already
+      enforced repo-wide by validate_ci_rca_taxonomy, which fails any registered check lacking a
+      function_to_category row; a plan-local red-green pair would restate that universal guard.
+
+constraints:
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable V3 failure, stop and RCA.
+  - >-
+    Agents never self-direct a terraform apply. terraform/personal applies via CI behind the
+    tf-gated-apply Environment; terraform/github is operator-directed (plan presented, human
+    accepts, then apply); terraform/bootstrap is human-only -- the agent files a rec and stops.
+  - >-
+    Do NOT add terraform/github or terraform/bootstrap to any auto-apply workflow. The guard is
+    AWS-IAM-only and has zero github_* awareness, so a ruleset diff would classify as safe to
+    auto-apply. Bringing that channel into CI is deliberately deferred to rec-3126.
+  - >-
+    Never rename any AWS resource. agent-platform-* IAM roles, the agent-platform-data-lake
+    bucket, /agent-platform/* SSM paths, the agent_platform Glue database and profile, and all
+    Lambda names stay exactly as they are. Decision 101's other point-(b) rows remain frozen.
+  - >-
+    The relicense is FORWARD ONLY. Every version published up to the flip commit remains
+    Apache-2.0 irrevocably; make no retroactive claim anywhere in LICENSE, LICENSING.md, README or
+    Decision 171.
+  - >-
+    Do not rewrite historical old-slug references in docs/DECISIONS.md run URLs, archived
+    docs/plans/, docs/INTENT-*.md, docs/audit-prompts/ or audits/. Redirects keep them resolvable
+    and audits/ deliverables are sealed.
+  - >-
+    Do not raise any budget. terraform/github/CLAUDE.md sits at exactly its prose budget, so its
+    edit must be a net-neutral-or-shrinking substitution; docs/PROJECT_CONTEXT.md has 36 bytes of
+    headroom. No # raise-approved marker is authored by this plan.
+  - >-
+    The rename moment requires a quiet window: no in-flight PRs, no pending gated-apply approval
+    holding the concurrency group, and a green convergence record before the apply.
+  - >-
+    Do not author a local terraform init/validate/plan command. Neither terraform nor gh is
+    installed in the DEV container; CI's required terraform-validate check and the
+    speculative-plan job are the authoritative verifiers.
+
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": round 1 BLOCK (Decision 166
+    structural-size, resolved by the PR #906 terraform decomposition landing on main); round 2
+    FLAGS_FOUND, 123 of 123 triaged. CITE list: Decision 48, Decision 55, Decision 75, Decision
+    77, Decision 83, Decision 84, Decision 92, Decision 93, Decision 94, Decision 98, Decision
+    101, Decision 111, Decision 119, Decision 126, Decision 127, Decision 128, Decision 131,
+    Decision 132, Decision 144, Decision 150, Decision 158, Decision 163, Decision 165, Decision
+    166, Decision 167, Decision 169, Decision 170.
+  - >-
+    "gates: decision-scout=FLAGS_FOUND (round 2, after a round-1 BLOCK); plan-critique=<verdict>
+    after <N> round(s)" -- plan-critique runs as a multi-perspective panel with a 3-round
+    convergence rule at explicit human direction, not the single-agent default.
+  - >-
+    Decision 101 already ratifies Theseus as the platform's external brand and records
+    theseus.support as owned, but its point (b) freezes the repository name as an internal
+    identifier "not to be altered without a separate explicit decision" and defers the deep rename
+    post-MVP. Decision 171 is that explicit decision: it promotes ONLY the repository-name row into
+    the presentation layer and re-affirms every other (b) row as frozen.
+  - >-
+    Decision 101 point (f) defers "a paid service offering" as separately gated. Decision 171
+    discharges that gate for the licence half only -- it authorises dual licensing, not a built
+    commercial surface.
+  - >-
+    Decision 171 byte budget is a HARD FAIL, not a warning -- corrected mid-planning after an
+    incorrect fact-check in the other direction. docs/contracts/decision-entry.yaml's
+    size_governance.per_entry_size_norm sets tier: hard-fail, and
+    validate_decisions_size._per_entry_cap_failures appends to `failed` for any new-in-diff entry
+    over 6,144 bytes (the function was renamed from _per_entry_cap_warnings precisely to mark that
+    flip). Recent single-subject entries land at 5,649-5,869 bytes, and 171 must carry TWO subjects
+    plus a split reversal stanza, three row-specific Decision 101 amendments, the GPL-compatibility
+    reasoning, the sole-ownership caveat, the in-place-rename rationale and the prose-class naming.
+    It will be tight. A raise is forbidden by this plan's constraints AND by Decision 167's own
+    reversal conditions. NAMED RELIEF PATH, in order: (1) route mechanism detail to LICENSING.md
+    and the contracts rather than restating it in the entry; (2) compress the Related pointer block
+    to bare ids; (3) move the in-place-over-fresh-repo rationale into LICENSING.md, citing it from
+    the entry. If it still will not fit, STOP and escalate to the operator -- do not raise the cap,
+    and do not split into two entries to evade it, which Decision 167 reversal condition (b) names
+    as split-then-recombine.
+  - >-
+    Header budget: docs/DECISIONS.md carries 123 live H2 entries against a 132 ceiling. A single
+    entry was chosen over splitting rename and relicence at explicit human direction; the entry
+    therefore carries a split reversal stanza so either half can be reversed independently.
+  - >-
+    BUSL-1.1 was chosen over AGPL and FSL because its default text restricts PRODUCTION USE,
+    reaching internal for-profit use by third parties that copyleft and non-compete licences do
+    not. Parameters: Licensor "Benjamin Blake"; Change License Apache-2.0; Change Date = flip date
+    + 4 years, rounded DOWN to the exact anniversary (BUSL's cap; never up -- see the Change Date
+    context row); Additional Use Grant is a clarifying restatement of BUSL's baseline permitting
+    non-production use, personal research, evaluation and development, carrying the mandatory
+    non-limitation clause INSIDE the parameter value. Canonical licence text: https://mariadb.com/bsl11/ -- reproduce
+    verbatim, filling only the Parameters block.
+  - >-
+    GitHub's licence detector (licensee) is backed by choosealicense.com, which does NOT include
+    BUSL-1.1 despite it being a valid SPDX identifier. Do not gate anything on a licence badge
+    appearing; record whatever .license.spdx_id returns as an observation, not a failure.
+  - >-
+    LICENSING.md anchors on the last pre-flip commit SHA AND states a self-verifying rule (any snapshot
+    whose root LICENSE is the Apache text is Apache-licensed) so the boundary survives squash-merge
+    SHA churn. Verify the SHA immediately before the final push (VP step 6).
+  - >-
+    The in-place rename is deliberate over a fresh repository: a new repo confers no additional
+    legal protection, since the published Apache snapshot stays Apache for whoever holds it, while
+    destroying the public track record and the PR/commit reference graph the decision log depends
+    on. Record this in Decision 171.
+  - >-
+    Deployment design informed by a Fable advice-consult (2026-08-14). Its ordering is adopted:
+    bootstrap trust first (the riskiest edit, made while everything is healthy and locally
+    repairable), personal-root trust second, live verification third, rename fourth, trust
+    narrowing last. Its headline recommendation -- rename via the GitHub API rather than Terraform
+    -- was NOT adopted: its central premise (that terraform/github is un-initable from the admin
+    container) was refuted by an operator diagnostic on 2026-08-14 showing init succeeds,
+    integrations/github v6.12.1 signature-verified, state readable with 5 managed resources.
+  - >-
+    Safety property of the ordering: no step leaves the system with CI broken AND the repair
+    requiring CI. Before the rename every apply runs under a fully working old-slug CI. After it,
+    either trust is correct or the recovery is an owner-executed rename-back needing neither CI nor
+    Terraform, because the old-slug subs are still trusted. Irreversibility begins only at VP step
+    23, which is gated on steps 21 and 22's live proof of all five roles.
+  - >-
+    github_repository.name is NOT ForceNew: the provider calls Repositories.Edit() then
+    d.SetId(repo.GetName()), handling rename natively. github_repository_ruleset.repository is not
+    ForceNew either. The expected plan is in-place updates across the five resources referencing
+    github_repository.this.name; any destroy or replace of github_repository.this is an ABORT
+    (prevent_destroy = true would block it regardless). Documented fallback if the reviewed plan is
+    wrong: abort and rename via the GitHub API, accepting a state rm + re-import reconcile debt.
+  - >-
+    Decision 119's premise is STALE as of 2026-08-14: an operator diagnostic found
+    terraform/personal init succeeds with kislerdm/neon installed self-signed and no mirror, and
+    the github.com release-asset URLs Decision 119 names as permanently 403ing all return 200 --
+    only the HTML browse page still 403s. This plan does NOT rely on that finding (one container,
+    one moment; the boundary has moved before) and keeps every terraform step CI-delegated. File a
+    follow-on rec at implement time so the docs resting on that premise are re-grounded.
+  - >-
+    Follow-on recs to file at implement time (do not expand this plan's scope): commercial-contact
+    routing once theseus.support exists (ROADMAP-SEMANTO S1.2/S1.3, deferred_post_mvp); the stale
+    Decision 119 premise above; the deploy-paths.yaml misclassification of terraform/github as a
+    "hashicorp/*-only root" when it uses integrations/github; and the stale pre-Decision-94 comment
+    at terraform/github/environments.tf:21-22 asserting "the sub is still refs/heads/main"; adding
+    a terraform/github leg to .github/workflows/terraform-provider-mirror-seed.yml so
+    integrations/github lands in the S3 mirror (that workflow seeds from terraform/personal only,
+    and the mirror is the one governed way to make PR-2's Terraform branch independent of ad-hoc
+    egress -- it would likely retire the API fallback branch entirely); and graduating
+    bootstrap-apply-trust-both-sub-forms from a single-PR plan per VP step 3's waiver.
+  - >-
+    Already filed: rec-3126, bringing terraform/github onto a governed plan + always-gated-apply CI
+    channel. Deliberately deferred past this plan so a brand-new apply channel's first exercise is
+    not the change that can break every OIDC trust claim in the repo.
+  - >-
+    The class-(a) / class-(b) split is load-bearing and must be encoded as an explicit path
+    allowlist in validate_licence_consistency, never a repo-wide grep: roughly twenty legitimate
+    bare "agent-platform" occurrences are AWS naming (SSM paths, Project tags, terraform variable
+    defaults) that must NOT be rewritten.
+  - >-
+    PR ORDERING (revised at critique): sweep + trust cleanup runs BEFORE the relicense, not after.
+    Leaving PR-3 as licence drafting would have parked BUSL parameterisation and an advisory legal
+    review inside the window where trust is still dual and the old slug is un-narrowed. The user's
+    hard constraint (rename FIRST, relicense SECOND) is unaffected -- the relicense still lands
+    after the rename. The new check ships with the relicense, so its slug-staleness red-green is
+    demonstrated by fixtures in the mirror test rather than by tree state.
+  - >-
+    Change Date rounds DOWN to the exact four-year anniversary of the flip, never up. An earlier
+    draft said "pinned to the first of the following month", which would have pushed the date up to
+    ~30 days PAST the anniversary and breached BUSL-1.1's own cap. A published version's Change
+    Date may only ever be moved EARLIER, never later -- moving it later is the same retroactive
+    claim the forward-only rule forbids in the other direction.
+  - >-
+    The boundary file is LICENSING.md, deliberately NOT NOTICE. Pre-flip snapshots are
+    Apache-licensed and Apache-2.0 section 4(d) gives a root NOTICE file a specific redistribution
+    obligation; putting BUSL boundary prose there is genuinely ambiguous for a downstream Apache
+    licensee. Its self-verifying rule must be provenance-scoped ("any commit of THIS repository AS
+    PUBLISHED BY THE LICENSOR at or before <SHA>/apache-final") -- an unscoped rule keyed on the
+    content of a mutable LICENSE file lets a post-flip BUSL licensee revert it and self-certify
+    Apache.
+  - >-
+    RESOLVED (operator decision, post-critique): the Additional Use Grant stays a clarifying
+    restatement of BUSL's baseline AND carries an explicit non-limitation clause. The licensing
+    critique's objection was that BUSL's grant slot exists to permit LIMITED PRODUCTION use, so an
+    enumerated list there invites an expressio unius reading -- the enumeration taken as exhaustive,
+    NARROWING the baseline the body already grants. The operator's fix is the standard drafting
+    remedy rather than a switch to "None": state that the enumeration is illustrative and not
+    exhaustive, and that it neither limits nor qualifies the rights granted by the licence body.
+    That preserves the evaluator-facing clarity the restatement was chosen for (dec-111's curated
+    portal serves exactly that audience) while removing the narrowing risk. Draft it so the
+    non-limitation sentence sits INSIDE the Additional Use Grant parameter value, not as a floating
+    note elsewhere in the file -- a clause in a different section does not qualify the parameter.
+    VP step 4 asserts the non-limitation language is present, so this cannot be silently dropped
+    during drafting. Flag it to the external legal reviewer as one of the named items.
+  - >-
+    Sole-copyright-ownership premise is UNVERIFIED and must not be silently assumed. GitHub ToS
+    inbound=outbound puts contributions under the outbound licence (BUSL), which confers no right
+    to sublicense commercially -- hence CONTRIBUTING.md. The clone here is SHALLOW (60 commits from
+    2026-08-04) so repo-wide authorship cannot be measured from it; in that window 59 of 60 commits
+    are authored by Benjamin Blake, 1 by "Claude <noreply@anthropic.com>", and 54 carry a
+    Co-Authored-By trailer. Record the provenance question in Decision 171 and file a rec for a
+    real CLA/DCO mechanism rather than treating a README sentence as sufficient.
+  - >-
+    Additional follow-on recs to file at implement time: a dependency-licence audit (benign while
+    outbound is Apache-2.0, NOT benign once a commercial licence is sold -- blocking before any
+    sale, not before the flip); and a real CLA/DCO mechanism per the row above.
+  - >-
+    Decision 171 must record why Apache-2.0 is an acceptable BUSL Change License: BUSL-1.1 requires
+    the Change License be GPL-compatible, and Apache-2.0 is GPLv3-compatible (not GPLv2). This is
+    well-precedented but the reasoning is currently nowhere in the repo.
+  - >-
+    CI-DELEGATION CLAIM, QUALIFIED (critique-gate finding). This plan discounts the 2026-08-14
+    terraform/personal init diagnostic as one-container/one-moment, yet PR-2's terraform/github plan
+    is NOT CI-delegable -- that root has no CI path by this plan's own constraint -- and depends on
+    initing integrations/github, a third-party github.com-hosted provider, i.e. exactly the class
+    Decision 119 calls blocked. The single most consequential apply therefore rests on the
+    diagnostic class discounted elsewhere. That asymmetry is why the GitHub-API rename is a
+    first-class execution branch in PR-2, not a footnote.
+  - >-
+    Decision 171 must carry a portal-set note. Decision 111 enumerates the curated public portal as
+    README.md, AGENTS.md, EVALUATION-PROMPTS.yaml, .devcontainer/ and SECURITY.md. This plan lands
+    three NEW root portal files (LICENSING.md, CONTRIBUTING.md, COMMERCIAL-LICENSE.md), so that
+    enumeration goes stale on merge. The invariant itself is untouched -- licence artefacts are
+    curated projection, not an operational-data export, so Decision 111's reversal conditions do
+    not fire -- but the entry must say so explicitly rather than leaving the list silently wrong.
+    Record the COMMERCIAL-LICENSE.md placement rationale too: Decision 101(c) names marketing/ as
+    the home for commercial PROSE, and a licence-contact stub at the repo root where licence files
+    conventionally live is deliberately not that.
+  - >-
+    The Co-Authored-By trailer must be addressed head-on, not left implicit. AGENTS.md's own
+    git-ops conventions mandate a Co-Authored-By line naming the assistant on every commit, and 54
+    of the 60 commits visible in this shallow clone carry one; the trailer keeps accruing after the
+    flip. A trailer is a convention rather than an assignment, but a dual-licensing posture resting
+    on sole copyright ownership cannot simply not mention it. Name it in CONTRIBUTING.md and in
+    Decision 171's sole-ownership caveat, and let the follow-on CLA/DCO rec decide whether the
+    convention needs changing. Do NOT quietly drop the trailer as a workaround.
+  - >-
+    Name Decision 171's reversal-stanza FORM explicitly when authoring: decision-entry.yaml
+    distinguishes a plain **Reversal conditions:** marker from the machine-monitored fenced
+    reversal-conditions stanza that scripts/preflight/decision_conditions.py matches on its exact
+    info string. Pick one deliberately. A second fence also costs bytes against the hard 6,144-byte
+    cap, which is the binding constraint here -- prefer the plain marker unless monitoring is
+    genuinely wanted.
+  - >-
+    HERMETIC MARKERS DELIBERATELY ABSENT (structural, do not "restore" them). validate_vp_replay
+    re-executes every (pre-deploy AND hermetic) step against the tree of whichever PR carries a
+    feat({slug}) commit. This plan spans FOUR PRs, and a step's preconditions hold only inside its
+    own PR: steps 4/5/7/8 assert BUSL/LICENSING.md/prose-globs/the new check, all absent in PR-1;
+    steps 1/2 assert the dual-slug state that PR-3 deliberately reverses. Marking any of them
+    hermetic makes each PR fail the other PRs' steps. The steps still run at implement time -- only
+    the cross-PR replay is disabled. If a future revision collapses this into a single PR, or
+    splits it into four plan slugs, revisit these markers then and not before.
+  - >-
+    Branch was rebased onto origin/main e86c271 at authoring time; preflight reported 0 commits
+    behind, 0 ahead, no uncommitted changes, and an empty ci_rca_unresolved_recs list.
+
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Operator confirms a quiet window -- no in-flight PRs, no pending gated-apply approval
+  - Operator confirms admin-container access for the two bootstrap applies and the rename apply
+  - External legal review of the BUSL parameters offered to the operator (advisory, non-blocking)
+
+execution_steps:
+  - >-
+    PR-1 (dual trust). Convert local.github_repo to local.github_repos in terraform/personal/oidc.tf
+    and terraform/bootstrap/github_ci_apply.tf; expand every sub site in oidc_ci_roles.tf (branch 2,
+    pr 2) and oidc_pipeline_roles.tf (planner 3, deploy 1) to iterate the list; expand the apply
+    role across both Decision 94 sub forms. Run VP steps 1-3 and 13, then open the PR.
+  - >-
+    PR-1 apply, part A (operator, human-only). File a rec describing the bootstrap change and STOP.
+    A human applies terraform/bootstrap from the admin container with the agent_platform_admin
+    profile after reviewing the plan. Then run VP step 15. Bootstrap goes FIRST, deliberately.
+  - >-
+    PR-1 apply, part B (CI). Merge the PR; the trust diff trips the guard to exit 2 and routes to
+    the gated-apply job. The operator approves the tf-gated-apply Environment. Then run VP steps 14
+    and 16. Do not proceed while either is red.
+  - >-
+    PR-2 (rename). Flip repository_name to theseus in terraform/github/variables.tf; make the
+    net-neutral substitution across all three old-slug sites in terraform/github/CLAUDE.md; add
+    prevent_destroy to github_repository_environment.tf_gated_apply in terraform/github/environments.tf
+    (it carries no lifecycle block today, so the fail-open destroy path is genuinely open --
+    prevent_destroy is a lifecycle meta-argument and produces NO plan diff, so it does not perturb
+    the operator's "in-place updates only" expected shape); and delete the redundant import block in
+    terraform/github/repo.tf, whose line-2 comment is itself a class-(a) old-slug site. Run VP step 13, open and merge the PR.
+  - >-
+    PR-2 apply (operator-directed, admin container). Resolve the tf-gated-apply reviewer id FIRST
+    -- gated_apply_reviewer_user_ids has no default and its validation rejects an empty list, and
+    the runbook's `gh api /user --jq .id` will not work (gh absent, api.github.com egress-blocked
+    from DEV); use the admin container or the GitHub MCP get_me tool. Then
+    terraform -chdir=terraform/github plan with the documented vars. PRESENT the plan and STOP.
+    Expected shape: in-place updates only. ABORT on ANY of: a destroy, replace or import action on
+    ANY of the five resources referencing github_repository.this.name
+    (github_repository.this, github_repository_ruleset.main_protection,
+    github_actions_repository_permissions.this, github_workflow_repository_permissions.this,
+    github_repository_environment.tf_gated_apply); any diff to the Environment's reviewers; any
+    change to required_status_checks. Only after explicit human acceptance, apply.
+  - >-
+    PR-2 apply, FALLBACK BRANCH (first-class, not a footnote). If terraform init cannot resolve
+    the integrations/github provider in the admin container, or the presented plan trips any abort
+    condition above, do NOT force it: the owner renames via GitHub Settings or
+    PATCH /repos/benjamin-blake/agent-platform with {"name":"theseus"}. This is atomic and
+    Terraform-independent. It leaves terraform/github state drifted (the github_repository state ID
+    is the repo NAME), which nothing detects -- terraform-drift.yml is WORKDIR: terraform/personal
+    only -- so file a rec immediately for the state reconcile (expect state rm + re-import) and do
+    not run a routine terraform/github apply until it is done, or that apply will silently rename
+    the repository forward again.
+  - >-
+    After either branch: run VP steps 17, 18, 19 and 20. Then, ON THE TERRAFORM BRANCH ONLY,
+    assert a clean (no-op) terraform/github plan so state and reality agree before anything else
+    touches that root. Do NOT run that assertion on the API-fallback branch: that branch drifts
+    state deliberately (the github_repository state ID is the repo name), so a non-empty plan there
+    is the expected outcome, not a failure -- the reconcile rec filed in that branch is what closes
+    it, and a routine apply must not run against that root until the reconcile lands.
+  - >-
+    Live-exercise the FOUR personal-root roles under the new slug per VP step 21 -- a trivial PR
+    opened and merged (github_ci_pr, github_ci_branch), a terraform-drift cycle (github_ci_planner)
+    and a governed Lambda deploy (github_ci_deploy). The apply role is NOT exercised here: no trust
+    diff exists on main between PR-2 and PR-3 to route a gated apply, and the only one that will is
+    PR-3's own contraction. Step 22 proves the apply role from that apply, which is fail-safe --
+    the job must authenticate on a theseus sub before it can remove anything.
+  - >-
+    PR-3 (sweep + trust cleanup, NO guard) -- runs BEFORE the relicense so dual trust is narrowed
+    promptly after step 21 rather than waiting on licence drafting and legal review. Update the
+    class-(a) slug sites. The check is NOT written here -- it ships whole in PR-4, because its
+    licence invariant cannot be green before LICENSE and LICENSING.md exist. Remove the old-slug
+    subs from both trust roots. Run VP steps 2 and 13, then open the PR.
+  - >-
+    PR-3 applies. Bootstrap contraction is again operator-only (file a rec, STOP, human applies);
+    the personal-root contraction routes through gated-apply as before. Then run VP steps 22 and 23.
+  - >-
+    Create and push the boundary tag BEFORE writing LICENSING.md's SHA, in the PR-4 working tree:
+    git tag -a apache-final "$(git rev-parse origin/main)" -m "Last version released under
+    Apache-2.0; later versions are BUSL-1.1 per Decision 171" && git push origin apache-final.
+    The repository has ZERO tags today, so this is the first durable referent for "every version
+    published up to the flip". A local-only tag is not an anchor -- the push is load-bearing, and
+    VP step 6 asserts the tag resolves to the same commit as LICENSING.md's SHA.
+  - >-
+    PR-4 (relicense + decision) -- LAST. Fetch the canonical BUSL-1.1 text and fill only its Parameters
+    block. Write validate_licence_consistency here (NOT in PR-3): its licence invariant cannot be
+    green before LICENSE and LICENSING.md exist. Give it an explicit class-(a) path allowlist WITH
+    A PER-PATH PATTERN, an examined() count declaration, and both invariants; register it across
+    its six applicable surfaces including the ci_rca_taxonomy row -- NOT a verification-registry
+    row: nothing in this plan graduates (see VP step 3's waiver), so surface 5 does not apply and
+    authoring that row would red PRs 2-4; write the mirror test to 100% line coverage. Then move the current Apache
+    text verbatim to LICENSE-APACHE; write LICENSING.md with the SHA and
+    the self-verifying rule; add the COMMERCIAL-LICENSE.md placeholder and its prose_allowlist row;
+    rewrite README's H1, License section and CLA note; name the project in PROJECT_CONTEXT. Author
+    Decision 171 with its Decision 167 envelope (amends [101, 127]) AND the reciprocal
+    forward-pointer inside BOTH Decision 101 and Decision 127 -- and add the
+    licence-and-attribution class to Decision 127's point-1 permanent-class enumeration, which is
+    the substantive amendment the 127 edge asserts. Point LICENSE's alternative-licensing contact
+    slot at COMMERCIAL-LICENSE.md rather than leaving its bracket empty. Re-check the next free decision number at execution time -- a concurrent
+    PR may have claimed 171. Run VP steps 4-13 -- NOT just 4-7 and 12: steps 8, 9, 10 and 11 all
+    exercise validate_licence_consistency, which ships in THIS PR, and step 9 alone is the linked
+    verification_step for eight test obligations. Then open and merge the PR.
+  - >-
+    Post-merge: run VP step 24 to sync Decision 171 to ops_decisions, and file the four follow-on
+    recs named in Context. Confirm rec-3126 remains open and unbundled.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure
+    stop and RCA (Decision 55).
+  - 'Report: what was implemented, verification results'
+
+rollback: >-
+  The cheap-rollback boundary is PR-3's CONTRACTION APPLY, not a VP step: steps 22 and 23 run
+  AFTER those applies and only verify them (step 22's own fix_if opens "WHY THIS IS SAFE DESPITE
+  RUNNING AFTER THE CONTRACTION APPLIES"). An earlier draft of this stanza said "before step 23",
+  which is off by one and would mislead an operator in exactly the window that matters.
+  BEFORE PR-3's contractions apply -- i.e. through PR-1, PR-2 and the step-21 live exercise --
+  rollback is cheap and needs neither CI nor Terraform: the
+  owner renames theseus back to agent-platform via Settings or PATCH /repos. The old-slug subs are
+  still trusted because cleanup has not run, so CI resumes on the next run. Clear any red
+  convergence record via the acknowledge-and-retry unlatch, and route ci_rca recs raised during the
+  broken window through normal review (Decision 55/72, forward-fix, never auto-revert).
+  AFTER those contractions apply, a rename-back is NOT a self-contained recovery, and an earlier draft of this plan
+  was wrong to claim it was. Only github_ci_apply lives in the admin-local bootstrap root; the
+  OTHER FOUR roles live in terraform/personal, whose sole sanctioned apply channel is
+  terraform-apply-sandbox.yml -- which must authenticate as repo:benjamin-blake/agent-platform,
+  precisely the sub step 23 deleted. Renaming back post-23 therefore CREATES the forbidden state
+  this plan's ordering exists to avoid: CI broken, and the repair running through CI. Post-22 the
+  sanctioned recovery is FORWARD-FIX under theseus. If a rename-back is genuinely unavoidable it
+  requires an out-of-band operator apply of terraform/personal from the admin container re-adding
+  the old-slug subs -- outside Decision 126's routine model, so it is break-glass requiring
+  explicit human direction, and it must be pre-authorised BEFORE step 23 runs, never improvised
+  after. This asymmetry is the reason step 23 is gated on step 21's RoleLastUsed proof of the four personal-root roles.
+  The relicense half rolls back independently by reverting its own PR; note that any version
+  already published under BUSL-1.1 stays available under BUSL-1.1 to whoever holds it, exactly as
+  the forward-only rule cuts the other way.
