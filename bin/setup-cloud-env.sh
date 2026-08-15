@@ -58,7 +58,7 @@
 # script" field -- NOT the env-var field: a PAT is a credential and the env-var
 # field is visible to anyone using the environment. Add this next to the ~/.aws
 # block above, filling <PAT> from a fine-grained, read-only, single-repo
-# (agent-platform), short-expiry GitHub token:
+# (theseus), short-expiry GitHub token:
 #
 #     mkdir -p "$HOME/.config/gh-mcp"
 #     cat > "$HOME/.config/gh-mcp/token" <<'EOF'

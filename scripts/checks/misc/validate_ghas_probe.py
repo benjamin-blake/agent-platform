@@ -27,7 +27,7 @@ from urllib.request import Request, urlopen
 from scripts.checks import registry
 
 _API_BASE = "https://api.github.com"
-_DEFAULT_REPO = "benjamin-blake/agent-platform"
+_DEFAULT_REPO = "benjamin-blake/theseus"
 
 
 class ProbeTokenMissing(Exception):
@@ -183,11 +183,16 @@ def validate_ghas_probe(failed: list[str]) -> None:
         state = _probe(token)
     except ProbeTokenMissing:
         print("Probe token not set -- SKIPPED (expected default; the standing workflow carries it).")
+        registry.skipped(f"{_TOKEN_ENV_VAR} not set -- live probe unavailable outside the standing workflow")
         return
     except (ProbeAuthError, ProbeTransportError) as exc:
         print(f"Probe SKIPPED -- unable to verify ({exc}).")
+        registry.skipped(f"probe could not reach the GHAS control surfaces ({exc})")
         return
 
+    # The three control surfaces _disabled_controls adjudicates: secret scanning, push
+    # protection, Actions enablement. A live probe always examines all three.
+    registry.examined(3, unit="ghas_control_surfaces")
     disabled = _disabled_controls(state)
     if disabled:
         print(f"GHAS probe FAILED -- disabled control(s): {disabled}")
