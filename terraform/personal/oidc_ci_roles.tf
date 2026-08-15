@@ -24,10 +24,14 @@ resource "aws_iam_role" "github_ci_branch" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = [
-              "repo:${local.github_repo}:ref:refs/heads/main",
-              "repo:${local.github_repo}:ref:refs/heads/agent/*"
-            ]
+            # Dual-slug transition (Decision 171): flatten over local.github_repos so both the
+            # pre- and post-rename slugs are trusted for each ref pattern during the window.
+            "token.actions.githubusercontent.com:sub" = flatten([
+              for repo in local.github_repos : [
+                "repo:${repo}:ref:refs/heads/main",
+                "repo:${repo}:ref:refs/heads/agent/*"
+              ]
+            ])
           }
         }
       }
@@ -223,10 +227,14 @@ resource "aws_iam_role" "github_ci_pr" {
             # the pull_request sub MUST be trusted. refs/pull/* is retained for any ref-scoped or
             # customized-sub consumer. This role stays read-only (athena/iceberg/convergence reads,
             # no tfstate, no writes), so trusting the PR sub does not widen blast radius.
-            "token.actions.githubusercontent.com:sub" = [
-              "repo:${local.github_repo}:pull_request",
-              "repo:${local.github_repo}:ref:refs/pull/*"
-            ]
+            # Dual-slug transition (Decision 171): flatten over local.github_repos so both the
+            # pre- and post-rename slugs are trusted for each PR-context sub pattern.
+            "token.actions.githubusercontent.com:sub" = flatten([
+              for repo in local.github_repos : [
+                "repo:${repo}:pull_request",
+                "repo:${repo}:ref:refs/pull/*"
+              ]
+            ])
           }
         }
       }

@@ -11,7 +11,14 @@
 # The account ID in ARNs comes from var.account_id (gitignored tfvars); never a committed literal.
 
 locals {
-  github_repo = "benjamin-blake/agent-platform"
+  # Dual-slug transition (Decision 171 / PLAN-repo-rename-relicense): both the pre-rename and
+  # post-rename repository slugs are trusted simultaneously while the rename lands, so no OIDC
+  # sub site is ever left trusting a single slug across the rename moment. Every sub site below
+  # MUST iterate this list -- never re-introduce a scalar `github_repo` local. Narrowed back to a
+  # one-element list at PR-3 cleanup once live trust under the new slug is proven (VP steps 21-23).
+  # This list MUST stay identical to terraform/bootstrap's; the two roots cannot reference each
+  # other, so agreement is enforced by tests/checks/iam_tf/test_oidc_trust_slug_invariants.py.
+  github_repos = ["benjamin-blake/agent-platform", "benjamin-blake/theseus"]
 
   # T2.49 c2 hardening item 3 (single-source, DEP-12 / Decision 144): the RESERVED session-name
   # that discriminates the planner role's fail-closed convergence-write path. Referenced at
