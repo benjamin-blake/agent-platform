@@ -129,6 +129,18 @@ scope:
   # (tests/checks/misc/test_validate_ghas_probe.py, tests/convergence_health/test_approvals.py)
   # ship with PR-3 alongside the modules they cover: test_coverage_checker enforces 100% on every
   # CHANGED Python file, so deferring either to PR-4 reds PR-3's own merge gate.
+  - file: terraform/bootstrap/github_ci_apply_policy.tf
+    action: Modify
+    purpose: >-
+      REVERT the temporary IAMRoleReconcile widening added under rec-3132. PR-1's gated apply
+      partially failed with AccessDenied on iam:UpdateAssumeRolePolicy for github_ci_planner and
+      github_ci_deploy: the Sid enumerated only branch + pr, deliberately, because planner holds
+      the fail-closed ConvergenceRecordWrite and deploy is the production Lambda code-deploy
+      channel (Decision 143 intent -- the exclusion is about WHICH roles, not about avoiding a
+      wildcard). Those two ARNs were added as a time-boxed exception so the expansion AND this
+      contraction could both run through the normal gated-apply channel; PR-3 removes them again,
+      in the SAME bootstrap apply that contracts the apply role's own trust, and strictly AFTER
+      the personal-root contraction has applied.
   - file: scripts/checks/misc/validate_ghas_probe.py
     action: Modify
     purpose: _DEFAULT_REPO slug (the CI path already reads GITHUB_REPOSITORY; only the local default is stale).
@@ -732,6 +744,41 @@ verification_plan:
       A stale sub is dead trust scope: a future repo created under the old name in this namespace
       would inherit assume rights. Squatting is owner-only in a user namespace, so this is not
       third-party-exploitable, but it must still be removed.
+  - step: 25
+    phase: post-deploy
+    action: >-
+      The temporary IAMRoleReconcile widening (rec-3132) is fully reverted -- both in config and
+      in the live identity policy.
+    command: >-
+      set -o pipefail;
+      ! grep -q 'agent-platform-github-ci-planner' terraform/bootstrap/github_ci_apply_policy.tf &&
+      ! grep -q 'agent-platform-github-ci-deploy' terraform/bootstrap/github_ci_apply_policy.tf &&
+      P=$(aws iam get-role-policy --role-name agent-platform-github-ci-apply
+      --policy-name agent-platform-github-ci-apply --profile agent_platform_admin
+      --query 'PolicyDocument' --output json) && test -n "$P" &&
+      bin/venv-python -c "import json,sys;
+      d=json.loads(sys.argv[1]);
+      s=[x for x in d['Statement'] if x.get('Sid')=='IAMRoleReconcile'][0];
+      r=s['Resource'] if isinstance(s['Resource'],list) else [s['Resource']];
+      bad=[a for a in r if a.endswith('-planner') or a.endswith('-deploy')];
+      sys.exit('STILL WIDENED: %s' % bad) if bad else None;
+      sys.exit(0 if len(r)==2 else 'expected exactly 2 ARNs, got %d' % len(r))" "$P" &&
+      echo reconcile-narrowed
+    expected: >-
+      Prints reconcile-narrowed. The Sid is back to exactly its two original enumerated ARNs
+      (branch + pr) in BOTH the committed config and the live inline policy.
+    fix_if: >-
+      A surviving planner or deploy entry means the temporary rename-window grant outlived its
+      window -- the CI apply role can still rewrite the trust of the convergence-write anchor and
+      the production deploy channel. Config-only reversion is NOT sufficient: the live policy is
+      what grants, so the bootstrap apply must have landed. Do NOT run this before the
+      personal-root contraction has applied, or the narrow-back has fired too early.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts the ABSENCE of a deliberately transient exception; once PR-3 lands there is nothing
+      left to guard and a standing registry row would assert a permanently-true condition. The
+      durable protection is that the entries live in Terraform config, so the revert is forced by
+      the diff rather than by a check.
   - step: 24
     phase: post-deploy
     action: Decision 171 reached the warehouse.
@@ -804,6 +851,21 @@ test_obligations:
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
     red_green_expectation: >-
       Red via a mirror-test fixture naming this path, green against the swept tree.
+  - source: terraform/bootstrap/github_ci_apply_policy.tf
+    behavior: >-
+      The CI apply role's trust-rewrite scope returns to exactly its two original enumerated roles
+      (branch + pr) once the rename window closes, so the temporary rec-3132 grant over
+      github_ci_planner (convergence-write anchor) and github_ci_deploy (production deploy channel)
+      cannot outlive PR-3.
+    verification_step: 25
+    command: >-
+      ! grep -q 'agent-platform-github-ci-planner' terraform/bootstrap/github_ci_apply_policy.tf &&
+      ! grep -q 'agent-platform-github-ci-deploy' terraform/bootstrap/github_ci_apply_policy.tf
+    red_green_expectation: >-
+      Red while the temporary entries stand (i.e. throughout the rename window, by design), green
+      once PR-3's bootstrap apply reverts them. Note the polarity is inverted relative to a normal
+      obligation: this asserts the ABSENCE of a transient exception, so red is the EXPECTED state
+      between PR-1 and PR-3 and is not a defect during that window.
   - source: terraform/bootstrap/github_ci_apply.tf
     behavior: The apply role's trust never loses either Decision 94 sub form.
     verification_step: 3
@@ -1294,8 +1356,14 @@ execution_steps:
     licence invariant cannot be green before LICENSE and LICENSING.md exist. Remove the old-slug
     subs from both trust roots. Run VP steps 2 and 13, then open the PR.
   - >-
-    PR-3 applies. Bootstrap contraction is again operator-only (file a rec, STOP, human applies);
-    the personal-root contraction routes through gated-apply as before. Then run VP steps 22 and 23.
+    PR-3 applies. ORDERING IS LOAD-BEARING and was NOT understood at authoring time (rec-3132): the
+    personal-root contraction must apply FIRST, because it needs the temporary IAMRoleReconcile
+    grant that the bootstrap apply then removes. Narrowing bootstrap first re-creates the exact
+    AccessDenied that partially failed PR-1's gated apply. So: (a) personal-root contraction routes
+    through gated-apply as before; (b) THEN the bootstrap apply, which in ONE change both contracts
+    the apply role's own trust AND reverts IAMRoleReconcile to its original two enumerated ARNs
+    (branch + pr), removing the planner and deploy entries added under rec-3132. Operator-only as
+    always (file a rec, STOP, human applies). Then run VP steps 22, 23 and 25.
   - >-
     Create and push the boundary tag BEFORE writing LICENSING.md's SHA, in the PR-4 working tree:
     git tag -a apache-final "$(git rev-parse origin/main)" -m "Last version released under
