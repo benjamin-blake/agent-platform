@@ -1,0 +1,501 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "oidc-immutable-subject-trust-restore"
+intent: >-
+  Restore GitHub Actions OIDC access after GitHub migrated benjamin-blake/theseus to the immutable
+  subject-claim format at the 2026-08-15T12:55:57Z rename, by trusting the immutable subject
+  additively in both Terraform roots and applying it via the human-gated break-glass path.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-oidc-immutable-subject-trust-restore.yaml
+phase: >-
+  Incident recovery. No tier_item; this is a live-incident forward fix (soft-warn exception
+  category: hotfix). PARTITION HALF 1 OF 2 of the critique-accepted
+  PLAN-oidc-immutable-subject-recovery (see context: PARTITION PROVENANCE); its sibling is
+  PLAN-oidc-failopen-closure, which must land AFTER this plan's break-glass apply. Adjacent to the
+  in-flight PLAN-repo-rename-relicense, which this unblocks (that plan's VP step 21 RoleLastUsed
+  evidence is unusable until this lands).
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Append the immutable repo-segment entry to local.github_repos and re-ground the dual-slug
+      comment for the immutable-subject world. One-line list change; no sub-site edits.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Same list entry, byte-identical to terraform/personal (cross-root agreement invariant), plus
+      the stale sub-shape comment at lines 41-44.
+  - file: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py
+    action: Modify
+    purpose: >-
+      Add a standing assertion pinning the immutable entry's owner-id/repo-id shape in both roots so
+      the eventual contraction cannot silently drop it, and assert no entry carries a repo: prefix.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Record the immutable-subject migration as a numbered Decision (172; see context on the 171 gap)
+      with reversal conditions and the pre-stage-before-future-renames playbook.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerated derivation carrying the Decision 172 entry.
+      validate_decisions_index_freshness is pre=True with NO pre_globs, so it runs on every --pre
+      regardless of diff, and check_index_freshness hard-fails on any drift between the committed
+      index and the live DECISIONS.md derivation. No hook or workflow regenerates it (verified);
+      both prior new-Decision commits modified it by hand. Without this row this plan -- the outage
+      fix -- reds on --pre.
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: >-
+      Add a zero-credential identity anchor to the always-green pr-validate job echoing
+      github.repository_id and github.repository_owner_id, so the numeric ids the trust policy pins
+      are falsifiable against GitHub itself rather than against this plan's own literals -- and stay
+      observable on every PR. Needs no OIDC and no AWS, so it works during the outage.
+  - file: config/composite_action_body_baseline.yaml
+    action: Modify
+    purpose: >-
+      Register the new inline run: body this plan adds, in the r3_workflows section (Decision 162
+      R3 leg). REQUIRED: validate_composite_action_shell_bodies is pre=True with NO pre_globs, so it
+      runs on every --pre regardless of diff, and an unregistered body is a hard fail with no size
+      floor. Without this the outage fix itself reds.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal (4 roles: github_ci_branch, github_ci_pr, github_ci_planner, github_ci_deploy)
+    and terraform/bootstrap (github_ci_apply) both carry their own local.github_repos; the two lists
+    must change identically in the same PR or the cross-root invariant test fails.
+  - >-
+    The trust diff guard-BLOCKS (scripts/terraform_apply_guard.py checks assume_role_policy diffs
+    BEFORE IAM classification, Decision 77 / Decision 92 pt 5), routing to the tf-gated-apply
+    Environment -- whose job assumes github_ci_apply via OIDC, which is exactly what is broken.
+    reconcile.yml is dead the same way (hard assume steps, no continue-on-error). The CD path
+    therefore CANNOT self-heal this change.
+  - >-
+    Apply is human-gated break-glass under the agent_platform_admin profile from the ADMIN container
+    (docs/contracts/deploy-paths.yaml#admin_out_of_band.procedure, Decision 126). Agent executes only
+    after a human reviews the plan output and explicitly directs it. -target-scoped to the four role
+    resources in terraform/personal; terraform/bootstrap is a small root and applies whole.
+  - >-
+    terraform/personal init requires the Decision 120 S3 provider mirror synced by
+    bin/setup-cloud-env.sh (the kislerdm/neon provider cannot fetch its checksum through the CC-web
+    proxy, Decision 119). Verify the mirror synced before attempting init.
+  - >-
+    Do NOT route this through the saved-plan path: the admin apply bumps the state serial, so any
+    pre-heal plan.bin fails Terraform's staleness check by design. Expect exactly one
+    workflow_dispatch acknowledge-and-retry cycle to write the convergence record green afterwards.
+acceptance_criteria:
+  - >-
+    local.github_repos in terraform/personal/oidc.tf and terraform/bootstrap/github_ci_apply.tf are
+    identical lists that both contain the entry benjamin-blake@217728084/theseus@1252427466, and no
+    entry in either list begins with "repo:".
+  - >-
+    Every live CI role trust document contains the immutable sub for each of its existing ref
+    patterns, and NO NEW wildcard is introduced into any sub condition (the pre-existing agent/* and
+    refs/pull/* ref globs are unchanged and expected).
+  - >-
+    The four roles this plan drives (branch, pr, planner, apply) each record a successful
+    sts:AssumeRoleWithWebIdentity dated after the fix, proving the minted immutable sub matches trust
+    (this is also PLAN-repo-rename-relicense's VP step 21 evidence, currently unusable).
+    github_ci_deploy is recorded as PENDING, not claimed: nothing in this plan drives it -- it
+    advances on the next ducklake/prod deploy, and its evidence is filed as a follow-on rec.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove both roots declare an identical github_repos list carrying the immutable entry, that the
+      entry has the OWNER@OWNER-ID/REPO@REPO-ID shape with the correct numeric ids, and that no entry
+      carries a "repo:" prefix (the double-prefix bug class -- sub sites already render "repo:${repo}:").
+    command: bin/venv-python -m pytest "tests/checks/iam_tf/test_oidc_trust_slug_invariants.py" -q
+    expected: >-
+      exit 0; the new TestImmutableSubjectEntry class passes alongside the pre-existing Decision 94
+      both-sub-forms and cross-root agreement assertions (none of which this change may weaken).
+    fix_if: >-
+      A failure naming cross-root divergence means only one root was edited. A failure naming the
+      repo: prefix means the entry was written as a full sub prefix instead of a repo segment.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The assertions live in a standing pytest module already selected by both presubmit tiers, so a
+      verification-registry row would duplicate an always-on guard rather than add coverage.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the rendered sub strings are exactly the five immutable forms the five roles need. NOTE:
+      the test module previously read ONLY oidc.tf and github_ci_apply.tf, and three of the five
+      suffixes live in neither -- :ref:refs/heads/agent/* in oidc_ci_roles.tf, and :pull_request and
+      :ref:refs/pull/* in oidc_ci_roles.tf and oidc_pipeline_roles.tf. The module is extended to
+      read those two files as part of this plan.
+    command: bin/venv-python -m pytest "tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry" -q
+    expected: >-
+      exit 0; the expansion yields repo:benjamin-blake@217728084/theseus@1252427466 suffixed by each
+      of :ref:refs/heads/main, :ref:refs/heads/agent/*, :pull_request, :ref:refs/pull/*, and
+      :environment:tf-gated-apply.
+    fix_if: >-
+      A missing suffix means the module is not reading the file that declares that sub site; add the
+      read path. If a sub site does not iterate local.github_repos, make it iterate -- never
+      hand-add the immutable string at that site.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same standing-pytest duplication as step 1; the class is a node-id selector into the module
+      step 1 already runs in full.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm both Terraform roots are canonically formatted after the list edit.
+    command: terraform fmt -check -recursive terraform/personal terraform/bootstrap
+    expected: exit 0, no files listed.
+    fix_if: Run terraform fmt -recursive on the two roots and re-commit.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Already covered by a standing credential-free gate -- scripts/checks/_terraform.py:142 runs
+      terraform fmt -check per root in both presubmit tiers -- so a registry row would duplicate an
+      always-on check rather than add coverage.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Falsify the numeric ids against GitHub itself rather than against this plan's own literals.
+      Runs with no OIDC and no AWS, so it works during the outage.
+    command: bin/venv-python -m pytest "tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry" -q && grep -n 'repository_owner_id' .github/workflows/ci.yml
+    expected: >-
+      The pr-validate identity-anchor step is present and echoes github.repository_id and
+      github.repository_owner_id; on the first PR run those printed values equal 1252427466 and
+      217728084 -- the exact literals pinned in both trust lists.
+    fix_if: >-
+      If the printed ids differ from the pinned literals, STOP before the break-glass apply and
+      correct the trust entry -- an apply with a wrong digit costs a full human-gated cycle.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The durable half is the identity anchor now standing in pr-validate on every PR; the id equality
+      itself is a one-time pre-apply falsification, not an ongoing invariant to register.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm the Decision entry took a free number and did not consume 171, which eight in-tree
+      comments already cite for the dual-slug transition that PLAN-repo-rename-relicense still owes.
+    command: grep -c '^## Decision 172:' docs/DECISIONS.md
+    expected: "1 (and grep -c '^## Decision 171:' docs/DECISIONS.md still returns 0)"
+    fix_if: >-
+      If a concurrent PR claimed 172, shift to the next free number and update the plan's context --
+      the numbering-race rule makes this safe at execution time.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a one-time numbering outcome specific to this plan's entry; a registry row would pin a
+      literal number that carries no ongoing invariant once the entry has landed.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Prove the always-on presubmit surface this plan's non-Terraform files feed is green: the
+      regenerated docs/decisions-index.json matches the live DECISIONS.md derivation, and the new
+      ci.yml inline run: body carries its r3_workflows registration. Both checks are pre=True with
+      NO pre_globs, so they run on every --pre regardless of diff and hard-fail on any drift.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      exit 0; validate_decisions_index_freshness reports the index current, and
+      validate_composite_action_shell_bodies reports no unbaselined R1/R2/R3 violations.
+    fix_if: >-
+      An index-freshness failure means docs/decisions-index.json was not regenerated after the
+      Decision 172 edit -- run bin/venv-python -m scripts.decisions_index --write and commit the
+      result in the same commit. An unregistered-body failure means the r3_workflows key does not
+      match the guard's computed key -- derive it from
+      scripts.checks.ci_guards._workflow_shell_bodies.scan_workflow_bodies() rather than by hand.
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Run the FULL validation tier before commit, as handoff_policy.full_validation_required_before_commit
+      declares. Without this step validate_handoff_full_tier fails the PR in both presubmit tiers.
+    command: bin/venv-python -m scripts.validate
+    expected: exit 0 on a completed full run (not a timeout).
+    fix_if: >-
+      On timeout the disposition is blocked per handoff_policy -- resume later and rerun the full tier
+      from the start; do not commit on a partial run.
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: post-deploy
+    action: >-
+      After the human-directed break-glass apply, read every live trust document and confirm each
+      carries the immutable sub for its ref patterns, with no NEW wildcard introduced.
+    command: for r in branch pr planner deploy apply; do echo "== $r"; aws iam get-role --role-name agent-platform-github-ci-$r --profile agent_platform_admin --query 'Role.AssumeRolePolicyDocument.Statement[].Condition' --output json; done
+    expected: >-
+      Every role shows repo:benjamin-blake@217728084/theseus@1252427466 sub entries alongside the two
+      legacy name-only entries; github_ci_apply still uses StringEquals; the only '*' characters are
+      the pre-existing agent/* and refs/pull/* ref globs.
+    fix_if: >-
+      A role missing the immutable entry means the -target list omitted it, or the bootstrap root was
+      not applied. Re-run the apply for that role only.
+    hermetic: false
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Prove live assume succeeds under the immutable sub by confirming RoleLastUsed advanced past each
+      role's last pre-outage use. This is the evidence PLAN-repo-rename-relicense's VP step 21 needs
+      and currently cannot obtain.
+    command: for r in branch pr planner deploy apply; do echo -n "$r "; aws iam get-role --role-name agent-platform-github-ci-$r --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text; done
+    expected: >-
+      branch > 2026-08-15T13:10:59Z; pr > 2026-08-15T12:43:43Z; planner > 2026-08-15T11:35:07Z;
+      apply > 2026-08-15T12:03:07Z. Exercise each role first: dispatch convergence-health (branch),
+      terraform-drift (planner), tf-gated-apply-prototype (apply), open any PR (pr). DEPLOY IS NOT
+      DRIVEN BY THIS PLAN -- it advances on the next ducklake/prod deploy, so record it as pending
+      rather than claiming it. Allow for the documented RoleLastUsed reporting lag before concluding
+      a role failed.
+    fix_if: >-
+      A timestamp that does not advance means the minted sub still does not match. Do NOT guess again:
+      add a temporary workflow step that reads ACTIONS_ID_TOKEN_REQUEST_URL and prints only the decoded
+      sub/aud/repository/repository_id/repository_owner_id claims (never the raw JWT -- it is a bearer
+      credential), and write trust from the observed string.
+    hermetic: false
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Confirm a real apply wrote a fresh green convergence record after the dispatch-ack unlatch, so
+      the record reflects the healed state rather than a stale pre-outage green.
+    command: aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform_admin
+    expected: >-
+      status green, commit_sha equal to this plan's merge commit, timestamp after the break-glass apply.
+    fix_if: >-
+      A red record means the apply failed; recover via the workflow_dispatch acknowledge-and-retry
+      naming the red commit. A stale commit_sha means no post-heal apply ran yet.
+    hermetic: false
+test_obligations:
+  - source: terraform/personal/oidc.tf
+    behavior: >-
+      The immutable repo-segment entry stays present, and the list stays identical to the bootstrap
+      root, so a future contraction cannot silently drop it.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py
+    red_green_expectation: >-
+      Red before (no immutable entry declared in either root), green after.
+  - source: terraform/bootstrap/github_ci_apply.tf
+    behavior: >-
+      Same immutable entry, byte-identical list, with Decision 94's both-sub-forms expansion intact.
+    verification_step: 1
+    test_selector: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py
+    red_green_expectation: >-
+      Red before (cross-root divergence once only personal is edited), green after.
+  - source: .github/workflows/ci.yml
+    behavior: >-
+      pr-validate echoes the repository and owner numeric ids on every PR, keeping the identity the
+      trust policy pins observable and falsifiable without credentials.
+    verification_step: 4
+    command: bin/venv-python -m pytest "tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry" -q && grep -n 'repository_owner_id' .github/workflows/ci.yml
+    waiver_reason: >-
+      A workflow echo of two GitHub-provided context values has no unit-testable surface of its own;
+      its evidence is the grep that the anchor exists plus the printed values on the PR run, which is
+      exactly what the linked step performs.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The committed index stays in lockstep with the DECISIONS.md derivation once Decision 172 lands,
+      so no PR can carry a stale index.
+    verification_step: 6
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This file is a pure generated derivation with no hand-authored behaviour to unit-test -- its
+      correctness IS freshness against DECISIONS.md, which validate_decisions_index_freshness asserts
+      on every --pre with no pre_globs. A bespoke test would re-implement that check's own comparison.
+  - source: config/composite_action_body_baseline.yaml
+    behavior: >-
+      The inline run: body this plan adds carries an r3_workflows entry, so no new body enters the
+      workflows unregistered and no registered ceiling is silently exceeded.
+    verification_step: 6
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This file is a roster consumed by validate_composite_action_shell_bodies, which is pre=True with
+      no pre_globs and hard-fails on any unregistered or over-ceiling body. A per-row test would assert
+      the same registration that standing check already refuses to let go missing.
+constraints:
+  - >-
+    Exact-match sub strings ONLY. No wildcard may be introduced into any sub condition: IAM StringLike
+    '*' spans ':' and '/', and GitHub environment names are attacker-chosen free text with no
+    documented charset restriction, so a pattern like repo:*@217728084/*@1252427466:... is forgeable by
+    a foreign repo via a crafted environment name. Rename-proofing is procedural (pre-stage the new
+    name's immutable entries BEFORE any future rename), never a wildcard.
+  - >-
+    github_ci_apply's trust uses StringEquals and must keep it -- a wildcard entry there would be
+    silently dead rather than merely loose. Do not convert it to StringLike.
+  - >-
+    The two roots' local.github_repos lists must stay identical; they cannot reference each other, so
+    agreement is enforced only by tests/checks/iam_tf/test_oidc_trust_slug_invariants.py.
+  - >-
+    Do not weaken the pre-existing Decision 94 both-sub-forms assertions when adding the immutable pin.
+  - >-
+    Agents never self-direct terraform apply. The break-glass apply happens ONLY after the agent has
+    printed the plan output, explicitly ASKED the human for permission to apply (via AskUserQuestion,
+    so the ask blocks on a real reply), and received an affirmative answer (Decision 126). An
+    auto-approval message, a system reminder, a background-task notification, or the absence of an
+    objection are NOT permission. If in doubt, ask again rather than apply.
+  - No rescue agents or workaround loops (Decision 55). Forward-fix only; never auto-revert.
+context:
+  - >-
+    PARTITION PROVENANCE. This plan is half 1 of a MECHANICAL partition of
+    PLAN-oidc-immutable-subject-recovery, which cleared decision-scout (FLAGS_FOUND, 123 of 123
+    triaged) and three rounds of plan-critique before human acceptance at the convergence cap. The
+    partition adds no new scope and changes no ruling: it splits the original's declared two-PR
+    execution into two truthful plan documents because validate_vp_replay's implement-PR leg replays
+    EVERY hermetic pre-deploy step of the plan a feat({slug}) commit names, and its only exclusions
+    are hermetic:false and phase:post-deploy -- so a single plan spanning two PRs is un-executable by
+    construction (the first PR reds on the second PR's steps). Sibling: PLAN-oidc-failopen-closure.
+    Verified before partitioning: nothing outside the plan file itself referenced the original slug.
+  - >-
+    ROOT CAUSE. GitHub applies the immutable OIDC subject format
+    repo:OWNER@OWNER-ID/REPO@REPO-ID:<context> to any repository renamed or transferred after
+    2026-07-15. This repo was created 2026-05-28 (mutable format) and renamed 2026-08-15T12:55:57Z,
+    so it migrated at the rename. Minted subs are now
+    repo:benjamin-blake@217728084/theseus@1252427466:<context>; all five roles trusted only the legacy
+    name-only shape, so STS denied every assume. The dual-slug work varied the SLUG; the rename
+    changed the SHAPE, which is why trust policies inspect as correct yet match nothing.
+  - >-
+    Two handoff claims were WRONG and are corrected here. (1) The "unexplained successful assume at
+    13:10:59Z" was not an assume: RoleLastUsed tracks last USE of the role's credentials, and CI run
+    31885416810 (push to main, created 12:45:32Z, pre-rename) assumed at ~12:47 and kept calling AWS
+    through full-tier validate until 13:10:59. No role has a post-rename success. (2) The missing
+    "Id-token: write" line is a red herring: the error text is STS-authored, so a token was minted and
+    sent; an ungranted id-token fails earlier in getIDToken() with an ACTIONS_ID_TOKEN_REQUEST_URL
+    error. The ~14:15Z workflow-permissions change chased a phantom.
+  - >-
+    DECISION NUMBERING. docs/DECISIONS.md tops out at Decision 170. Decision 171 does NOT exist -- it
+    is a forward reference that PLAN-repo-rename-relicense's PR-4 still owes, already cited by eight
+    in-tree comments (terraform/personal/oidc.tf:14, oidc_ci_roles.tf:27,230,
+    oidc_pipeline_roles.tf:62,92,250, terraform/bootstrap/github_ci_apply.tf:14,65). Minting this
+    plan's entry as 171 would silently re-point every one of them at the wrong ruling, and nothing
+    validates an amends target's existence. Use 172 and leave 171 reserved. Re-check the max header at
+    execution time (numbering race).
+  - >-
+    Decision-scout verdict FLAGS_FOUND (123 of 123 triaged), inherited from the pre-partition plan.
+    CITE list, verbatim ids: Decision 94, Decision 126, Decision 120, Decision 119, Decision 92,
+    Decision 158, Decision 48, Decision 132, Decision 60, Decision 154, Decision 155, Decision 162,
+    Decision 170, Decision 131, Decision 167, Decision 150, Decision 165. RELATED: Decision 144,
+    Decision 77, Decision 169, Decision 72, Decision 148. The wildcard rejection rests on trust-sub
+    string semantics, not on Decision 35/98's enumeration principle.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s), then human-accepted at the convergence cap -- both gates were cleared by the pre-partition PLAN-oidc-immutable-subject-recovery, of which this document is a mechanical partition half adding no new scope"
+  - >-
+    ORDERING. This plan lands FIRST and is followed by the human-directed break-glass apply. Its
+    sibling PLAN-oidc-failopen-closure lands after: that plan's post-deploy verification REQUIRES
+    this apply, because until OIDC works CI cannot authenticate to prove any masking fix. The
+    sibling's MERGE gates are credential-free and do not depend on this plan, but its post-deploy
+    proof does. Do not reorder.
+  - >-
+    Plan-only and workflow-only PRs still merge during the outage: pr-validate uses no AWS, and
+    terraform-validate is fail-open by design (Decision 55/83). apply-sandbox will red harmlessly on
+    this plan's merge -- it cannot even write the record red without credentials.
+  - >-
+    OBSERVABILITY OF THE OUTAGE IS ITSELF DEAD. ci-rca, ci-rca-inactivity-sweep, rec-autoclose,
+    main-canary and convergence-health all hard-fail at assume, so no automated rec was filed for any
+    failure since 12:55:57Z and Resolves: trailers on PRs merged in the window did not close their
+    recs. After the heal: sweep Actions history for red runs since 12:55:57Z and reconcile the
+    rec-close backlog. Any terraform/personal merge during the window is silently unapplied behind a
+    stale-green convergence record; the first post-heal drift tick or dispatch-ack will surface it.
+  - >-
+    NOT IN SCOPE, file as recs instead: contracting the two legacy name-only entries once live proof
+    lands (they are provably dead -- a renamed repo is immutable, and any new repo taking the old slug
+    is post-cutoff and also immutable, so the window can be short); re-scoping
+    PLAN-repo-rename-relicense's remaining VP steps and PR-3 contraction for the immutable world
+    (lines 527, 543, 712 assume two slugs x two sub forms); the stale sub-shape comment at
+    docs/contracts/environment-taxonomy.yaml:95.
+  - >-
+    CONSIDERED AND REJECTED: GitHub's repository-level OIDC subject-claim customization API could
+    restore a name-only sub and avoid touching trust at all. Rejected because it is rename-fragile in
+    exactly the way this incident proves, and it would re-pin identity to a mutable name; trusting the
+    immutable sub additively is the durable choice.
+  - >-
+    Branch was 0 commits behind origin/main at planning time; no Scope file overlap with main. The
+    GitHub numeric ids committed here (owner 217728084, repo 1252427466) are public GitHub metadata,
+    not AWS account ids, and are 9 and 10 digits -- below the pre-commit never-commit 12-digit shape
+    hook and below the speculative-plan redaction self-check threshold.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Confirm the Decision 120 provider mirror is synced before attempting any terraform init against
+    terraform/personal
+  - >-
+    Re-read the current max '## Decision NNN:' header before drafting the entry (numbering race)
+execution_steps:
+  - >-
+    Step 1 -- terraform/personal/oidc.tf: append "benjamin-blake@217728084/theseus@1252427466" to
+    local.github_repos as a third entry. It is a REPO SEGMENT, not a full sub prefix: the six sub sites
+    already render "repo:${repo}:<suffix>", so an entry beginning with "repo:" would render
+    "repo:repo:..." and match nothing. Re-ground the dual-slug comment to explain the immutable format
+    and that the numeric ids, not the names, are the durable identity. AUTHORING CAUTION: the
+    re-grounded comment must not contain the literal "github_repos = [" (the invariant test's regex
+    takes the first file-wide match) nor "local.github_repo" followed by a non-word character
+    (TestNoScalarSurvivor).
+  - >-
+    Step 2 -- terraform/bootstrap/github_ci_apply.tf: make the identical one-entry change to its
+    own local.github_repos, and refresh the stale sub-shape comment at lines 41-44. Same authoring
+    caution as step 1.
+  - >-
+    Step 3 -- tests/checks/iam_tf/test_oidc_trust_slug_invariants.py: FIRST extend the module's
+    file set to also read terraform/personal/oidc_ci_roles.tf and terraform/personal/oidc_pipeline_roles.tf
+    -- it currently reads only oidc.tf and github_ci_apply.tf, and three of the five expected suffixes
+    (:ref:refs/heads/agent/*, :pull_request, :ref:refs/pull/*) appear in neither, so VP step 2 cannot
+    pass without this. Then add TestImmutableSubjectEntry asserting (a) both roots declare an entry of
+    the form NAME@DIGITS/NAME@DIGITS carrying owner id 217728084 and repo id 1252427466, (b) no entry
+    in either list begins with "repo:", and (c) the flattened expansion yields all five expected
+    immutable sub literals. Leave the existing Decision 94 and cross-root assertions untouched.
+  - >-
+    Step 4 -- .github/workflows/ci.yml: add the zero-credential identity anchor to the pr-validate
+    job, echoing the github.repository_id and github.repository_owner_id context values. pr-validate
+    uses no OIDC and no AWS, so it runs green during the outage. This makes the numeric ids the trust
+    policy pins falsifiable against GitHub rather than against this plan's own literals. MANDATORY
+    COMPANION: register the new inline run: body in config/composite_action_body_baseline.yaml's
+    r3_workflows section, key ".github/workflows/ci.yml::pr-validate::<hyphen-slug-of-step-name>",
+    ceiling = its effective line count. validate_composite_action_shell_bodies is pre=True with no
+    pre_globs, so an unregistered body hard-fails on every --pre. Appending to an existing
+    pr-validate body is NOT an escape -- both existing keys have ceilings of 3 and 1.
+  - >-
+    Step 5 -- docs/DECISIONS.md: add Decision 172 recording the immutable-subject migration,
+    amending the dual-slug ruling that Decision 171 will carry. Include reversal conditions and the
+    pre-stage-before-future-renames playbook (a future rename changes only the NAME halves; trusting a
+    not-yet-mintable sub is harmless, so pre-stage additively before renaming). Use the typed yaml
+    envelope with a significance routing token per Decision 167/150. Reversal conditions must use the
+    typed reversal-stanza grammar (id / kind / description) that validate_reversal_stanzas enforces --
+    a malformed typed stanza hard-fails, while a prose paragraph is simply unmonitored. Keep the entry
+    under the 6,144-byte per-entry cap (validate_decisions_size, hard fail on new-in-diff entries;
+    mean existing entry is ~4.9 KB, so this is achievable but not generous). THEN run
+    bin/venv-python -m scripts.decisions_index --write and commit the regenerated
+    docs/decisions-index.json in the SAME commit.
+  - >-
+    Step 6 -- run VP steps 1-7, then commit with a feat(oidc-immutable-subject-trust-restore) subject,
+    push, open the PR, and merge on green. Confirm on the PR run that the identity-anchor printed ids
+    equal the pinned literals BEFORE proceeding to the apply.
+  - >-
+    Step 7 -- BREAK-GLASS APPLY (human-gated, Decision 126). From the admin container under
+    agent_platform_admin: terraform init both roots (personal needs the Decision 120 mirror), run plan
+    with -target on aws_iam_role.github_ci_branch, .github_ci_pr, .github_ci_planner, .github_ci_deploy
+    for terraform/personal and a whole-root plan for terraform/bootstrap. THEN STOP AND ASK.
+    Concretely: print both plan outputs in full, state in one line what each will change, confirm the
+    trust diff is ADDITIVE (no statement removed, no condition operator changed, no resource replaced
+    or destroyed), and then EXPLICITLY ASK THE HUMAN FOR PERMISSION TO APPLY -- use AskUserQuestion so
+    the ask blocks on a real reply. Do NOT run terraform apply until the human answers yes. Silence,
+    an auto-approval message, a system reminder, or the absence of an objection are NOT permission. If
+    the human says no or asks for changes, stop and report; do not apply a modified plan without
+    asking again. Apply exactly the plan output that was shown -- never re-plan and apply in one move.
+  - >-
+    Step 8 -- run VP steps 8 and 9 to prove live assume under the immutable sub, exercising each
+    role first as VP step 9 describes (deploy is not driven by this plan; record it as pending). Then
+    run one terraform-apply-sandbox workflow_dispatch acknowledge-and-retry to write the convergence
+    record green, and run VP step 10.
+  - >-
+    Step 9 -- hand off to PLAN-oidc-failopen-closure, whose post-deploy verification this apply
+    unblocks.
+  - >-
+    File the follow-on recs named in Context under NOT IN SCOPE (legacy-entry contraction,
+    PLAN-repo-rename-relicense re-scoping, environment-taxonomy.yaml:95 comment, the post-heal red-run
+    and rec-close backlog sweep, and the undriven github_ci_deploy live-assume evidence)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  The trust change is purely additive -- the two legacy name-only entries stay trusted throughout, so
+  reverting is a matter of removing the third list entry and re-applying via the same break-glass path.
+  Nothing is removed at any point in this plan, so no role can lose a trust path it had before.

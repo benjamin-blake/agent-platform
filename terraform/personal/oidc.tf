@@ -18,7 +18,23 @@ locals {
   # one-element list at PR-3 cleanup once live trust under the new slug is proven (VP steps 21-23).
   # This list MUST stay identical to terraform/bootstrap's; the two roots cannot reference each
   # other, so agreement is enforced by tests/checks/iam_tf/test_oidc_trust_slug_invariants.py.
-  github_repos = ["benjamin-blake/agent-platform", "benjamin-blake/theseus"]
+  #
+  # IMMUTABLE-SUBJECT ENTRY (Decision 172): a THIRD, differently-shaped entry -- a repo SEGMENT
+  # of the form "OWNER@OWNER-ID/REPO@REPO-ID", never a full "repo:" sub prefix (every sub site
+  # below already renders "repo:${repo}:<suffix>"; a "repo:"-prefixed entry here would render
+  # "repo:repo:..." and match nothing). GitHub mints this immutable numeric-id subject for any
+  # repository renamed or transferred after 2026-07-15 -- benjamin-blake/theseus renamed at
+  # 2026-08-15T12:55:57Z and now presents ONLY this shape; the two name-only entries above mint
+  # nothing and are provably dead going forward, but stay trusted until a follow-on contraction
+  # (NOT this plan) removes them with live proof. The numeric ids -- not either name -- are the
+  # durable identity: a future rename changes only the NAME half, so pre-staging the new name's
+  # immutable entry additively, BEFORE the rename, is what keeps a future rename from repeating
+  # this outage (see Decision 172's playbook).
+  github_repos = [
+    "benjamin-blake/agent-platform",
+    "benjamin-blake/theseus",
+    "benjamin-blake@217728084/theseus@1252427466",
+  ]
 
   # T2.49 c2 hardening item 3 (single-source, DEP-12 / Decision 144): the RESERVED session-name
   # that discriminates the planner role's fail-closed convergence-write path. Referenced at
