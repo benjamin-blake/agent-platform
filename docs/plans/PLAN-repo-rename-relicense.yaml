@@ -129,18 +129,15 @@ scope:
   # (tests/checks/misc/test_validate_ghas_probe.py, tests/convergence_health/test_approvals.py)
   # ship with PR-3 alongside the modules they cover: test_coverage_checker enforces 100% on every
   # CHANGED Python file, so deferring either to PR-4 reds PR-3's own merge gate.
-  - file: terraform/bootstrap/github_ci_apply_policy.tf
-    action: Modify
-    purpose: >-
-      REVERT the temporary IAMRoleReconcile widening added under rec-3132. PR-1's gated apply
-      partially failed with AccessDenied on iam:UpdateAssumeRolePolicy for github_ci_planner and
-      github_ci_deploy: the Sid enumerated only branch + pr, deliberately, because planner holds
-      the fail-closed ConvergenceRecordWrite and deploy is the production Lambda code-deploy
-      channel (Decision 143 intent -- the exclusion is about WHICH roles, not about avoiding a
-      wildcard). Those two ARNs were added as a time-boxed exception so the expansion AND this
-      contraction could both run through the normal gated-apply channel; PR-3 removes them again,
-      in the SAME bootstrap apply that contracts the apply role's own trust, and strictly AFTER
-      the personal-root contraction has applied.
+  # REMOVED FROM SCOPE (rec-3145): terraform/bootstrap/github_ci_apply_policy.tf's temporary
+  # IAMRoleReconcile widening (rec-3132) is NOT reverted by this plan. The revert was tied to
+  # PR-3's trust contraction, and Decision 172 point 4 rehomed that contraction to rec-3142. The
+  # widening must SURVIVE until rec-3142 runs -- rec-3142's personal-root contraction needs
+  # github_ci_apply to hold iam:UpdateAssumeRolePolicy on github_ci_planner and github_ci_deploy,
+  # which is exactly what the widening grants. Reverting it here would strand that contraction
+  # behind the same AccessDenied that partially failed PR-1's gated apply. The revert obligation
+  # therefore travels WITH rec-3142, in the same bootstrap apply that narrows the trust, and
+  # strictly after the personal-root contraction lands.
   - file: scripts/checks/misc/validate_ghas_probe.py
     action: Modify
     purpose: _DEFAULT_REPO slug (the CI path already reads GITHUB_REPOSITORY; only the local default is stale).
@@ -250,12 +247,21 @@ acceptance_criteria:
     The repository resolves at github.com/benjamin-blake/theseus with history, issues, pull
     requests, stars and the commit/PR reference graph intact, and the old URL 301-redirects to it.
   - >-
-    All five OIDC roles authenticate live under the theseus slug -- github_ci_branch,
-    github_ci_pr, github_ci_planner, github_ci_deploy, and github_ci_apply on BOTH of its
-    Decision 94 sub forms -- each proven by a real assume-role, never by inspecting Terraform.
+    REALIZED DIFFERENTLY (Decision 172, rec-3145) -- the original wording said "under the theseus
+    slug", which the rename made false. GitHub applies the immutable subject
+    repo:OWNER@OWNER-ID/REPO@REPO-ID to any repository renamed after 2026-07-15, so
+    benjamin-blake/theseus mints ONLY repo:benjamin-blake@217728084/theseus@1252427466:<context>
+    and the name-only slug mints nothing. The criterion as realized: all five OIDC roles
+    authenticate live under the IMMUTABLE subject. Four are proven (branch 21:12:36Z, planner
+    20:59:14Z, apply 21:20:37Z on BOTH Decision 94 sub forms, pr in the terraform-validate job log
+    at 22:11:49Z, all 2026-08-15); github_ci_deploy is PENDING and owned by rec-3143, which no plan
+    drives -- it advances on the next ducklake/prod Lambda deploy.
   - >-
-    After cleanup, no role's trust policy still references benjamin-blake/agent-platform, and
-    github_ci_apply retains both sub forms under the new slug.
+    REHOMED to rec-3142 (Decision 172 point 4) -- NOT this plan. The trust contraction is a
+    future, separately-evidenced act. The two legacy name-only entries stay trusted until every
+    role records live proof under the immutable sub AND a follow-on contraction removes them
+    explicitly. Narrowing to the name-only theseus entry, as this plan originally specified, would
+    delete the only entry that works and re-break OIDC completely.
   - >-
     LICENSE is parameterised BUSL-1.1 (Licensor "Benjamin Blake", Change License Apache-2.0,
     Change Date = flip date + 4 years); LICENSE-APACHE holds the verbatim prior Apache text; and
@@ -629,156 +635,53 @@ verification_plan:
   - step: 21
     phase: post-deploy
     action: >-
-      Every one of the five roles authenticates live under the new slug, including both apply-role
-      sub forms. This is the gate on trust cleanup.
-    command: >-
-      set -o pipefail; test -n "$RENAME_TS" || { echo "RENAME_TS unset"; exit 1; };
-      for role in branch pr planner deploy; do
-      U=$(aws iam get-role --role-name "agent-platform-github-ci-$role"
-      --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
-      || { echo "READ FAILED: $role"; exit 1; };
-      test -n "$U" -a "$U" != "None" || { echo "NEVER ASSUMED: $role"; exit 1; };
-      bin/venv-python -c "import sys,datetime as d;
-      u=d.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));
-      r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
-      sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
-      || { echo "STALE -- last successful assume predates the rename: $role"; exit 1; };
-      done; echo four-personal-roles-ok
-    expected: >-
-      Prints four-personal-roles-ok. Export RENAME_TS first, as ISO-8601 WITH AN EXPLICIT UTC OFFSET
-      -- use the trailing-Z form specifically, NOT +00:00. Step 22 compares it against GitHub's
-      run_started_at with jq, which is a LEXICOGRAPHIC string compare, and GitHub always returns
-      Z-suffixed; mixing forms only happens to work because the date-time prefixes differ, and it
-      fails open at exact equality. An offset-naive value raises inside the Python comparison in
-      steps 21/22 and is reported as STALE -- fail-closed, but misleading.
-      ADMIN-CONTAINER STEP -- needs agent_platform_admin. Drive the exercise deliberately before
-      running this: open and merge a trivial PR (github_ci_pr on the PR event, github_ci_branch on
-      push), let terraform-drift run (github_ci_planner), run a governed Lambda deploy
-      (github_ci_deploy). Do NOT try to drive a gated apply here -- there is no trust diff on main
-      to route one, which is the circularity step 22 exists to break. The apply
-      apply role is DELIBERATELY EXCLUDED from this step -- see step 22. Between PR-2 and PR-3
-      there is no IAM/trust/destroy diff on main to route a gated apply, and the only such diff IS
-      PR-3's own contraction, so requiring apply-role proof here would be circular and
-      unsatisfiable.
-      RoleLastUsed lags by up to ~4 hours; re-run rather than concluding failure inside that window.
+      REHOMED to rec-3142 (Decision 172 / rec-3145). Originally gated PR-3's contraction on live
+      proof that four personal-root roles were assumed under the new slug. The evidence exists but
+      under the IMMUTABLE subject, not the name slug: branch 21:12:36Z, planner 20:59:14Z, apply
+      21:20:37Z (BOTH Decision 94 sub forms), pr 22:11:49Z, all 2026-08-15. github_ci_deploy is
+      still PENDING and owned by rec-3143. Since this plan no longer contracts, the step gates
+      nothing here and its evidence obligation travels to rec-3142.
+    command: "true  # rehomed -- see rec-3142 and rec-3143"
+    expected: Not executed by this plan.
     fix_if: >-
-      RoleLastUsed advances ONLY on a successful sts:AssumeRoleWithWebIdentity, so it cannot be
-      satisfied by a failed assume. It is EVENT time, so its ~4h reporting lag produces false
-      negatives only -- re-run, never conclude failure inside that window. Two rejected alternatives, both load-bearing: (a) workflow RUN
-      conclusions are worthless here -- the assume steps carry continue-on-error: true at
-      terraform-drift.yml:91-92, deploy-ducklake-lambdas.yml:125-126 and :300-301, and
-      ci.yml:197-198, so a run concludes success even when the assume FAILED; (b) CloudTrail
-      lookup-events is DENIED to both available profiles (verified 2026-08-14; the repo records
-      this itself at terraform/bootstrap/github_ci_apply_policy.tf:493) AND would have been
-      fail-open anyway, since lookup-events returns failed AssumeRoleWithWebIdentity events with
-      the role ARN intact. Any role not proven is a role whose trust may be wrong -- do NOT run
-      step 23 until all four, plus the apply role's environment sub form, are observed.
-
-  # ---------- PR-4 post-deploy: cleanup and decision sync ----------
+      Do NOT resurrect this step here. Contracting on four-of-five evidence is exactly what
+      rec-3142 sequences against rec-3143.
+    graduation: not-applicable
   - step: 22
     phase: post-deploy
     action: >-
-      PR-3's own gated apply proves the apply role on BOTH Decision 94 sub forms -- and is
-      fail-safe by construction.
-    command: >-
-      set -o pipefail; test -n "$RENAME_TS" || { echo "RENAME_TS unset"; exit 1; };
-      U=$(aws iam get-role --role-name agent-platform-github-ci-apply
-      --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text)
-      || { echo "READ FAILED"; exit 1; };
-      test -n "$U" -a "$U" != "None" || { echo "apply role NEVER assumed"; exit 1; };
-      bin/venv-python -c "import sys,datetime as d;
-      u=d.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'));
-      r=d.datetime.fromisoformat(sys.argv[2].replace('Z','+00:00'));
-      sys.exit(0 if u > r else 1)" "$U" "$RENAME_TS"
-      || { echo "apply role not assumed since the rename"; exit 1; };
-      test -n "$PR3_RUN_ID" || { echo "PR3_RUN_ID unset"; exit 1; };
-      H="Authorization: Bearer $(cat ~/.config/gh-mcp/token)"; B="https://api.github.com/repos/benjamin-blake/theseus";
-      curl -sf -H "$H" "$B/actions/runs/$PR3_RUN_ID"
-      | jq -e --arg ts "$RENAME_TS" '.run_started_at > $ts'
-      || { echo "run $PR3_RUN_ID started BEFORE the rename -- pre-rename evidence, rejected"; exit 1; };
-      curl -sf -H "$H" "$B/actions/runs/$PR3_RUN_ID/jobs"
-      | jq -e '[.jobs[] | select(.name | test("gated-apply"))
-      | select(.conclusion == "success")] | length >= 1'
-    expected: >-
-      Exit 0. ONLY THE JOB ASSERTION IS LOAD-BEARING: RoleLastUsed is per-ROLE, not per-sub-FORM,
-      and advances on the ref-form assume that apply-sandbox performs earlier in the same run, so
-      treat it as corroborating liveness, never as proof of the environment form. The run-start
-      comparison is what rejects pre-rename evidence; the gated-apply job conclusion is what proves
-      the environment sub form. ADMIN-CONTAINER STEP. Export PR3_RUN_ID as the run id of PR-3's
-      post-merge terraform-apply-sandbox run, and RENAME_TS as ISO-8601 with an explicit UTC
-      offset.
-    fix_if: >-
-      WHY THIS IS SAFE DESPITE RUNNING AFTER THE CONTRACTION APPLIES: the gated-apply job must
-      AUTHENTICATE before it can apply anything, and post-rename GitHub can only mint theseus subs.
-      So a successful job proves the theseus environment: sub form, and a failed authentication
-      means the job never starts and the old-slug subs are never removed. The destructive change
-      cannot outrun its own proof. RECOVERY FOR THE ONE CELL THE HEAL BUTTON CANNOT REACH: if
-      gated-apply fails AT the OIDC step post-rename, write-convergence-record never reaches S3, so
-      the record stays green-with-pending_gated and Reconcile resolves nothing actionable. State is
-      SAFE (contraction unapplied, all personal roles still dual-trusted) but the sanctioned heal
-      button is inert -- repair out-of-band from the admin container by correcting the trust and
-      re-running the workflow, and do not treat Reconcile's silence as convergence. Do NOT substitute a convergence-record grep: the routed branch
-      of write-convergence-record preserves the prior status, so a routed-but-unapproved apply
-      leaves a STALE green that passes; and both apply-sandbox and apply-reconcile write green on
-      the ref sub with no environment: declaration, so a green proves the slug but never the sub
-      FORM -- which is exactly the Decision 94 VP9 regression this exists to catch.
+      REHOMED to rec-3142. Proved the apply role on BOTH Decision 94 sub forms via PR-3's own
+      gated apply. This plan's PR-3 has no apply, so there is no run to observe. The equivalent
+      proof already landed during the Decision 172 recovery (apply 21:20:37Z, both sub forms).
+    command: "true  # rehomed -- see rec-3142"
+    expected: Not executed by this plan.
+    fix_if: Do NOT resurrect here; rec-3142 owns the contraction that this verified.
+    graduation: not-applicable
   - step: 23
     phase: post-deploy
-    action: After cleanup, no role trusts the old slug, and the apply role keeps both sub forms.
-    command: >-
-      set -o pipefail; for r in agent-platform-github-ci-branch agent-platform-github-ci-pr
-      agent-platform-github-ci-planner agent-platform-github-ci-deploy
-      agent-platform-github-ci-apply; do
-      D=$(aws iam get-role --role-name "$r" --profile agent_platform_admin
-      --query 'Role.AssumeRolePolicyDocument' --output json) || { echo "READ FAILED: $r"; exit 1; };
-      test -n "$D" || { echo "EMPTY doc -- cannot certify cleanup: $r"; exit 1; };
-      echo "$D" | grep -q 'benjamin-blake/agent-platform'
-      && { echo "STALE old-slug sub still trusted: $r"; exit 1; }; done;
-      T=$(aws iam get-role --role-name agent-platform-github-ci-apply
-      --profile agent_platform_admin --query 'Role.AssumeRolePolicyDocument' --output json) &&
-      test -n "$T" &&
-      echo "$T" | grep -q 'theseus:ref:refs/heads/main' &&
-      echo "$T" | grep -q 'theseus:environment:tf-gated-apply' && echo cleanup-ok
-    expected: Prints cleanup-ok. Old slug gone from all five; both Decision 94 forms retained.
+    action: >-
+      REHOMED to rec-3142. Asserted that after cleanup no role trusts the old slug. This plan
+      performs no cleanup, and asserting the absence of entries Decision 172 deliberately RETAINS
+      would fail by design.
+    command: "true  # rehomed -- see rec-3142"
+    expected: Not executed by this plan.
     fix_if: >-
-      A stale sub is dead trust scope: a future repo created under the old name in this namespace
-      would inherit assume rights. Squatting is owner-only in a user namespace, so this is not
-      third-party-exploitable, but it must still be removed.
+      Do NOT resurrect here. Decision 172 point 4 keeps the legacy entries trusted on purpose
+      until rec-3142 removes them with live proof.
+    graduation: not-applicable
   - step: 25
     phase: post-deploy
     action: >-
-      The temporary IAMRoleReconcile widening (rec-3132) is fully reverted -- both in config and
-      in the live identity policy.
-    command: >-
-      set -o pipefail;
-      ! grep -q 'agent-platform-github-ci-planner' terraform/bootstrap/github_ci_apply_policy.tf &&
-      ! grep -q 'agent-platform-github-ci-deploy' terraform/bootstrap/github_ci_apply_policy.tf &&
-      P=$(aws iam get-role-policy --role-name agent-platform-github-ci-apply
-      --policy-name agent-platform-github-ci-apply --profile agent_platform_admin
-      --query 'PolicyDocument' --output json) && test -n "$P" &&
-      bin/venv-python -c "import json,sys;
-      d=json.loads(sys.argv[1]);
-      s=[x for x in d['Statement'] if x.get('Sid')=='IAMRoleReconcile'][0];
-      r=s['Resource'] if isinstance(s['Resource'],list) else [s['Resource']];
-      bad=[a for a in r if a.endswith('-planner') or a.endswith('-deploy')];
-      sys.exit('STILL WIDENED: %s' % bad) if bad else None;
-      sys.exit(0 if len(r)==2 else 'expected exactly 2 ARNs, got %d' % len(r))" "$P" &&
-      echo reconcile-narrowed
-    expected: >-
-      Prints reconcile-narrowed. The Sid is back to exactly its two original enumerated ARNs
-      (branch + pr) in BOTH the committed config and the live inline policy.
+      REHOMED to rec-3142. Asserted the temporary IAMRoleReconcile widening (rec-3132) was fully
+      reverted. The widening must now SURVIVE this plan: rec-3142's personal-root contraction
+      needs github_ci_apply to hold iam:UpdateAssumeRolePolicy on planner and deploy. Reverting it
+      here would strand that contraction behind the same AccessDenied that partially failed PR-1.
+    command: "true  # rehomed -- see rec-3142"
+    expected: Not executed by this plan.
     fix_if: >-
-      A surviving planner or deploy entry means the temporary rename-window grant outlived its
-      window -- the CI apply role can still rewrite the trust of the convergence-write anchor and
-      the production deploy channel. Config-only reversion is NOT sufficient: the live policy is
-      what grants, so the bootstrap apply must have landed. Do NOT run this before the
-      personal-root contraction has applied, or the narrow-back has fired too early.
-    graduation: waive
-    graduation_waiver_reason: >-
-      Asserts the ABSENCE of a deliberately transient exception; once PR-3 lands there is nothing
-      left to guard and a standing registry row would assert a permanently-true condition. The
-      durable protection is that the entries live in Terraform config, so the revert is forced by
-      the diff rather than by a check.
+      Do NOT revert the widening in this plan. The revert belongs in the SAME bootstrap apply that
+      narrows the trust, strictly after the personal-root contraction lands.
+    graduation: not-applicable
   - step: 24
     phase: post-deploy
     action: Decision 171 reached the warehouse.
@@ -851,21 +754,6 @@ test_obligations:
       validate_licence_consistency as v; f=[]; v(f); print(f); raise SystemExit(1 if f else 0)"
     red_green_expectation: >-
       Red via a mirror-test fixture naming this path, green against the swept tree.
-  - source: terraform/bootstrap/github_ci_apply_policy.tf
-    behavior: >-
-      The CI apply role's trust-rewrite scope returns to exactly its two original enumerated roles
-      (branch + pr) once the rename window closes, so the temporary rec-3132 grant over
-      github_ci_planner (convergence-write anchor) and github_ci_deploy (production deploy channel)
-      cannot outlive PR-3.
-    verification_step: 25
-    command: >-
-      ! grep -q 'agent-platform-github-ci-planner' terraform/bootstrap/github_ci_apply_policy.tf &&
-      ! grep -q 'agent-platform-github-ci-deploy' terraform/bootstrap/github_ci_apply_policy.tf
-    red_green_expectation: >-
-      Red while the temporary entries stand (i.e. throughout the rename window, by design), green
-      once PR-3's bootstrap apply reverts them. Note the polarity is inverted relative to a normal
-      obligation: this asserts the ABSENCE of a transient exception, so red is the EXPECTED state
-      between PR-1 and PR-3 and is not a defect during that window.
   - source: terraform/bootstrap/github_ci_apply.tf
     behavior: The apply role's trust never loses either Decision 94 sub form.
     verification_step: 3
@@ -1280,6 +1168,33 @@ context:
   - >-
     Branch was rebased onto origin/main e86c271 at authoring time; preflight reported 0 commits
     behind, 0 ahead, no uncommitted changes, and an empty ci_rca_unresolved_recs list.
+  - >-
+    RE-SCOPED MID-FLIGHT (Decision 172, rec-3145), after PR-1 and PR-2 had merged. GitHub applies
+    an IMMUTABLE OIDC subject, repo:OWNER@OWNER-ID/REPO@REPO-ID, to any repository renamed or
+    transferred after 2026-07-15. benjamin-blake/theseus renamed at 2026-08-15T12:55:57Z and from
+    that instant minted ONLY repo:benjamin-blake@217728084/theseus@1252427466:<context>. Every
+    role's trust inspected as correct -- this plan's dual-slug work varies only the NAME half --
+    yet matched nothing, because the rename changed the subject SHAPE, a dimension no step here
+    anticipated. STS denied every assume from 12:55:57Z; the same outage disabled ci-rca and
+    convergence-health, so nothing auto-filed and a stale-green convergence record masked it.
+    CONSEQUENCE FOR THIS PLAN: the two name-only slugs are now dead, so PR-3's contraction --
+    which would have narrowed local.github_repos to the name-only theseus entry -- would have
+    DELETED the only entry that can mint and re-broken OIDC entirely. The contraction, its
+    ordering constraint, VP steps 21/22/23, and the rec-3132 IAMRoleReconcile revert are all
+    REHOMED to rec-3142, sequenced after rec-3143 closes github_ci_deploy's evidence gap. What
+    REMAINS this plan's: PR-3's class-(a) sweep (done) and PR-4's relicense plus Decision 171,
+    which is still owed -- eight in-tree comments cite it by number, and
+    PLAN-oidc-immutable-subject-trust-restore deliberately minted 172 instead of 171 so those
+    citations keep resolving to the ruling they mean.
+  - >-
+    LESSON, recorded because the plan's own safety argument missed it: this plan reasoned
+    carefully about WHICH slugs are trusted and about both Decision 94 sub FORMS, and treated the
+    rename as safe because dual trust covered both names. It never modelled the subject FORMAT as
+    a variable. The pre-rename safety property ("no step leaves CI broken AND the repair requiring
+    CI") held only under that unexamined assumption; in the event, the rename broke every assume
+    at once and the repair did route through the broken channel. Decision 172 point 2's playbook
+    -- pre-stage the new name's immutable entry additively BEFORE any future rename -- is the
+    durable fix, and trusting a not-yet-mintable subject costs nothing.
 
 pre_implementation_checklist:
   - Branch confirmed not on main
@@ -1350,20 +1265,17 @@ execution_steps:
     PR-3's own contraction. Step 22 proves the apply role from that apply, which is fail-safe --
     the job must authenticate on a theseus sub before it can remove anything.
   - >-
-    PR-3 (sweep + trust cleanup, NO guard) -- runs BEFORE the relicense so dual trust is narrowed
-    promptly after step 21 rather than waiting on licence drafting and legal review. Update the
-    class-(a) slug sites. The check is NOT written here -- it ships whole in PR-4, because its
-    licence invariant cannot be green before LICENSE and LICENSING.md exist. Remove the old-slug
-    subs from both trust roots. Run VP steps 2 and 13, then open the PR.
+    PR-3 (sweep ONLY -- the trust contraction is REHOMED to rec-3142 per Decision 172 point 4 and
+    rec-3145). Update the class-(a) slug sites. The check is NOT written here -- it ships whole in
+    PR-4, because its licence invariant cannot be green before LICENSE and LICENSING.md exist. Do
+    NOT touch either trust root: narrowing local.github_repos to the name-only theseus entry, as
+    this step originally specified, would delete the only entry that can actually mint and re-break
+    OIDC completely (the 2026-08-15 outage). Run VP steps 2 and 13, then open and merge the PR.
   - >-
-    PR-3 applies. ORDERING IS LOAD-BEARING and was NOT understood at authoring time (rec-3132): the
-    personal-root contraction must apply FIRST, because it needs the temporary IAMRoleReconcile
-    grant that the bootstrap apply then removes. Narrowing bootstrap first re-creates the exact
-    AccessDenied that partially failed PR-1's gated apply. So: (a) personal-root contraction routes
-    through gated-apply as before; (b) THEN the bootstrap apply, which in ONE change both contracts
-    the apply role's own trust AND reverts IAMRoleReconcile to its original two enumerated ARNs
-    (branch + pr), removing the planner and deploy entries added under rec-3132. Operator-only as
-    always (file a rec, STOP, human applies). Then run VP steps 22, 23 and 25.
+    PR-3 has NO apply. There is no trust diff, so nothing routes to gated-apply and no operator
+    bootstrap apply is owed. The contraction, its ordering constraint, and the IAMRoleReconcile
+    revert all travel together to rec-3142, which sequences them after rec-3143 closes
+    github_ci_deploy's evidence gap so all five roles contract in one reviewed change.
   - >-
     Create and push the boundary tag BEFORE writing LICENSING.md's SHA, in the PR-4 working tree:
     git tag -a apache-final "$(git rev-parse origin/main)" -m "Last version released under
