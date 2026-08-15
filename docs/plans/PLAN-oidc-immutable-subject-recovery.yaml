@@ -455,6 +455,26 @@ test_obligations:
       A workflow echo of two GitHub-provided context values has no unit-testable surface of its own;
       its evidence is the grep that the anchor exists plus the printed values on the PR run, which is
       exactly what the linked step performs.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The committed index stays in lockstep with the DECISIONS.md derivation once Decision 172 lands,
+      so no PR can carry a stale index.
+    verification_step: 7
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This file is a pure generated derivation with no hand-authored behaviour to unit-test -- its
+      correctness IS freshness against DECISIONS.md, which validate_decisions_index_freshness asserts
+      on every --pre with no pre_globs. A bespoke test would re-implement that check's own comparison.
+  - source: config/composite_action_body_baseline.yaml
+    behavior: >-
+      Every inline run: body this plan adds carries an r3_workflows entry, so no new body enters the
+      workflows unregistered and no registered ceiling is silently exceeded.
+    verification_step: 7
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This file is a roster consumed by validate_composite_action_shell_bodies, which is pre=True with
+      no pre_globs and hard-fails on any unregistered or over-ceiling body. A per-row test would assert
+      the same registration that standing check already refuses to let go missing.
   - source: scripts/checks/ci_guards/_manifest.py
     behavior: The new check is registered and therefore actually runs in the presubmit tiers.
     verification_step: 8
