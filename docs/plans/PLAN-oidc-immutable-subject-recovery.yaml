@@ -67,6 +67,13 @@ scope:
       github.repository_id and github.repository_owner_id, so the numeric ids the trust policy pins
       are falsifiable against GitHub itself rather than against this plan's own literals -- and stay
       observable on every PR. Needs no OIDC and no AWS, so it works during the outage.
+  - file: config/composite_action_body_baseline.yaml
+    action: Modify
+    purpose: >-
+      Register every new inline run: body this plan adds, in the r3_workflows section (Decision 162
+      R3 leg). REQUIRED in BOTH PRs: validate_composite_action_shell_bodies is pre=True with NO
+      pre_globs, so it runs on every --pre regardless of diff, and an unregistered body is a hard
+      fail with no size floor. Without this PR-1 -- the outage fix itself -- reds.
   - file: scripts/checks/ci_guards/validate_oidc_failopen_guards.py
     action: Create
     purpose: >-
@@ -125,9 +132,9 @@ acceptance_criteria:
     the minted immutable sub matches trust (this is also PLAN-repo-rename-relicense's VP step 21
     evidence, currently unusable).
   - >-
-    The new guard fails on all three masking shapes (missing id; id referenced only in positive
-    == 'success' gates) and passes on the four sanctioned degrade-and-classify sites, with no
-    allowlist and no frozen baseline.
+    The new guard fails on all three masking shapes -- (a) missing id, (b) id referenced only in
+    positive == 'success' gates, (c) a .conclusion-only reference -- and passes on the four
+    sanctioned degrade-and-classify sites, with no allowlist and no frozen baseline.
   - >-
     terraform-drift no longer reports success when its assume fails, and advisory-status no longer
     posts a green terraform-converged status derived from a credential failure -- while its job
@@ -221,7 +228,9 @@ verification_plan:
     expected: >-
       exit 0; distinct outcomes for NoSuchKey (success, pass-on-absent), credential/authorization
       failure (error, UNVERIFIED), red record (failure), pending_gated (success with the routed-pending
-      description), and green (success).
+      description), green (success), and empty-body / unparseable JSON (error, never an abort) -- six
+      cases. The empty and corrupt cases matter: today the inline body folds empty into pass-on-absent
+      green, and a corrupt record aborts under inherited errexit and reds a job that must never red.
     fix_if: >-
       If a credential failure yields success, the classifier is still swallowing the error the way the
       inline aws s3 cp ... || echo "" did; discriminate on the error code, not on empty output.
@@ -261,7 +270,8 @@ verification_plan:
       validate_structural_size_limits passes on terraform-apply-sandbox.yml, which the
       scripts/ci/convergence_advisory.py extraction must have netted BELOW its 529 budget.
     fix_if: >-
-      If the check does not appear, the _manifest.py Entry is missing or misnamed. If
+      If the check does not appear, the likeliest cause is that its Entry pre_globs did not select
+      this diff -- check that first, then that the Entry name/module/attr triple resolves. If
       validate_structural_size_limits fails, the extraction did not remove enough inline body --
       extract further; do NOT raise the budget (Decision 128/165). If the guard itself fails, first
       decide whether the flagged site is genuinely unclassified or the predicate is over-narrow on
@@ -470,9 +480,11 @@ constraints:
     No structural-size budget raise either. .github/workflows/terraform-apply-sandbox.yml measures
     exactly 529 effective lines against a 529 budget in config/structural_size_budgets.yaml
     (validate_structural_size_limits, pre=True), so PR-2 CANNOT add a line to it until the
-    scripts/ci/convergence_advisory.py extraction nets it down. Extraction is the Decision 128/165
-    decompose-by-default answer; a raise-approved marker is not, and Decision 172 authorises the
-    immutable-subject migration, not a workflow size raise.
+    scripts/ci/convergence_advisory.py extraction nets it down. The structural registry and its
+    raise guard are Decision 166 (the incumbent entry itself reads # raise-approved: dec-166), with
+    Decision 165 governing marker AUTHORIZATION; Decision 128 governs the separate Python SLOC
+    registry. Extraction is the decompose-by-default answer; a raise-approved marker is not, and
+    Decision 172 authorises the immutable-subject migration, not a workflow size raise.
   - >-
     No SLOC budget raise. scripts/verify_ci_workflow.py measures exactly 500 SLOC with zero headroom
     and is unregistered, so the guard goes in a new sibling module (Decision 128 decompose-by-default;
@@ -558,6 +570,24 @@ context:
     success while applying nothing) which is the same silent-success family but a different mechanism
     -- apply-skip, not assume -- and is deliberately left standing per human direction.
   - >-
+    EXPECTED VISIBLE CHANGE, not a regression: advisory-status today only ever posts success or
+    failure. The classifier adds a third state, error, so while the outage persists every PR shows a
+    red-x terraform-converged. That is the anti-masking behaviour working as designed; the check stays
+    non-required (main-protection requires only pr-validate and terraform-validate), so it wedges
+    nothing.
+  - >-
+    RESIDUAL, stated rather than implied: config/ci_rca_taxonomy.yaml excludes terraform-drift from
+    ci-rca (Decision 92 pt 6 routes it to the ops-portal alarm path), and that path needs the very
+    credentials a failed assume just proved absent. So an OIDC regression on drift now produces a red
+    hourly run and ZERO rec. Strictly better than the current green-and-blind, but "loud" here means
+    visible in Actions, not automatically triaged. The post-heal Actions-history sweep covers it
+    partially.
+  - >-
+    CONSIDERED AND REJECTED: GitHub's repository-level OIDC subject-claim customization API could
+    restore a name-only sub and avoid touching trust at all. Rejected because it is rename-fragile in
+    exactly the way this incident proves, and it would re-pin identity to a mutable name; trusting the
+    immutable sub additively is the durable choice.
+  - >-
     rec-3138 is bundled and records the WRONG root cause in its title ("convergence-health job is not
     granted id-token write"). Its closure resolution must state the immutable-subject cause, so the
     next reader of the rec is not re-taught the misdiagnosis.
@@ -604,7 +634,12 @@ execution_steps:
     PR-1 step 4 -- .github/workflows/ci.yml: add the zero-credential identity anchor to the pr-validate
     job, echoing the github.repository_id and github.repository_owner_id context values. pr-validate
     uses no OIDC and no AWS, so it runs green during the outage. This makes the numeric ids the trust
-    policy pins falsifiable against GitHub rather than against this plan's own literals.
+    policy pins falsifiable against GitHub rather than against this plan's own literals. MANDATORY
+    COMPANION: register the new inline run: body in config/composite_action_body_baseline.yaml's
+    r3_workflows section, key ".github/workflows/ci.yml::pr-validate::<hyphen-slug-of-step-name>",
+    ceiling = its effective line count. validate_composite_action_shell_bodies is pre=True with no
+    pre_globs, so an unregistered body hard-fails PR-1 on every --pre. Appending to an existing
+    pr-validate body is NOT an escape -- both existing keys have ceilings of 3 and 1.
   - >-
     PR-1 step 5 -- docs/DECISIONS.md: add Decision 172 recording the immutable-subject migration,
     amending the dual-slug ruling that Decision 171 will carry. Include reversal conditions and the
@@ -629,33 +664,51 @@ execution_steps:
     record green, and run VP step 13.
   - >-
     PR-2 step 1 -- create scripts/ci/convergence_advisory.py, extracting the advisory-status inline
-    run: body (terraform-apply-sandbox.yml lines ~666-740, ~74 lines). It must read the convergence
+    run: body. MEASURED FIGURES (do not re-derive): the run: body is lines 673-705 = 27 EFFECTIVE
+    lines; the whole step is 666-705 = 34 effective; lines 707-740 are the gated-apply job's comment
+    header and count ZERO toward the effective-line metric. So the extraction returns at most ~26-27
+    effective lines, and PR-2 adds back an id (+1), a checkout (+2) and two-to-three classifier steps
+    (+3-6 each) -- realistic net is -10 to -15, not -74. It clears the 529 ceiling but the headroom is
+    thin. If VP step 7 shows it did not clear, the designated SECOND extraction target is the
+    speculative-plan redaction body (lines ~609-635); do not raise the budget. It must read the
+    convergence
     record and return a status state plus description, discriminating: NoSuchKey (success,
     pass-on-absent), credential/authorization failure (error, UNVERIFIED -- cannot read the record;
     not evidence of convergence), red record (failure), pending_gated (success with the routed-pending
-    description), green (success). Discriminate on the error code, never on empty output -- that
-    conflation is the defect. Reuse the NoSuchKey-vs-other-error pattern already at
+    description), green (success), and empty-body / unparseable JSON (error, never an abort -- today
+    empty folds into pass-on-absent green and a corrupt record aborts under inherited errexit, reding
+    a job that must never red). Six cases. Discriminate on the error code, never on empty output --
+    that conflation is the defect. Reuse the NoSuchKey-vs-other-error pattern already at
     terraform-drift.yml:198-225 rather than inventing one. This extraction is REQUIRED before any line
     is added to that workflow (529/529 structural budget).
   - >-
     PR-2 step 2 -- create tests/test_convergence_advisory.py covering all five outcomes above, flat
     under tests/ per the scripts/ci convention.
   - >-
-    PR-2 step 3 -- .github/workflows/terraform-apply-sandbox.yml advisory-status: replace the inline
-    body with a thin adapter call to the new module (Decision 162), give the assume step an id, and add
-    a negative-branch classifier. Keep the JOB green -- it must never red a PR, and terraform-converged
-    must remain a non-required check (Decision 83).
+    PR-2 step 3 -- .github/workflows/terraform-apply-sandbox.yml advisory-status: ADD actions/checkout@v7
+    FIRST -- the job today has exactly two steps (the assume and the inline body) and no checkout, so
+    without it python3 -m scripts.ci.convergence_advisory cannot resolve the module, the step has no
+    continue-on-error, and the job reds, violating this plan's own never-red-a-PR constraint. Note
+    scripts/ci/ has no __init__.py; the -m form works via PEP 420 from the repo root (reconcile.yml:161
+    precedent) but ONLY after checkout. Then replace the inline body with a thin adapter call to the new
+    module (Decision 162), give the assume step an id, and add a negative-branch classifier. DO NOT
+    RENAME the advisory-status step: its baseline key is the hyphen-slug of its name
+    (".github/workflows/terraform-apply-sandbox.yml::advisory-status::read-convergence-record-and-post-advisory-terraform-converged-status",
+    ceiling 26) -- renaming mints an unregistered key and orphans the old one. Register every NEW
+    run: body added here in r3_workflows. Keep the JOB green -- it must never red a PR, and
+    terraform-converged must remain a non-required check (Decision 83).
   - >-
     PR-2 step 4 -- .github/workflows/terraform-apply-sandbox.yml speculative-plan: add a
     negative-branch classifier on oidc_plan that surfaces the failed assume (and states that no plan.bin
     was persisted, so the merge-time apply will fail closed) instead of silently skipping every step.
+    Register the new inline run: body in r3_workflows.
   - >-
     PR-2 step 5 -- .github/workflows/terraform-drift.yml: replace the positive-only gating with a
     negative-branch classifier that fails the job loudly when the assume fails. An assume failure is an
     ERROR, not drift: the workflow's own stated invariant already mandates loud on errors, the record
     stays untouched, and config/ci_rca_taxonomy.yaml deliberately excludes terraform-drift from ci-rca
     so there is no rec storm. Remove the now-stale bootstrap-window justification comment -- the
-    planner role exists.
+    planner role exists. Register the new inline run: body in r3_workflows.
   - >-
     PR-2 step 6 -- create scripts/checks/ci_guards/validate_oidc_failopen_guards.py. Predicate: for
     every step in .github/workflows that uses aws-actions/configure-aws-credentials AND declares
@@ -668,7 +721,10 @@ execution_steps:
     closing expression braces and a quote character -- so use a proximity or line-scoped match
     accepting the single-quoted, double-quoted and bare forms. Scan step-level if: expressions, env:
     mappings, AND inline run: bodies (rec-2861 proposes moving mirror_oidc's reference into env:). No
-    allowlist, no baseline. Report each violation with file and step name.
+    allowlist, no baseline. Report each violation with file and step name. MANDATORY (Decision 170):
+    the module must call registry.examined(...) / registry.skipped(...) -- validate_check_accounting is
+    pre=True over scripts/checks/**, and config/check_accounting_baseline.yaml is shrink-only and
+    bounded by a frozen _BASELINE_SEED, so a new check CANNOT be baselined and must declare instead.
   - >-
     PR-2 step 7 -- register the check: add its Entry to scripts/checks/ci_guards/_manifest.py (pre=True,
     full_segment matching its ci_guards siblings, with pre_globs covering the workflows directory and
@@ -681,7 +737,8 @@ execution_steps:
     classifier in the exact ci.yml mirror_oidc shape (silent), a .conclusion-only reference (fires),
     and a step without continue-on-error (ignored entirely).
   - >-
-    PR-2 step 9 -- run VP steps 4, 5, 7, 8 and 10, then commit, push, open PR-2, and merge on green.
+    PR-2 step 9 -- run VP steps 4, 5, 7, 8 and 10, then commit, push, open PR-2, merge on green, and
+    run VP step 14 to confirm rec-3138 closed.
     Include the Resolves: rec-3138 trailer in the squash-merge body of whichever PR lands last, with a
     resolution naming the immutable-subject root cause.
   - >-
