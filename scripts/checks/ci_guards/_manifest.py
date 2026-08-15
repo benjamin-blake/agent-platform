@@ -98,4 +98,15 @@ ENTRIES: tuple[Entry, ...] = (
         pre=True,
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_oidc_failopen_guards",
+        module="scripts.checks.ci_guards.validate_oidc_failopen_guards",
+        attr="validate_oidc_failopen_guards",
+        pre=True,
+        pre_globs=(
+            ".github/workflows/**",
+            "scripts/checks/ci_guards/validate_oidc_failopen_guards.py",
+        ),
+        full_segment="full_after_lint",
+    ),
 )
