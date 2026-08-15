@@ -13,7 +13,7 @@ variable "github_owner" {
 variable "repository_name" {
   description = "GitHub repository name managed by this module."
   type        = string
-  default     = "agent-platform"
+  default     = "theseus"
 }
 
 variable "admin_bypass_actor_id" {

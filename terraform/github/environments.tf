@@ -39,4 +39,14 @@ resource "github_repository_environment" "tf_gated_apply" {
     protected_branches     = true
     custom_branch_policies = false
   }
+
+  # A destroy of this Environment FAILS OPEN, which is why it is blocked outright: GitHub
+  # silently re-creates a protection-rule-free environment the first time a job references
+  # `environment: tf-gated-apply`, while github_ci_apply's OIDC trust still matches the
+  # environment: sub form -- so every gated apply would keep authenticating and start running
+  # with NO required reviewer. The gate would appear intact and enforce nothing.
+  # prevent_destroy is a lifecycle meta-argument, so it produces no plan diff of its own.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
