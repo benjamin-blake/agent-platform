@@ -2,6 +2,54 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 172: GitHub's immutable OIDC subject-claim format governs post-rename repositories; trust additively, contract only with live proof (Decided)
+
+```yaml
+number: 172
+status: Decided
+decided_date: "2026-08-15"
+amends: []
+significance:
+  value: numbered_decision
+  justification: A durable architectural commitment to trust GitHub's immutable numeric-id OIDC subject additively for every rename-eligible repository, with reversal-relevant consequences for how every future rename is staged.
+```
+
+**Status:** Decided
+**Date:** 2026-08-15
+**Warehouse ID:** dec-172 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+GitHub applies an immutable OIDC subject-claim format, `repo:OWNER@OWNER-ID/REPO@REPO-ID:<context>`, to any repository renamed or transferred after 2026-07-15 -- replacing the mutable `repo:OWNER/REPO:<context>` form this repository's five CI roles trusted exclusively. `benjamin-blake/theseus` was created 2026-05-28 (mutable format) and renamed 2026-08-15T12:55:57Z (`agent-platform` -> `theseus`), migrating at the rename. Every role's trust policy inspected as correct (Decision 171's in-flight dual-slug work varies only the NAME half) yet matched nothing post-rename -- the rename changed the subject SHAPE, a dimension no prior trust-policy work anticipated. STS denied every assume from 12:55:57Z onward; the same outage also disabled `ci-rca`/`convergence-health`, so no recommendation auto-filed and a stale-green convergence record masked the failure.
+
+**Decision:**
+1. **Trust the immutable numeric-id subject additively, alongside the existing name-only entries -- never in place of them.** `local.github_repos` in `terraform/personal/oidc.tf` and `terraform/bootstrap/github_ci_apply.tf` gains a third entry, a repo SEGMENT of the form `OWNER@OWNER-ID/REPO@REPO-ID` (never a `repo:`-prefixed literal -- every sub site already renders `repo:${repo}:<suffix>`). For this repository: `benjamin-blake@217728084/theseus@1252427466`.
+2. **The numeric ids, not either name, are the durable identity.** A future rename changes only the NAME half of the immutable form; the ids (`217728084` / `1252427466`) are permanent for this repository's lifetime. Trusting a not-yet-mintable sub is harmless (a StringLike/StringEquals entry against a subject nothing can ever present costs nothing), so the standing playbook going forward is: **before** any future rename, pre-stage the new name's immutable entry additively, so no gap between rename and trust-repair ever recurs.
+3. **Exact-match only -- no wildcard.** IAM `StringLike` `*` spans `:` and `/`, and GitHub environment names are attacker-chosen free text with no documented charset restriction, so a pattern like `repo:*@217728084/*@1252427466:...` would be forgeable by a foreign repository via a crafted environment name. Rename-proofing is procedural (point 2), never a wildcard.
+4. **Contraction is a future, separately-evidenced act -- not this Decision.** The two legacy name-only entries are provably dead going forward (a renamed repository's old slug can never mint a subject again, and any new repository later claiming the old slug is itself post-cutoff and immutable), but they stay trusted until live `RoleLastUsed` proof lands for every role under the immutable sub and a follow-on contraction removes them explicitly.
+
+**Rationale:**
+An IAM trust diff already routes to the gated-apply path regardless of shape (Decision 77/92), so additive trust is no more expensive to apply than a narrowing edit, and it avoids reviewing a removal under incident time-pressure for no safety benefit (the legacy entries cost nothing extra to keep trusted). GitHub's repository-level OIDC subject-claim customization API (forcing a name-only sub) was examined and rejected: rename-fragile in exactly the way this incident proves, and it re-pins identity to a mutable name instead of adopting the durable one.
+
+**Reversal conditions:**
+This trust stays additive until superseded by a scoped contraction: (a) the two legacy name-only entries are removed only once every role records live proof of a successful assume under the immutable sub (this plan's VP steps 11-12) and `github_ci_deploy`'s currently-pending evidence closes -- tracked as a follow-on recommendation, never automatic; (b) if a future rename lands WITHOUT its new name's immutable entry pre-staged beforehand (point 2's playbook not followed), this Decision's recovery procedure applies again and a process gap is filed.
+
+```yaml reversal-conditions
+decision: 172
+review_by: 2026-11-15
+on_trigger: "re-decide via /plan whether contraction is evidenced; update or re-arm this stanza"
+conditions:
+  - id: legacy-entries-provably-dead-with-proof
+    kind: manual
+    description: "All five CI roles record a live RoleLastUsed timestamp under the immutable sub (this plan's VP steps 11-12) and github_ci_deploy's pending evidence closes -> contract local.github_repos to the immutable entry alone via a follow-on plan, never silently."
+  - id: future-rename-not-prestaged
+    kind: manual
+    description: "A future repository rename/transfer lands without the new name's immutable entry pre-staged additively beforehand -> this Decision's playbook (point 2) was not followed; re-run the same recovery and file a process gap."
+```
+
+**Related:** Decision 94 (both-sub-forms guard this entry must not weaken), Decision 77 + Decision 92 (gated-apply routing for the IAM trust diff), Decision 55 (forward-fix, never a workaround), Decision 35 (exact-match enumeration principle the no-wildcard constraint rests on), Decision 167 (typed envelope / Significance claim), Decision 133 (reversal-conditions stanza grammar this entry follows).
+
+---
+
 ## Decision 170: The registered-check contract gains a second, declarative output channel -- examined()/skipped() -- so a vacuous pass, a skip, and an enforced pass stop collapsing into one indistinguishable green, governed by a shrink-only adoption ratchet (Decided)
 
 ```yaml

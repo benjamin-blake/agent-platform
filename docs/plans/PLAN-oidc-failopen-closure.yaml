@@ -1,0 +1,446 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "oidc-failopen-closure"
+intent: >-
+  Close the three fail-open assume-role sites that let the 2026-08-15 OIDC outage report green --
+  an advisory status derived from a credential failure, and two jobs that skipped every substantive
+  step while still reporting success -- and install a standing guard so the shape cannot recur.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-oidc-failopen-closure.yaml
+phase: >-
+  CI-signal-integrity hardening. No tier_item; this is the follow-on half of a live-incident forward
+  fix (soft-warn exception category: hotfix). PARTITION HALF 2 OF 2 of the critique-accepted
+  PLAN-oidc-immutable-subject-recovery (see context: PARTITION PROVENANCE); its sibling is
+  PLAN-oidc-immutable-subject-trust-restore, whose break-glass apply MUST land before this plan's
+  post-deploy verification can run.
+scope:
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      advisory-status: give the assume step an id and post a non-green error status distinguishing a
+      credential failure from a genuine NoSuchKey pass-on-absent, keeping the JOB green.
+      speculative-plan: add a negative-branch classifier so a failed assume is surfaced, not skipped.
+  - file: .github/workflows/terraform-drift.yml
+    action: Modify
+    purpose: >-
+      Loud-fail the drift job when its assume fails instead of reporting success with every
+      substantive step skipped (an alarm sensor that cannot fail is not a sensor).
+  - file: scripts/ci/convergence_advisory.py
+    action: Create
+    purpose: >-
+      Extract advisory-status's ~74-line inline run: body into a tested module (Decision 162 thin
+      adapter; the pr_conflict_signal.sh precedent). Discriminates NoSuchKey / credential-failure /
+      red / green / pending-gated and emits the status state + description. REQUIRED, not cosmetic:
+      .github/workflows/terraform-apply-sandbox.yml measures exactly 529 effective lines against a
+      529 budget in config/structural_size_budgets.yaml, so this plan cannot add a line until this
+      extraction nets it down.
+  - file: tests/test_convergence_advisory.py
+    action: Create
+    purpose: >-
+      Unit tests for the extracted classifier, flat under tests/ per the scripts/ci convention
+      (map_source_to_test returns None for scripts/ci/**, matching test_review_verdict.py et al).
+  - file: scripts/checks/ci_guards/validate_oidc_failopen_guards.py
+    action: Create
+    purpose: >-
+      Standing guard: every continue-on-error assume-role step must declare an id AND be referenced
+      downstream in a negative branch. New sibling module, NOT a guard inside verify_ci_workflow.py.
+  - file: scripts/checks/ci_guards/_manifest.py
+    action: Modify
+    purpose: Register the new check's Entry (Decision 169 per-domain declarative manifest).
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      function_to_category row for the new check module -- the registration obligation
+      scripts.roadmap.plan_obligations reports for any new check module.
+  - file: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
+    action: Create
+    purpose: >-
+      Mirror tests (Decision 131): prove the guard fires on each masking shape and stays silent on
+      the four sanctioned degrade-and-classify sites.
+  - file: config/composite_action_body_baseline.yaml
+    action: Modify
+    purpose: >-
+      Register every new inline run: body this plan adds, in the r3_workflows section (Decision 162
+      R3 leg). REQUIRED: validate_composite_action_shell_bodies is pre=True with NO pre_globs, so it
+      runs on every --pre regardless of diff, and an unregistered body is a hard fail with no size
+      floor.
+bundled_recommendations:
+  - rec-3138
+infrastructure_dependencies:
+  - >-
+    PLAN-oidc-immutable-subject-trust-restore's break-glass apply MUST have landed before this
+    plan's post-deploy verification: until OIDC works, CI cannot authenticate to prove any masking
+    fix. This plan's MERGE gates are credential-free (pr-validate uses no AWS) and do not depend on
+    that apply -- only the post-deploy proof does.
+acceptance_criteria:
+  - >-
+    The new guard fails on all three masking shapes -- (a) missing id, (b) id referenced only in
+    positive == 'success' gates, (c) a .conclusion-only reference -- and passes on the four
+    sanctioned degrade-and-classify sites, with no allowlist and no frozen baseline.
+  - >-
+    terraform-drift no longer reports success when its assume fails, and advisory-status no longer
+    posts a green terraform-converged status derived from a credential failure -- while its job
+    still never reds a PR and terraform-converged remains a non-required check.
+  - rec-3138 is closed with a resolution naming the immutable-subject root cause, not the id-token
+    misdiagnosis recorded in its title.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the new fail-open guard discriminates: it must fire on each of the three masking shapes
+      (a: assume step with no id; b: id referenced only in positive == 'success' gates; c: a
+      .conclusion-only reference, which continue-on-error forces to success and so can never
+      classify) and stay silent on
+      the four sanctioned sites that carry a negative-branch classifier -- INCLUDING ci.yml's
+      mirror_oidc, whose classifier is the double-quoted shell form
+      if [ "${{ steps.mirror_oidc.outcome }}" != "success" ] inside a run: body.
+    command: bin/venv-python -m pytest "tests/checks/ci_guards/test_validate_oidc_failopen_guards.py" -q
+    expected: >-
+      exit 0; fixtures cover single-quoted != 'success', double-quoted != "success", the
+      ${{ ... }}-split form where != is separated from outcome by the closing braces and a quote, a
+      step with no id, a step whose id appears only in positive gates, a step referencing only
+      .conclusion, and a step without continue-on-error (ignored entirely).
+    fix_if: >-
+      If the guard passes on a fixture missing its classifier, the predicate is matching any
+      steps.<id>.outcome reference rather than a NEGATIVE-branch reference; tighten it. If it fires
+      on the double-quoted or brace-split fixture, the predicate is over-narrow on quoting -- fix the
+      predicate, NOT the workflow.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The guard is itself the standing regression instrument and runs in both presubmit tiers via its
+      _manifest.py Entry; graduating its unit tests would register a check that checks a check.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the extracted advisory classifier discriminates a credential failure from a genuine
+      absent record -- the exact conflation that published a green terraform-converged status during
+      this outage.
+    command: bin/venv-python -m pytest "tests/test_convergence_advisory.py" -q
+    expected: >-
+      exit 0; distinct outcomes for NoSuchKey (success, pass-on-absent), credential/authorization
+      failure (error, UNVERIFIED), red record (failure), pending_gated (success with the routed-pending
+      description), green (success), and empty-body / unparseable JSON (error, never an abort) -- six
+      cases. The empty and corrupt cases matter: today the inline body folds empty into pass-on-absent
+      green, and a corrupt record aborts under inherited errexit and reds a job that must never red.
+    fix_if: >-
+      If a credential failure yields success, the classifier is still swallowing the error the way the
+      inline aws s3 cp ... || echo "" did; discriminate on the error code, not on empty output.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Standing pytest module for a scripts/ci extraction; the behaviour is guarded on every run of the
+      suite, so a registry row would duplicate it.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the guard is wired into the presubmit path (validate.py is the single source of truth --
+      never a workflow-only check), that the live repository satisfies it, that every new inline
+      run: body carries its r3_workflows registration, and that the structural size budget still
+      holds after the workflow edits.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      exit 0; output names validate_oidc_failopen_guards; the seven live continue-on-error
+      assume-role steps all pass (four pre-existing classifiers, three newly fixed); and
+      validate_structural_size_limits passes on terraform-apply-sandbox.yml, which the
+      scripts/ci/convergence_advisory.py extraction must have netted BELOW its 529 budget.
+    fix_if: >-
+      If the check does not appear, the likeliest cause is that its Entry pre_globs did not select
+      this diff -- check that first, then that the Entry name/module/attr triple resolves. If
+      validate_structural_size_limits fails, the extraction did not remove enough inline body --
+      extract further; do NOT raise the budget (Decision 128/165/166). If the guard itself fails, first
+      decide whether the flagged site is genuinely unclassified or the predicate is over-narrow on
+      quoting (see step 1's fix_if) -- fix the workflow only in the former case.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the new check is actually registered -- an unregistered check module is a silent no-op,
+      the same false-green class this plan exists to close.
+    command: bin/venv-python -m pytest "tests/checks/ci_guards/test__manifest.py" "tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py" -q
+    expected: >-
+      exit 0; the manifest test sees the new Entry and the taxonomy test sees its function_to_category
+      row, so a failure of the guard is classifiable rather than unattributed.
+    fix_if: >-
+      A manifest failure means the Entry name/module/attr triple does not resolve. A taxonomy failure
+      means the function_to_category row is missing or names a category that does not exist.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Both are standing pytest modules already selected by the presubmit tiers for this domain;
+      a registry row would duplicate coverage that cannot silently lapse.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the FULL validation tier before commit, as handoff_policy.full_validation_required_before_commit
+      declares. Without this step validate_handoff_full_tier fails the PR in both presubmit tiers.
+    command: bin/venv-python -m scripts.validate
+    expected: exit 0 on a completed full run (not a timeout).
+    fix_if: >-
+      On timeout the disposition is blocked per handoff_policy -- resume later and rerun the full tier
+      from the start; do not commit on a partial run.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Confirm rec-3138 closed with a resolution naming the immutable-subject root cause, correcting
+      the id-token misdiagnosis in its title.
+    command: bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()]; r=[x for x in rows if x.get('id')=='rec-3138'][0]; print(r['status'], '|', str(r.get('resolution'))[:200])"
+    expected: >-
+      status closed, resolution naming GitHub immutable subject claims and the post-2026-07-15 rename
+      trigger -- not id-token permissions.
+    fix_if: >-
+      If still open, the Resolves: trailer was omitted from the squash-merge body; close via
+      ops_data_portal --update-rec with the corrected resolution text.
+    hermetic: false
+test_obligations:
+  - source: scripts/checks/ci_guards/validate_oidc_failopen_guards.py
+    behavior: >-
+      Fires on a continue-on-error assume-role step with no id, and on one whose id is referenced
+      only in positive == 'success' gates; silent when a negative-branch classifier exists in any
+      supported quoting form. Matches .outcome only -- never .conclusion, which GitHub forces to
+      success under continue-on-error and would admit a permanently-dead classifier.
+    verification_step: 1
+    test_selector: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
+    red_green_expectation: >-
+      Red before (module absent), green after, with per-shape and per-quoting-form fixture cases.
+  - source: .github/workflows/terraform-drift.yml
+    behavior: >-
+      A failed assume surfaces loudly rather than producing a success run with every substantive step
+      skipped.
+    verification_step: 1
+    test_selector: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
+    red_green_expectation: >-
+      Red before (oidc_drift has only positive gates), green after.
+  - source: .github/workflows/terraform-apply-sandbox.yml
+    behavior: >-
+      advisory-status declares an id and never derives a green terraform-converged status from a
+      credential failure; speculative-plan classifies a failed assume instead of skipping silently.
+    verification_step: 1
+    test_selector: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
+    red_green_expectation: >-
+      Red before (advisory-status has no id; oidc_plan has only positive gates), green after.
+  - source: scripts/ci/convergence_advisory.py
+    behavior: >-
+      Discriminates a credential/authorization failure from a genuine NoSuchKey absent record, and
+      never emits a success state for the former.
+    verification_step: 2
+    test_selector: tests/test_convergence_advisory.py
+    red_green_expectation: >-
+      Red before (module absent; the inline body conflated both into pass-on-absent green), green after.
+  - source: config/composite_action_body_baseline.yaml
+    behavior: >-
+      Every inline run: body this plan adds carries an r3_workflows entry, so no new body enters the
+      workflows unregistered and no registered ceiling is silently exceeded.
+    verification_step: 3
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This file is a roster consumed by validate_composite_action_shell_bodies, which is pre=True with
+      no pre_globs and hard-fails on any unregistered or over-ceiling body. A per-row test would assert
+      the same registration that standing check already refuses to let go missing.
+  - source: scripts/checks/ci_guards/_manifest.py
+    behavior: The new check is registered and therefore actually runs in the presubmit tiers.
+    verification_step: 4
+    test_selector: tests/checks/ci_guards/test__manifest.py
+    red_green_expectation: >-
+      Red before (Entry absent, check never runs), green after.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      The new check module maps to a ci-rca category so a failure of it is classifiable rather than
+      falling through to an unattributed bucket.
+    verification_step: 4
+    test_selector: tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
+    waiver_reason: >-
+      Coverage is a data-completeness property of the taxonomy file itself, already enforced
+      generically by validate_ci_rca_taxonomy for every registered check; a per-row test would assert
+      the same mapping the existing standing check already refuses to let go missing.
+constraints:
+  - >-
+    The advisory-status JOB must stay green (it must never red a PR) and terraform-converged must NOT
+    be added to the main-protection required_status_checks (Decision 83 non-wedging).
+  - >-
+    No structural-size budget raise. .github/workflows/terraform-apply-sandbox.yml measures
+    exactly 529 effective lines against a 529 budget in config/structural_size_budgets.yaml
+    (validate_structural_size_limits, pre=True), so this plan CANNOT add a line to it until the
+    scripts/ci/convergence_advisory.py extraction nets it down. The structural registry and its
+    raise guard are Decision 166 (the incumbent entry itself reads # raise-approved: dec-166), with
+    Decision 165 governing marker AUTHORIZATION; Decision 128 governs the separate Python SLOC
+    registry. Extraction is the decompose-by-default answer; a raise-approved marker is not, and
+    Decision 172 authorises the immutable-subject migration, not a workflow size raise.
+  - >-
+    No SLOC budget raise. scripts/verify_ci_workflow.py measures exactly 500 SLOC with zero headroom
+    and is unregistered, so the guard goes in a new sibling module (Decision 128 decompose-by-default;
+    Decision 165 would require an authorizing marker for any raise).
+  - >-
+    No allowlist and no frozen baseline in the guard -- the negative-branch predicate separates
+    sanctioned from masking sites structurally (Decision 163: remove the exception path, do not build
+    a gate around it).
+  - >-
+    Keep the advisory-status job green by making scripts/ci/convergence_advisory.py never raise --
+    NOT by adding continue-on-error: true to the adapter run: step. Adding it would pull that body
+    into validate_masked_errexit_steps' population and acquire a sixth registration obligation (its
+    VAR=$(...) positional-guard rule) for no benefit.
+  - No rescue agents or workaround loops (Decision 55). Forward-fix only; never auto-revert.
+context:
+  - >-
+    PARTITION PROVENANCE. This plan is half 2 of a MECHANICAL partition of
+    PLAN-oidc-immutable-subject-recovery, which cleared decision-scout (FLAGS_FOUND, 123 of 123
+    triaged) and three rounds of plan-critique before human acceptance at the convergence cap. The
+    partition adds no new scope and changes no ruling: it splits the original's declared two-PR
+    execution into two truthful plan documents because validate_vp_replay's implement-PR leg replays
+    EVERY hermetic pre-deploy step of the plan a feat({slug}) commit names, and its only exclusions
+    are hermetic:false and phase:post-deploy -- so a single plan spanning two PRs is un-executable by
+    construction (the first PR reds on the second PR's steps). Sibling:
+    PLAN-oidc-immutable-subject-trust-restore.
+  - >-
+    ORDERING. This plan lands SECOND. Its post-deploy verification REQUIRES the sibling plan's
+    break-glass apply: until OIDC works, CI cannot authenticate to prove any masking fix. Its MERGE
+    gates, by contrast, are entirely credential-free -- VP steps 1, 2 and 4 are pytest over in-repo
+    fixtures and VP step 3 is the same --pre the creds-free pr-validate job runs -- so nothing in
+    this plan's CI depends on the apply. Do not reorder.
+  - >-
+    Defect 2's stated scope in the original handoff was wrong and is corrected here. Of 26
+    assume-role steps, only 7 are continue-on-error and 4 of those carry a negative-branch classifier.
+    19 hard-fail. The three genuine masking sites are terraform-apply-sandbox advisory-status (no id
+    at all; its aws s3 cp ... || echo "" turns a credential failure into pass-on-absent GREEN),
+    terraform-drift (positive-only gates -> success while detecting nothing; live-confirmed on the
+    12:58/13:42/14:37Z runs), and terraform-apply-sandbox speculative-plan (same shape; the mask also
+    converts a visible pre-merge failure into a post-merge red, since the merge-time apply then fails
+    closed on the missing plan.bin).
+  - >-
+    Decision-scout verdict FLAGS_FOUND (123 of 123 triaged), inherited from the pre-partition plan.
+    CITE list, verbatim ids: Decision 94, Decision 126, Decision 120, Decision 119, Decision 92,
+    Decision 158, Decision 48, Decision 132, Decision 60, Decision 154, Decision 155, Decision 162,
+    Decision 170, Decision 131, Decision 167, Decision 150, Decision 165. RELATED: Decision 144,
+    Decision 77, Decision 169, Decision 72, Decision 148. Flags resolved in-plan: Decision 128 WARN
+    (SLOC) -> sibling module, no raise; Decision 163 SPIRIT (allowlist is an argue-past path) ->
+    negative-branch predicate removes the exception entirely rather than formalising a baseline.
+    Decision 131 supersedes the caller's Decision 104 citation for the test mirror rule; Decision 169
+    supersedes it for the manifest registration surface.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s), then human-accepted at the convergence cap -- both gates were cleared by the pre-partition PLAN-oidc-immutable-subject-recovery, of which this document is a mechanical partition half adding no new scope"
+  - >-
+    EXPECTED VISIBLE CHANGE, not a regression: advisory-status today only ever posts success or
+    failure. The classifier adds a third state, error, so while the outage persists every PR shows a
+    red-x terraform-converged. That is the anti-masking behaviour working as designed; the check stays
+    non-required (main-protection requires only pr-validate and terraform-validate), so it wedges
+    nothing.
+  - >-
+    RESIDUAL, stated rather than implied: config/ci_rca_taxonomy.yaml excludes terraform-drift from
+    ci-rca (Decision 92 pt 6 routes it to the ops-portal alarm path), and that path needs the very
+    credentials a failed assume just proved absent. So an OIDC regression on drift now produces a red
+    hourly run and ZERO rec. Strictly better than the current green-and-blind, but "loud" here means
+    visible in Actions, not automatically triaged. The post-heal Actions-history sweep covers it
+    partially.
+  - >-
+    NOT IN SCOPE, file as recs instead: rec-3135 (terraform-apply-sandbox dispatch exits success
+    while applying nothing) which is the same silent-success family but a different mechanism --
+    apply-skip, not assume -- and is deliberately left standing per human direction.
+  - >-
+    rec-3138 is bundled and records the WRONG root cause in its title ("convergence-health job is not
+    granted id-token write"). Its closure resolution must state the immutable-subject cause, so the
+    next reader of the rec is not re-taught the misdiagnosis.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - Sibling plan PLAN-oidc-immutable-subject-trust-restore merged AND its break-glass apply landed
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Step 1 -- create scripts/ci/convergence_advisory.py, extracting the advisory-status inline
+    run: body. MEASURED FIGURES (do not re-derive): the run: body is lines 673-705 = 27 EFFECTIVE
+    lines; the whole step is 666-705 = 34 effective; lines 707-740 are the gated-apply job's comment
+    header and count ZERO toward the effective-line metric. So the extraction returns at most ~26-27
+    effective lines, and this plan adds back an id (+1), a checkout (+2) and two-to-three classifier
+    steps (+3-6 each) -- realistic net is -10 to -15, not -74. It clears the 529 ceiling but the
+    headroom is thin. If VP step 3 shows it did not clear, the designated SECOND extraction target is
+    the speculative-plan redaction body (lines ~609-635); do not raise the budget. It must read the
+    convergence
+    record and return a status state plus description, discriminating: NoSuchKey (success,
+    pass-on-absent), credential/authorization failure (error, UNVERIFIED -- cannot read the record;
+    not evidence of convergence), red record (failure), pending_gated (success with the routed-pending
+    description), green (success), and empty-body / unparseable JSON (error, never an abort -- today
+    empty folds into pass-on-absent green and a corrupt record aborts under inherited errexit, reding
+    a job that must never red). Six cases. Discriminate on the error code, never on empty output --
+    that conflation is the defect. Reuse the NoSuchKey-vs-other-error pattern already at
+    terraform-drift.yml:198-225 rather than inventing one. This extraction is REQUIRED before any line
+    is added to that workflow (529/529 structural budget).
+  - >-
+    Step 2 -- create tests/test_convergence_advisory.py covering all SIX outcomes above, flat
+    under tests/ per the scripts/ci convention.
+  - >-
+    Step 3 -- .github/workflows/terraform-apply-sandbox.yml advisory-status: ADD actions/checkout@v7
+    FIRST -- the job today has exactly two steps (the assume and the inline body) and no checkout, so
+    without it python3 -m scripts.ci.convergence_advisory cannot resolve the module, the step has no
+    continue-on-error, and the job reds, violating this plan's own never-red-a-PR constraint. Note
+    scripts/ci/ has no __init__.py; the -m form works via PEP 420 from the repo root (reconcile.yml:161
+    precedent) but ONLY after checkout. Then replace the inline body with a thin adapter call to the new
+    module (Decision 162), give the assume step an id, and add a negative-branch classifier. DO NOT
+    RENAME the advisory-status step: its baseline key is the hyphen-slug of its name
+    (".github/workflows/terraform-apply-sandbox.yml::advisory-status::read-convergence-record-and-post-advisory-terraform-converged-status",
+    ceiling 26) -- renaming mints an unregistered key and orphans the old one. For the same reason do
+    NOT add an id: to that run: step either: the key grammar is "step's own id, else hyphen-slug of
+    name", so adding an id re-keys it identically to a rename. The id goes on the ASSUME step, which
+    is a uses: step and is never scanned by this guard. Register every NEW
+    run: body added here in r3_workflows. Keep the JOB green -- it must never red a PR, and
+    terraform-converged must remain a non-required check (Decision 83).
+  - >-
+    Step 4 -- .github/workflows/terraform-apply-sandbox.yml speculative-plan: add a
+    negative-branch classifier on oidc_plan that surfaces the failed assume (and states that no plan.bin
+    was persisted, so the merge-time apply will fail closed) instead of silently skipping every step.
+    Register the new inline run: body in r3_workflows.
+  - >-
+    Step 5 -- .github/workflows/terraform-drift.yml: replace the positive-only gating with a
+    negative-branch classifier that fails the job loudly when the assume fails. An assume failure is an
+    ERROR, not drift: the workflow's own stated invariant already mandates loud on errors, the record
+    stays untouched, and config/ci_rca_taxonomy.yaml deliberately excludes terraform-drift from ci-rca
+    so there is no rec storm. Remove the now-stale bootstrap-window justification comment -- the
+    planner role exists. Register the new inline run: body in r3_workflows.
+  - >-
+    Step 6 -- create scripts/checks/ci_guards/validate_oidc_failopen_guards.py. Predicate: for
+    every step in .github/workflows that uses aws-actions/configure-aws-credentials AND declares
+    continue-on-error: true, require (a) a non-empty id, and (b) at least one reference to
+    steps.<id>.outcome in a NEGATIVE branch anywhere in the same job. Match .outcome EXCLUSIVELY --
+    never .conclusion, which GitHub forces to success under continue-on-error, so accepting it would
+    admit a permanently-dead classifier. The negative match must be quoting-agnostic and tolerate the
+    expression-split form: ci.yml's sanctioned mirror_oidc classifier compares the interpolated
+    outcome to "success" with DOUBLE quotes, with the != separated from the word outcome by the
+    closing expression braces and a quote character -- so use a proximity or line-scoped match
+    accepting the single-quoted, double-quoted and bare forms. Scan step-level if: expressions, env:
+    mappings, AND inline run: bodies (rec-2861 proposes moving mirror_oidc's reference into env:). No
+    allowlist, no baseline. Report each violation with file and step name. MANDATORY (Decision 170):
+    the module must call registry.examined(...) / registry.skipped(...) -- validate_check_accounting is
+    pre=True over scripts/checks/**, and config/check_accounting_baseline.yaml is shrink-only and
+    bounded by a frozen _BASELINE_SEED, so a new check CANNOT be baselined and must declare instead.
+  - >-
+    Step 7 -- register the check: add its Entry to scripts/checks/ci_guards/_manifest.py (pre=True,
+    full_segment matching its ci_guards siblings, with pre_globs covering the workflows directory and
+    the check's own module path) and add the function_to_category row to config/ci_rca_taxonomy.yaml
+    that scripts.roadmap.plan_obligations requires for a new check module.
+  - >-
+    Step 8 -- create tests/checks/ci_guards/test_validate_oidc_failopen_guards.py with inline
+    workflow fixtures covering: no id (fires), id with only positive equals-success gates (fires), id
+    with an if:-level negative classifier (silent), id with a double-quoted run-body negative
+    classifier in the exact ci.yml mirror_oidc shape (silent), a .conclusion-only reference (fires),
+    and a step without continue-on-error (ignored entirely).
+  - >-
+    Step 9 -- run VP steps 1-5, then commit with a feat(oidc-failopen-closure) subject, push, open
+    the PR, merge on green, and run VP step 6 to confirm rec-3138 closed. Include the
+    Resolves: rec-3138 trailer in the squash-merge body, with a resolution naming the
+    immutable-subject root cause.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55)
+  - >-
+    File the follow-on recs named in Context under NOT IN SCOPE
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  The workflow changes revert cleanly by git revert of this plan's PR; the guard is a new module and
+  its removal restores the prior (silent) behaviour without touching any other check. Nothing in this
+  plan touches either Terraform root, so no trust path and no applied infrastructure is affected by a
+  revert.

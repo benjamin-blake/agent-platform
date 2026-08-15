@@ -16,7 +16,19 @@ locals {
   # the rename lands, narrowed back to a one-element list at PR-3 cleanup (VP steps 21-23).
   # This list MUST stay identical to terraform/personal's; the two roots cannot reference each
   # other, so agreement is enforced by tests/checks/iam_tf/test_oidc_trust_slug_invariants.py.
-  github_repos = ["benjamin-blake/agent-platform", "benjamin-blake/theseus"]
+  #
+  # IMMUTABLE-SUBJECT ENTRY (Decision 172): mirrors terraform/personal/oidc.tf's third entry --
+  # a repo SEGMENT "OWNER@OWNER-ID/REPO@REPO-ID", never a "repo:"-prefixed literal (this root's
+  # two sub sites below already render "repo:${repo}:<suffix>"). GitHub applies the immutable
+  # numeric-id subject to any repo renamed/transferred after 2026-07-15; theseus renamed at
+  # 2026-08-15T12:55:57Z and now presents ONLY this shape. The two name-only entries mint
+  # nothing post-rename and are provably dead, but stay trusted until a follow-on contraction
+  # (NOT this plan) removes them with live proof.
+  github_repos = [
+    "benjamin-blake/agent-platform",
+    "benjamin-blake/theseus",
+    "benjamin-blake@217728084/theseus@1252427466",
+  ]
 }
 
 # Adopt the live role + inline policy without recreate.
@@ -38,10 +50,13 @@ resource "aws_iam_role" "github_ci_apply" {
   # CD.35 Wave 3 / T2.22 (Decision 92, CORRECTED post-VP9):
   # This role is assumed by TWO apply paths in terraform-apply-sandbox.yml:
   #   1. Routine auto-apply (apply-sandbox job, guard PASS): no job-level environment, so GitHub
-  #      mints sub = repo:OWNER/REPO:ref:refs/heads/main.
+  #      mints sub = repo:<OWNER/REPO or OWNER@ID/REPO@ID>:ref:refs/heads/main.
   #   2. Gated apply (gated-apply job, guard fail-closed set: IAM/trust/destroy): the job declares
   #      environment: tf-gated-apply, and GitHub then OVERRIDES the sub to
-  #      repo:OWNER/REPO:environment:tf-gated-apply (the env claim REPLACES the ref claim in sub).
+  #      repo:<OWNER/REPO or OWNER@ID/REPO@ID>:environment:tf-gated-apply (the env claim REPLACES
+  #      the ref claim in sub). (Decision 172: post-2026-07-15-rename repos mint ONLY the
+  #      immutable OWNER@ID/REPO@ID shape -- the name-only OWNER/REPO shape is legacy and no
+  #      longer minted for this repository, but stays trusted until a follow-on contraction.)
   # Decision 94 (VP9 regression guard): trust MUST keep BOTH subs or the gated-apply path breaks.
   # The OIDC provider stays in terraform/personal/; trust references its ARN as a literal
   # (no cross-root resource reference).

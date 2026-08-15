@@ -27,9 +27,33 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PERSONAL_LOCALS = _REPO_ROOT / "terraform" / "personal" / "oidc.tf"
 _BOOTSTRAP_APPLY = _REPO_ROOT / "terraform" / "bootstrap" / "github_ci_apply.tf"
+# Decision 172 (immutable-subject entry): three of the five expected sub suffixes are declared
+# by sub sites that live OUTSIDE oidc.tf / github_ci_apply.tf -- :ref:refs/heads/agent/* and
+# :pull_request/:ref:refs/pull/* are rendered only in oidc_ci_roles.tf and oidc_pipeline_roles.tf.
+# TestImmutableSubjectEntry reads these two files as well so VP step 2 can pass.
+_BRANCH_AND_PR_ROLES = _REPO_ROOT / "terraform" / "personal" / "oidc_ci_roles.tf"
+_PIPELINE_ROLES = _REPO_ROOT / "terraform" / "personal" / "oidc_pipeline_roles.tf"
 
 _GITHUB_REPOS_RE = re.compile(r"github_repos\s*=\s*\[(?P<body>[^\]]*)\]", re.S)
 _SLUG_RE = re.compile(r'"([^"]+)"')
+# An immutable repo-segment entry: NAME@DIGITS/NAME@DIGITS -- never a full "repo:" sub prefix
+# (every sub site below already renders "repo:${repo}:<suffix>").
+_IMMUTABLE_ENTRY_RE = re.compile(r"^([A-Za-z0-9_.-]+)@(\d+)/([A-Za-z0-9_.-]+)@(\d+)$")
+_EXPECTED_OWNER = "benjamin-blake"
+_EXPECTED_OWNER_ID = "217728084"
+_EXPECTED_REPO = "theseus"
+_EXPECTED_REPO_ID = "1252427466"
+_IMMUTABLE_SEGMENT = f"{_EXPECTED_OWNER}@{_EXPECTED_OWNER_ID}/{_EXPECTED_REPO}@{_EXPECTED_REPO_ID}"
+# The five sub-site suffix TEMPLATES (with the un-substituted `${repo}` token) each expected sub
+# site must declare, and the fully-expanded literal each one yields once `${repo}` resolves to
+# the immutable segment above.
+_EXPECTED_SUFFIXES = (
+    ":ref:refs/heads/main",
+    ":ref:refs/heads/agent/*",
+    ":pull_request",
+    ":ref:refs/pull/*",
+    ":environment:tf-gated-apply",
+)
 
 
 def _declared_slugs(path: Path) -> list[str]:
@@ -103,3 +127,58 @@ class TestNoScalarSurvivor:
                     f"{tf_file} references the scalar local.github_repo -- every sub site must "
                     "iterate local.github_repos so no role is left trusting a single slug."
                 )
+
+
+class TestImmutableSubjectEntry:
+    """Decision 172: GitHub's immutable OIDC subject-claim format, applied to any repository
+    renamed/transferred after 2026-07-15. benjamin-blake/theseus renamed at
+    2026-08-15T12:55:57Z and now mints ONLY repo:benjamin-blake@217728084/theseus@1252427466:<...>
+    -- the two legacy name-only entries mint nothing post-rename."""
+
+    def test_both_roots_declare_the_immutable_entry(self) -> None:
+        for path in (_PERSONAL_LOCALS, _BOOTSTRAP_APPLY):
+            slugs = _declared_slugs(path)
+            matches = [_IMMUTABLE_ENTRY_RE.match(s) for s in slugs]
+            immutable = [m for m in matches if m is not None]
+            assert immutable, (
+                f"{path} declares no OWNER@OWNER-ID/REPO@REPO-ID immutable entry in local.github_repos (slugs={slugs})"
+            )
+            owner, owner_id, repo, repo_id = immutable[0].groups()
+            assert (owner, owner_id, repo, repo_id) == (
+                _EXPECTED_OWNER,
+                _EXPECTED_OWNER_ID,
+                _EXPECTED_REPO,
+                _EXPECTED_REPO_ID,
+            ), (
+                f"{path}'s immutable entry is {immutable[0].group(0)!r}, expected "
+                f"{_IMMUTABLE_SEGMENT!r} (owner id 217728084 / repo id 1252427466)."
+            )
+
+    def test_no_entry_carries_a_repo_prefix(self) -> None:
+        """A "repo:"-prefixed entry would render "repo:repo:..." at every sub site -- the
+        double-prefix bug class the sub sites' own "repo:${repo}:<suffix>" template guards
+        against only if the LIST never supplies an already-prefixed segment."""
+        for path in (_PERSONAL_LOCALS, _BOOTSTRAP_APPLY):
+            for slug in _declared_slugs(path):
+                assert not slug.startswith("repo:"), (
+                    f"{path} declares {slug!r} with a repo: prefix -- every sub site already "
+                    'renders "repo:${repo}:<suffix>", so this entry would double-prefix to '
+                    '"repo:repo:..." and match nothing.'
+                )
+
+    def test_flattened_expansion_yields_all_five_immutable_subs(self) -> None:
+        """Each expected suffix must be declared, as the "repo:${repo}:<suffix>" template, by a
+        sub site that iterates local.github_repos -- proving (with the entry-membership
+        assertion above) that the flattened expansion yields
+        repo:benjamin-blake@217728084/theseus@1252427466 suffixed by each of the five forms."""
+        combined = "\n".join(p.read_text(encoding="utf-8") for p in (_BRANCH_AND_PR_ROLES, _PIPELINE_ROLES, _BOOTSTRAP_APPLY))
+        for suffix in _EXPECTED_SUFFIXES:
+            template = f"repo:${{repo}}{suffix}"
+            assert template in combined, (
+                f"no sub site declares the {template!r} template over local.github_repos -- "
+                "the module is not reading the file that declares this sub site (extend the "
+                "file set) or the sub site itself is missing this suffix."
+            )
+            rendered = template.replace("${repo}", _IMMUTABLE_SEGMENT)
+            expected = f"repo:{_IMMUTABLE_SEGMENT}{suffix}"
+            assert rendered == expected  # trivially true; pins the yielded literal for readers
