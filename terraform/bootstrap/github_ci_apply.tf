@@ -11,7 +11,10 @@
 # The trust references the OIDC provider as a literal ARN (no cross-root resource reference).
 
 locals {
-  github_repo = "benjamin-blake/agent-platform"
+  # Dual-slug transition (Decision 171 / PLAN-repo-rename-relicense): mirrors
+  # terraform/personal/oidc.tf's local.github_repos -- both slugs trusted simultaneously while
+  # the rename lands, narrowed back to a one-element list at PR-3 cleanup (VP step 23).
+  github_repos = ["benjamin-blake/agent-platform", "benjamin-blake/theseus"]
 }
 
 # Adopt the live role + inline policy without recreate.
@@ -57,10 +60,15 @@ resource "aws_iam_role" "github_ci_apply" {
             #   - refs/heads/main          : the routine auto-apply path (no job environment).
             #   - environment:tf-gated-apply: the gated-apply job (GitHub overrides sub to the env
             #     claim when a job declares environment:; approval-gated by the required reviewer).
-            "token.actions.githubusercontent.com:sub" = [
-              "repo:${local.github_repo}:ref:refs/heads/main",
-              "repo:${local.github_repo}:environment:tf-gated-apply"
-            ]
+            # Dual-slug transition (Decision 171): flatten over local.github_repos so BOTH
+            # Decision 94 sub forms are trusted for BOTH slugs during the transition window --
+            # never drop either form for either slug (see the module-level warning above).
+            "token.actions.githubusercontent.com:sub" = flatten([
+              for repo in local.github_repos : [
+                "repo:${repo}:ref:refs/heads/main",
+                "repo:${repo}:environment:tf-gated-apply"
+              ]
+            ])
           }
         }
       }

@@ -59,7 +59,11 @@ resource "aws_iam_role" "github_ci_planner" {
             "sts:RoleSessionName"                     = local.convergence_writer_session_name
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
+            # Dual-slug transition (Decision 171): both slugs trusted for the reserved-session
+            # main-sub statement during the transition window.
+            "token.actions.githubusercontent.com:sub" = [
+              for repo in local.github_repos : "repo:${repo}:ref:refs/heads/main"
+            ]
           }
         }
       },
@@ -82,10 +86,14 @@ resource "aws_iam_role" "github_ci_planner" {
             "sts:RoleSessionName" = local.convergence_writer_session_name
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = [
-              "repo:${local.github_repo}:pull_request",
-              "repo:${local.github_repo}:ref:refs/pull/*"
-            ]
+            # Dual-slug transition (Decision 171): flatten over local.github_repos so both slugs
+            # are trusted for each PR-context sub pattern.
+            "token.actions.githubusercontent.com:sub" = flatten([
+              for repo in local.github_repos : [
+                "repo:${repo}:pull_request",
+                "repo:${repo}:ref:refs/pull/*"
+              ]
+            ])
           }
         }
       }
@@ -236,7 +244,11 @@ resource "aws_iam_role" "github_ci_deploy" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
+            # Dual-slug transition (Decision 171): both slugs trusted for the deploy role's
+            # single main-sub statement during the transition window.
+            "token.actions.githubusercontent.com:sub" = [
+              for repo in local.github_repos : "repo:${repo}:ref:refs/heads/main"
+            ]
           }
         }
       }
