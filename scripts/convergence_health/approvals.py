@@ -77,7 +77,7 @@ def _make_github_caller(token: str) -> Callable[[str], Any]:
 def find_stuck_gated_approvals(
     gh_caller: Optional[Callable[[str], Any]] = None,
     owner: str = "benjamin-blake",
-    repo: str = "agent-platform",
+    repo: str = "theseus",
     threshold_hours: float = STUCK_APPROVAL_THRESHOLD_HOURS,
     now: Optional[datetime] = None,
 ) -> list[dict[str, Any]]:
@@ -111,7 +111,7 @@ def find_stuck_gated_approvals(
 def find_reconcile_runs_since(
     gh_caller: Optional[Callable[[str], Any]] = None,
     owner: str = "benjamin-blake",
-    repo: str = "agent-platform",
+    repo: str = "theseus",
     per_page: int = 10,
 ) -> list[dict[str, Any]]:
     """Query recent .github/workflows/reconcile.yml Actions runs (any status), newest first.
@@ -168,7 +168,7 @@ def has_in_flight_reconcile_for_episode(
 def diagnose_stuck_approvals(
     gh_caller: Optional[Callable[[str], Any]] = None,
     owner: str = "benjamin-blake",
-    repo: str = "agent-platform",
+    repo: str = "theseus",
     threshold_hours: float = 0.0,
     now: Optional[datetime] = None,
 ) -> list[dict[str, Any]]:

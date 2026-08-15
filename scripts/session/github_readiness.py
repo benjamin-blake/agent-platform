@@ -28,7 +28,7 @@ def _authenticated_read(timeout: int = 15) -> tuple[str, str]:
         if not token:
             return "unknown", "token unavailable"
         request = urllib.request.Request(
-            "https://api.github.com/repos/benjamin-blake/agent-platform",
+            "https://api.github.com/repos/benjamin-blake/theseus",
             headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:

@@ -6,8 +6,18 @@ from unittest.mock import patch
 
 import pytest
 
+from scripts.checks.misc.validate_ghas_probe import (
+    ProbeTransportError,
+    _actions_scope_label,
+    _alerts_reachability,
+    _disabled_controls,
+    _get,
+    _probe,
+    _repo,
+    _status_label,
+    validate_ghas_probe,
+)
 from scripts.checks.misc.validate_ghas_probe import _run_cli as _ghas_run_cli
-from scripts.checks.misc.validate_ghas_probe import validate_ghas_probe
 
 
 class TestValidateGhasProbe:
@@ -202,3 +212,80 @@ class TestValidateGhasProbe:
         ):
             _ghas_run_cli()
         assert "super-secret-token" not in capsys.readouterr().out
+
+
+class TestDefaultRepoSlug:
+    """The local default must name the renamed repository (PLAN-repo-rename-relicense PR-3).
+
+    The sweep's own guard proves only that the OLD slug is absent; absence is not the same
+    claim as correctness, so this asserts the positive value directly.
+    """
+
+    def test_default_repo_is_the_renamed_slug_when_env_unset(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            assert _repo() == "benjamin-blake/theseus"
+
+    def test_ci_supplied_repository_still_wins_over_the_default(self) -> None:
+        """CI sets GITHUB_REPOSITORY; the default is only the local fallback."""
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "someone/elsewhere"}):
+            assert _repo() == "someone/elsewhere"
+
+
+class TestProbeErrorBranches:
+    """Cover the transport/decode/enum branches the happy-path tests do not reach."""
+
+    def test_get_wraps_url_error_as_transport_error(self) -> None:
+        with patch(
+            "scripts.checks.misc.validate_ghas_probe.urlopen",
+            side_effect=urllib.error.URLError("no route to host"),
+        ):
+            with pytest.raises(ProbeTransportError, match="no route to host"):
+                _get("/repos/x/y", "tok")
+
+    def test_get_wraps_non_auth_http_error_as_transport_error(self) -> None:
+        """A 5xx is a transport failure, not an auth failure -- only 401/403 mean the token."""
+
+        def _raise_500(request: object, timeout: float = 15) -> None:
+            raise urllib.error.HTTPError(url="x", code=500, msg="Server Error", hdrs=None, fp=None)  # type: ignore[arg-type]
+
+        with patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_500):
+            with pytest.raises(ProbeTransportError, match="HTTP 500"):
+                _get("/repos/x/y", "tok")
+
+    def test_alerts_reachability_returns_minus_one_on_url_error(self) -> None:
+        with patch(
+            "scripts.checks.misc.validate_ghas_probe.urlopen",
+            side_effect=urllib.error.URLError("dns failure"),
+        ):
+            assert _alerts_reachability("/repos/x/y/secret-scanning/alerts", "tok") == -1
+
+    def test_status_label_coerces_unrecognised_values_to_unknown(self) -> None:
+        assert _status_label("something-else") == "unknown"
+        assert _status_label(None) == "unknown"
+
+    def test_actions_scope_label_coerces_unrecognised_values_to_unknown(self) -> None:
+        assert _actions_scope_label("not-a-scope") == "unknown"
+        assert _actions_scope_label(None) == "unknown"
+
+    def test_non_json_repo_info_body_raises_transport_error(self) -> None:
+        def _urlopen(request: object, timeout: float = 15):
+            return TestValidateGhasProbe._FakeResponse(200, b"<html>not json</html>")
+
+        with patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_urlopen):
+            with pytest.raises(ProbeTransportError, match="repo-info endpoint"):
+                _probe("tok")
+
+    def test_non_json_actions_permissions_body_raises_transport_error(self) -> None:
+        def _urlopen(request: object, timeout: float = 15):
+            url = request.full_url  # type: ignore[attr-defined]
+            if url.endswith("/actions/permissions"):
+                return TestValidateGhasProbe._FakeResponse(200, b"nonsense")
+            return TestValidateGhasProbe._FakeResponse(200, TestValidateGhasProbe._repo_body())
+
+        with patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_urlopen):
+            with pytest.raises(ProbeTransportError, match="actions/permissions endpoint"):
+                _probe("tok")
+
+    def test_disabled_push_protection_is_reported(self) -> None:
+        state = {"scanning_status": "enabled", "push_protection": "disabled", "actions_enabled": True}
+        assert _disabled_controls(state) == ["push_protection=disabled"]
