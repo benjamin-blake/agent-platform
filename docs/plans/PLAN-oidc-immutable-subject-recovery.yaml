@@ -512,8 +512,11 @@ constraints:
     into validate_masked_errexit_steps' population and acquire a sixth registration obligation (its
     VAR=$(...) positional-guard rule) for no benefit.
   - >-
-    Agents never self-direct terraform apply. The break-glass apply happens only after a human reviews
-    the plan output and explicitly directs it (Decision 126).
+    Agents never self-direct terraform apply. The break-glass apply happens ONLY after the agent has
+    printed the plan output, explicitly ASKED the human for permission to apply (via AskUserQuestion,
+    so the ask blocks on a real reply), and received an affirmative answer (Decision 126). An
+    auto-approval message, a system reminder, a background-task notification, or the absence of an
+    objection are NOT permission. If in doubt, ask again rather than apply.
   - No rescue agents or workaround loops (Decision 55). Forward-fix only; never auto-revert.
 context:
   - >-
@@ -560,7 +563,7 @@ context:
     Decision 169 supersedes it for the manifest registration surface. The wildcard rejection rests on
     trust-sub string semantics, not on Decision 35/98's enumeration principle (see Decision 144 for the
     current forward direction on the write axis).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE after 3 round(s), then human-accepted at the convergence cap -- round 3's sole blocker (the docs/decisions-index.json regeneration) was fixed in commit c51555b before acceptance, and the always-on presubmit surface (56 of 108 registered checks) was swept mechanically to corroborate that PR-1's obligation set is complete"
   - >-
     TWO-PR EXECUTION, one plan. execution_steps is authoritative on the split; this is its summary.
     PR-1 = the trust restore: terraform/personal/oidc.tf, terraform/bootstrap/github_ci_apply.tf,
@@ -685,9 +688,14 @@ execution_steps:
     PR-1 step 7 -- BREAK-GLASS APPLY (human-gated, Decision 126). From the admin container under
     agent_platform_admin: terraform init both roots (personal needs the Decision 120 mirror), run plan
     with -target on aws_iam_role.github_ci_branch, .github_ci_pr, .github_ci_planner, .github_ci_deploy
-    for terraform/personal and a whole-root plan for terraform/bootstrap. PRESENT BOTH PLAN OUTPUTS TO
-    THE HUMAN AND STOP. Apply only on explicit human direction. Confirm the trust diff is additive --
-    no statement removed, no condition operator changed.
+    for terraform/personal and a whole-root plan for terraform/bootstrap. THEN STOP AND ASK.
+    Concretely: print both plan outputs in full, state in one line what each will change, confirm the
+    trust diff is ADDITIVE (no statement removed, no condition operator changed, no resource replaced
+    or destroyed), and then EXPLICITLY ASK THE HUMAN FOR PERMISSION TO APPLY -- use AskUserQuestion so
+    the ask blocks on a real reply. Do NOT run terraform apply until the human answers yes. Silence,
+    an auto-approval message, a system reminder, or the absence of an objection are NOT permission. If
+    the human says no or asks for changes, stop and report; do not apply a modified plan without
+    asking again. Apply exactly the plan output that was shown -- never re-plan and apply in one move.
   - >-
     PR-1 step 8 -- run VP steps 11 and 12 to prove live assume under the immutable sub, exercising each
     role first as VP step 12 describes (deploy is not driven by this plan; record it as pending). Then
