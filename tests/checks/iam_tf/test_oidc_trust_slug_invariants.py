@@ -50,8 +50,7 @@ def _apply_role_trust_block() -> str:
 class TestDecision94BothSubForms:
     def test_apply_role_trusts_the_ref_sub_form(self) -> None:
         assert ":ref:refs/heads/main" in _apply_role_trust_block(), (
-            "github_ci_apply lost the ref:refs/heads/main sub form -- the routine "
-            "auto-apply path can no longer authenticate."
+            "github_ci_apply lost the ref:refs/heads/main sub form -- the routine auto-apply path can no longer authenticate."
         )
 
     def test_apply_role_trusts_the_environment_sub_form(self) -> None:
