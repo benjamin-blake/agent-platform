@@ -1,11 +1,3 @@
-# Import the existing repository so Terraform manages it without recreating it.
-# Run: terraform -chdir=terraform/github import github_repository.this agent-platform
-# Or use the import block below (Terraform 1.5+).
-import {
-  to = github_repository.this
-  id = var.repository_name
-}
-
 resource "github_repository" "this" {
   name       = var.repository_name
   visibility = "public"
