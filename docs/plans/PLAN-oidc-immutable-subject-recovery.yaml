@@ -46,6 +46,27 @@ scope:
     purpose: >-
       Loud-fail the drift job when its assume fails instead of reporting success with every
       substantive step skipped (an alarm sensor that cannot fail is not a sensor).
+  - file: scripts/ci/convergence_advisory.py
+    action: Create
+    purpose: >-
+      Extract advisory-status's ~74-line inline run: body into a tested module (Decision 162 thin
+      adapter; the pr_conflict_signal.sh precedent). Discriminates NoSuchKey / credential-failure /
+      red / green / pending-gated and emits the status state + description. REQUIRED, not cosmetic:
+      .github/workflows/terraform-apply-sandbox.yml measures exactly 529 effective lines against a
+      529 budget in config/structural_size_budgets.yaml, so PR-2 cannot add a line until this
+      extraction nets it down.
+  - file: tests/test_convergence_advisory.py
+    action: Create
+    purpose: >-
+      Unit tests for the extracted classifier, flat under tests/ per the scripts/ci convention
+      (map_source_to_test returns None for scripts/ci/**, matching test_review_verdict.py et al).
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: >-
+      Add a zero-credential identity anchor to the always-green pr-validate job echoing
+      github.repository_id and github.repository_owner_id, so the numeric ids the trust policy pins
+      are falsifiable against GitHub itself rather than against this plan's own literals -- and stay
+      observable on every PR. Needs no OIDC and no AWS, so it works during the outage.
   - file: scripts/checks/ci_guards/validate_oidc_failopen_guards.py
     action: Create
     purpose: >-
@@ -97,7 +118,8 @@ acceptance_criteria:
     entry in either list begins with "repo:".
   - >-
     Every live CI role trust document contains the immutable sub for each of its existing ref
-    patterns, and no trust condition anywhere contains a wildcard character in a sub value.
+    patterns, and NO NEW wildcard is introduced into any sub condition (the pre-existing agent/* and
+    refs/pull/* ref globs are unchanged and expected).
   - >-
     All five CI roles record a successful sts:AssumeRoleWithWebIdentity dated after the fix, proving
     the minted immutable sub matches trust (this is also PLAN-repo-rename-relicense's VP step 21
@@ -134,16 +156,20 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
-      Prove the rendered sub strings are exactly the five immutable forms the five roles need, by
-      asserting each expected literal appears in the flattened template expansion.
+      Prove the rendered sub strings are exactly the five immutable forms the five roles need. NOTE:
+      the test module currently reads ONLY oidc.tf and github_ci_apply.tf, and three of the five
+      suffixes live in neither -- :ref:refs/heads/agent/* in oidc_ci_roles.tf, and :pull_request and
+      :ref:refs/pull/* in oidc_ci_roles.tf and oidc_pipeline_roles.tf. The module must be extended to
+      read those two files or this step cannot pass.
     command: bin/venv-python -m pytest "tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry" -q
     expected: >-
       exit 0; the expansion yields repo:benjamin-blake@217728084/theseus@1252427466 suffixed by each
       of :ref:refs/heads/main, :ref:refs/heads/agent/*, :pull_request, :ref:refs/pull/*, and
       :environment:tf-gated-apply.
     fix_if: >-
-      A missing suffix means a sub site does not iterate local.github_repos; find it and make it
-      iterate rather than hand-adding the immutable string at that site.
+      A missing suffix means the module is not reading the file that declares that sub site; add the
+      read path. If a sub site does not iterate local.github_repos, make it iterate -- never
+      hand-add the immutable string at that site.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -156,20 +182,30 @@ verification_plan:
     expected: exit 0, no files listed.
     fix_if: Run terraform fmt -recursive on the two roots and re-commit.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Already covered by a standing credential-free gate -- scripts/checks/_terraform.py:142 runs
+      terraform fmt -check per root in both presubmit tiers -- so a registry row would duplicate an
+      always-on check rather than add coverage.
   - step: 4
     phase: pre-deploy
     action: >-
       Prove the new fail-open guard discriminates: it must fire on each of the three masking shapes
       (assume step with no id; id referenced only in positive == 'success' gates) and stay silent on
-      the four sanctioned sites that carry a negative-branch classifier.
+      the four sanctioned sites that carry a negative-branch classifier -- INCLUDING ci.yml's
+      mirror_oidc, whose classifier is the double-quoted shell form
+      if [ "${{ steps.mirror_oidc.outcome }}" != "success" ] inside a run: body.
     command: bin/venv-python -m pytest "tests/checks/ci_guards/test_validate_oidc_failopen_guards.py" -q
     expected: >-
-      exit 0; includes a red-before/green-after case per masking shape driven from inline workflow
-      fixtures, not from the live .github/workflows files alone.
+      exit 0; fixtures cover single-quoted != 'success', double-quoted != "success", the
+      ${{ ... }}-split form where != is separated from outcome by the closing braces and a quote, a
+      step with no id, a step whose id appears only in positive gates, and a step without
+      continue-on-error (ignored entirely).
     fix_if: >-
       If the guard passes on a fixture missing its classifier, the predicate is matching any
-      steps.<id>.outcome reference rather than a NEGATIVE-branch reference; tighten it.
+      steps.<id>.outcome reference rather than a NEGATIVE-branch reference; tighten it. If it fires
+      on the double-quoted or brace-split fixture, the predicate is over-narrow on quoting -- fix the
+      predicate, NOT the workflow.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -178,18 +214,61 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
+      Prove the extracted advisory classifier discriminates a credential failure from a genuine
+      absent record -- the exact conflation that published a green terraform-converged status during
+      this outage.
+    command: bin/venv-python -m pytest "tests/test_convergence_advisory.py" -q
+    expected: >-
+      exit 0; distinct outcomes for NoSuchKey (success, pass-on-absent), credential/authorization
+      failure (error, UNVERIFIED), red record (failure), pending_gated (success with the routed-pending
+      description), and green (success).
+    fix_if: >-
+      If a credential failure yields success, the classifier is still swallowing the error the way the
+      inline aws s3 cp ... || echo "" did; discriminate on the error code, not on empty output.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Standing pytest module for a scripts/ci extraction; the behaviour is guarded on every run of the
+      suite, so a registry row would duplicate it.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Falsify the numeric ids against GitHub itself rather than against this plan's own literals.
+      Runs with no OIDC and no AWS, so it works during the outage.
+    command: bin/venv-python -m pytest "tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry" -q && grep -n 'repository_owner_id' .github/workflows/ci.yml
+    expected: >-
+      The pr-validate identity-anchor step is present and echoes github.repository_id and
+      github.repository_owner_id; on the first PR run those printed values equal 1252427466 and
+      217728084 -- the exact literals pinned in both trust lists.
+    fix_if: >-
+      If the printed ids differ from the pinned literals, STOP before the break-glass apply and
+      correct the trust entry -- an apply with a wrong digit costs a full human-gated cycle.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The durable half is the identity anchor now standing in pr-validate on every PR; the id equality
+      itself is a one-time pre-apply falsification, not an ongoing invariant to register.
+  - step: 7
+    phase: pre-deploy
+    action: >-
       Prove the guard is wired into the presubmit path (validate.py is the single source of truth --
-      never a workflow-only check) and that the live repository now satisfies it.
+      never a workflow-only check), that the live repository satisfies it, and that the structural
+      size budget still holds after the workflow edits.
     command: bin/venv-python -m scripts.validate --pre
     expected: >-
-      exit 0; output names validate_oidc_failopen_guards, and the seven live continue-on-error
-      assume-role steps all pass (four pre-existing classifiers, three newly fixed).
+      exit 0; output names validate_oidc_failopen_guards; the seven live continue-on-error
+      assume-role steps all pass (four pre-existing classifiers, three newly fixed); and
+      validate_structural_size_limits passes on terraform-apply-sandbox.yml, which the
+      scripts/ci/convergence_advisory.py extraction must have netted BELOW its 529 budget.
     fix_if: >-
-      If the check does not appear, the _manifest.py Entry is missing or misnamed. If it appears and
-      fails, a masking site was missed -- fix the workflow, never the predicate.
+      If the check does not appear, the _manifest.py Entry is missing or misnamed. If
+      validate_structural_size_limits fails, the extraction did not remove enough inline body --
+      extract further; do NOT raise the budget (Decision 128/165). If the guard itself fails, first
+      decide whether the flagged site is genuinely unclassified or the predicate is over-narrow on
+      quoting (see step 4's fix_if) -- fix the workflow only in the former case.
     hermetic: false
     graduation: not-applicable
-  - step: 6
+  - step: 8
     phase: pre-deploy
     action: >-
       Prove the new check is actually registered -- an unregistered check module is a silent no-op,
@@ -206,7 +285,7 @@ verification_plan:
     graduation_waiver_reason: >-
       Both are standing pytest modules already selected by the presubmit tiers for this domain;
       a registry row would duplicate coverage that cannot silently lapse.
-  - step: 7
+  - step: 9
     phase: pre-deploy
     action: >-
       Confirm the Decision entry took a free number and did not consume 171, which eight in-tree
@@ -221,40 +300,54 @@ verification_plan:
     graduation_waiver_reason: >-
       Asserts a one-time numbering outcome specific to this plan's entry; a registry row would pin a
       literal number that carries no ongoing invariant once the entry has landed.
-  - step: 8
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Run the FULL validation tier before commit, as handoff_policy.full_validation_required_before_commit
+      declares. Without this step validate_handoff_full_tier fails the PR in both presubmit tiers --
+      reproduced live against this plan file before the step was added.
+    command: bin/venv-python -m scripts.validate
+    expected: exit 0 on a completed full run (not a timeout).
+    fix_if: >-
+      On timeout the disposition is blocked per handoff_policy -- resume later and rerun the full tier
+      from the start; do not commit on a partial run.
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
     phase: post-deploy
     action: >-
       After the human-directed break-glass apply, read every live trust document and confirm each
-      carries the immutable sub for its ref patterns, with no wildcard character in any sub value.
+      carries the immutable sub for its ref patterns, with no NEW wildcard introduced.
     command: for r in branch pr planner deploy apply; do echo "== $r"; aws iam get-role --role-name agent-platform-github-ci-$r --profile agent_platform_admin --query 'Role.AssumeRolePolicyDocument.Statement[].Condition' --output json; done
     expected: >-
       Every role shows repo:benjamin-blake@217728084/theseus@1252427466 sub entries alongside the two
-      legacy name-only entries; github_ci_apply still uses StringEquals; no value contains '*' except
+      legacy name-only entries; github_ci_apply still uses StringEquals; the only '*' characters are
       the pre-existing agent/* and refs/pull/* ref globs.
     fix_if: >-
       A role missing the immutable entry means the -target list omitted it, or the bootstrap root was
       not applied. Re-run the apply for that role only.
     hermetic: false
-  - step: 9
+  - step: 12
     phase: post-deploy
     action: >-
-      Prove live assume succeeds under the immutable sub for all five roles by confirming RoleLastUsed
-      advanced past each role's last pre-outage use. This is the evidence PLAN-repo-rename-relicense's
-      VP step 21 needs and currently cannot obtain.
+      Prove live assume succeeds under the immutable sub by confirming RoleLastUsed advanced past each
+      role's last pre-outage use. This is the evidence PLAN-repo-rename-relicense's VP step 21 needs
+      and currently cannot obtain.
     command: for r in branch pr planner deploy apply; do echo -n "$r "; aws iam get-role --role-name agent-platform-github-ci-$r --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text; done
     expected: >-
       branch > 2026-08-15T13:10:59Z; pr > 2026-08-15T12:43:43Z; planner > 2026-08-15T11:35:07Z;
-      apply > 2026-08-15T12:03:07Z; deploy > 2026-08-14T10:32:24Z. Exercise each role first (dispatch
-      convergence-health for branch, terraform-drift for planner, tf-gated-apply-prototype for apply,
-      any PR for pr; deploy advances on the next ducklake/prod deploy). Allow for the documented
-      RoleLastUsed reporting lag before concluding a role failed.
+      apply > 2026-08-15T12:03:07Z. Exercise each role first: dispatch convergence-health (branch),
+      terraform-drift (planner), tf-gated-apply-prototype (apply), open any PR (pr). DEPLOY IS NOT
+      DRIVEN BY THIS PLAN -- it advances on the next ducklake/prod deploy, so record it as pending
+      rather than claiming it. Allow for the documented RoleLastUsed reporting lag before concluding
+      a role failed.
     fix_if: >-
       A timestamp that does not advance means the minted sub still does not match. Do NOT guess again:
       add a temporary workflow step that reads ACTIONS_ID_TOKEN_REQUEST_URL and prints only the decoded
       sub/aud/repository/repository_id/repository_owner_id claims (never the raw JWT -- it is a bearer
       credential), and write trust from the observed string.
     hermetic: false
-  - step: 10
+  - step: 13
     phase: post-deploy
     action: >-
       Confirm a real apply wrote a fresh green convergence record after the dispatch-ack unlatch, so
@@ -266,7 +359,7 @@ verification_plan:
       A red record means the apply failed; recover via the workflow_dispatch acknowledge-and-retry
       naming the red commit. A stale commit_sha means no post-heal apply ran yet.
     hermetic: false
-  - step: 11
+  - step: 14
     phase: post-deploy
     action: >-
       Confirm rec-3138 closed with a resolution naming the immutable-subject root cause, correcting
@@ -298,11 +391,13 @@ test_obligations:
   - source: scripts/checks/ci_guards/validate_oidc_failopen_guards.py
     behavior: >-
       Fires on a continue-on-error assume-role step with no id, and on one whose id is referenced
-      only in positive == 'success' gates; silent when a negative-branch classifier exists.
+      only in positive == 'success' gates; silent when a negative-branch classifier exists in any
+      supported quoting form. Matches .outcome only -- never .conclusion, which GitHub forces to
+      success under continue-on-error and would admit a permanently-dead classifier.
     verification_step: 4
     test_selector: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
     red_green_expectation: >-
-      Red before (module absent), green after, with per-shape fixture cases.
+      Red before (module absent), green after, with per-shape and per-quoting-form fixture cases.
   - source: .github/workflows/terraform-drift.yml
     behavior: >-
       A failed assume surfaces loudly rather than producing a success run with every substantive step
@@ -319,9 +414,27 @@ test_obligations:
     test_selector: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
     red_green_expectation: >-
       Red before (advisory-status has no id; oidc_plan has only positive gates), green after.
+  - source: scripts/ci/convergence_advisory.py
+    behavior: >-
+      Discriminates a credential/authorization failure from a genuine NoSuchKey absent record, and
+      never emits a success state for the former.
+    verification_step: 5
+    test_selector: tests/test_convergence_advisory.py
+    red_green_expectation: >-
+      Red before (module absent; the inline body conflated both into pass-on-absent green), green after.
+  - source: .github/workflows/ci.yml
+    behavior: >-
+      pr-validate echoes the repository and owner numeric ids on every PR, keeping the identity the
+      trust policy pins observable and falsifiable without credentials.
+    verification_step: 6
+    command: bin/venv-python -m pytest "tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry" -q && grep -n 'repository_owner_id' .github/workflows/ci.yml
+    waiver_reason: >-
+      A workflow echo of two GitHub-provided context values has no unit-testable surface of its own;
+      its evidence is the grep that the anchor exists plus the printed values on the PR run, which is
+      exactly what the linked step performs.
   - source: scripts/checks/ci_guards/_manifest.py
     behavior: The new check is registered and therefore actually runs in the presubmit tiers.
-    verification_step: 6
+    verification_step: 8
     test_selector: tests/checks/ci_guards/test__manifest.py
     red_green_expectation: >-
       Red before (Entry absent, check never runs), green after.
@@ -329,7 +442,7 @@ test_obligations:
     behavior: >-
       The new check module maps to a ci-rca category so a failure of it is classifiable rather than
       falling through to an unattributed bucket.
-    verification_step: 6
+    verification_step: 8
     test_selector: tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
     waiver_reason: >-
       Coverage is a data-completeness property of the taxonomy file itself, already enforced
@@ -353,6 +466,13 @@ constraints:
   - >-
     The advisory-status JOB must stay green (it must never red a PR) and terraform-converged must NOT
     be added to the main-protection required_status_checks (Decision 83 non-wedging).
+  - >-
+    No structural-size budget raise either. .github/workflows/terraform-apply-sandbox.yml measures
+    exactly 529 effective lines against a 529 budget in config/structural_size_budgets.yaml
+    (validate_structural_size_limits, pre=True), so PR-2 CANNOT add a line to it until the
+    scripts/ci/convergence_advisory.py extraction nets it down. Extraction is the Decision 128/165
+    decompose-by-default answer; a raise-approved marker is not, and Decision 172 authorises the
+    immutable-subject migration, not a workflow size raise.
   - >-
     No SLOC budget raise. scripts/verify_ci_workflow.py measures exactly 500 SLOC with zero headroom
     and is unregistered, so the guard goes in a new sibling module (Decision 128 decompose-by-default;
@@ -463,82 +583,114 @@ execution_steps:
     local.github_repos as a third entry. It is a REPO SEGMENT, not a full sub prefix: the six sub sites
     already render "repo:${repo}:<suffix>", so an entry beginning with "repo:" would render
     "repo:repo:..." and match nothing. Re-ground the dual-slug comment to explain the immutable format
-    and that the numeric ids, not the names, are the durable identity.
+    and that the numeric ids, not the names, are the durable identity. AUTHORING CAUTION: the
+    re-grounded comment must not contain the literal "github_repos = [" (the invariant test's regex
+    takes the first file-wide match) nor "local.github_repo" followed by a non-word character
+    (TestNoScalarSurvivor).
   - >-
     PR-1 step 2 -- terraform/bootstrap/github_ci_apply.tf: make the identical one-entry change to its
-    own local.github_repos, and refresh the stale sub-shape comment at lines 41-44.
+    own local.github_repos, and refresh the stale sub-shape comment at lines 41-44. Same authoring
+    caution as step 1.
   - >-
-    PR-1 step 3 -- tests/checks/iam_tf/test_oidc_trust_slug_invariants.py: add TestImmutableSubjectEntry
-    asserting (a) both roots declare an entry matching ^[^/@:]+@\d+/[^/@:]+@\d+$ carrying owner id
-    217728084 and repo id 1252427466, (b) no entry in either list begins with "repo:", and (c) the
-    flattened expansion yields all five expected immutable sub literals. Leave the existing Decision 94
-    and cross-root assertions untouched.
+    PR-1 step 3 -- tests/checks/iam_tf/test_oidc_trust_slug_invariants.py: FIRST extend the module's
+    file set to also read terraform/personal/oidc_ci_roles.tf and terraform/personal/oidc_pipeline_roles.tf
+    -- it currently reads only oidc.tf and github_ci_apply.tf, and three of the five expected suffixes
+    (:ref:refs/heads/agent/*, :pull_request, :ref:refs/pull/*) appear in neither, so VP step 2 cannot
+    pass without this. Then add TestImmutableSubjectEntry asserting (a) both roots declare an entry of
+    the form NAME@DIGITS/NAME@DIGITS carrying owner id 217728084 and repo id 1252427466, (b) no entry
+    in either list begins with "repo:", and (c) the flattened expansion yields all five expected
+    immutable sub literals. Leave the existing Decision 94 and cross-root assertions untouched.
   - >-
-    PR-1 step 4 -- docs/DECISIONS.md: add Decision 172 recording the immutable-subject migration,
+    PR-1 step 4 -- .github/workflows/ci.yml: add the zero-credential identity anchor to the pr-validate
+    job, echoing the github.repository_id and github.repository_owner_id context values. pr-validate
+    uses no OIDC and no AWS, so it runs green during the outage. This makes the numeric ids the trust
+    policy pins falsifiable against GitHub rather than against this plan's own literals.
+  - >-
+    PR-1 step 5 -- docs/DECISIONS.md: add Decision 172 recording the immutable-subject migration,
     amending the dual-slug ruling that Decision 171 will carry. Include reversal conditions and the
     pre-stage-before-future-renames playbook (a future rename changes only the NAME halves; trusting a
     not-yet-mintable sub is harmless, so pre-stage additively before renaming). Use the typed yaml
     envelope with a significance routing token per Decision 167/150.
   - >-
-    PR-1 step 5 -- run VP steps 1-3 and 6, then commit, push, open PR-1, and merge on green.
+    PR-1 step 6 -- run VP steps 1, 2, 3, 6, 9 and 10, then commit, push, open PR-1, and merge on green.
+    Confirm on the PR run that the identity-anchor printed ids equal the pinned literals BEFORE
+    proceeding to the apply.
   - >-
-    PR-1 step 6 -- BREAK-GLASS APPLY (human-gated, Decision 126). From the admin container under
+    PR-1 step 7 -- BREAK-GLASS APPLY (human-gated, Decision 126). From the admin container under
     agent_platform_admin: terraform init both roots (personal needs the Decision 120 mirror), run plan
     with -target on aws_iam_role.github_ci_branch, .github_ci_pr, .github_ci_planner, .github_ci_deploy
     for terraform/personal and a whole-root plan for terraform/bootstrap. PRESENT BOTH PLAN OUTPUTS TO
     THE HUMAN AND STOP. Apply only on explicit human direction. Confirm the trust diff is additive --
     no statement removed, no condition operator changed.
   - >-
-    PR-1 step 7 -- run VP steps 7 and 8 to prove live assume under the immutable sub for all five
-    roles, exercising each role first as VP step 8 describes. Then run one terraform-apply-sandbox
-    workflow_dispatch acknowledge-and-retry to write the convergence record green, and run VP step 9.
+    PR-1 step 8 -- run VP steps 11 and 12 to prove live assume under the immutable sub, exercising each
+    role first as VP step 12 describes (deploy is not driven by this plan; record it as pending). Then
+    run one terraform-apply-sandbox workflow_dispatch acknowledge-and-retry to write the convergence
+    record green, and run VP step 13.
   - >-
-    PR-2 step 1 -- .github/workflows/terraform-drift.yml: replace the positive-only gating with a
+    PR-2 step 1 -- create scripts/ci/convergence_advisory.py, extracting the advisory-status inline
+    run: body (terraform-apply-sandbox.yml lines ~666-740, ~74 lines). It must read the convergence
+    record and return a status state plus description, discriminating: NoSuchKey (success,
+    pass-on-absent), credential/authorization failure (error, UNVERIFIED -- cannot read the record;
+    not evidence of convergence), red record (failure), pending_gated (success with the routed-pending
+    description), green (success). Discriminate on the error code, never on empty output -- that
+    conflation is the defect. Reuse the NoSuchKey-vs-other-error pattern already at
+    terraform-drift.yml:198-225 rather than inventing one. This extraction is REQUIRED before any line
+    is added to that workflow (529/529 structural budget).
+  - >-
+    PR-2 step 2 -- create tests/test_convergence_advisory.py covering all five outcomes above, flat
+    under tests/ per the scripts/ci convention.
+  - >-
+    PR-2 step 3 -- .github/workflows/terraform-apply-sandbox.yml advisory-status: replace the inline
+    body with a thin adapter call to the new module (Decision 162), give the assume step an id, and add
+    a negative-branch classifier. Keep the JOB green -- it must never red a PR, and terraform-converged
+    must remain a non-required check (Decision 83).
+  - >-
+    PR-2 step 4 -- .github/workflows/terraform-apply-sandbox.yml speculative-plan: add a
+    negative-branch classifier on oidc_plan that surfaces the failed assume (and states that no plan.bin
+    was persisted, so the merge-time apply will fail closed) instead of silently skipping every step.
+  - >-
+    PR-2 step 5 -- .github/workflows/terraform-drift.yml: replace the positive-only gating with a
     negative-branch classifier that fails the job loudly when the assume fails. An assume failure is an
     ERROR, not drift: the workflow's own stated invariant already mandates loud on errors, the record
     stays untouched, and config/ci_rca_taxonomy.yaml deliberately excludes terraform-drift from ci-rca
     so there is no rec storm. Remove the now-stale bootstrap-window justification comment -- the
     planner role exists.
   - >-
-    PR-2 step 2 -- .github/workflows/terraform-apply-sandbox.yml advisory-status: give the assume step
-    an id and add a negative-branch classifier. On a failed assume post the status as state=error with
-    a description naming it UNVERIFIED (cannot read the convergence record -- credential failure; not
-    evidence of convergence). Keep the JOB green. Reserve state=success for a verified-green record and
-    for a genuine NoSuchKey pass-on-absent -- reuse the NoSuchKey-vs-other-error discrimination pattern
-    already present at terraform-drift.yml:198-225 rather than inventing one.
+    PR-2 step 6 -- create scripts/checks/ci_guards/validate_oidc_failopen_guards.py. Predicate: for
+    every step in .github/workflows that uses aws-actions/configure-aws-credentials AND declares
+    continue-on-error: true, require (a) a non-empty id, and (b) at least one reference to
+    steps.<id>.outcome in a NEGATIVE branch anywhere in the same job. Match .outcome EXCLUSIVELY --
+    never .conclusion, which GitHub forces to success under continue-on-error, so accepting it would
+    admit a permanently-dead classifier. The negative match must be quoting-agnostic and tolerate the
+    expression-split form: ci.yml's sanctioned mirror_oidc classifier compares the interpolated
+    outcome to "success" with DOUBLE quotes, with the != separated from the word outcome by the
+    closing expression braces and a quote character -- so use a proximity or line-scoped match
+    accepting the single-quoted, double-quoted and bare forms. Scan step-level if: expressions, env:
+    mappings, AND inline run: bodies (rec-2861 proposes moving mirror_oidc's reference into env:). No
+    allowlist, no baseline. Report each violation with file and step name.
   - >-
-    PR-2 step 3 -- .github/workflows/terraform-apply-sandbox.yml speculative-plan: add a
-    negative-branch classifier on oidc_plan that surfaces the failed assume (and states that no plan.bin
-    was persisted, so the merge-time apply will fail closed) instead of silently skipping every step.
+    PR-2 step 7 -- register the check: add its Entry to scripts/checks/ci_guards/_manifest.py (pre=True,
+    full_segment matching its ci_guards siblings, with pre_globs covering the workflows directory and
+    the check's own module path) and add the function_to_category row to config/ci_rca_taxonomy.yaml
+    that scripts.roadmap.plan_obligations requires for a new check module.
   - >-
-    PR-2 step 4 -- create scripts/checks/ci_guards/validate_oidc_failopen_guards.py. Predicate: for
-    every step in .github/workflows/**/*.yml that uses aws-actions/configure-aws-credentials AND
-    declares continue-on-error: true, require (a) a non-empty id, and (b) at least one reference to
-    steps.<id>.outcome in a NEGATIVE branch (!= 'success' / != success) anywhere in the same job --
-    scan step-level if: expressions, env: mappings, AND inline run: bodies, since ci.yml's mirror_oidc
-    classifier lives in a run body and rec-2861 proposes moving it into env:. No allowlist, no
-    baseline. Report each violation with file and step name.
+    PR-2 step 8 -- create tests/checks/ci_guards/test_validate_oidc_failopen_guards.py with inline
+    workflow fixtures covering: no id (fires), id with only positive equals-success gates (fires), id
+    with an if:-level negative classifier (silent), id with a double-quoted run-body negative
+    classifier in the exact ci.yml mirror_oidc shape (silent), a .conclusion-only reference (fires),
+    and a step without continue-on-error (ignored entirely).
   - >-
-    PR-2 step 5 -- register the check: add its Entry to scripts/checks/ci_guards/_manifest.py (pre=True,
-    full_segment matching its ci_guards siblings, with pre_globs covering .github/workflows/** and the
-    check's own module path) and add the function_to_category row to config/ci_rca_taxonomy.yaml that
-    scripts.roadmap.plan_obligations requires for a new check module.
-  - >-
-    PR-2 step 6 -- create tests/checks/ci_guards/test_validate_oidc_failopen_guards.py with inline
-    workflow fixtures covering: no id (fires), id with only == 'success' gates (fires), id with an
-    if:-level != 'success' classifier (silent), id with a run-body != success classifier (silent), and
-    a step without continue-on-error (ignored entirely).
-  - >-
-    PR-2 step 7 -- run VP steps 4 and 5, then commit, push, open PR-2, and merge on green. Include the
-    Resolves: rec-3138 trailer in the squash-merge body of whichever PR lands last, with a resolution
-    naming the immutable-subject root cause.
+    PR-2 step 9 -- run VP steps 4, 5, 7, 8 and 10, then commit, push, open PR-2, and merge on green.
+    Include the Resolves: rec-3138 trailer in the squash-merge body of whichever PR lands last, with a
+    resolution naming the immutable-subject root cause.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55)
   - >-
     File the follow-on recs named in Context under NOT IN SCOPE (legacy-entry contraction,
     PLAN-repo-rename-relicense re-scoping, environment-taxonomy.yaml:95 comment, the post-heal red-run
-    and rec-close backlog sweep)
+    and rec-close backlog sweep, and the undriven github_ci_deploy live-assume evidence)
   - 'Report: what was implemented, verification results'
 work_areas: []
 rollback: >-
