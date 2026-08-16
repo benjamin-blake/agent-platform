@@ -14,7 +14,7 @@ verification_tier: V3
 plan_path: docs/plans/PLAN-oidc-trust-contraction-closure.yaml
 phase: >-
   Platform hardening; no tier_item. Ad-hoc closure of the Decision 172 contraction chain
-  (rec-3143 -> rec-3142 -> the rec-3132 widening revert). T2.50 / DEP-05 (the protected amendment
+  (rec-3143 -> rec-3161, successor to the erroneously-closed rec-3142 -> the rec-3132 revert). T2.50 / DEP-05 (the protected amendment
   channel over the repo-side gate surface) is COMPLETE as of 2026-07-24, both exit criteria met --
   this plan neither closes nor depends on it, and deliberately does NOT repeat the pre-DEP-05
   justification that the narrow IAMRoleReconcile grant is "the only control" against a fleet-wide
@@ -60,17 +60,12 @@ scope:
       Add the NEW-in-diff registry row VP step 6's graduate disposition owes
       (plan_slug == oidc-trust-contraction-closure, check_id == oidc-trust-contraction-guards).
       validate_graduation_completeness's implement-PR leg fails the PR without it (T3.21).
-  - file: docs/DECISIONS.md
-    action: Modify
-    purpose: >-
-      Discharge Decision 172's legacy-entries-provably-dead-with-proof reversal condition. DEFERRED
-      to a second commit AFTER the live evidence lands (VP step 12) -- see the timing note in Context.
-  - file: docs/decisions-index.json
-    action: Modify
-    purpose: >-
-      Regenerate the committed decisions index, which any docs/DECISIONS.md edit drifts.
-      validate_decisions_index_freshness runs in BOTH presubmit tiers. Travels with the same
-      deferred second commit.
+  # docs/DECISIONS.md and docs/decisions-index.json are DELIBERATELY NOT IN SCOPE. The Decision 172
+  # discharge asserts facts that are true only after the operator bootstrap apply, which happens
+  # post-merge, so it cannot ride this PR; and it cannot ride a follow-up PR under this plan's slug
+  # either, because validate_graduation_completeness's implement-PR leg would then fail (see the
+  # DISCHARGE REHOMING note in Context). It is rehomed to its own recommendation, exactly as
+  # Decision 172 point 4 rehomed this very contraction onto rec-3142.
 bundled_recommendations:
   - rec-3143
 infrastructure_dependencies:
@@ -116,9 +111,12 @@ acceptance_criteria:
     Every trust SUBJECT on all five CI roles is immutable-format after the contraction, asserted over
     ALL statements of each role's trust document (github_ci_planner has two). For github_ci_apply,
     BOTH Decision 94 sub forms (ref:refs/heads/main and environment:tf-gated-apply) survive. Live
-    re-assume is proven by dispatch for deploy and apply; for branch, pr and planner it is a
-    CONDITIONAL observation -- each is confirmed against a NAMED exerciser run that demonstrably ran
-    after the bootstrap apply, not against an unbounded wait.
+    re-assume is VERIFIED by dispatch for deploy and apply (steps 12-13, both gated on a real
+    timestamp comparison). For branch, pr and planner it is an OPERATOR-RECORDED OBSERVATION, not a
+    machine-verified criterion: step 14 asserts only that each timestamp advanced past the bootstrap
+    apply, and the exerciser run id is recorded by hand in the completion report. Stated this way
+    deliberately -- these three roles self-exercise on schedules this plan does not control, so a
+    criterion claiming to verify the exerciser would be unfalsifiable.
   - >-
     The IAMRoleReconcile Sid in the LIVE inline policy on agent-platform-github-ci-apply lists
     exactly the branch and pr role ARNs -- the planner and deploy ARNs are gone. Verified by
@@ -128,9 +126,11 @@ acceptance_criteria:
     entry is immutable-format, and the IAMRoleReconcile Resource set is exactly branch + pr. The
     stale TEMPORARY / REVERT OBLIGATION comment block is gone from the file.
   - >-
-    Decision 172's legacy-entries-provably-dead-with-proof reversal condition is discharged only
-    AFTER its facts are true: removed from the stanza, recorded as a dated amendment note, stanza
-    still well-formed, decisions index regenerated. No new numbered Decision is minted.
+    Decision 172's legacy-entries-provably-dead-with-proof reversal condition is NOT discharged by
+    this plan. It is rehomed to a dedicated recommendation filed during implementation, carrying the
+    exact amendment text, to be executed once all of its facts are true. The condition stays ARMED
+    until then -- which is correct behaviour for a monitor whose work is genuinely incomplete. No new
+    numbered Decision is minted, by this plan or by the successor.
 verification_plan:
   - step: 1
     phase: post-deploy
@@ -244,15 +244,21 @@ verification_plan:
       means the comment block was not discharged and re-grounded alongside the code.
     graduation: waive
     graduation_waiver_reason: >-
-      Duplicates the pytest guard graduated at step 6, which pins the exact Resource set rather than
-      substring-probing it. The grep form is retained here only as a fast pre-commit signal and to
-      catch the stale-comment strings the set-equality guard does not look at.
+      Only TWO of this step's six assertions (the Resource-set pair) duplicate the pytest guard
+      graduated at step 6. The other four -- REVERT OBLIGATION, RENAME WINDOW ONLY, rec-3132, and the
+      stale DEP-05-is-open clause -- are comment-hygiene assertions with NO durable successor, and
+      they are waived knowingly: after this plan lands, nothing stops a fresh TEMPORARY grant comment
+      with no machine-checkable expiry. That is the class-level defect this plan diagnoses in WHY THIS
+      PLAN EXISTS and explicitly defers to the named follow-on rec; graduating a one-shot string match
+      against four literals this plan is deleting would register a check that goes vacuous on merge.
   - step: 6
     phase: pre-deploy
-    hermetic: false
+    hermetic: true
     action: >-
       Run both standing guards. These are the durable regression barrier and must be red before the
-      change and green after -- run them against the PRE-change tree first to prove red.
+      change and green after -- run them against the PRE-change tree first to prove red. Declared
+      hermetic (measured 1.4s, creds-free, filesystem-only) so the barrier is itself replayed by
+      validate_vp_replay rather than being the one step exempt from independent replay.
     command: >-
       bin/venv-python -m pytest tests/checks/iam_tf/test_oidc_trust_slug_invariants.py
       tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py -q
@@ -368,21 +374,32 @@ verification_plan:
     action: >-
       POST-CONTRACTION LIVENESS, deploy role. Dispatch the prod channel a second time, then RUN the
       comparison. Between the two dispatches nothing in the Lambda-packaged set changes (terraform/**,
-      tests/**, config/agent/**, docs/DECISIONS.md and docs/decisions-index.json are all unpackaged),
-      so this ships byte-identical code.
+      tests/**, config/agent/** and terraform/** are all unpackaged), so this ships byte-identical
+      code. Asserts the SAME evidence class as step 2 -- the deterministic deploy record FIRST, then
+      the lagged RoleLastUsed -- so the post-contraction proof is not weaker than the pre-contraction
+      proof for the same role against the same failure mode. Export REDEPLOY_SHA from this dispatch.
     command: >-
+      aws s3 cp s3://agent-platform-data-lake/deploy-records/prod/agent-platform-findings-processor.json -
+      --region eu-west-2 --profile agent_platform_admin | bin/venv-python -c "import json,sys,os;
+      sha=json.load(sys.stdin)['source_git_sha']; assert sha==os.environ['REDEPLOY_SHA'],
+      (sha, os.environ['REDEPLOY_SHA']); print('redeploy-record-fresh-ok', sha[:8])" &&
       aws iam get-role --role-name agent-platform-github-ci-deploy --profile agent_platform_admin
-      --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,os;
-      t=sys.stdin.read().strip(); b=os.environ['BOOTSTRAP_APPLY_TS'];
-      assert t>b, f'no advance: {t} <= {b}'; print('deploy-liveness-ok', t)"
+      --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,os,datetime as dt;
+      raw=sys.stdin.read().strip(); assert raw and raw!='None', f'RoleLastUsed ABSENT ({raw!r}) --
+      role never assumed or REPLACED; not a lag artifact'; t=dt.datetime.fromisoformat(raw);
+      b=dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']); assert t>b,
+      f'no advance: {t} <= {b}'; print('deploy-liveness-ok', raw)"
     expected: >-
-      "deploy-liveness-ok <timestamp>" with the timestamp later than BOOTSTRAP_APPLY_TS. Dispatch
-      deploy-prod-lambdas.yml on main first and allow for IAM last-used reporting lag (step 3's retry
+      "redeploy-record-fresh-ok <sha8>" then "deploy-liveness-ok <timestamp>". The deploy record is
+      the gate; the timestamp corroborates, allowing for IAM last-used reporting lag (step 3's retry
       window applies).
     fix_if: >-
-      No advance after the retry window means the contraction broke this role's assume. Restore the
-      name-only entries in terraform/personal/oidc.tf via the gated path immediately, then RCA -- do
-      not leave CI unable to deploy while investigating.
+      A stale deploy record means the second dispatch no-opped -- re-dispatch, do not proceed. A
+      literal "None" RoleLastUsed is NOT a lag artifact: it means the role has never been assumed or
+      has been REPLACED, so the assertion rejects it rather than letting 'None' > a timestamp pass
+      lexicographically. A genuine no-advance with a fresh deploy record means the contraction broke
+      this role's assume: restore the name-only entries in terraform/personal/oidc.tf via the gated
+      path immediately, then RCA -- do not leave CI unable to deploy while investigating.
   - step: 13
     phase: post-deploy
     action: >-
@@ -392,15 +409,20 @@ verification_plan:
       ref:refs/heads/main form post-contraction.
     command: >-
       aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin
-      --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,os;
-      t=sys.stdin.read().strip(); b=os.environ['BOOTSTRAP_APPLY_TS'];
-      assert t>b, f'no advance: {t} <= {b}'; print('apply-liveness-ok', t)"
+      --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,os,datetime as dt;
+      raw=sys.stdin.read().strip(); assert raw and raw!='None', f'RoleLastUsed ABSENT ({raw!r}) --
+      the apply role was never assumed or was REPLACED (step 9 fix_if catastrophic case), not a lag
+      artifact'; t=dt.datetime.fromisoformat(raw);
+      b=dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']); assert t>b,
+      f'no advance: {t} <= {b}'; print('apply-liveness-ok', raw)"
     expected: >-
       "apply-liveness-ok <timestamp>" later than BOOTSTRAP_APPLY_TS, and the convergence record at
       convergence/personal/sandbox.json green.
     fix_if: >-
-      A failed assume here is not the sub-form distinction -- step 11 already proved the document, so
-      a failure points at the OIDC provider or the subject literal. A red convergence record is drift
+      An ABSENT RoleLastUsed is the signature of a REPLACED role -- exactly the destroy/replace case
+      step 9's fix_if calls catastrophic -- so treat it as that incident, never as reporting lag. A
+      failed assume with a present timestamp is not the sub-form distinction: step 11 already proved
+      the document, so a failure points at the OIDC provider or the subject literal. A red convergence record is drift
       surfaced by the fresh re-plan; triage it as ordinary drift (Decision 55/72), not as a
       contraction failure.
   - step: 14
@@ -414,8 +436,10 @@ verification_plan:
       rc=0; for r in branch pr planner; do n="agent-platform-github-ci-$r";
       t=$(aws iam get-role --role-name "$n" --profile agent_platform_admin --query
       'Role.RoleLastUsed.LastUsedDate' --output text);
-      bin/venv-python -c "import sys,os; t=sys.argv[1]; b=os.environ['BOOTSTRAP_APPLY_TS'];
-      ok=t>b; print(sys.argv[2],'OK' if ok else 'NO-ADVANCE',t); sys.exit(0 if ok else 1)"
+      bin/venv-python -c "import sys,os,datetime as dt; raw=sys.argv[1];
+      ok = raw not in ('','None') and dt.datetime.fromisoformat(raw) >
+      dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']);
+      print(sys.argv[2],'OK' if ok else 'NO-ADVANCE',raw); sys.exit(0 if ok else 1)"
       "$t" "$n" || rc=1; done; exit $rc
     expected: >-
       OK for all three with exit 0. Planner may need up to one hour (the drift cron cadence); re-run
@@ -428,37 +452,13 @@ verification_plan:
   - step: 15
     phase: post-deploy
     action: >-
-      DEFERRED DISCHARGE (second commit, after step 11's live proof). Edit docs/DECISIONS.md per the
-      exact text in Context, regenerate the index, then assert the discharge landed, the stanza is
-      still well-formed, and the index is fresh. Scoped to the reversal-conditions STANZA, not the
-      whole Decision 172 section -- the amendment note deliberately NAMES the discharged condition id,
-      so a section-wide absence assertion would fail against this plan's own prescribed edit.
-    command: >-
-      bin/venv-python -m scripts.preflight.decision_conditions >/dev/null &&
-      bin/venv-python -m scripts.decisions_index --check &&
-      bin/venv-python -c "import pathlib,re;
-      t=pathlib.Path('docs/DECISIONS.md').read_text();
-      sec=t.split('## Decision 171')[0];
-      fence=re.search(r'\`\`\`yaml reversal-conditions(.*?)\`\`\`', sec, re.S).group(1);
-      assert 'id: legacy-entries-provably-dead-with-proof' not in fence,
-      'discharged condition still in the Decision 172 stanza';
-      assert 'id: future-rename-not-prestaged' in fence, 'stanza conditions list must stay non-empty';
-      assert 'contraction discharged' in sec, 'no dated amendment note recording the discharge';
-      print('decision-172-discharged-ok')"
-    expected: "Exit 0 from all three; decision-172-discharged-ok printed."
-    fix_if: >-
-      A MALFORMED stanza exit means the edit broke the fence or emptied the conditions list -- the
-      list must stay NON-EMPTY (future-rename-not-prestaged remains). An index-drift failure means the
-      regeneration step was skipped: bin/venv-python -m scripts.decisions_index --write.
-  - step: 16
-    phase: post-deploy
-    action: >-
       Close the recommendation ledger and VERIFY the closures. rec-3143 closes at merge via the
-      Resolves trailer (its evidence landed at step 2, BEFORE merge). rec-3142 is satisfied only by
-      the post-merge gated apply, so it is closed explicitly with the post-apply evidence, never by
-      the trailer (Decision 103).
+      Resolves trailer (its evidence landed at step 2, BEFORE merge). rec-3161 -- the live successor
+      to rec-3142, see the LEDGER CORRECTION note in Context -- is satisfied only by the post-merge
+      gated apply, so it is closed explicitly with the post-apply evidence, never by the trailer
+      (Decision 103).
     command: >-
-      bin/venv-python -m scripts.ops_data_portal --update-rec rec-3142 --status closed --resolution
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-3161 --status closed --resolution
       "Contracted local.github_repos to the immutable entry in both roots; gated apply converged and
       all five roles verified live under the immutable subject (VP steps 8, 11-14). The rec-3132
       IAMRoleReconcile widening reverted in the same operator bootstrap apply, strictly after." &&
@@ -466,16 +466,19 @@ verification_plan:
       bin/venv-python -c "import json,pathlib;
       rows={r['id']: r for r in (json.loads(l) for l in
       pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip())};
-      bad=[i for i in ('rec-3142','rec-3143') if rows.get(i,{}).get('status')!='closed'];
+      bad=[i for i in ('rec-3161','rec-3143') if rows.get(i,{}).get('status')!='closed'];
       assert not bad, bad; print('rec-closures-verified-ok')"
     expected: >-
-      "rec-closures-verified-ok". rec-3132 needs no action -- it was already closed on 2026-08-15 when
+      "rec-closures-verified-ok". rec-3142 needs no action (already closed, resolution corrected to
+      name rec-3161 as successor). rec-3132 needs no action -- it was already closed on 2026-08-15 when
       the widening LANDED, so no open rec tracks the revert (this plan is its only tracking vehicle).
     fix_if: >-
       A portal write that cannot complete FAILS LOUDLY -- there is no offline outbox (Decision 84 I-4).
       Re-file after restoring connectivity; never hand-edit logs/.recommendations-log.jsonl, and never
       call scripts.sync.ops or any drain/pull CLI directly (Single Portal Invariant). If rec-3143 is
-      not closed, rec-autoclose.yml did not fire -- close it with the same --update-rec form.
+      not closed, rec-autoclose.yml did not fire -- close it with the same --update-rec form. Do NOT
+      attempt to reopen or re-close rec-3142: the warehouse refuses a closed -> open transition by
+      design (Decision 103), which is why rec-3161 exists.
 test_obligations:
   - source: terraform/personal/oidc.tf
     behavior: >-
@@ -514,13 +517,6 @@ test_obligations:
     red_green_expectation: >-
       Red before the row is added (validate_graduation_completeness's implement-PR leg fails a
       graduate-disposition step with no matching NEW-in-diff registry row), green after.
-  - source: docs/decisions-index.json
-    behavior: The committed index stays in sync with docs/DECISIONS.md.
-    verification_step: 15
-    command: bin/venv-python -m scripts.decisions_index --check
-    red_green_expectation: >-
-      Red after the DECISIONS.md edit and before regeneration (drift), green after `--write`.
-      Enforced continuously by validate_decisions_index_freshness in both tiers.
 constraints:
   - >-
     NEVER author a local terraform init/validate/plan for terraform/personal in a CC-web session
@@ -572,8 +568,8 @@ context:
     iam:UpdateAssumeRolePolicy on four roles; two of them (planner, deploy) are marked TEMPORARY
     (rec-3132) with the end condition "remove both in PR-3's bootstrap apply". That removal never
     happened because PR-3 no longer exists as planned: Decision 172 point 4 rehomed the trust
-    contraction out of PLAN-repo-rename-relicense onto rec-3142, and the widening must SURVIVE until
-    rec-3142 runs. The head of the chain (rec-3143) was unscheduled -- the rename plan's own amended
+    contraction out of PLAN-repo-rename-relicense onto rec-3142 (now carried by its successor
+    rec-3161), and the widening must SURVIVE until that contraction runs. The head of the chain (rec-3143) was unscheduled -- the rename plan's own amended
     acceptance criterion says of it "which no plan drives -- it advances on the next ducklake/prod
     Lambda deploy." A trust verb, the highest risk class in this repo's taxonomy, was left widened
     indefinitely waiting on an event nobody had scheduled. This plan schedules it.
@@ -611,6 +607,15 @@ context:
     exactly. Steps 12-14 add live post-contraction re-assume for all five roles anyway, per the
     "prove it, do not argue it" standard.
   - >-
+    LEDGER CORRECTION (2026-08-16, this planning session's own error). rec-3142 was closed by
+    accident when this session smoke-tested the verification-plan commands against the LIVE portal
+    without excluding the --update-rec write. No work had been done. Decision 103's schema gate
+    refused the closed -> open reactivation and directed that a reopen be recorded as a new rec, so
+    rec-3161 was filed carrying the identical outstanding work, and rec-3142's resolution was
+    corrected in place to flag the erroneous closure and name its successor. THIS PLAN THEREFORE
+    CLOSES rec-3161, NOT rec-3142. Two standing lessons: never execute a plan's prospective portal
+    writes as part of a command smoke-test, and the warehouse guard worked exactly as designed.
+  - >-
     rec-3132 IS ALREADY CLOSED (2026-08-15), closed when the widening LANDED rather than when it
     reverts. No open rec tracks the revert obligation -- it survives only as an HCL comment and a note
     in PLAN-repo-rename-relicense. This plan is its sole tracking vehicle, which is itself the drift
@@ -631,22 +636,33 @@ context:
     plan makes the repository's own Decision text true. No edit to Decision 171 is needed or made
     (forward-direction amendment convention, Decision 126/143).
   - >-
-    DISCHARGE TIMING (plan-critique finding, the sharpest one). The Decision 172 amendment note asserts
-    three facts -- all five roles proven live, both roots contracted, the widening reverted -- of which
-    the last two are true only AFTER the operator bootstrap apply at step 9, which happens post-merge.
-    Merging the discharge with the code would disarm the reversal condition that tracks those facts
-    while they were still outstanding: exactly the defect this plan criticises in Decision 171. So the
-    docs/DECISIONS.md and docs/decisions-index.json rows are DEFERRED to a SECOND commit on the same
-    branch, made after step 11's live proof, and VP step 15 (which asserts the discharge) is
-    phase: post-deploy rather than hermetic. This is not gate-dodging: the discharge genuinely depends
-    on live post-apply state, so post-deploy is its correct phase. It also keeps the plan clear of
-    rec-3139 -- no hermetic step asserts a fact that a later commit establishes.
+    DISCHARGE REHOMING (plan-critique rounds 1-2). The Decision 172 amendment note asserts three
+    facts -- all five roles proven live, both roots contracted, the widening reverted -- of which the
+    last two are true only AFTER the operator bootstrap apply at step 9, which happens post-merge.
+    Merging the discharge with the code would disarm the reversal condition tracking those facts
+    while they were still outstanding: exactly the defect this plan criticises in Decision 171. But
+    deferring it to a second PR under THIS plan's slug is also blocked, and for a reason worth
+    recording: validate_graduation_completeness's implement-PR leg computes new-in-diff registry rows
+    as current-minus-origin/main, so once PR-1 merges the oidc-trust-contraction-guards row is in the
+    baseline and a later feat({slug}) PR would fail the check with "no matching new-in-diff registry
+    row" -- and it is pre=True, so that is an authoritative gate, not advisory. The escapes (a
+    non-feat commit subject, or flipping step 6 to waive) are the workarounds rec-3139 records as
+    rejected. So the discharge is REHOMED to its own recommendation, precisely as Decision 172 point
+    4 rehomed this very contraction onto rec-3142. That is this repository's established pattern for
+    an evidence-gated governance edit, not a novel dodge.
+  - >-
+    rec-3139 IS NARROWER THAN ITS TITLE SUGGESTS -- worth folding into the follow-on. rec-3139 records
+    that validate_vp_replay has no in-model expression for a plan spanning two PRs. There are TWO
+    feat-commit-resolving gates, not one: validate_graduation_completeness shares the same
+    _FEAT_COMMIT_RE resolution and the same blind spot, and an earlier draft of this plan cleared
+    itself against vp_replay alone and was wrong. Whatever fixes rec-3139 must cover both.
   - >-
     ONE PLAN, ONE PR FOR THE CODE. All code and test edits land in a single commit, so
-    validate_vp_replay replays this plan's hermetic pre-deploy steps (4, 5) against a complete tree.
-    The three applies are separated by APPLY CHANNEL, not by PR: the personal contraction applies at
-    merge via tf-gated-apply, and the bootstrap edits sit inert until the operator applies them. The
-    deferred discharge commit adds no hermetic step, so replaying it is a no-op.
+    validate_vp_replay replays this plan's hermetic pre-deploy steps (4, 5, 6) against a complete
+    tree. The three applies are separated by APPLY CHANNEL, not by PR: the personal contraction
+    applies at merge via tf-gated-apply, and the bootstrap edits sit inert until the operator applies
+    them. Nothing in this plan requires a second PR under its own slug -- the one edit that would
+    have (the Decision 172 discharge) is rehomed to a rec above.
   - >-
     MERGE GATE. .github/CODEOWNERS maps /terraform/bootstrap/ to @benjamin-blake and main-protection
     sets require_code_owner_review = true, so this PR reports REVIEW_REQUIRED / BLOCKED even with CI
@@ -661,7 +677,8 @@ context:
     Decision, different failure category (code_regression vs an IAM trust-scope contraction) -- so the
     deferral is logged here rather than claimed as related work.
   - >-
-    DECISION 172 DISCHARGE, exact edit (second commit, after step 11). In the
+    DECISION 172 DISCHARGE, exact edit -- CARRY THIS VERBATIM INTO THE SUCCESSOR REC (a), do not
+    apply it in this plan. In the
     ```yaml reversal-conditions``` stanza, DELETE the legacy-entries-provably-dead-with-proof
     condition entirely, leaving future-rename-not-prestaged. The conditions list must stay NON-EMPTY
     or the stanza parses MALFORMED and validate_reversal_stanzas fails. Immediately AFTER the stanza's
@@ -682,8 +699,15 @@ context:
     working precedent for a marker whose authorising reference is machine-verified, and may absorb
     this rather than needing a fresh mechanism.
   - >-
-    Branch was 0 commits behind origin/main at planning time (e01e41d); no Scope file overlapped
-    main_files_changed_since_branch, so the Main Divergence Assessment is clean.
+    MAIN DIVERGENCE (re-assessed at critique round 2 -- the earlier "clean" reading is superseded).
+    The branch base was e01e41d with no overlap, but origin/main has since advanced to 796bf7a
+    (#918, feat(decompose-test-plan-document)), which TOUCHES A SCOPE FILE:
+    config/agent/verification_registry/registry.yaml (adds 2 rows, repoints 11 dangling ones). The
+    implementing session MUST rebase onto origin/main at commit-flow time (AGENTS.md Git-ops:
+    auto-rebase at commit-flow time, never at assessment time) and add the
+    oidc-trust-contraction-guards row against the REBASED registry, or the row lands against a stale
+    file and conflicts. #918 also decomposed tests/test_plan_document.py into
+    tests/roadmap/plan_document/ -- no scope overlap, but do not resurrect the old path.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -730,22 +754,22 @@ execution_steps:
     oidc-trust-contraction-guards with plan_slug oidc-trust-contraction-closure, matching VP step 6's
     graduate disposition. Follow the file's existing row shape.
   - >-
-    Execute VP steps 4-7 (pre-deploy) -- run each; loop until pass. Commit, push, open the PR. State
+    REBASE onto origin/main first (see the MAIN DIVERGENCE note -- #918 touched the registry scope
+    file), then execute VP steps 4-7 (pre-deploy) -- run each; loop until pass. Commit, push, open the PR. State
     the operator handoff (step 9) in the PR body as well as here (Decision 115). EXPECT the PR to
     report REVIEW_REQUIRED because /terraform/bootstrap/ is a CODEOWNERS protected path -- request the
     code-owner review rather than treating the block as a CI failure.
   - >-
     After merge and the approved tf-gated-apply convergence, execute VP steps 8-14 in order. Step 8 is
-    a HARD GATE on step 9. Export BOOTSTRAP_APPLY_TS at step 9. On any unrecoverable V3 failure, stop
+    a HARD GATE on step 9. Export BOOTSTRAP_APPLY_TS at step 9 and REDEPLOY_SHA at step 12. On any unrecoverable V3 failure, stop
     and RCA (Decision 55).
   - >-
-    ONLY AFTER step 11 passes: make the SECOND commit -- docs/DECISIONS.md discharge per the exact
-    text in Context, plus `bin/venv-python -m scripts.decisions_index --write`. Then run VP step 15.
-    Do not bundle this edit into the first commit; it asserts facts that are not true at merge time.
-  - >-
-    Run VP step 16 to close and VERIFY the recommendation ledger, then file the follow-on
-    recommendation named in Context (machine-checkable expiry for TEMPORARY IAM grants) via
-    `get_rec_write_guidance()` then `file_rec()`.
+    Run VP step 15 to close and VERIFY the recommendation ledger. Then file TWO recommendations via
+    `get_rec_write_guidance()` then `file_rec()`: (a) the Decision 172 DISCHARGE rec, carrying the
+    exact amendment text from Context verbatim in its acceptance field, blocked until the operator
+    bootstrap apply has landed -- do NOT edit docs/DECISIONS.md in this plan; and (b) the
+    machine-checkable-expiry rec for TEMPORARY IAM grants, noting that rec-3139's finding generalises
+    to validate_graduation_completeness as well as validate_vp_replay.
   - 'Report: what was implemented, verification results, and the live-IAM evidence for each of the five roles.'
 work_areas: []
 rollback: >-
