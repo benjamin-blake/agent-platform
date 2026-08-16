@@ -145,8 +145,9 @@ verification_plan:
     expected: >-
       The deploy job assumes agent-platform-github-ci-deploy, builds/uploads/deploys the three prod
       artifacts, and the smoke job asserts status=disabled / skipped_comparison=true / statusCode=400.
-      Measured blast radius at plan time: compute_affected_artifacts over the 89 files changed since
-      the last prod deploy (d024e63) returns exactly {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']}
+      Measured blast radius: compute_affected_artifacts over every file changed since the last prod
+      deploy (d024e63) returns exactly {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']} -- re-measure
+      rather than trusting a count, the file total grows as main advances but the artifact set has not
       -- handler code byte-identical, ops-compaction untouched, all three functions schedule-disabled
       (Decision 61/37/116).
     fix_if: >-
@@ -181,12 +182,15 @@ verification_plan:
       needs the admin profile.
     command: >-
       aws iam get-role --role-name agent-platform-github-ci-deploy --profile agent_platform_admin
-      --query 'Role.RoleLastUsed.LastUsedDate' --output text
+      --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,datetime as dt;
+      raw=sys.stdin.read().strip(); assert raw and raw!='None', f'RoleLastUsed ABSENT ({raw!r})';
+      assert dt.datetime.fromisoformat(raw) > dt.datetime.fromisoformat('2026-08-15T12:55:57+00:00'), raw;
+      print('deploy-assume-post-rename-ok', raw)"
     expected: >-
-      A timestamp strictly later than 2026-08-15T12:55:57Z (the rename). At plan time it reads
-      2026-08-14T10:32:24Z. Record ONLY the role logical name and the timestamp in any committed
-      artefact or PR body -- never the ARN or raw CLI output (Decision 101; the 12-digit account id
-      is shape-blocked by the pre-commit never-commit hook).
+      "deploy-assume-post-rename-ok <timestamp>", the timestamp strictly later than the rename at
+      2026-08-15T12:55:57Z. Red today: it reads 2026-08-14T10:32:24Z, pre-rename. Record ONLY the
+      role logical name and the timestamp in any committed artefact or PR body -- never the ARN or
+      raw CLI output (Decision 101; the 12-digit account id is shape-blocked by the pre-commit hook).
     fix_if: >-
       IAM last-used reporting lags, so an unchanged timestamp immediately after the run is NOT by
       itself proof of failure. Re-read after ~15 minutes, up to three times. Only if step 2 ALSO
@@ -267,8 +271,10 @@ verification_plan:
       test_every_entry_is_immutable_format fails (2 of 3 entries per root are name-only) and
       test_resource_set_is_exactly_branch_and_pr fails (4 ARNs, not 2).
     fix_if: >-
-      A guard that passes on the pre-change tree is not guarding anything -- fix the assertion, not
-      the tree. Note test_slug_lists_are_identical_across_roots must also stay green: it is what
+      Exit 4 ("file or directory not found") is NOT a proven red -- it means the new test file does
+      not exist yet, so run this only after execution_steps 2-3 have authored both guards and before
+      the .tf edits. A guard that PASSES on the pre-change tree is not guarding anything -- fix the
+      assertion, not the tree. Note test_slug_lists_are_identical_across_roots must also stay green: it is what
       catches a contraction that narrows one root and misses the other.
     graduation: graduate
     graduation_check_id: "oidc-trust-contraction-guards"
@@ -285,11 +291,16 @@ verification_plan:
       validate_oidc_failopen_guards) is owned by another agent under
       docs/plans/PLAN-oidc-failopen-guard-coverage.yaml -- if the full tier reds on THAT check and
       nothing else, it is that agent's fix, not this plan's; do not patch it inline.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a command_exit_zero slot, so not-applicable would be the wrong label --
+      but graduating the full presubmit run would register a check identical to the tier that runs
+      it. The obligation is already structurally enforced by validate_handoff_full_tier
+      (Decision 163), which fails any plan whose verification_plan never invokes the full tier.
   - step: 8
     phase: post-deploy
     action: >-
-      HARD ORDERING GATE. After the PR merges and the tf-gated-apply job is approved and converges,
+      ORDERING CONTROL (procedural, not machine-enforced -- see infrastructure_dependencies). After the PR merges and the tf-gated-apply job is approved and converges,
       confirm all FOUR personal-root roles are contracted in LIVE IAM. Do not run step 9 until this
       passes. Iterates ALL trust statements (github_ci_planner has two -- its pull_request subs live
       in the second and are invisible to a Statement[0] read), coerces scalar-or-list condition
@@ -323,7 +334,8 @@ verification_plan:
       destroy or replace of aws_iam_role.github_ci_apply or aws_iam_role_policy.github_ci_apply.
       Record the apply completion timestamp; steps 12-14 compare against it.
     command: >-
-      echo "OPERATOR: terraform -chdir=terraform/bootstrap plan -var-file=terraform/bootstrap/terraform.bootstrap.tfvars
+      echo "OPERATOR: re-run VP step 8 as a literal precondition on the same command line --
+      <VP8 command> && terraform -chdir=terraform/bootstrap plan -var-file=terraform/bootstrap/terraform.bootstrap.tfvars
       # review, then apply, then: export BOOTSTRAP_APPLY_TS=\$(date -u +%Y-%m-%dT%H:%M:%S+00:00).
       Agent executes only after a human reviews the plan and explicitly directs it (Decision 126)."
     expected: >-
@@ -414,10 +426,13 @@ verification_plan:
       the apply role was never assumed or was REPLACED (step 9 fix_if catastrophic case), not a lag
       artifact'; t=dt.datetime.fromisoformat(raw);
       b=dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']); assert t>b,
-      f'no advance: {t} <= {b}'; print('apply-liveness-ok', raw)"
+      f'no advance: {t} <= {b}'; print('apply-liveness-ok', raw)" &&
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --region eu-west-2
+      --profile agent_platform_admin | bin/venv-python -c "import json,sys; d=json.load(sys.stdin);
+      assert d['status']=='green', d['status']; print('convergence-green-ok', d['status'])"
     expected: >-
-      "apply-liveness-ok <timestamp>" later than BOOTSTRAP_APPLY_TS, and the convergence record at
-      convergence/personal/sandbox.json green.
+      "apply-liveness-ok <timestamp>" later than BOOTSTRAP_APPLY_TS, then "convergence-green-ok
+      green" -- both asserted, neither merely printed.
     fix_if: >-
       An ABSENT RoleLastUsed is the signature of a REPLACED role -- exactly the destroy/replace case
       step 9's fix_if calls catastrophic -- so treat it as that incident, never as reporting lag. A
@@ -490,15 +505,29 @@ test_obligations:
       Red before (this root declares 2 name-only entries alongside the immutable one), green after.
   - source: terraform/bootstrap/github_ci_apply.tf
     behavior: >-
-      The mirrored slug list stays identical to terraform/personal's and immutable-format only, so a
-      contraction cannot narrow one root and miss the other.
+      This root's mirrored local.github_repos carries only immutable-format entries. The guard reads
+      _BOOTSTRAP_APPLY directly, so it discharges this file's obligation on its own evidence rather
+      than borrowing the personal root's.
+    verification_step: 6
+    test_selector: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry::test_every_entry_is_immutable_format
+    red_green_expectation: >-
+      Red before (this root declares 2 name-only entries alongside the immutable one), green after.
+      Deliberately NOT linked to test_slug_lists_are_identical_across_roots, which is green before AND
+      after by design and so cannot discharge the AGENTS.md red-green rule for this file; that test is
+      carried as its own obligation row below.
+  - source: terraform/bootstrap/github_ci_apply.tf
+    behavior: >-
+      The two roots' slug lists stay byte-identical, so a contraction cannot narrow one root and miss
+      the other -- a divergence the two roots' inability to reference each other makes otherwise
+      invisible until post-deploy.
     verification_step: 6
     test_selector: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestCrossRootSlugAgreement::test_slug_lists_are_identical_across_roots
-    red_green_expectation: >-
-      Green before and after by design (both roots currently agree at 3 entries); it turns red if the
-      implementing session contracts only one root, which is the drift it exists to catch. The
-      red-before evidence for this file is carried by test_every_entry_is_immutable_format, which
-      asserts over BOTH roots and is red before / green after.
+    waiver_reason: >-
+      No red-before state exists for this invariant and none should: both roots agree at 3 entries
+      today and must agree at 1 entry after, so the test is green on both sides of a CORRECT change.
+      It goes red only on the specific defect it guards -- a half-applied contraction -- which is a
+      state this plan must never produce. A red-before requirement here would mean deliberately
+      breaking cross-root agreement first, which is worse than the waiver.
   - source: terraform/bootstrap/github_ci_apply_policy.tf
     behavior: >-
       The IAMRoleReconcile Sid's Resource set stays exactly {branch, pr}. iam:UpdateAssumeRolePolicy
@@ -700,10 +729,11 @@ context:
     this rather than needing a fresh mechanism.
   - >-
     MAIN DIVERGENCE (re-assessed at critique round 2 -- the earlier "clean" reading is superseded).
-    The branch base was e01e41d with no overlap, but origin/main has since advanced to 796bf7a
-    (#918, feat(decompose-test-plan-document)), which TOUCHES A SCOPE FILE:
+    ABSORBED as of this branch: origin/main advanced to 796bf7a (#918,
+    feat(decompose-test-plan-document)) and this branch has been rebased onto it, so #918 is already
+    under the plan. It TOUCHED A SCOPE FILE:
     config/agent/verification_registry/registry.yaml (adds 2 rows, repoints 11 dangling ones). The
-    implementing session MUST rebase onto origin/main at commit-flow time (AGENTS.md Git-ops:
+    implementing session MUST STILL rebase onto origin/main at commit-flow time (AGENTS.md Git-ops:
     auto-rebase at commit-flow time, never at assessment time) and add the
     oidc-trust-contraction-guards row against the REBASED registry, or the row lands against a stale
     file and conflicts. #918 also decomposed tests/test_plan_document.py into
@@ -711,7 +741,7 @@ context:
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - only the plan-cited decision sections (172, 171, 143, 94, 92, 77, 126, 48, 163, 103, 133, 150, 167)
+  - only the plan-cited decision sections (172, 171, 143, 115, 94, 92, 77, 126, 48, 163, 103, 133, 150, 167)
   - terraform/CLAUDE.md and terraform/bootstrap/CLAUDE.md read (apply model, operator-only rule)
   - All files in scope located and readable
   - agent_platform_admin profile confirmed (aws sts get-caller-identity --profile agent_platform_admin)
@@ -780,5 +810,5 @@ rollback: >-
   a second operator bootstrap apply restoring the ARNs first, then the personal rollback -- the exact
   inverse of this plan's ordering, and operator-tier both times. Note the immutable entry is never
   removed at any stage, so no rollback path can reproduce the 2026-08-15 total outage; the worst case
-  is a return to the current over-wide steady state, not an outage. The test, registry and
-  DECISIONS.md changes are independently revertible and carry no infrastructure effect.
+  is a return to the current over-wide steady state, not an outage. The test and registry
+  changes are independently revertible and carry no infrastructure effect.
