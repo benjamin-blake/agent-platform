@@ -1,7 +1,7 @@
 """Coverage-closing edge cases for validate_contract_drift.py not otherwise exercised by the
 VP-step-aligned modules: the sys.path injection/restore branch, Pass 2's malformed head/base
-YAML handling, the ratchet pin-error surfacing through the full gate, the best-effort router
-loader's failure branches, and _class_d_meta_from_text's direct failure branches."""
+YAML handling, the ratchet pin-error surfacing through the full gate, and the best-effort router
+loader's failure branches."""
 
 from __future__ import annotations
 
@@ -119,38 +119,3 @@ class TestLoadRouterRoutesFailureBranches:
         non_mapping = tmp_path / "file-router.yaml"
         non_mapping.write_text("- a\n- b\n", encoding="utf-8")
         assert _load_router_routes(non_mapping, yaml) == []
-
-
-class TestClassDMetaFromTextDirect:
-    def test_invalid_yaml_returns_none(self) -> None:
-        from scripts.checks.contracts.validate_contract_drift import _class_d_meta_from_text
-
-        assert _class_d_meta_from_text("{bad: [unclosed") is None
-
-    def test_non_mapping_returns_none(self) -> None:
-        from scripts.checks.contracts.validate_contract_drift import _class_d_meta_from_text
-
-        assert _class_d_meta_from_text("- a\n- b\n") is None
-
-    def test_contract_not_a_mapping_returns_none(self) -> None:
-        from scripts.checks.contracts.validate_contract_drift import _class_d_meta_from_text
-
-        assert _class_d_meta_from_text("contract: not-a-mapping\n") is None
-
-    def test_valid_envelope_returns_meta(self) -> None:
-        from scripts.checks.contracts.validate_contract_drift import _class_d_meta_from_text
-
-        text = (
-            "contract:\n"
-            "  id: x\n"
-            "  class: D\n"
-            "  contract_version: 1\n"
-            "  status: ratified\n"
-            "  ratified_via: t\n"
-            "  subject: s\n"
-            "  evaluator:\n"
-            "    check: validate_placement\n"
-        )
-        meta = _class_d_meta_from_text(text)
-        assert meta is not None
-        assert meta.id == "x"

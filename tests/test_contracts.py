@@ -436,11 +436,21 @@ class TestLoadContractMeta:
         meta = load_contract_meta(path)
         assert meta.status.value == "active"
 
-    def test_grandfathered_file_carrying_none_grandfathered_evaluator_loads(self, tmp_path: Path) -> None:
-        envelope = _class_d_envelope(evaluator={"none_grandfathered": _complete_route()})
+    def test_none_grandfathered_evaluator_is_unrepresentable(self, tmp_path: Path) -> None:
+        # rec-3059 wave 2: the grandfather-only none_grandfathered kind is retired -- it is no
+        # longer representable at ALL, not merely unresolving, so load_contract_meta must reject
+        # it at the schema layer just like any other malformed evaluator.
+        route = {
+            "reason": "pre-ritual free-form doc, pending future ratification",
+            "consumer": "scripts/some_consumer.py",
+            "mechanism": "assert some_field matches reality",
+            "blocker": "no check reads it yet",
+            "shape": "check",
+        }
+        envelope = _class_d_envelope(evaluator={"none_grandfathered": route})
         path = _write(tmp_path / "d.yaml", {"contract": envelope})
-        meta = load_contract_meta(path)
-        assert meta.evaluator.none_grandfathered.reason == "pre-ritual free-form doc, pending future ratification"
+        with pytest.raises(ContractValidationError):
+            load_contract_meta(path)
 
     def test_no_top_level_contract_block_raises(self, tmp_path: Path) -> None:
         path = _write(tmp_path / "d.yaml", {"not_contract": {}})
@@ -462,65 +472,6 @@ class TestLoadContractMeta:
         path.write_text("{bad: [unclosed", encoding="utf-8")
         with pytest.raises(ContractValidationError, match="invalid YAML"):
             load_contract_meta(path)
-
-
-def _complete_route(**overrides: object) -> dict:
-    """A minimal, fully-populated EnforcementRoute dict (migration-step-3-grandfathering)."""
-    route = {
-        "reason": "pre-ritual free-form doc, pending future ratification",
-        "consumer": "scripts/some_consumer.py",
-        "mechanism": "assert some_field matches reality",
-        "blocker": "no check reads it yet",
-        "shape": "check",
-    }
-    route.update(overrides)
-    return route
-
-
-class TestEvaluatorSpec:
-    """EnforcementRoute requirement on none_grandfathered (migration-step-3-grandfathering)."""
-
-    def test_none_grandfathered_requires_complete_enforcement_route(self) -> None:
-        from pydantic import ValidationError
-
-        from scripts.contracts_schema import EvaluatorSpec
-
-        # A complete route is accepted.
-        spec = EvaluatorSpec.model_validate({"none_grandfathered": _complete_route()})
-        assert spec.none_grandfathered.reason == "pre-ritual free-form doc, pending future ratification"
-
-        # consumer: null is accepted (no consumer module exists at all -- e.g. telemetry-lexicon).
-        spec_null_consumer = EvaluatorSpec.model_validate({"none_grandfathered": _complete_route(consumer=None)})
-        assert spec_null_consumer.none_grandfathered.consumer is None
-
-        # A bare free-text string (the pre-migration form) is REJECTED.
-        with pytest.raises(ValidationError):
-            EvaluatorSpec.model_validate({"none_grandfathered": "pending ratification"})
-
-        # A whitespace-only (declared but empty) consumer is REJECTED -- distinct from omitting
-        # consumer entirely (None), which is the legitimate no-consumer-module case above.
-        with pytest.raises(ValidationError):
-            EvaluatorSpec.model_validate({"none_grandfathered": _complete_route(consumer="   ")})
-
-        # An unknown extra key on the route is REJECTED (extra="forbid").
-        with pytest.raises(ValidationError):
-            EvaluatorSpec.model_validate({"none_grandfathered": _complete_route(unexpected_field="x")})
-
-        # An invalid `shape` value is REJECTED (Literal["check", "agent_surface"] only).
-        with pytest.raises(ValidationError):
-            EvaluatorSpec.model_validate({"none_grandfathered": _complete_route(shape="something_else")})
-
-        # Missing any of reason/mechanism/blocker/shape is REJECTED.
-        for missing_field in ("reason", "mechanism", "blocker", "shape"):
-            incomplete = _complete_route()
-            del incomplete[missing_field]
-            with pytest.raises(ValidationError):
-                EvaluatorSpec.model_validate({"none_grandfathered": incomplete})
-
-        # An empty (whitespace-only) required field is also REJECTED.
-        for empty_field in ("reason", "mechanism", "blocker"):
-            with pytest.raises(ValidationError):
-                EvaluatorSpec.model_validate({"none_grandfathered": _complete_route(**{empty_field: "   "})})
 
 
 class TestLoadAllContractsSkipsClassD:

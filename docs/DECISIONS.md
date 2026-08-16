@@ -197,6 +197,8 @@ significance:
 
 **Related:** Decision 118 (the CD.25 ritual this Decision extends with a fourth class), Decision 86 / Decision 127 (field-semantics-in-contract routing this Decision's own field-semantics home follows), Decision 165 (the shared raise-marker mechanism the ratchet binds to as a sixth consumer), Decision 128 (decompose-by-default -- the `_population.py` split), Decision 104 (the check-registry pattern the evaluator-resolution rule reads). Roadmap refs: audits/contract-first-governance-33c8667.yaml findings CFG-03/CFG-04/CFG-05/CFG-09 (partially addressed; population sweep remains open), tier_item T2.56 (not_started; this Decision closes none of its criteria), rec-3054 (the standing consumer of this Decision's filed drain recommendation).
 
+[Amendment 2026-08-16: clause 3's none_grandfathered half is inoperative -- rec-3059 wave 2 (PLAN-class-d-enforcers-wave-2) converted the last two contracts carrying the grandfather-only evaluator.none_grandfathered kind to resolving evaluators and then retired the kind itself: it is no longer declarable at all. See docs/contracts/contract-population.yaml's retirement_notes.evaluator_none_grandfathered for the live record (what, why, reversal path).]
+
 ---
 
 ## Decision 167: Decision-entry flow governance -- typed metadata envelope, required Significance routing claim, and a WARN-tier per-entry authoring size norm (amends Decision 150 and Decision 160) (Decided)

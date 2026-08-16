@@ -20,7 +20,6 @@ import pytest
 
 from scripts.ci.iam_simulate import (
     DEFAULT_FIXTURE,
-    VALID_DECISIONS,
     Triple,
     build_triples,
     context_entries,
@@ -311,18 +310,6 @@ def test_main_fails_closed_on_a_malformed_fixture(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # The real fixture
 # ---------------------------------------------------------------------------
-
-
-def test_real_fixture_builds_cleanly() -> None:
-    """Every recorded triple resolves to a concrete, wildcard-free ARN with a known decision."""
-    data = load_fixture(_REPO_ROOT / DEFAULT_FIXTURE)
-    triples = build_triples(data, _ACCOUNT, _REGION)
-    assert triples, "the standing fixture must carry triples"
-    assert len({t.id for t in triples}) == len(triples)
-    for triple in triples:
-        assert triple.expected_decision in VALID_DECISIONS
-        assert "${" not in triple.target_arn
-        assert triple.why.strip()
 
 
 def test_real_fixture_records_both_directions() -> None:

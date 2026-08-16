@@ -10,17 +10,9 @@ import pytest
 
 import scripts.checks.hygiene.validate_placement  # noqa: F401  -- registers "validate_placement" regardless of run order
 from scripts.checks.contracts import _population
-from scripts.contracts_schema import ContractMeta, EvaluatorSpec
+from scripts.contracts_schema import EvaluatorSpec
 
 _ROOT = Path(__file__).resolve().parents[3]
-
-_COMPLETE_ROUTE = {
-    "reason": "pre-ritual free-form doc, pending future ratification",
-    "consumer": "scripts/some_consumer.py",
-    "mechanism": "assert some_field matches reality",
-    "blocker": "no check reads it yet",
-    "shape": "check",
-}
 
 
 class TestClassifyFile:
@@ -305,13 +297,6 @@ class TestResolveEvaluatorModuleBoundary:
         assert not resolves2
         assert "does not contain" in detail2
 
-    def test_none_grandfathered_kind_never_resolves(self) -> None:
-        resolves, detail = _population.resolve_evaluator(
-            "x.yaml", EvaluatorSpec(none_grandfathered=_COMPLETE_ROUTE), root=_ROOT
-        )
-        assert not resolves
-        assert "never resolves" in detail
-
 
 class TestSubjectUniquenessDirect:
     def test_empty_inputs(self) -> None:
@@ -430,49 +415,6 @@ class TestAmendmentLogAndKindChangeDirect:
         head = {"contract": {"id": "x", "note": "new"}, "amendment_log": []}
         assert _population.check_amendment_log_for_class_d(base, head) is not None
 
-    def test_kind_change_requires_both_sides_present(self) -> None:
-        assert _population.check_evaluator_kind_change(None, None) is None
-        meta = ContractMeta.model_validate(
-            {
-                "id": "x",
-                "class": "D",
-                "contract_version": 1,
-                "status": "ratified",
-                "ratified_via": "t",
-                "subject": "s",
-                "evaluator": {"check": "validate_placement"},
-            }
-        )
-        assert _population.check_evaluator_kind_change(meta, None) is None
-        assert _population.check_evaluator_kind_change(None, meta) is None
-
-    def test_kind_change_resolving_to_none_grandfathered_fails(self) -> None:
-        def _meta(evaluator: dict) -> ContractMeta:
-            return ContractMeta.model_validate(
-                {
-                    "id": "x",
-                    "class": "D",
-                    "contract_version": 1,
-                    "status": "ratified",
-                    "ratified_via": "t",
-                    "subject": "s",
-                    "evaluator": evaluator,
-                }
-            )
-
-        resolving = _meta({"check": "validate_placement"})
-        grandfathered = _meta({"none_grandfathered": _COMPLETE_ROUTE})
-        err = _population.check_evaluator_kind_change(resolving, grandfathered)
-        assert err is not None
-        assert "resolving evaluator" in err
-
-        agent_surface_resolving = _meta({"agent_surface": "x.md"})
-        err2 = _population.check_evaluator_kind_change(agent_surface_resolving, grandfathered)
-        assert err2 is not None
-
-        # Both resolving -- no kind change.
-        assert _population.check_evaluator_kind_change(resolving, resolving) is None
-
     def test_conformance_loss_both_directions(self) -> None:
         assert _population.check_conformance_loss("ritual", "unshaped") is not None
         assert _population.check_conformance_loss("class_d", "unshaped") is not None
@@ -494,7 +436,6 @@ class TestCensus:
         assert not broken.bucket_identity_holds()
 
 
-@pytest.mark.parametrize("kind", ["check", "agent_surface", "none_grandfathered"])
+@pytest.mark.parametrize("kind", ["check", "agent_surface"])
 def test_evaluator_spec_accepts_each_kind_alone(kind: str) -> None:
-    value = _COMPLETE_ROUTE if kind == "none_grandfathered" else "value"
-    EvaluatorSpec.model_validate({kind: value})
+    EvaluatorSpec.model_validate({kind: "value"})

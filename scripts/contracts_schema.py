@@ -15,7 +15,7 @@ All validation is deferred to explicit model construction inside load_contract /
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -134,61 +134,27 @@ class ContractGovernance(BaseModel):
     human_initiated_value: str | None = None
 
 
-class EnforcementRoute(BaseModel):
-    """A `none_grandfathered` claim's required structured debt record (migration-step-3-grandfathering).
-
-    An unenforced Class D claim can no longer be filed as a bare free-text string -- it must name
-    WHY no evaluator exists yet (`reason`), WHAT would consume it (`consumer`, nullable when no
-    consumer module exists at all -- e.g. telemetry-lexicon.yaml), HOW the future check would
-    assert conformance (`mechanism`), WHAT blocks building it today (`blocker`), and WHETHER the
-    eventual evaluator would be a `check` or an `agent_surface` (`shape`). Every field except
-    `consumer` is required and non-empty -- a route with an empty reason/mechanism/blocker is
-    exactly as uninformative as the free-text form it replaces.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    reason: str
-    consumer: str | None = None
-    mechanism: str
-    blocker: str
-    shape: Literal["check", "agent_surface"]
-
-    @model_validator(mode="after")
-    def _required_fields_non_empty(self) -> EnforcementRoute:
-        for field_name in ("reason", "mechanism", "blocker"):
-            value = getattr(self, field_name)
-            if not value or not value.strip():
-                raise ValueError(f"EnforcementRoute.{field_name} must be a non-empty string")
-        if self.consumer is not None and not self.consumer.strip():
-            raise ValueError("EnforcementRoute.consumer must be non-empty when declared (or omitted/null entirely)")
-        return self
-
-
 class EvaluatorSpec(BaseModel):
     """A Class D contract's typed evaluator union (contracts-first-class-migration).
 
-    Exactly one of the three kinds: `check` (a registered scripts/checks/* name resolved by
-    executable-context evidence of reading the contract), `agent_surface` (a non-Python
-    agent-consumed surface, e.g. a skill or slash command, that names the contract), or
-    `none_grandfathered` (a structured EnforcementRoute, migration-step-3-grandfathering -- the
-    grandfather-only form; a NEW file may never declare it, see
-    scripts/checks/contracts/_population.py). This model carries no baseline-dependent rule -- a
-    pydantic validator cannot see the git baseline, so the new-vs-grandfathered distinction is
-    enforced entirely in the gate, not here.
+    Exactly one of the two kinds: `check` (a registered scripts/checks/* name resolved by
+    executable-context evidence of reading the contract) or `agent_surface` (a non-Python
+    agent-consumed surface, e.g. a skill or slash command, that names the contract). The
+    third, grandfather-only kind that never resolved (migration-step-3-grandfathering) was
+    retired at rec-3059 wave 2 -- it is no longer representable at all, so every Class D
+    contract's evaluator must genuinely resolve.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     check: str | None = None
     agent_surface: str | None = None
-    none_grandfathered: EnforcementRoute | None = None
 
     @model_validator(mode="after")
     def _exactly_one_kind(self) -> EvaluatorSpec:
-        kinds = [k for k in ("check", "agent_surface", "none_grandfathered") if getattr(self, k) is not None]
+        kinds = [k for k in ("check", "agent_surface") if getattr(self, k) is not None]
         if len(kinds) != 1:
-            raise ValueError(f"evaluator must declare exactly one of: check, agent_surface, none_grandfathered (got {kinds})")
+            raise ValueError(f"evaluator must declare exactly one of: check, agent_surface (got {kinds})")
         return self
 
 

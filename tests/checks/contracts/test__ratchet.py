@@ -1,6 +1,6 @@
-"""Direct module-boundary coverage for scripts/checks/contracts/_ratchet.py: the three ratchet
-pins (grandfathered_max, status_active_max, evaluator_none_grandfathered_max), their direction
-checks, and the pin-vs-census equality binding.
+"""Direct module-boundary coverage for scripts/checks/contracts/_ratchet.py: the two ratchet
+pins (grandfathered_max, status_active_max), their direction checks, and the pin-vs-census
+equality binding.
 
 Migrated from tests/checks/contracts/test__population.py's TestRatchetSpecAndCensus alongside the
 _ratchet.py source move (Decision 128 decompose-by-default / Decision 131 mirror convention,
@@ -21,12 +21,6 @@ class TestRatchetSpecShapes:
 
     def test_status_active_max_spec_shape(self) -> None:
         spec = _ratchet.status_active_max_spec()
-        assert spec.rel_path == "docs/contracts/contract-population.yaml"
-        assert spec.token == "raise-approved"
-        assert spec.gated_direction == "up"
-
-    def test_evaluator_none_grandfathered_max_spec_shape(self) -> None:
-        spec = _ratchet.evaluator_none_grandfathered_max_spec()
         assert spec.rel_path == "docs/contracts/contract-population.yaml"
         assert spec.token == "raise-approved"
         assert spec.gated_direction == "up"
@@ -53,26 +47,24 @@ class TestValidateRatchetPins:
         assert pins == {} and "ratchet block is missing" in errors[0]
 
     def test_missing_individual_pin_reports_error_but_others_parse(self, tmp_path) -> None:
-        (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: 19\n  status_active_max: 16\n", encoding="utf-8"
-        )
+        (tmp_path / "contract-population.yaml").write_text("ratchet:\n  grandfathered_max: 19\n", encoding="utf-8")
         pins, errors = _ratchet.validate_ratchet_pins(tmp_path)
-        assert pins == {"grandfathered_max": 19, "status_active_max": 16}
-        assert any("evaluator_none_grandfathered_max" in e and "missing" in e for e in errors)
+        assert pins == {"grandfathered_max": 19}
+        assert any("status_active_max" in e and "missing" in e for e in errors)
 
     def test_string_value_reported_and_omitted(self, tmp_path) -> None:
         (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: 'x'\n  status_active_max: 16\n  evaluator_none_grandfathered_max: 8\n",
+            "ratchet:\n  grandfathered_max: 'x'\n  status_active_max: 16\n",
             encoding="utf-8",
         )
         pins, errors = _ratchet.validate_ratchet_pins(tmp_path)
         assert "grandfathered_max" not in pins
-        assert pins == {"status_active_max": 16, "evaluator_none_grandfathered_max": 8}
+        assert pins == {"status_active_max": 16}
         assert any("non-bool int" in e for e in errors)
 
     def test_bool_value_reported_and_omitted(self, tmp_path) -> None:
         (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: false\n  status_active_max: 16\n  evaluator_none_grandfathered_max: 8\n",
+            "ratchet:\n  grandfathered_max: false\n  status_active_max: 16\n",
             encoding="utf-8",
         )
         pins, errors = _ratchet.validate_ratchet_pins(tmp_path)
@@ -81,20 +73,20 @@ class TestValidateRatchetPins:
 
     def test_negative_value_reported_and_omitted(self, tmp_path) -> None:
         (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: -5\n  status_active_max: 16\n  evaluator_none_grandfathered_max: 8\n",
+            "ratchet:\n  grandfathered_max: -5\n  status_active_max: 16\n",
             encoding="utf-8",
         )
         pins, errors = _ratchet.validate_ratchet_pins(tmp_path)
         assert "grandfathered_max" not in pins
         assert any("non-negative" in e for e in errors)
 
-    def test_all_three_valid(self, tmp_path) -> None:
+    def test_both_pins_valid(self, tmp_path) -> None:
         (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: 19\n  status_active_max: 16\n  evaluator_none_grandfathered_max: 8\n",
+            "ratchet:\n  grandfathered_max: 19\n  status_active_max: 16\n",
             encoding="utf-8",
         )
         pins, errors = _ratchet.validate_ratchet_pins(tmp_path)
-        assert pins == {"grandfathered_max": 19, "status_active_max": 16, "evaluator_none_grandfathered_max": 8}
+        assert pins == {"grandfathered_max": 19, "status_active_max": 16}
         assert errors == []
 
 
@@ -107,7 +99,7 @@ class TestValidateRatchetPinBackCompat:
 
     def test_valid(self, tmp_path) -> None:
         (tmp_path / "contract-population.yaml").write_text(
-            "ratchet:\n  grandfathered_max: 19\n  status_active_max: 16\n  evaluator_none_grandfathered_max: 8\n",
+            "ratchet:\n  grandfathered_max: 19\n  status_active_max: 16\n",
             encoding="utf-8",
         )
         value, errors = _ratchet.validate_ratchet_pin(tmp_path)
@@ -164,9 +156,9 @@ class TestCheckPinDirection:
         assert violations and "does not authorize" in violations[0]
 
     def test_new_pin_key_with_no_base_entry_skips_even_though_base_file_exists(self, tmp_path) -> None:
-        """A brand-new pin (status_active_max / evaluator_none_grandfathered_max on this plan's
-        own landing) is never gated on its own addition -- the base file exists but carries no
-        entry for the new key, so the direction comparison skips entirely (no marker required)."""
+        """A brand-new pin (status_active_max, on migration-step-3-grandfathering's own landing)
+        is never gated on its own addition -- the base file exists but carries no entry for the
+        new key, so the direction comparison skips entirely (no marker required)."""
         base_text = "ratchet:\n  grandfathered_max: 21\n"
         violations = _ratchet.check_pin_direction("status_active_max", tmp_path, 16, base_reader=lambda rel: base_text)
         assert violations == []
@@ -181,8 +173,8 @@ class TestPinBinding:
     between a pin and its live census bucket, in EITHER direction."""
 
     def test_all_pins_equal_census_pass(self) -> None:
-        pins = {"grandfathered_max": 19, "status_active_max": 16, "evaluator_none_grandfathered_max": 8}
-        census_values = {"grandfathered_max": 19, "status_active_max": 16, "evaluator_none_grandfathered_max": 8}
+        pins = {"grandfathered_max": 19, "status_active_max": 16}
+        census_values = {"grandfathered_max": 19, "status_active_max": 16}
         assert _ratchet.check_pins_bound_to_census(pins, census_values) == []
 
     def test_census_over_pin_fails(self) -> None:
@@ -197,18 +189,18 @@ class TestPinBinding:
     def test_pin_over_census_fails(self) -> None:
         # Pin sits ABOVE its census bucket -- stale slack left behind by a landed enforcer --
         # FAILS too (equality, not a `>=` ceiling).
-        pins = {"evaluator_none_grandfathered_max": 8}
-        census_values = {"evaluator_none_grandfathered_max": 7}
+        pins = {"status_active_max": 16}
+        census_values = {"status_active_max": 15}
         errors = _ratchet.check_pins_bound_to_census(pins, census_values)
         assert len(errors) == 1
-        assert "evaluator_none_grandfathered_max=8" in errors[0]
+        assert "status_active_max=16" in errors[0]
 
     def test_pin_absent_from_census_values_is_silently_skipped(self) -> None:
         pins = {"unrecognized_key": 5}
         assert _ratchet.check_pins_bound_to_census(pins, {}) == []
 
     def test_multiple_mismatches_all_reported(self) -> None:
-        pins = {"grandfathered_max": 19, "status_active_max": 16, "evaluator_none_grandfathered_max": 8}
-        census_values = {"grandfathered_max": 18, "status_active_max": 16, "evaluator_none_grandfathered_max": 9}
+        pins = {"grandfathered_max": 19, "status_active_max": 16}
+        census_values = {"grandfathered_max": 18, "status_active_max": 15}
         errors = _ratchet.check_pins_bound_to_census(pins, census_values)
         assert len(errors) == 2

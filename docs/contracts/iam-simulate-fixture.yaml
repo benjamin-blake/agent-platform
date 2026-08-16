@@ -17,10 +17,12 @@
 #
 # NOT A RITUAL A/B/C CONTRACT (Decision 118 governs RATIFIED contracts): a Class D mechanism
 # contract as of the `contract:` block below (migration-step-3-grandfathering, T2.56 migration
-# step 3), grandfathered with evaluator.none_grandfathered (its only reader is a CI script, not a
-# registered check -- see the enforcement_route). Amend the body by editing it in the same PR as
-# the grant change it records; amend the `contract:` envelope's own fields via a new
-# amendment_log[] entry.
+# step 3), enforced by {check: validate_iam_simulate_fixture_shape} -- a structural check over
+# expected_decision_values / the per-verb placeholders shape, never the live
+# condition-key/intersection semantics themselves, which stay a POST-APPLY-only concern owned by
+# scripts/ci/iam_simulate.py's runner (see WHAT THIS IS above). Amend the body by editing it in
+# the same PR as the grant change it records; amend the `contract:` envelope's own fields via a
+# new amendment_log[] entry.
 #
 # PUBLIC REPO (Decision 101): ${account_id} and ${region} are PLACEHOLDERS, resolved at run time by
 # the runner. A literal 12-digit account id must NEVER appear in this file -- the pre-commit
@@ -46,20 +48,17 @@ contract:
     the per-verb decision records) is unchanged by this envelope.
   subject: iam-simulate-fixture
   evaluator:
-    none_grandfathered:
-      reason: >-
-        The only reader of this fixture is a CI script, not a registered validate.py check --
-        wiring it into --pre would red the very PR that fixes a legitimate gap (see WHAT THIS IS
-        above).
-      consumer: scripts/ci/iam_simulate.py
-      mechanism: >-
-        Register a check over expected_decision_values / the per-verb placeholders shape (never
-        the condition-key/intersection semantics themselves, which stay a POST-APPLY-only
-        concern).
-      blocker: the reader is a CI script, not a registered check
-      shape: check
+    check: validate_iam_simulate_fixture_shape
 
-amendment_log: []
+amendment_log:
+  - date: "2026-08-16"
+    semantic_break: false
+    change_class: governance_note_add
+    summary: >-
+      rec-3059 wave 2: flipped evaluator from none_grandfathered to {check:
+      validate_iam_simulate_fixture_shape} -- verbatim the route's own recorded mechanism, only
+      its stale blocker re-adjudicated. Promoted test_real_fixture_builds_cleanly into the new
+      check (zero coverage delta) and deleted it from tests/test_iam_simulate.py.
 
 schema_version: 1
 

@@ -13,18 +13,28 @@ contract:
     migration step 3). The R1/R2/R3 rule body itself is unchanged by this envelope.
   subject: composite-action-shape
   evaluator:
-    none_grandfathered:
-      reason: >-
-        The R1/R2/R3 guard hardcodes its own copy of the known-violator roster instead of
-        reading this contract.
-      consumer: scripts/checks/ci_guards/_workflow_shell_bodies.py
-      mechanism: >-
-        Have the guard read rules/known_r1_violators from the contract instead of its hardcoded
-        _R1_KNOWN_VIOLATORS second copy.
-      blocker: the guard hardcodes what the contract declares
-      shape: check
+    check: validate_composite_action_shape_rosters
 
-amendment_log: []
+amendment_log:
+  - date: "2026-08-16"
+    semantic_break: false
+    change_class: governance_note_add
+    summary: >-
+      rec-3059 wave 2 (PLAN-class-d-enforcers-wave-2): flipped evaluator from none_grandfathered
+      to {check: validate_composite_action_shape_rosters}. DELIBERATE DEVIATION from this
+      contract's own retired enforcement route, which proposed having the R1/R2/R3 guard read
+      known_r1_violators FROM this contract instead of its hardcoded _R1_KNOWN_VIOLATORS copy in
+      scripts/checks/ci_guards/validate_composite_action_shell_bodies.py. Decision 162's R1
+      MEMBERSHIP clause makes that route MANDATORY to deviate from: "a config-file edit alone can
+      never admit a third violator; growing the set requires editing the guard's own source in a
+      reviewed change" -- collapsing to one contract-side copy would demote a reviewed-code-change
+      bar to a YAML doc edit. ACCEPTED COST: the new check builds a THREE-WAY parity assertion
+      (this contract's known_r1_violators, the guard's frozen _R1_KNOWN_VIOLATORS constant, and
+      config/composite_action_body_baseline.yaml's r1: section) over what was already an
+      unverified copy -- known_r1_violators already declared keys+pinned_lines 13/9 today,
+      unasserted; the check makes an existing latent duplication machine-checked rather than
+      creating a new one. A future extraction PR now FAILS CI if it misses any of the three
+      surfaces, instead of silently drifting. All three surfaces agreed at implement time.
 
 projection_id: composite-action-shape
 version: 1

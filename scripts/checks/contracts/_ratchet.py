@@ -1,6 +1,6 @@
-"""Class D population ratchet: the three `contract-population.yaml` `ratchet:` pins
-(grandfathered_max, status_active_max, evaluator_none_grandfathered_max), their direction checks,
-and the pin-vs-census equality binding (migration-step-3-grandfathering).
+"""Class D population ratchet: the two `contract-population.yaml` `ratchet:` pins
+(grandfathered_max, status_active_max), their direction checks, and the pin-vs-census equality
+binding (migration-step-3-grandfathering).
 
 Split out of scripts/checks/contracts/_population.py (Decision 128 decompose-by-default): that
 module was at 402/500 SLOC before this plan's ratchet additions, so the split is the default
@@ -30,9 +30,8 @@ _RATCHET_TOKEN = "raise-approved"
 
 GRANDFATHERED_MAX_KEY = "grandfathered_max"
 STATUS_ACTIVE_MAX_KEY = "status_active_max"
-EVALUATOR_NONE_GRANDFATHERED_MAX_KEY = "evaluator_none_grandfathered_max"
 
-PIN_KEYS: tuple[str, ...] = (GRANDFATHERED_MAX_KEY, STATUS_ACTIVE_MAX_KEY, EVALUATOR_NONE_GRANDFATHERED_MAX_KEY)
+PIN_KEYS: tuple[str, ...] = (GRANDFATHERED_MAX_KEY, STATUS_ACTIVE_MAX_KEY)
 
 
 def _make_pin_spec(label: str) -> _marker_guard.RegistrySpec:
@@ -56,21 +55,14 @@ def status_active_max_spec() -> _marker_guard.RegistrySpec:
     return _make_pin_spec("Contract-population status:active debt-pin guardrail (migration-step-3-grandfathering)")
 
 
-def evaluator_none_grandfathered_max_spec() -> _marker_guard.RegistrySpec:
-    return _make_pin_spec(
-        "Contract-population evaluator.none_grandfathered debt-pin guardrail (migration-step-3-grandfathering)"
-    )
-
-
 _SPEC_BY_KEY: dict[str, Callable[[], _marker_guard.RegistrySpec]] = {
     GRANDFATHERED_MAX_KEY: ratchet_spec,
     STATUS_ACTIVE_MAX_KEY: status_active_max_spec,
-    EVALUATOR_NONE_GRANDFATHERED_MAX_KEY: evaluator_none_grandfathered_max_spec,
 }
 
 
 def validate_ratchet_pins(contracts_dir: Path) -> tuple[dict[str, int], list[str]]:
-    """Strict type/shape check of all three ratchet pins from the PARSED (not regex) YAML, read
+    """Strict type/shape check of both ratchet pins from the PARSED (not regex) YAML, read
     from the injected `contracts_dir` -- never _common.ROOT. Each pin: int, not bool,
     non-negative. Returns (pins, errors): `pins` carries only the pins that parsed cleanly (never
     a sentinel 0 for a missing/malformed one); a missing file or non-mapping document returns
@@ -115,7 +107,7 @@ def check_pin_direction(
     base_reader: Callable[[str], str | None] | None = None,
 ) -> list[str]:
     """Diff-guard over one pin's value (mirrors the pre-split single-pin
-    `check_ratchet_direction`, generalized to any of the three PIN_KEYS), reusing
+    `check_ratchet_direction`, generalized to either of the two PIN_KEYS), reusing
     scripts.checks._marker_guard's shared extractor/authorization primitives -- but reading
     CURRENT text from the injected `contracts_dir` (never _common.ROOT), which is what lets this
     obey a tmp_path fixture. A base file that does not exist (this plan's own landing PR) or that
@@ -177,7 +169,7 @@ def check_pins_bound_to_census(pins: dict[str, int], census_values: dict[str, in
     equality forces every enforcer landing under rec-3059 to lower the debt pin in the same PR.
 
     `pins`: {pin_key: declared value} (from validate_ratchet_pins -- only pins that parsed
-    cleanly). `census_values`: {pin_key: live census count} for the SAME three keys, supplied by
+    cleanly). `census_values`: {pin_key: live census count} for the SAME two keys, supplied by
     the caller (never imported here, to keep this module's dependency on _population
     one-directional). A pin key absent from `pins` (already reported by validate_ratchet_pins) or
     from `census_values` contributes no additional error here.

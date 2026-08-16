@@ -17,7 +17,6 @@ from scripts.contracts_schema import (
     ContractGovernance,
     ContractMeta,
     ContractStatus,
-    EnforcementRoute,
     EvaluatorSpec,
     FieldSpec,
     VerbSpec,
@@ -297,20 +296,10 @@ class TestClassDEnumWidenings:
         assert ContractStatus("active") is ContractStatus.active
 
 
-_COMPLETE_ROUTE = {
-    "reason": "pending ratification",
-    "consumer": "scripts/some_consumer.py",
-    "mechanism": "assert some_field matches reality",
-    "blocker": "no check reads it yet",
-    "shape": "check",
-}
-
-
 class TestEvaluatorSpec:
     def test_exactly_one_kind_required(self) -> None:
         EvaluatorSpec.model_validate({"check": "validate_placement"})
         EvaluatorSpec.model_validate({"agent_surface": ".claude/skills/foo/SKILL.md"})
-        EvaluatorSpec.model_validate({"none_grandfathered": _COMPLETE_ROUTE})
 
     def test_zero_kinds_rejected(self) -> None:
         with pytest.raises(ValidationError):
@@ -324,64 +313,26 @@ class TestEvaluatorSpec:
         with pytest.raises(ValidationError):
             EvaluatorSpec.model_validate({"check": "x", "extra": 1})
 
+    def test_none_grandfathered_is_not_a_declarable_kind(self) -> None:
+        """VP step 5's graduated node (rec-3059 wave 2) -- the plan's core unrepresentability
+        claim. CHECK_ID HONESTY: none-grandfathered-kind-unrepresentable names the FULL claim, so
+        every assertion in the plan's VP step 5 shell leg is asserted HERE, not only the
+        model_validate half."""
+        import dataclasses
 
-def _route(**overrides: object) -> dict:
-    route = dict(_COMPLETE_ROUTE)
-    route.update(overrides)
-    return route
+        import scripts.contracts_schema as cs
+        from scripts.checks.contracts import _population, _ratchet
 
-
-class TestEnforcementRoute:
-    """The structured none_grandfathered debt record (migration-step-3-grandfathering). Mirror
-    coverage for scripts/contracts_schema.py's EnforcementRoute validator -- this file is the
-    mirror test for that module, so both `raise` branches must be exercised HERE (a sibling
-    test module covering them does not satisfy the per-file 100% mirror coverage gate)."""
-
-    def test_complete_route_accepted(self) -> None:
-        route = EnforcementRoute.model_validate(_COMPLETE_ROUTE)
-        assert route.reason == "pending ratification"
-        assert route.shape == "check"
-
-    def test_null_consumer_accepted(self) -> None:
-        # No consumer module exists at all -- the telemetry-lexicon.yaml route is exactly this.
-        assert EnforcementRoute.model_validate(_route(consumer=None)).consumer is None
-
-    def test_omitted_consumer_accepted(self) -> None:
-        route = _route()
-        del route["consumer"]
-        assert EnforcementRoute.model_validate(route).consumer is None
-
-    @pytest.mark.parametrize("field_name", ["reason", "mechanism", "blocker"])
-    def test_missing_required_field_rejected(self, field_name: str) -> None:
-        route = _route()
-        del route[field_name]
+        route = {"reason": "x", "mechanism": "x", "blocker": "x", "shape": "check"}
         with pytest.raises(ValidationError):
-            EnforcementRoute.model_validate(route)
+            EvaluatorSpec.model_validate({"none_grandfathered": route})
 
-    @pytest.mark.parametrize("field_name", ["reason", "mechanism", "blocker"])
-    def test_empty_required_field_rejected(self, field_name: str) -> None:
-        # Exercises the first `raise` branch: a present-but-blank required field is exactly as
-        # uninformative as the free-text form the route replaces.
-        with pytest.raises(ValidationError, match=field_name):
-            EnforcementRoute.model_validate(_route(**{field_name: "   "}))
-
-    def test_whitespace_only_consumer_rejected(self) -> None:
-        # Exercises the second `raise` branch -- distinct from omitting consumer entirely (None),
-        # which is the legitimate no-consumer-module case above.
-        with pytest.raises(ValidationError, match="consumer"):
-            EnforcementRoute.model_validate(_route(consumer="   "))
-
-    def test_invalid_shape_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            EnforcementRoute.model_validate(_route(shape="something_else"))
-
-    def test_unknown_field_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            EnforcementRoute.model_validate(_route(unexpected_field="x"))
-
-    def test_bare_string_rejected_on_evaluator_spec(self) -> None:
-        with pytest.raises(ValidationError):
-            EvaluatorSpec.model_validate({"none_grandfathered": "pending ratification"})
+        assert not hasattr(cs, "EnforcementRoute"), "EnforcementRoute still exported"
+        assert "none_grandfathered" not in cs.EvaluatorSpec.model_fields, cs.EvaluatorSpec.model_fields.keys()
+        assert not hasattr(_population, "check_evaluator_kind_change"), "kind-change rule survived"
+        census_fields = {f.name for f in dataclasses.fields(_population.Census)}
+        assert "evaluator_none_grandfathered" not in census_fields, "census field survived"
+        assert _ratchet.PIN_KEYS == ("grandfathered_max", "status_active_max"), _ratchet.PIN_KEYS
 
 
 class TestContractMetaClassDRequirements:
