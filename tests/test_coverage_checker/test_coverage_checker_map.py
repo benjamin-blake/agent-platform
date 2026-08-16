@@ -120,6 +120,24 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "test_ci_rca_filing.py"
 
+    def test_maps_scripts_roadmap_plan_document_to_concern_split_package(self) -> None:
+        """scripts/roadmap/plan_document.py maps to the tests/roadmap/plan_document/ concern-split
+        package (PLAN-decompose-test-plan-document: registers it in _CONCERN_SPLIT_TEST_PACKAGES
+        so the former tests/test_plan_document.py monolith's decomposition resolves to a test
+        PACKAGE DIRECTORY via rule 3, DIRECT CONCERN-SPLIT)."""
+        source = ROOT / "scripts" / "roadmap" / "plan_document.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "roadmap" / "plan_document"
+
+    def test_maps_still_grandfathered_roadmap_sibling_to_flat_home(self) -> None:
+        """scripts/roadmap/plan_audit.py and scripts/roadmap/find_plan.py (never on the 24-roster,
+        never concern-split) still resolve to their flat grandfathered homes -- proves registering
+        scripts/roadmap/plan_document.py as a direct concern-split entry did not perturb its
+        roadmap-family siblings."""
+        assert map_source_to_test(ROOT / "scripts" / "roadmap" / "plan_audit.py") == ROOT / "tests" / "test_plan_audit.py"
+        assert map_source_to_test(ROOT / "scripts" / "roadmap" / "find_plan.py") == ROOT / "tests" / "test_find_plan.py"
+
     def test_returns_none_for_unmapped_path(self, tmp_path: Path) -> None:
         """Paths not under src/ or scripts/ return None."""
         source = tmp_path / "docs" / "README.py"
