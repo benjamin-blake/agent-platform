@@ -1,0 +1,632 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "oidc-trust-contraction-closure"
+intent: >-
+  Close the trust-contraction chain left open by the 2026-08-15 rename incident so a deliberately
+  TEMPORARY iam:UpdateAssumeRolePolicy widening stops being open-ended: drive github_ci_deploy's
+  missing live-assume evidence deliberately, contract local.github_repos to the immutable OIDC
+  subject in both terraform roots, and revert the widening in the same operator bootstrap apply,
+  strictly after the personal-root contraction.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-oidc-trust-contraction-closure.yaml
+phase: >-
+  Platform hardening; no tier_item. Ad-hoc closure of the Decision 172 contraction chain
+  (rec-3143 -> rec-3142 -> the rec-3132 widening revert). Adjacent to T2.50 / DEP-05 (a dedicated
+  trust-boundary control) but does NOT close it -- while DEP-05 stays open, the narrow enumerated
+  IAMRoleReconcile grant is the only control against a fleet-wide trust rewrite, which is exactly
+  why this plan restores it.
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Contract local.github_repos to the immutable entry alone (remove benjamin-blake/agent-platform
+      and benjamin-blake/theseus); re-ground the dual-slug-transition comment to the contracted
+      steady state. Consumed by oidc_ci_roles.tf (branch, pr) and oidc_pipeline_roles.tf (planner,
+      deploy).
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Same contraction in the mirrored local.github_repos list. The two roots cannot reference each
+      other, so cross-root agreement is a test invariant -- both lists MUST change in this one commit.
+  - file: terraform/bootstrap/github_ci_apply_policy.tf
+    action: Modify
+    purpose: >-
+      Revert the rec-3132 widening: drop the github_ci_planner and github_ci_deploy ARNs from the
+      IAMRoleReconcile Sid, restoring branch + pr only, and delete the TEMPORARY / REVERT OBLIGATION
+      comment block that the revert discharges.
+  - file: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py
+    action: Modify
+    purpose: >-
+      Add TestImmutableSubjectEntry::test_every_entry_is_immutable_format -- every entry in both
+      roots' local.github_repos must match the OWNER@ID/REPO@ID format. A FORMAT assertion, never a
+      count assertion (Decision 172 point 2's pre-stage playbook adds a future name's immutable entry
+      additively before any later rename; a count assertion would wrongly reject that).
+  - file: tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py
+    action: Create
+    purpose: >-
+      Standing guard pinning the IAMRoleReconcile Sid's Resource set to exactly
+      {agent-platform-github-ci-branch, agent-platform-github-ci-pr}. This is the machine-checkable
+      expiry the original widening lacked -- it existed only as an HCL comment, which is precisely
+      why it outlived the event it was scoped to (Decision 163 spirit; Decision 143 clause 1).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Discharge Decision 172's legacy-entries-provably-dead-with-proof reversal condition: remove it
+      from the yaml reversal-conditions stanza and record the discharge as a dated in-body amendment
+      note. No new numbered Decision is minted.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerate the committed decisions index, which any docs/DECISIONS.md edit drifts.
+      validate_decisions_index_freshness runs in BOTH presubmit tiers, so a stale index reds the PR.
+bundled_recommendations:
+  - rec-3143
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf -- IAM trust diff on four roles (branch, pr, planner, deploy). Always
+    out-of-budget under the deterministic guard, so it guard-BLOCKs and routes to the tf-gated-apply
+    GitHub Environment for human approval (Decision 77 / Decision 92). Applies at merge from the
+    speculative plan.bin persisted on the PR (no re-plan, Decision 77 no-TOCTOU).
+  - >-
+    terraform/bootstrap/** -- OPERATOR-ONLY, never auto-applied (Decision 126; the
+    terraform-apply-sandbox path filter is terraform/personal/** and terraform/bootstrap is
+    deliberately excluded as the T2.23 self-grant break). The bootstrap edits sit INERT in the merged
+    tree until a human applies them by hand under the agent_platform_admin profile. This exclusion is
+    what structurally enforces the load-bearing ordering below -- it is not a matter of discipline.
+  - >-
+    ORDERING IS LOAD-BEARING. The terraform/personal contraction MUST apply FIRST: it rewrites trust
+    on github_ci_planner and github_ci_deploy, which requires github_ci_apply to still hold
+    iam:UpdateAssumeRolePolicy on those two roles -- exactly what the rec-3132 widening grants.
+    Reverting the widening first strands the contraction behind the same AccessDenied that partially
+    failed PR-1's gated apply (run 31879737554, commit 9d9c4e0).
+  - >-
+    No boundary or authority-budget change is implied. terraform/bootstrap/github_ci_apply_boundary.tf
+    already permits iam:UpdateAssumeRolePolicy at the ceiling; the identity policy is the narrow
+    layer (confirmed by rec-3132's RCA: "The permissions boundary is NOT the blocker").
+acceptance_criteria:
+  - >-
+    agent-platform-github-ci-deploy records a live sts:AssumeRoleWithWebIdentity under the immutable
+    OIDC subject: Role.RoleLastUsed.LastUsedDate is later than the rename at 2026-08-15T12:55:57Z
+    (it reads 2026-08-14T10:32:24Z at plan time). Because that role's trust carries ONLY
+    :ref:refs/heads/main subjects and the two name-only entries cannot be minted post-rename, an
+    advance past the rename IS proof of the immutable form for this role specifically.
+  - >-
+    local.github_repos in BOTH terraform/personal/oidc.tf and terraform/bootstrap/github_ci_apply.tf
+    contains exactly the immutable entry benjamin-blake@217728084/theseus@1252427466. The two legacy
+    name-only entries are gone from both roots; the immutable entry is untouched.
+  - >-
+    All five CI roles authenticate under the immutable subject AFTER the contraction: live trust
+    documents show only immutable-format subjects, and each role's RoleLastUsed advances past the
+    bootstrap apply. For github_ci_apply specifically, BOTH Decision 94 sub forms
+    (ref:refs/heads/main and environment:tf-gated-apply) survive in the live trust document.
+  - >-
+    The IAMRoleReconcile Sid in the LIVE inline policy on agent-platform-github-ci-apply lists
+    exactly the branch and pr role ARNs -- the planner and deploy ARNs are gone. Verified by
+    aws iam get-role-policy against live IAM, never by reading the HCL.
+  - >-
+    Two standing guards fail against the pre-change tree and pass after: every local.github_repos
+    entry is immutable-format, and the IAMRoleReconcile Resource set is exactly branch + pr.
+  - >-
+    Decision 172's legacy-entries-provably-dead-with-proof reversal condition is discharged: removed
+    from the stanza, recorded as a dated amendment note, stanza still well-formed, decisions index
+    regenerated. No new numbered Decision is minted.
+verification_plan:
+  - step: 1
+    phase: post-deploy
+    action: >-
+      DRIVE rec-3143. Before opening the PR, dispatch the governed prod-Lambda code-deploy channel on
+      main so github_ci_deploy mints an assume under the immutable subject. Record the run id.
+    command: >-
+      echo "Dispatch via MCP: mcp__github__actions_run_trigger(method='run_workflow',
+      owner='benjamin-blake', repo='theseus', workflow_id='deploy-prod-lambdas.yml', ref='main')
+      -- then wait for the run to complete before step 2."
+    expected: >-
+      The deploy job assumes agent-platform-github-ci-deploy, builds/uploads/deploys the three prod
+      artifacts, and the smoke job asserts status=disabled / skipped_comparison=true / statusCode=400.
+      Measured blast radius at plan time: compute_affected_artifacts over the 89 files changed since
+      the last prod deploy (d024e63) returns exactly {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']}
+      -- handler code byte-identical, ops-compaction untouched, all three functions schedule-disabled
+      (Decision 61/37/116).
+    fix_if: >-
+      Do NOT read the run conclusion as success. If DEPLOY_ROLE_PROVISIONED is not 'true' and the
+      assume fails, the "Classify assume-role outcome" step warns and the run reports GREEN having
+      deployed nothing. Step 2 is the actual gate. On a failed assume, read the job log for that
+      classifier's warning and treat it as a live trust regression -- do NOT re-dispatch blindly.
+  - step: 2
+    phase: post-deploy
+    action: >-
+      PROVE the assume landed. Read RoleLastUsed on the deploy role under the admin profile
+      (iam:GetRole is denied to agent_platform/PlatformDev).
+    command: >-
+      aws iam get-role --role-name agent-platform-github-ci-deploy --profile agent_platform_admin
+      --query 'Role.RoleLastUsed.LastUsedDate' --output text
+    expected: >-
+      A timestamp strictly later than 2026-08-15T12:55:57Z (the rename). At plan time it reads
+      2026-08-14T10:32:24Z. Record ONLY the role logical name and the timestamp in any committed
+      artefact or PR body -- never the ARN or raw CLI output (Decision 101; the 12-digit account id
+      is shape-blocked by the pre-commit never-commit hook).
+    fix_if: >-
+      Unchanged timestamp means the assume never happened -- a real regression, not a flake. Do not
+      proceed to the contraction: contracting while a role has no proof is the exact failure mode
+      Decision 172 point 4 exists to prevent. RCA the trust document instead.
+  - step: 3
+    phase: post-deploy
+    action: >-
+      CORROBORATE step 2 with a second, independent anchor -- the deploy record proves the deploy job
+      actually ran under the assumed role, not merely that the role was touched.
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/deploy-records/prod/agent-platform-findings-processor.json -
+      --region eu-west-2 --profile agent_platform_admin | bin/venv-python -c "import json,sys;
+      print(json.load(sys.stdin)['source_git_sha'])"
+    expected: The source_git_sha equals the main commit the dispatch ran against (not d024e63).
+    fix_if: >-
+      A stale sha means the deploy job no-opped. Combined with an unchanged RoleLastUsed this confirms
+      a bootstrap-window false green; see step 1's fix_if.
+  - step: 4
+    phase: pre-deploy
+    hermetic: true
+    action: Assert the contraction landed in BOTH roots and removed only the two legacy name-only entries.
+    command: >-
+      bin/venv-python -c "import re,pathlib; paths=['terraform/personal/oidc.tf',
+      'terraform/bootstrap/github_ci_apply.tf'];
+      get=lambda p: re.findall(r'\"([^\"]+)\"', re.search(r'github_repos\s*=\s*\[([^\]]*)\]',
+      pathlib.Path(p).read_text(),re.S).group(1));
+      lists=[get(p) for p in paths];
+      assert all(l==['benjamin-blake@217728084/theseus@1252427466'] for l in lists), lists;
+      print('contracted-ok', lists[0])"
+    expected: "contracted-ok ['benjamin-blake@217728084/theseus@1252427466']"
+    fix_if: >-
+      Any name-only entry surviving means the contraction is incomplete in that root. The immutable
+      entry MISSING is the catastrophic case -- it is the only subject this repository can mint
+      post-rename, and removing it (or narrowing to the name-only theseus slug) re-breaks OIDC
+      completely. That exact mistake is what Decision 172 caught in the original rename plan.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the pytest guard graduated at step 6, which asserts the same invariant in its durable
+      format-based form over both roots. Graduating a second registry slot for the same predicate would
+      register two checks that can never disagree.
+  - step: 5
+    phase: pre-deploy
+    hermetic: true
+    action: Assert the IAMRoleReconcile widening is reverted in HCL and its TEMPORARY marker is gone.
+    command: >-
+      bin/venv-python -c "import pathlib;
+      t=pathlib.Path('terraform/bootstrap/github_ci_apply_policy.tf').read_text();
+      s=t[t.index('Sid    = \"IAMRoleReconcile\"'):];
+      s=s[:s.index('Sid    = \"IAMRoleMetadataWrite\"')];
+      assert 'github-ci-planner' not in s and 'github-ci-deploy' not in s, 'widening still present';
+      assert 'TEMPORARY' not in s, 'TEMPORARY marker survives the revert';
+      assert 'github-ci-branch' in s and 'github-ci-pr' in s, 'narrow grant was over-removed';
+      print('reconcile-narrow-ok')"
+    expected: "reconcile-narrow-ok"
+    fix_if: >-
+      planner/deploy surviving means the revert did not land. branch/pr MISSING means the revert
+      over-removed and broke the legitimate narrow grant the pipeline needs for ordinary trust
+      reconcile. A surviving TEMPORARY marker means the comment block was not discharged with the code.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the pytest guard graduated at step 6, which pins the exact Resource set rather than
+      substring-probing it. The grep form is retained here only as a fast pre-commit signal.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Run both standing guards. These are the durable regression barrier and must be red before the
+      change and green after -- run them against the PRE-change tree first to prove red.
+    command: >-
+      bin/venv-python -m pytest tests/checks/iam_tf/test_oidc_trust_slug_invariants.py
+      tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py -q
+    expected: >-
+      All tests pass on the post-change tree. On the pre-change tree,
+      test_every_entry_is_immutable_format fails (2 of 3 entries per root are name-only) and
+      test_resource_set_is_exactly_branch_and_pr fails (4 ARNs, not 2).
+    fix_if: >-
+      A guard that passes on the pre-change tree is not guarding anything -- fix the assertion, not
+      the tree. Note test_slug_lists_are_identical_across_roots must also stay green: it is what
+      catches a contraction that narrows one root and misses the other.
+    graduation: graduate
+    graduation_check_id: "oidc-trust-contraction-guards"
+  - step: 7
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Assert Decision 172's reversal condition is discharged, the stanza is still well-formed, and the
+      committed decisions index is fresh.
+    command: >-
+      bin/venv-python -m scripts.preflight.decision_conditions >/dev/null &&
+      bin/venv-python -m scripts.decisions_index --check &&
+      bin/venv-python -c "import pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text();
+      assert 'legacy-entries-provably-dead-with-proof' not in t.split('## Decision 171')[0],
+      'discharged condition still in the Decision 172 stanza';
+      assert 'contraction discharged' in t, 'no dated amendment note recording the discharge';
+      print('decision-172-discharged-ok')"
+    expected: "Exit 0 from all three; decision-172-discharged-ok printed."
+    fix_if: >-
+      A MALFORMED stanza exit means the edit broke the fence or emptied the conditions list -- the
+      list must stay NON-EMPTY (future-rename-not-prestaged remains). An index-drift failure means
+      the regeneration step was skipped: bin/venv-python -m scripts.decisions_index --write.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The stanza and index halves duplicate two registered checks that already run in both presubmit
+      tiers (validate_reversal_stanzas, validate_decisions_index_freshness). The discharge half is a
+      one-shot assertion about this specific edit, not a standing invariant worth a registry slot.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Full-tier presubmit before commit/PR (Decision 163 / handoff_policy: the fast tier alone does
+      not discharge the pre-handoff obligation).
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0 with an empty failed-checks list.
+    fix_if: >-
+      Forward-fix on the branch (Decision 55). Note rec-3147 (open ci-rca, 100%-coverage regression in
+      validate_oidc_failopen_guards) is owned by another agent under
+      docs/plans/PLAN-oidc-failopen-guard-coverage.yaml -- if the full tier reds on THAT check and
+      nothing else, it is that agent's fix, not this plan's; do not patch it inline.
+    graduation: not-applicable
+  - step: 9
+    phase: post-deploy
+    action: >-
+      HARD ORDERING GATE. After the PR merges and the tf-gated-apply job is approved and converges,
+      confirm all FOUR personal-root roles are contracted in LIVE IAM. Do not run step 10 until this
+      passes.
+    command: >-
+      for r in branch pr planner deploy; do aws iam get-role --role-name
+      "agent-platform-github-ci-$r" --profile agent_platform_admin --query
+      'Role.AssumeRolePolicyDocument.Statement[0].Condition' --output json | bin/venv-python -c
+      "import json,sys,re; c=json.load(sys.stdin);
+      subs=sum([v for k,v in {**c.get('StringEquals',{}),**c.get('StringLike',{})}.items() if
+      k.endswith(':sub')],[]);
+      bad=[s for s in subs if not re.match(r'^repo:[\w.-]+@\d+/[\w.-]+@\d+:',s)];
+      print('OK' if not bad else 'LEGACY-SURVIVES', sorted(set(subs)))"; done
+    expected: >-
+      OK for all four roles, with every listed sub prefixed
+      repo:benjamin-blake@217728084/theseus@1252427466:. The suffix set differs per role by design
+      (main / agent/* / pull_request / refs/pull/*) -- assert the SUBJECT form, not the suffix count.
+    fix_if: >-
+      LEGACY-SURVIVES on any role means the gated apply partially applied, exactly as PR-1 did. STOP.
+      Do NOT run the bootstrap apply -- reverting the widening now would strand the remaining
+      contraction behind the AccessDenied the widening exists to prevent. Recover via Reconcile
+      (reconcile.yml), which re-plans fresh and routes to tf-gated-apply; the terraform-apply-sandbox
+      acknowledge-and-retry path is NOT a route to gated-apply on a guard-BLOCK change (rec-3132's
+      recorded lesson).
+  - step: 10
+    phase: post-deploy
+    action: >-
+      OPERATOR ACTION, strictly after step 9 passes. Apply terraform/bootstrap by hand under
+      agent_platform_admin -- carrying BOTH the apply role's own trust contraction and the
+      IAMRoleReconcile revert in one apply. Review the plan output before applying; STOP on any
+      destroy or replace of aws_iam_role.github_ci_apply or aws_iam_role_policy.github_ci_apply.
+    command: >-
+      echo "OPERATOR: terraform -chdir=terraform/bootstrap plan -var-file=terraform/bootstrap/terraform.bootstrap.tfvars
+      # review, then apply. Agent executes only after a human reviews the plan and explicitly directs it (Decision 126)."
+    expected: >-
+      The plan shows in-place updates to the apply role's assume_role_policy (3 subject entries -> 1,
+      both Decision 94 sub forms retained) and its inline policy (IAMRoleReconcile 4 ARNs -> 2). No
+      destroy, no replace.
+    fix_if: >-
+      Any destroy/replace of the live apply role or its policy would break every in-flight CI job --
+      STOP and RCA. The bootstrap tfvars file is gitignored; regenerate it rather than committing it.
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Prove the widening is GONE in live IAM (never by reading the HCL). Output is mapped to role
+      short names so no account id is printed (Decision 101).
+    command: >-
+      aws iam get-role-policy --role-name agent-platform-github-ci-apply --policy-name
+      agent-platform-github-ci-apply --profile agent_platform_admin --query 'PolicyDocument'
+      --output json | bin/venv-python -c "import json,sys; d=json.load(sys.stdin);
+      s=[x for x in d['Statement'] if x.get('Sid')=='IAMRoleReconcile'][0];
+      print(sorted(r.rsplit('/',1)[-1] for r in s['Resource']))"
+    expected: "['agent-platform-github-ci-branch', 'agent-platform-github-ci-pr']"
+    fix_if: >-
+      A four-element list means the bootstrap apply did not land. This is the only step that closes
+      the rec-3132 revert obligation; the HCL grep at step 5 proves intent, this proves effect.
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Prove github_ci_apply keeps BOTH Decision 94 sub forms under the immutable entry after its trust
+      contraction. RoleLastUsed is per-ROLE and cannot distinguish the forms, so this document proof
+      is the only evidence for the environment form.
+    command: >-
+      aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin
+      --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals' --output json |
+      bin/venv-python -c "import json,sys; c=json.load(sys.stdin);
+      subs=sorted(sum([v for k,v in c.items() if k.endswith(':sub')],[]));
+      i='repo:benjamin-blake@217728084/theseus@1252427466';
+      assert subs==[f'{i}:environment:tf-gated-apply', f'{i}:ref:refs/heads/main'], subs;
+      print('both-sub-forms-ok')"
+    expected: "both-sub-forms-ok"
+    fix_if: >-
+      A missing environment:tf-gated-apply form silently UNGATES every gated apply -- the VP9
+      regression Decision 94 exists to prevent. Restore it in the same bootstrap apply immediately.
+  - step: 13
+    phase: post-deploy
+    action: >-
+      POST-CONTRACTION LIVENESS, deploy role. Dispatch the prod channel a second time. Between the two
+      dispatches nothing in the Lambda-packaged set changes (terraform/**, tests/**, docs/DECISIONS.md
+      and docs/decisions-index.json are all unpackaged), so this ships byte-identical code.
+    command: >-
+      echo "Dispatch deploy-prod-lambdas.yml on main again, then:" &&
+      echo "aws iam get-role --role-name agent-platform-github-ci-deploy --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text"
+    expected: RoleLastUsed advances past the step-10 bootstrap apply timestamp.
+    fix_if: >-
+      No advance means the contraction broke this role's assume. Restore the name-only entries in
+      terraform/personal/oidc.tf via the gated path immediately, then RCA -- do not leave CI unable to
+      deploy while investigating.
+  - step: 14
+    phase: post-deploy
+    action: >-
+      POST-CONTRACTION LIVENESS, apply role. Dispatch terraform-apply-sandbox (the acknowledge-and-retry
+      path re-plans fresh and applies; a converged sandbox makes it a no-op that still writes a green
+      convergence record). Proves the ref:refs/heads/main form post-contraction.
+    command: >-
+      echo "Dispatch terraform-apply-sandbox.yml on main, then:" &&
+      echo "aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin --query 'Role.RoleLastUsed.LastUsedDate' --output text"
+    expected: >-
+      RoleLastUsed advances past the step-10 bootstrap apply, and the convergence record at
+      convergence/personal/sandbox.json is green.
+    fix_if: >-
+      A failed assume here is the environment-vs-main-form distinction biting: step 12 already proved
+      the document, so a failure points at the OIDC provider or the subject literal, not the sub form.
+      A red convergence record is drift surfaced by the fresh re-plan -- triage it as ordinary drift
+      (Decision 55/72), not as a contraction failure.
+  - step: 15
+    phase: post-deploy
+    action: >-
+      POST-CONTRACTION LIVENESS, remaining three roles. These self-exercise: branch on any ci.yml run,
+      pr on any PR's terraform-validate, planner on the hourly terraform-drift cron (17 * * * *), so
+      no dispatch is needed -- only observation.
+    command: >-
+      for r in branch pr planner; do echo -n "$r "; aws iam get-role --role-name
+      "agent-platform-github-ci-$r" --profile agent_platform_admin --query
+      'Role.RoleLastUsed.LastUsedDate' --output text; done
+    expected: All three timestamps are later than the step-10 bootstrap apply.
+    fix_if: >-
+      Allow up to one hour for planner (the drift cron cadence). A role that has not advanced after its
+      natural exerciser has demonstrably run is a real regression -- check that exerciser's run log for
+      the assume-role step before concluding.
+  - step: 16
+    phase: post-deploy
+    action: >-
+      Close the recommendation ledger. rec-3143 closes at merge via the Resolves trailer (its evidence
+      landed at step 2, BEFORE merge). rec-3142 is satisfied only by the post-merge gated apply, so it
+      is closed explicitly with the post-apply evidence, never by the trailer (Decision 103).
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-3142 --status closed --resolution
+      "Contracted local.github_repos to the immutable entry in both roots; gated apply converged and
+      all five roles verified live under the immutable subject (VP steps 9, 12-15). The rec-3132
+      IAMRoleReconcile widening reverted in the same operator bootstrap apply, strictly after."
+      && bin/venv-python -m scripts.sync.ops pull
+    expected: >-
+      rec-3142 closed; rec-3143 confirmed closed by rec-autoclose.yml. rec-3132 needs no action -- it
+      was already closed on 2026-08-15 when the widening LANDED, so no open rec tracks the revert (this
+      plan is its only tracking vehicle).
+    fix_if: >-
+      A portal write that cannot complete FAILS LOUDLY -- there is no offline outbox (Decision 84 I-4).
+      Re-file after restoring connectivity; never hand-edit logs/.recommendations-log.jsonl.
+test_obligations:
+  - source: terraform/personal/oidc.tf
+    behavior: >-
+      local.github_repos carries only immutable-format OWNER@ID/REPO@ID entries -- no legacy name-only
+      slug can be silently reintroduced, and the immutable entry can never be removed.
+    verification_step: 6
+    test_selector: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestImmutableSubjectEntry::test_every_entry_is_immutable_format
+    red_green_expectation: >-
+      Red before (this root declares 2 name-only entries alongside the immutable one), green after.
+  - source: terraform/bootstrap/github_ci_apply.tf
+    behavior: >-
+      The mirrored slug list stays identical to terraform/personal's and immutable-format only, so a
+      contraction cannot narrow one root and miss the other.
+    verification_step: 6
+    test_selector: tests/checks/iam_tf/test_oidc_trust_slug_invariants.py::TestCrossRootSlugAgreement::test_slug_lists_are_identical_across_roots
+    red_green_expectation: >-
+      Green before and after by design (both roots currently agree at 3 entries); it turns red if the
+      implementing session contracts only one root, which is the drift it exists to catch. The
+      red-before evidence for this file is carried by test_every_entry_is_immutable_format, which
+      asserts over BOTH roots and is red before / green after.
+  - source: terraform/bootstrap/github_ci_apply_policy.tf
+    behavior: >-
+      The IAMRoleReconcile Sid's Resource set stays exactly {branch, pr}. iam:UpdateAssumeRolePolicy is
+      a trust verb and stays fleet-narrow while DEP-05 is open (Decision 143 clause 1); re-widening now
+      requires a reviewed test edit rather than an HCL comment nobody enforces.
+    verification_step: 6
+    test_selector: tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py::TestIAMRoleReconcileScope::test_resource_set_is_exactly_branch_and_pr
+    red_green_expectation: Red before (4 ARNs -- planner and deploy still present), green after.
+  - source: docs/decisions-index.json
+    behavior: The committed index stays in sync with docs/DECISIONS.md.
+    verification_step: 7
+    command: bin/venv-python -m scripts.decisions_index --check
+    red_green_expectation: >-
+      Red after the DECISIONS.md edit and before regeneration (drift), green after
+      `--write`. Enforced continuously by validate_decisions_index_freshness in both tiers.
+constraints:
+  - >-
+    NEVER author a local terraform init/validate/plan for terraform/personal in a CC-web session
+    (Decision 119/120). CI's required terraform-validate check and the speculative-plan job are the
+    authoritative verifiers. terraform/bootstrap is hashicorp/aws-only, so `terraform fmt -check` is
+    locally available there if needed; a full local plan of bootstrap is the operator's step 10.
+  - >-
+    The immutable entry benjamin-blake@217728084/theseus@1252427466 MUST REMAIN in both roots.
+    Removing it, or narrowing to the name-only theseus slug, re-breaks OIDC completely -- that exact
+    mistake is what the rename plan specified before Decision 172 caught it. It is a repo SEGMENT,
+    never a "repo:"-prefixed literal (every sub site already renders "repo:${repo}:<suffix>").
+  - >-
+    No wildcard in any trust subject (Decision 172 point 3): IAM StringLike '*' spans ':' and '/',
+    and GitHub environment names are attacker-chosen free text, so a pattern like
+    repo:*@217728084/*@1252427466:... would be forgeable by a foreign repository.
+  - >-
+    No budget raises (Decision 128/165/166). Every scope edit in this plan REMOVES lines from the
+    terraform files; decreases are always unrestricted. Do not run --update-sloc-budgets.
+  - >-
+    Do NOT mint a new numbered Decision. This is a state change Decision 172's own stanza anticipates
+    ("update or re-arm this stanza"), not a durable architectural commitment, so it does not clear
+    docs/contracts/decision-entry.yaml's significance bar (Decision 150/167). The live header count is
+    125/132. Decision 172 is in the origin/main baseline, so the per-entry 6,144-byte cap is NOT
+    measured against it (the cap is forward-only, new-in-diff entries only) -- but keep the amendment
+    short regardless; the stanza removal roughly offsets it.
+  - >-
+    Record IAM evidence as role logical name + timestamp only. Never commit or paste an ARN, raw
+    get-role output, or the 12-digit account id (Decision 101; the pre-commit never-commit hook
+    shape-blocks it).
+  - >-
+    Agents never self-direct a terraform apply. Step 10 is executed by the operator, or by an agent
+    only after a human has reviewed the plan output and explicitly directed it (Decision 126).
+  - No rescue agents or workaround loops (Decision 55). A failed VP step is RCA'd, never retried into green.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND (125 of 125 triaged).
+    CITE -- Decision 172, Decision 171, Decision 143, Decision 94, Decision 92, Decision 77,
+    Decision 126, Decision 48, Decision 163, Decision 103, Decision 115, Decision 133, Decision 150,
+    Decision 167. RELATED -- Decision 156, Decision 144, Decision 158, Decision 119, Decision 120,
+    Decision 85, Decision 132, Decision 148.
+  - "gates: decision-scout=FLAGS_FOUND (all 6 flags adopted, no pivot); plan-critique=PROCEED after 1 round(s)"
+  - >-
+    WHY THIS PLAN EXISTS. terraform/bootstrap/github_ci_apply_policy.tf's IAMRoleReconcile Sid grants
+    iam:UpdateAssumeRolePolicy on four roles; two of them (planner, deploy) are marked TEMPORARY
+    (rec-3132) with the end condition "remove both in PR-3's bootstrap apply". That removal never
+    happened because PR-3 no longer exists as planned: Decision 172 point 4 rehomed the trust
+    contraction out of PLAN-repo-rename-relicense onto rec-3142, and the widening must SURVIVE until
+    rec-3142 runs. The head of the chain (rec-3143) was unscheduled -- the rename plan's own amended
+    acceptance criterion says of it "which no plan drives -- it advances on the next ducklake/prod
+    Lambda deploy." A trust verb, the highest risk class in this repo's taxonomy, was left widened
+    indefinitely waiting on an event nobody had scheduled. This plan schedules it.
+  - >-
+    VEHICLE ASSESSMENT (checked, not assumed). deploy-prod-lambdas.yml is the lower-blast-radius
+    vehicle. deploy-ducklake-lambdas.yml's reconcile-gate currently PASSES
+    (validate_reconcile_pending_gate --deploy-gate exits 0), so it would not block -- but it redeploys
+    the live DuckLake writer/reader that every ops-portal call transits, including this plan's own rec
+    closures. Rejected on blast radius, not on the gate. A zero-blast-radius PR-context identity anchor
+    (the shape #915 added to pr-validate) is structurally impossible: github_ci_deploy's live trust
+    carries only :ref:refs/heads/main subjects, so no pull_request-context job can assume it, and
+    widening trust to enable an anchor would be worse than the problem it verifies.
+  - >-
+    EVIDENCE DISCIPLINE. Workflow run conclusions are NOT accepted as proof of an assume. Seven of the
+    repo's 26 assume steps carry continue-on-error; #916 closed the three worst masking sites, but the
+    two deploy workflows retain a SCOPED tolerance -- while vars.DEPLOY_ROLE_PROVISIONED is not 'true',
+    a failed assume warns and the run reports GREEN having deployed nothing. RoleLastUsed plus the S3
+    deploy record are the evidence. CloudTrail lookup-events is AccessDenied to both available
+    profiles -- do not reach for it.
+  - >-
+    WHY RoleLastUsed SUFFICES FOR THE DEPLOY ROLE. RoleLastUsed is per-ROLE, not per-sub-form, so it
+    normally corroborates liveness without proving the form. For github_ci_deploy specifically it DOES
+    prove the form: its trust carries only :ref:refs/heads/main subjects, and the two name-only entries
+    cannot be minted post-rename, so any successful assume after 2026-08-15T12:55:57Z necessarily
+    matched the immutable entry. This inference does NOT transfer to github_ci_apply, where two sub
+    FORMS share one entry -- hence the separate document proof at step 12.
+  - >-
+    WHY THE CONTRACTION CANNOT CHANGE AN ASSUME OUTCOME. It removes only entries that are provably
+    unmintable, so the surviving entry -- and therefore every assume decision -- is textually unchanged.
+    The residual risk is a typo in the surviving entry, which steps 9 and 12's document proofs catch
+    exactly. Steps 13-15 add live post-contraction re-assume for all five roles anyway, per the
+    "prove it, do not argue it" standard.
+  - >-
+    rec-3132 IS ALREADY CLOSED (2026-08-15), closed when the widening LANDED rather than when it
+    reverts. No open rec tracks the revert obligation -- it survives only as an HCL comment and a note
+    in PLAN-repo-rename-relicense. This plan is its sole tracking vehicle, which is itself the drift
+    being closed. Do not attempt to close rec-3132 again.
+  - >-
+    DECISION 171 ALREADY ASSERTS THIS HAPPENED. Its Reversal-conditions prose reads "that window closed
+    with Decision 172's contraction" -- currently untrue, since the contraction has not landed. This
+    plan makes the repository's own Decision text true. No edit to Decision 171 is needed or made
+    (forward-direction amendment convention, Decision 126/143).
+  - >-
+    ONE PLAN, ONE PR, THREE ORDERED APPLIES -- and no rec-3139 exposure. All file edits land in a
+    single commit, so validate_vp_replay replays this plan's hermetic pre-deploy steps (4, 5, 7)
+    against a complete tree. The three applies are separated by APPLY CHANNEL, not by PR: the personal
+    contraction applies at merge via tf-gated-apply, and the bootstrap edits sit inert until the
+    operator applies them. rec-3139 (a plan whose EXECUTION spans two PRs is un-executable) therefore
+    does not bite.
+  - >-
+    ci-rca DEFERRAL (Related-Work check). rec-3147 (Critical, open, coverage regression in
+    scripts/checks/ci_guards/validate_oidc_failopen_guards.py) is deferred by explicit human direction:
+    it is owned by another agent under docs/plans/PLAN-oidc-failopen-guard-coverage.yaml. This plan
+    satisfies none of the three Related-Work conditions against it -- different source file, different
+    Decision, different failure category (code_regression vs an IAM trust-scope contraction) -- so the
+    deferral is logged here rather than claimed as related work.
+  - >-
+    DECISION 172 DISCHARGE, exact edit. In the ```yaml reversal-conditions``` stanza, DELETE the
+    legacy-entries-provably-dead-with-proof condition entirely, leaving future-rename-not-prestaged.
+    The conditions list must stay NON-EMPTY or the stanza parses MALFORMED and
+    validate_reversal_stanzas fails. Immediately AFTER the stanza's closing fence and BEFORE the
+    **Related:** line, insert a dated amendment note in the amendment_forms.dated_amendment shape:
+    "> **2026-08-16 amendment (contraction discharged):** condition (a)
+    `legacy-entries-provably-dead-with-proof` is satisfied and removed from the stanza above. All five
+    CI roles now record a live assume under the immutable subject, both roots' `local.github_repos`
+    carry the immutable entry alone, and the rec-3132 `IAMRoleReconcile` widening reverted in the same
+    operator bootstrap apply. See `docs/plans/PLAN-oidc-trust-contraction-closure.yaml`."
+  - >-
+    FOLLOW-ON REC to file during implementation (decision-scout Decision 163 spirit flag): a temporary
+    IAM grant currently expresses its end condition only as an HCL comment, which is exactly why this
+    one outlived its event. The per-grant fix is in scope here (the IAMRoleReconcile pin test); the
+    general class -- a machine-checkable expiry marker for any grant marked TEMPORARY -- is a separate
+    design problem. File it rather than inventing a guard that passes vacuously the moment this plan
+    empties the class.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (e01e41d); no Scope file overlapped
+    main_files_changed_since_branch, so the Main Divergence Assessment is clean.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections (172, 171, 143, 94, 92, 77, 126, 48, 163, 103, 133, 150, 167)
+  - terraform/CLAUDE.md and terraform/bootstrap/CLAUDE.md read (apply model, operator-only rule)
+  - All files in scope located and readable
+  - agent_platform_admin profile confirmed (aws sts get-caller-identity --profile agent_platform_admin)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    FIRST, before any file edit: run VP steps 1-3. Dispatch deploy-prod-lambdas.yml on main and prove
+    github_ci_deploy's RoleLastUsed advanced past 2026-08-15T12:55:57Z. If it did not advance, STOP and
+    RCA -- the entire contraction is gated on this evidence.
+  - >-
+    tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py -- CREATE. Parse the IAMRoleReconcile Sid
+    out of terraform/bootstrap/github_ci_apply_policy.tf and assert its Resource set is exactly the
+    branch and pr role ARN templates. Assert exact set equality, not absence of planner/deploy: any
+    future addition must then be a reviewed test edit. Run it against the pre-change tree and confirm
+    it FAILS before editing the .tf.
+  - >-
+    tests/checks/iam_tf/test_oidc_trust_slug_invariants.py -- MODIFY. Add
+    test_every_entry_is_immutable_format to TestImmutableSubjectEntry, asserting every entry in both
+    roots matches _IMMUTABLE_ENTRY_RE. Update the module docstring, which currently states a count
+    assertion "would fail the moment the plan's own cleanup lands" -- that cleanup is now landing, and
+    the format assertion is the durable successor. Confirm it FAILS before editing the .tf.
+  - >-
+    terraform/personal/oidc.tf -- MODIFY. Contract local.github_repos to the single immutable entry.
+    Rewrite the dual-slug-transition comment: the transition is over; state the contracted steady
+    state, that the list must stay identical to terraform/bootstrap's, and that Decision 172 point 2's
+    pre-stage playbook adds a future name's immutable entry additively BEFORE any later rename.
+  - >-
+    terraform/bootstrap/github_ci_apply.tf -- MODIFY. Same contraction and comment re-grounding. This
+    must land in the SAME commit as the personal-root edit or the cross-root agreement test reds.
+  - >-
+    terraform/bootstrap/github_ci_apply_policy.tf -- MODIFY. Remove the two TEMPORARY ARNs from the
+    IAMRoleReconcile Resource list and delete the TEMPORARY / REVERT OBLIGATION comment paragraphs the
+    revert discharges. KEEP the Decision 143 TRUST-ONLY paragraph -- it explains why the Sid stays
+    fleet-narrow and is not part of the temporary exception. Point it at the new pin test.
+  - >-
+    docs/DECISIONS.md -- MODIFY per the exact edit recorded in Context. Then regenerate
+    docs/decisions-index.json with `bin/venv-python -m scripts.decisions_index --write`.
+  - >-
+    Execute Verification Plan steps 4-8 (pre-deploy) -- run each; loop until pass. Commit, push, open
+    the PR. State the operator handoff (step 10) in the PR body as well as here (Decision 115): the
+    bootstrap apply is required and must follow the gated personal apply.
+  - >-
+    After merge and the approved tf-gated-apply convergence, execute VP steps 9-16 in order. Step 9 is
+    a HARD GATE on step 10. On any unrecoverable V3 failure, stop and RCA (Decision 55).
+  - >-
+    File the follow-on recommendation named in Context (machine-checkable expiry for TEMPORARY IAM
+    grants) via `get_rec_write_guidance()` then `file_rec()`.
+  - 'Report: what was implemented, verification results, and the live-IAM evidence for each of the five roles.'
+work_areas: []
+rollback: >-
+  Per stage. Before step 10 (bootstrap apply): the personal-root contraction is reverted by restoring
+  the two name-only entries in terraform/personal/oidc.tf and re-applying through tf-gated-apply -- the
+  widening is still live at that point, so the apply role retains the trust-rewrite grant it needs.
+  After step 10: the widening is gone, so a personal-root trust rollback would AccessDeny; recovery is
+  a second operator bootstrap apply restoring the ARNs first, then the personal rollback -- the exact
+  inverse of this plan's ordering. Note the immutable entry is never removed at any stage, so no
+  rollback path can reproduce the 2026-08-15 total outage. The DECISIONS.md and test changes are
+  independently revertible and carry no infrastructure effect.
