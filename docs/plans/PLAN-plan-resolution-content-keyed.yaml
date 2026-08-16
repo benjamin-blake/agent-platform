@@ -289,8 +289,10 @@ verification_plan:
     action: >-
       Prove the implement flow actually sets the declaration -- if this instruction is ever lost,
       implement sessions silently stop declaring and both gates go quietly vacuous.
-    command: test "$(grep -c 'implementation_declared' .claude/skills/implement/SKILL.md)" -ge "1"
-    expected: Exit 0 (the flow names the field; 0 occurrences today).
+    command: test "$(grep -c 'implementation_declared' .claude/skills/implement/SKILL.md)" -ge "1" && test "$(wc -c < .claude/skills/implement/SKILL.md)" -le "48202"
+    expected: >-
+      Exit 0 (the flow names the field -- 0 occurrences today -- and the file is within its
+      48202-byte budget, which has only 6 bytes of headroom).
     fix_if: >-
       A zero count means nothing in the documented flow sets the declaration, so every future
       implement PR resolves nothing and verifies nothing.
@@ -477,7 +479,14 @@ constraints:
     unit="declared_plans") -> status vacuous, which is honest - the domain of implementing plans is
     genuinely empty, and check-accounting.yaml reserves skipped for "could not examine", not
     "examined nothing". (c) Unreachable diff base -> registry.skipped("diff base unreachable") -> the
-    input was unavailable, which is exactly what skipped is for. Mechanism - _CURRENT_DECLARATION is
+    input was unavailable, which is exactly what skipped is for. (d) NO plan in the diff at all --
+    the majority case, which both plan legs early-return on today (validate_vp_replay.py:147,
+    validate_graduation_completeness.py:76) -- is ALSO an empty domain and takes examined(0,
+    unit="declared_plans"), never skipped. An empty resolved set is always examined(0) whatever
+    produced it; check-accounting.yaml forbids two structurally identical early returns receiving
+    opposite treatments, and neither this plan's VP nor validate_check_accounting's AST scan (which
+    proves a declaration exists in the module, not on every path) would catch that divergence.
+    Mechanism - _CURRENT_DECLARATION is
     a single module-level slot reset on outcome_scope() entry, unconditionally overwritten by
     examined()/skipped(), and harvested once by pop_declaration() after the whole body, so a per-leg
     declaration miscounts (plan-only examined(1) then implement examined(0) reports vacuous; a
@@ -601,11 +610,15 @@ context:
     considered and rejected because it re-resolves on any incidental touch of a completed plan; the
     narrower edge trigger matches check_graduation_guard.py's shipped precedent.
   - >-
-    DISCLOSED RESIDUAL -- new post-merge main exposure. Once resolution is push-aware,
-    validate_vp_replay's implement leg will replay hermetic pre-deploy steps on the post-merge main
-    run for the first time. That is the intended Decision 159 correction, but it is a new class of
-    main-reddening exposure (any hermetic step whose truth is branch-relative rather than
-    tree-relative), bounded only by MAX_AGGREGATE_SECONDS / MAX_REPLAYED_STEPS.
+    DISCLOSED RESIDUAL -- new hermetic-replay exposure, scoped correctly. validate_vp_replay is
+    registered pre=True with NO full_segment (scripts/checks/verification/_manifest.py:66-70), and
+    ci.yml gates the --pre job on pull_request, so it does NOT run on the post-merge main CI run --
+    the exposure cannot arrive that way. Where it can arrive is a LOCAL --pre run on a synced local
+    main, which AGENTS.md's never-work-on-main rule makes rare. The push-aware base is therefore
+    NECESSARY for validate_graduation_completeness (which does carry full_segment full_after_lint,
+    so its baseline sweep is load-bearing on main) and SYMMETRY for validate_vp_replay. The residual
+    class is real but narrow - any hermetic step whose truth is branch-relative rather than
+    tree-relative - and is bounded by MAX_AGGREGATE_SECONDS / MAX_REPLAYED_STEPS.
   - >-
     SCOPE-GUARD INTERACTION. edit_scope_guard.py denies fail-closed for any file outside the active
     plan's Scope, and this plan makes the implement flow edit the plan file itself. The guard is inert
@@ -709,9 +722,11 @@ execution_steps:
     test_obligations declare.
   - >-
     Add six config/agent/verification_registry/registry.yaml rows -- steps 1, 2, 3, 5, 7 and 8 -- each
-    carrying plan_slug plan-resolution-content-keyed. Step 5's row is command_exit_zero; step 8's is
-    grep_count. Keep every line within the 2315-character longest-line ceiling and re-measure
-    effective_lines after adding.
+    carrying plan_slug plan-resolution-content-keyed. Steps 5 AND 7 are command_exit_zero with a
+    `bash -c` argv (both sweep more than one file, which GrepCountCheck cannot express); step 8 is a
+    single-file grep_count; steps 1, 2 and 3 are test_selector rows naming classes absent at the base.
+    Keep every line within the 2315-character longest-line ceiling and re-measure effective_lines
+    after adding.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
     RCA (Decision 55).
