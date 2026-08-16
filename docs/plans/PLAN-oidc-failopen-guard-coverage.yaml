@@ -84,8 +84,12 @@ verification_plan:
       Locate any line still dark, and cross-check the measurement instrument itself. This is the
       line-number LOCATOR that step 1's fix_if routes to (step 1 prints only a percentage, never
       the missing line numbers), and it re-measures through a DIFFERENT --cov spec shape (dotted
-      module here versus step 1's parent directory) -- a real cross-check given rec-943, where a
-      single-file --cov spec silently collected no data at all and masqueraded as a pass.
+      module here versus step 1's parent directory), so two independent spec shapes must AGREE. Note
+      the direction: the dotted shape used here is the historically DEFECTIVE one (rec-943, where a
+      dotted single-file --cov spec silently collected no data and masqueraded as a pass); the
+      parent-directory shape was the fix. It is safe here because the mirror test imports the module
+      normally, and the pinned statement count in expected is what makes a silent no-data outcome
+      detectable -- a missing row rather than a false pass.
     command: _COVERAGE_SUBPROCESS=1 bin/venv-python -m pytest tests/checks/ci_guards/test_validate_oidc_failopen_guards.py -q --no-header --cov=scripts.checks.ci_guards.validate_oidc_failopen_guards --cov-report=term-missing
     expected: >-
       All tests pass and the module's coverage row reads 82 statements, 0 missed, 100%, with an
@@ -126,14 +130,21 @@ verification_plan:
     action: >-
       Prove the recurrence record actually landed on CD.30 with the elements that make it useful to
       a future reader: both rec ids, and a bounded escalation trigger.
-    command: grep -q "Recurrence evidence" docs/ROADMAP-PLATFORM.yaml && grep -q rec-3043 docs/ROADMAP-PLATFORM.yaml && grep -q rec-3147 docs/ROADMAP-PLATFORM.yaml && grep -qi "third recurrence" docs/ROADMAP-PLATFORM.yaml
+    command: 'grep -q "^      - \"\[Recurrence evidence" docs/ROADMAP-PLATFORM.yaml && grep -q rec-3043 docs/ROADMAP-PLATFORM.yaml && grep -q rec-3147 docs/ROADMAP-PLATFORM.yaml && grep -qi "third recurrence" docs/ROADMAP-PLATFORM.yaml'
     expected: >-
-      Exit 0. The annotation is dated per the Decision 151 append-only grammar, cites both recs, and
-      names the third-recurrence escalation trigger that bounds the deferral.
+      Exit 0. The first grep is the COLON-HAZARD guard, not a formatting nicety: it asserts the entry
+      is an explicitly double-QUOTED YAML scalar. The prescribed annotation text is colon-rich, and an
+      unquoted YAML string containing ": " silently parses as a {key: value} MAPPING instead of a
+      string. CD.30's discipline_points list already contains one victim of exactly this (index 2
+      parses as a dict, verified at planning time), and neither validate_platform_roadmap nor a
+      raw-text grep can see the difference. The remaining greps confirm the record is dated per the
+      Decision 151 append-only grammar, cites both recs, and names the third-recurrence escalation
+      trigger that bounds the deferral.
     fix_if: >-
-      Any grep fails -- the annotation is missing an element. A record that omits the escalation
-      trigger leaves the deferral open-ended, which is the Decision 57 spirit-flag this plan exists
-      to answer.
+      The first grep fails -- the entry was written unquoted and has silently become a mapping; wrap
+      it in double quotes. Any later grep fails -- the annotation is missing an element. A record that
+      omits the escalation trigger leaves the deferral open-ended, which is the Decision 57
+      spirit-flag this plan exists to answer.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -212,7 +223,7 @@ test_obligations:
       third-recurrence escalation trigger, and the roadmap stays schema-valid under
       validate_platform_roadmap.
     verification_step: 4
-    command: grep -q "Recurrence evidence" docs/ROADMAP-PLATFORM.yaml
+    command: 'grep -q "^      - \"\[Recurrence evidence" docs/ROADMAP-PLATFORM.yaml'
     waiver_reason: >-
       A dated append-only annotation carries no executable behaviour to red/green -- its correctness
       is textual presence plus roadmap schema validity, asserted by the linked step 4 greps and by
@@ -224,10 +235,16 @@ constraints:
     stored preventive_action proposing exactly that. Two independent grounds: CD.30's VTS-07
     sequencing note forbids the reorder ("promoting the current per-file 100%-floor form straight to
     --pre would be a breaking strictness jump"), and Decision 163 measured validate_test_coverage at
-    approximately 3m17s over a SINGLE file against Decision 73's 300s fast-tier budget. Read the
-    second ground as scaling, not as a near-miss: one file already consumes roughly 66% of the
-    ENTIRE fast-tier budget, and the cost is per-file, so any PR touching two or more source files
-    would blow the tier outright. This is a structural non-fit.
+    approximately 3m17s over a SINGLE file against Decision 73's 300s fast-tier budget. State that
+    ground PRECISELY, because it is destined for CD.30 and a future ratifier will weigh it: the cost
+    is additive per changed source file but is dominated by the size of the MAPPED MIRROR SUITE, not
+    by any per-file constant. Decision 163's 3m17s was measured over scripts/validate.py, which
+    map_source_to_test resolves to the tests/validate/ package (13 files, 3976 lines) -- roughly 66%
+    of the whole 300s budget for that one file. Small-mirror files are cheap by comparison: measured
+    on this tree at planning time, this plan's own guard costs 3.68s and a two-file invocation 6.95s.
+    The non-fit is therefore structural but UNEVEN -- a PR touching scripts/validate.py plus almost
+    anything else breaches the tier, while a small-mirror PR would not. Do NOT restate this as a flat
+    per-file scaling law; that generalization is false and this plan's own VP step 1 disproves it.
   - >-
     Do NOT register validate_oidc_failopen_guards.py in config/coverage_baseline.yaml. Decision 159
     scopes that roster to debt pre-existing its own implement time; a module born 2026-08-15 does not
@@ -245,8 +262,10 @@ constraints:
     The CD.30 annotation MUST use the Decision 151 dated append-only grammar (extend, never rewrite
     in place, matching the existing "[VTS-07 correction, 2026-07-25]" shape) and MUST NOT contain the
     literal phrase "ratification precondition", which WOULD ARM a Decision 105 R4 guard at
-    ratification. R4 early-continues on state: pending, so it cannot fire on CD.30 today -- the ban
-    is forward-looking, and deliberately broader than the guard's own
+    ratification. R4 cannot fire on CD.30 today, but note the actual mechanism: it is
+    validate_candidate_decision_ratification's DISPATCHER loop that branches to _check_r2_pending and
+    continues for any state == "pending" CD, so R4 is never reached -- not an early-return inside R4
+    itself. The ban is forward-looking, and deliberately broader than the guard's own
     "ratification precondition (XX-NN)" regex.
   - >-
     Only the two files in the Scope table may be modified. Out-of-scope issues become recommendations
@@ -291,9 +310,11 @@ context:
     pre=True, so --pre never runs it anywhere and the full tier always runs it anywhere. The failure
     surfaced in GitHub Actions main-validate (run 31911662199, .github/workflows/ci.yml:95-97,
     runs-on ubuntu-latest, push-triggered), not in any local container; the 89.0% figure reproduced
-    identically in a local container during planning. The one genuine asymmetry is the diff base
-    (push_context_base on a push versus merge-base on a branch), which is also what makes the check
-    no-op on this plan's own tests-only branch.
+    identically in a local container during planning. Distinguish two separate mechanisms: the diff
+    BASE differs between contexts (push_context_base on a push versus merge-base on a branch), which
+    is a genuine asymmetry -- but that is NOT what makes the gate no-op on this plan's own branch.
+    That is the src/-and-scripts/ PATH FILTER in get_changed_source_files(), which is symmetric and
+    no-ops identically on a branch and on main for any tests-plus-YAML diff.
   - >-
     V2 IS THE FLOOR, not an over-classification: validate_tier_floor._compute_floor raises the floor
     to V2 on ANY .py scope file, with no scripts/ or src/ qualifier, so this plan's test file sets a
@@ -329,8 +350,12 @@ execution_steps:
     pair. The env fixture must include BOTH a str and a non-str value so the isinstance filter on
     line 84 is genuinely exercised rather than trivially satisfied.
   - >-
-    docs/ROADMAP-PLATFORM.yaml -- append ONE discipline_point string to candidate_decisions[CD.30],
-    using the dated Decision 151 grammar. It must record: both occurrences (rec-3043 2026-08-05,
+    docs/ROADMAP-PLATFORM.yaml -- append ONE discipline_point to candidate_decisions[CD.30], using
+    the dated Decision 151 grammar and opening with the literal marker "[Recurrence evidence,
+    <date>]". WRITE IT AS AN EXPLICITLY DOUBLE-QUOTED YAML SCALAR. This is mandatory, not stylistic:
+    the required content is colon-rich, and an unquoted YAML string containing ": " silently parses
+    as a {key: value} mapping rather than a string. Index 2 of this very list is already a dict for
+    exactly that reason. Escape any inner double quotes, or phrase the entry to avoid them. It must record: both occurrences (rec-3043 2026-08-05,
     rec-3147 2026-08-15) and their shared fingerprint; the registration site that keeps the gate
     full-tier-only (scripts/checks/misc/_manifest.py, validate_test_coverage Entry,
     full_segment=full_after_lint with no pre=True); BOTH grounds for rejecting the --pre promotion
@@ -361,8 +386,12 @@ execution_steps:
 work_areas: []
 rollback: >-
   Both scope files are additive and independently revertable. Reverting the test-file change restores
-  the 89.0% measurement and re-reddens the post-merge full tier (it does not affect the guard's
-  behaviour, which this plan never modifies). Reverting the CD.30 discipline_point is a single list
+  the 89.0% measurement AS TAKEN BY VP step 1's explicit --files invocation, and does NOT redden any
+  CI tier: the diff-scoped coverage gate no-ops on a tests-only diff (get_changed_source_files()
+  filters to src/ and scripts/), symmetrically on a branch and on main. Do not rely on CI to catch
+  such a revert -- the regression resurfaces only on a later change that puts
+  validate_oidc_failopen_guards.py back into a diff. The guard's own behaviour is unaffected either
+  way, since this plan never modifies it. Reverting the CD.30 discipline_point is a single list
   entry deletion with no schema or state consequence, since no state, gates, or narrowly_supersedes
   field is touched. The follow-on rec, if already filed, is closed via the portal with
   --update-rec <id> --status closed rather than deleted.
