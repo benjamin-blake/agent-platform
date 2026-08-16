@@ -21,6 +21,17 @@ retroactive claim over those versions.
 
 The licence change applies only to versions published after the boundary commit.
 
+## Why the repository was renamed in place
+
+The repository was renamed `agent-platform` -> `theseus` immediately before the flip, in place
+rather than by publishing a fresh repository under the new name. A fresh repository would have
+conferred no additional legal protection: the Apache-2.0 snapshots are already published, and
+whoever holds one holds it under Apache-2.0 no matter what happens to the repository they came
+from. What a fresh repository would have destroyed is real -- the public commit and pull-request
+history that this project's decision log references by number, and the redirects that keep every
+old link resolving. The rename therefore preserves continuity and changes nothing about the
+boundary above.
+
 ## Self-verifying rule
 
 Commit SHAs churn when history is rewritten, so the boundary above is stated in a form that does
