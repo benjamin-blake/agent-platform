@@ -1,4 +1,4 @@
-# agent-platform
+# theseus
 
 This file is a curated projection of `CLAUDE.md` and `docs/ROADMAP-PLATFORM.yaml` - the canonical sources of truth for this repository. Where this file conflicts with those sources, the canonical sources win. For agent consumption, load those files directly.
 
@@ -42,7 +42,7 @@ Two prospective tenants are named in the roadmap - reaper-tools and dbt-daywork 
 | Operational decisions, recommendations, session logs | Append-only lakehouse (primary); markdown / JSONL cache (derivative) | Governed lakehouse per T5.4 / T1.5 - local files become read-only snapshots |
 | Plans | Markdown (docs/plans/PLAN-*.md) | Schema-validated YAML (docs/plans/PLAN-*.yaml) per T1.11 |
 | Briefing and INTENT-* docs | Markdown (docs/INTENT-*.md, docs/contracts/) | Non-authoritative; retiring per T5.5; content migrates to canonical YAML or is deleted |
-| Human portal files | Markdown (README.md, AGENTS.md, SECURITY.md) | Stays markdown per CD.20 / CD.23 - portal files declare projection status |
+| Human portal files | Markdown (README.md, AGENTS.md, SECURITY.md, LICENSING.md, CONTRIBUTING.md, COMMERCIAL-LICENSE.md) | Stays markdown per CD.20 / CD.23 - portal files declare projection status; the licence-and-attribution artefacts are a named permanent prose class (Decision 171) |
 
 ## Repo Layout
 
@@ -78,7 +78,21 @@ Two prospective tenants are named in the roadmap - reaper-tools and dbt-daywork 
 
 Copyright 2026 Benjamin Blake.
 
-The code in this repository is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+This repository is source-available under the **Business Source License 1.1**. See [LICENSE](LICENSE).
+Non-production use - evaluation, research, internal development and testing - is permitted by that licence; production use
+before the Change Date (2030-08-15) requires a commercial licence, see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+On the Change Date each version converts to the Apache License, Version 2.0.
+
+The licence change is **forward-only**: every version published up to and including commit `4de9df8` remains under
+Apache-2.0 irrevocably, and that text is preserved in [LICENSE-APACHE](LICENSE-APACHE). See
+[LICENSING.md](LICENSING.md) for the boundary and its self-verifying rule.
+
+BUSL-1.1 is not an OSI open-source licence. GitHub's licence detector does not recognise it, so this repository may display
+as unlicensed there; that is a detector limitation, not a statement about the licence.
+
+Contributions require an assignment of copyright or an equivalently broad grant, because dual licensing depends on sole
+ownership and GitHub's inbound=outbound terms do not supply it. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 Third-party dependencies remain subject to their respective licenses.
 
 Project names, trademarks, service marks, and logos are not granted under this license. All associated trademark rights are
