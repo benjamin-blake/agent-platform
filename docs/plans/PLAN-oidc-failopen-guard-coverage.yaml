@@ -132,19 +132,16 @@ verification_plan:
       a future reader: both rec ids, and a bounded escalation trigger.
     command: 'grep -q "^      - \"\[Recurrence evidence" docs/ROADMAP-PLATFORM.yaml && grep -q rec-3043 docs/ROADMAP-PLATFORM.yaml && grep -q rec-3147 docs/ROADMAP-PLATFORM.yaml && grep -qi "third recurrence" docs/ROADMAP-PLATFORM.yaml'
     expected: >-
-      Exit 0. The first grep is the COLON-HAZARD guard, not a formatting nicety: it asserts the entry
-      is an explicitly double-QUOTED YAML scalar. The prescribed annotation text is colon-rich, and an
-      unquoted YAML string containing ": " silently parses as a {key: value} MAPPING instead of a
-      string. CD.30's discipline_points list already contains one victim of exactly this (index 2
-      parses as a dict, verified at planning time), and neither validate_platform_roadmap nor a
-      raw-text grep can see the difference. The remaining greps confirm the record is dated per the
+      Exit 0. The first grep asserts the entry landed as an explicitly double-quoted YAML scalar at
+      CD.30's 6-space discipline_points indentation; the remaining greps confirm it is dated per the
       Decision 151 append-only grammar, cites both recs, and names the third-recurrence escalation
       trigger that bounds the deferral.
     fix_if: >-
-      The first grep fails -- the entry was written unquoted and has silently become a mapping; wrap
-      it in double quotes. Any later grep fails -- the annotation is missing an element. A record that
-      omits the escalation trigger leaves the deferral open-ended, which is the Decision 57
-      spirit-flag this plan exists to answer.
+      The first grep fails -- the entry is absent, single-quoted, differently indented, or its marker
+      text differs; write it as a double-quoted scalar opening with "[Recurrence evidence, <date>]".
+      Any later grep fails -- the annotation is missing an element. A record that omits the escalation
+      trigger leaves the deferral open-ended, which is the Decision 57 spirit-flag this plan exists to
+      answer.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -237,13 +234,15 @@ constraints:
     --pre would be a breaking strictness jump"), and Decision 163 measured validate_test_coverage at
     approximately 3m17s over a SINGLE file against Decision 73's 300s fast-tier budget. State that
     ground PRECISELY, because it is destined for CD.30 and a future ratifier will weigh it: the cost
-    is additive per changed source file but is dominated by the size of the MAPPED MIRROR SUITE, not
-    by any per-file constant. Decision 163's 3m17s was measured over scripts/validate.py, which
+    is additive per changed source file, with a small fixed floor per file (roughly 3-5s of pytest
+    spawn and collection) that is then dominated by the size of the MAPPED MIRROR SUITE. Decision
+    163's 3m17s was measured over scripts/validate.py, which
     map_source_to_test resolves to the tests/validate/ package (13 files, 3976 lines) -- roughly 66%
     of the whole 300s budget for that one file. Small-mirror files are cheap by comparison: measured
     on this tree at planning time, this plan's own guard costs 3.68s and a two-file invocation 6.95s.
-    The non-fit is therefore structural but UNEVEN -- a PR touching scripts/validate.py plus almost
-    anything else breaches the tier, while a small-mirror PR would not. Do NOT restate this as a flat
+    The non-fit is therefore structural but UNEVEN -- a PR touching scripts/validate.py would on its
+    own leave little of the tier's budget for anything else, while a small-mirror PR would not
+    strain it. Do NOT restate this as a flat
     per-file scaling law; that generalization is false and this plan's own VP step 1 disproves it.
   - >-
     Do NOT register validate_oidc_failopen_guards.py in config/coverage_baseline.yaml. Decision 159
@@ -275,7 +274,7 @@ constraints:
     collection) per the tests/CLAUDE.md test-count-coupling rule, and must follow the file's existing
     inline-fixture + _run() helper convention. No emojis, ASCII hyphens only, ruff line length 127.
 context:
-  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (125 of 125 triaged). CITE: Decision 48, Decision 55, Decision 72, Decision 86, Decision 105, Decision 131, Decision 132, Decision 135, Decision 142, Decision 150, Decision 151, Decision 153, Decision 159, Decision 163, Decision 169, Decision 170. RELATED: Decision 103, Decision 128, Decision 130, Decision 165, Decision 108, Decision 110, Decision 114, Decision 147."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (125 of 125 triaged). CITE: Decision 48, Decision 55, Decision 72, Decision 86, Decision 105, Decision 131, Decision 132, Decision 135, Decision 142, Decision 150, Decision 151, Decision 153, Decision 159, Decision 163, Decision 169, Decision 170. SPIRIT-FLAGGED and invoked substantively by this plan: Decision 57, Decision 93. RELATED: Decision 103, Decision 128, Decision 130, Decision 165, Decision 108, Decision 110, Decision 114, Decision 147."
   - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
   - >-
     RECURRENCE, VERIFIED: rec-3147 shares an identical CI-RCA v2 fingerprint
@@ -352,10 +351,9 @@ execution_steps:
   - >-
     docs/ROADMAP-PLATFORM.yaml -- append ONE discipline_point to candidate_decisions[CD.30], using
     the dated Decision 151 grammar and opening with the literal marker "[Recurrence evidence,
-    <date>]". WRITE IT AS AN EXPLICITLY DOUBLE-QUOTED YAML SCALAR. This is mandatory, not stylistic:
-    the required content is colon-rich, and an unquoted YAML string containing ": " silently parses
-    as a {key: value} mapping rather than a string. Index 2 of this very list is already a dict for
-    exactly that reason. Escape any inner double quotes, or phrase the entry to avoid them. It must record: both occurrences (rec-3043 2026-08-05,
+    <date>]". WRITE IT AS AN EXPLICITLY DOUBLE-QUOTED YAML SCALAR -- the required content is
+    colon-rich, and the quoting is what keeps it a string. Escape any inner double quotes, or phrase
+    the entry to avoid them. It must record: both occurrences (rec-3043 2026-08-05,
     rec-3147 2026-08-15) and their shared fingerprint; the registration site that keeps the gate
     full-tier-only (scripts/checks/misc/_manifest.py, validate_test_coverage Entry,
     full_segment=full_after_lint with no pre=True); BOTH grounds for rejecting the --pre promotion
