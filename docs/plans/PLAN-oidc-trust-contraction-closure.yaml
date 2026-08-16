@@ -66,8 +66,11 @@ scope:
       (2) check_id == iam-role-reconcile-scope-branch-pr-only, node_id ==
       tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py::TestIAMRoleReconcileScope::test_resource_set_is_exactly_branch_and_pr
       (step 7).
-      validate_graduation_completeness's implement-PR leg matches on (plan_slug, check_id) only, so a
-      single row would pass CI while silently graduating one guard and leaving the other unadmitted.
+      validate_graduation_completeness's implement-PR leg iterates PER graduate step and matches on
+      (plan_slug, check_id), so with two graduate steps a single row makes the second step find no
+      match and FAILS the check. The failure mode a single row would HIDE belongs to the REJECTED
+      design -- one check_id hosting two guards, where "graduated one of two" looks identical to
+      "graduated both" (see step 7's action).
   # docs/DECISIONS.md and docs/decisions-index.json are DELIBERATELY NOT IN SCOPE. The Decision 172
   # discharge asserts facts that are true only after the operator bootstrap apply, which happens
   # post-merge, so it cannot ride this PR; and it cannot ride a follow-up PR under this plan's slug
@@ -289,8 +292,9 @@ verification_plan:
       swallow a node collection error and exit 0, so the step would report green whether the guard
       was authored, misnamed, or never written. Two explicit NODES are safe (verified: a missing node
       alongside a valid node still exits 4), so the cross-root guard rides here as its obligation's
-      host without reintroducing that blindness. Only the first node is graduated; the cross-root one
-      is deliberately un-graduated per its waiver. The file's other tests run under step 8's tier.
+      host without reintroducing that blindness. Only the first node is graduated -- graduation is
+      per-STEP and carries one node_id per registry row (step 7's action), which is why the cross-root
+      node cannot ride this step's check_id. The file's other tests run under step 8's tier.
     fix_if: >-
       This file EXISTS (action: Modify) -- only the method is new, so a collection error here reads
       "no match in any of [<Class TestImmutableSubjectEntry>]" and means the method was not authored
@@ -315,7 +319,7 @@ verification_plan:
       -q
     expected: >-
       Passes on the post-change tree; fails on the pre-change tree (the Resource set holds 4 ARNs,
-      not 2). Exit 4 before the file is authored is NOT a proven red -- see step 6's fix_if.
+      not 2). Exit 4 here means the test FILE does not exist yet (action: Create) -- not a proven red. Distinct from step 6, whose file exists and where exit 4 means the METHOD is misnamed.
     fix_if: >-
       A guard that passes on the pre-change tree is not guarding anything -- fix the assertion, not
       the tree. Assert exact set equality, never absence-of-planner/deploy: a future addition must
@@ -334,7 +338,9 @@ verification_plan:
       Forward-fix on the branch (Decision 55). Note rec-3147 (open ci-rca, 100%-coverage regression in
       validate_oidc_failopen_guards) is owned by another agent under
       docs/plans/PLAN-oidc-failopen-guard-coverage.yaml -- if the full tier reds on THAT check and
-      nothing else, it is that agent's fix, not this plan's; do not patch it inline.
+      nothing else, it is that agent's fix, not this plan's; do not patch it inline. Likewise
+      tests/test_sync_deps.py can red locally on container/network state (it runs real pip-sync); that
+      is ambient, out of this plan's scope, and CI is the authority.
     graduation: waive
     graduation_waiver_reason: >-
       Kernel-expressible as a command_exit_zero slot, so not-applicable would be the wrong label --
@@ -378,11 +384,16 @@ verification_plan:
       destroy or replace of aws_iam_role.github_ci_apply or aws_iam_role_policy.github_ci_apply.
       Record the apply completion timestamp; steps 13-15 compare against it.
     command: >-
-      echo "OPERATOR: re-run VP step 8 as a literal precondition on the same command line, WRAPPED IN
-      A SUBSHELL -- ( <VP8 command> ) && terraform -chdir=terraform/bootstrap plan
+      echo "OPERATOR: the precondition is THE LIVE-IAM CONTRACTION CHECK -- the VP step whose action
+      begins 'ORDERING CONTROL', an aws iam get-role loop over the four personal-root roles. It is
+      NOT the presubmit step (-m scripts.validate), which says nothing about whether the contraction
+      reached live IAM. Paste that step's command WRAPPED IN A SUBSHELL:
+      ( <ORDERING CONTROL command> ) && terraform -chdir=terraform/bootstrap plan
       -var-file=terraform/bootstrap/terraform.bootstrap.tfvars . The parentheses are load-bearing:
-      VP8's command ends 'done; exit $rc', so pasting it bare would exit YOUR shell before terraform
-      ever runs, silently skipping the plan instead of gating it.
+      that command ends in an exit, so pasting it bare would exit YOUR shell before terraform ever
+      runs, silently skipping the plan instead of gating it. Named by PURPOSE, not by step number,
+      deliberately: a renumbering silently repointed this precondition at the presubmit once already,
+      which would have gated the apply on something that proves nothing about live IAM.
       # review, then apply, then: export BOOTSTRAP_APPLY_TS=\$(date -u +%Y-%m-%dT%H:%M:%S+00:00).
       Agent executes only after a human reviews the plan and explicitly directs it (Decision 126)."
     expected: >-
@@ -621,7 +632,7 @@ constraints:
     stale premise must be corrected in the HCL comment, not carried forward.
   - >-
     No budget raises (Decision 128/165/166). Every terraform scope edit REMOVES lines; decreases are
-    always unrestricted. The registry.yaml addition is one row. Do not run --update-sloc-budgets.
+    always unrestricted. The registry.yaml addition is TWO rows, one per graduated step (oidc-trust-slug-immutable-only, iam-role-reconcile-scope-branch-pr-only) -- adding only one FAILS validate_graduation_completeness. Do not run --update-sloc-budgets.
   - >-
     Do NOT mint a new numbered Decision. This is a state change Decision 172's own stanza anticipates
     ("update or re-arm this stanza"), not a durable architectural commitment, so it does not clear
@@ -644,7 +655,7 @@ context:
     Decision 126, Decision 48, Decision 163, Decision 103, Decision 115, Decision 133, Decision 150,
     Decision 167. RELATED -- Decision 156, Decision 144, Decision 158, Decision 119, Decision 120,
     Decision 85, Decision 132, Decision 148.
-  - "gates: decision-scout=FLAGS_FOUND (all 6 flags adopted, no pivot); plan-critique=REVISE x4 then PROCEED, after 5 round(s) -- rounds 1-4 each surfaced a distinct defect class (broken VP command bodies; a Statement[0] read that missed planner's second statement; a None>timestamp false green; an inoperative operator precondition and a rollback blocked by this plan's own guard). Set to PROCEED only when the gate actually returns it; do not pre-declare."
+  - "gates: decision-scout=FLAGS_FOUND (all 6 flags adopted, no pivot); plan-critique=REVISE x5 so far, verdict PENDING as of round 6 -- rounds 1-4 each surfaced a distinct defect class (broken VP command bodies; a Statement[0] read that missed planner's second statement; a None>timestamp false green; an inoperative operator precondition and a rollback blocked by this plan's own guard). Set to PROCEED only when the gate actually returns it; do not pre-declare."
   - >-
     WHY THIS PLAN EXISTS. terraform/bootstrap/github_ci_apply_policy.tf's IAMRoleReconcile Sid grants
     iam:UpdateAssumeRolePolicy on four roles; two of them (planner, deploy) are marked TEMPORARY
@@ -681,7 +692,7 @@ context:
     local.github_repos. With the two name-only entries unmintable post-rename, any successful assume
     after 2026-08-15T12:55:57Z necessarily matched the immutable entry. The argument collapses if
     either fact changes. It does NOT transfer to github_ci_apply, where two sub FORMS share one entry
-    -- hence the separate document proof at step 11.
+    -- hence the separate document proof at the both-sub-forms step (12).
   - >-
     WHY THE CONTRACTION CANNOT CHANGE AN ASSUME OUTCOME. It removes only entries that are provably
     unmintable, so the surviving entry -- and therefore every assume decision -- is textually unchanged.
@@ -790,7 +801,7 @@ context:
     time) and add BOTH graduated rows (oidc-trust-slug-immutable-only, iam-role-reconcile-scope-branch-pr-only) against the REBASED file, or the row lands
     against a stale registry and conflicts. Do NOT trust any SHA quoted here as current; re-check.
     Headroom re-measured post-#919: 5683 effective lines against the Decision 166 ceiling of 6000
-    (317 spare), so the one added row needs no budget raise. #918 also decomposed
+    (317 spare), so the two added rows (~16 lines) need no budget raise. #918 also decomposed
     tests/test_plan_document.py into tests/roadmap/plan_document/ -- no scope overlap, but do not
     resurrect the old path.
 
@@ -843,7 +854,7 @@ execution_steps:
   - >-
     REBASE onto origin/main first (see the MAIN DIVERGENCE note -- #918 touched the registry scope
     file), then execute VP steps 4-8 (pre-deploy) -- run each; loop until pass. Commit, push, open the PR. State
-    the operator handoff (step 9) in the PR body as well as here (Decision 115). EXPECT the PR to
+    the operator handoff (the OPERATOR ACTION step, 10) in the PR body as well as here (Decision 115). EXPECT the PR to
     report REVIEW_REQUIRED because /terraform/bootstrap/ is a CODEOWNERS protected path -- request the
     code-owner review rather than treating the block as a CI failure.
   - >-
@@ -875,7 +886,12 @@ rollback: >-
   live, so the apply role retains the trust-rewrite grant that re-apply needs.
   After step 10 the widening is gone, so any personal-root trust re-apply on planner or deploy would
   AccessDeny; recovery is a second operator bootstrap apply restoring those two ARNs FIRST, then the
-  personal re-apply -- the exact inverse of this plan's ordering, and operator-tier both times. Note the immutable entry is never
+  personal re-apply -- the exact inverse of this plan's ordering, and operator-tier both times. NOTE
+  that restoring those two ARNs is exactly what the new test_resource_set_is_exactly_branch_and_pr pin
+  forbids, BY DESIGN (a re-widening must be a reviewed edit, not a quiet one). The out-of-band apply
+  runs from a working tree and is not machine-blocked, but the commit persisting it is unmergeable
+  unless it carries a same-commit edit to that pin test. Budget for that edit; do not discover it
+  under time pressure. Note the immutable entry is never
   removed at any stage, so no rollback path can reproduce the 2026-08-15 total outage; the worst case
   is a return to the current over-wide steady state, not an outage. The test and registry
   changes are independently revertible and carry no infrastructure effect.
