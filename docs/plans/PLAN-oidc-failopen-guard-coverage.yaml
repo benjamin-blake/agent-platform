@@ -1,0 +1,395 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "oidc-failopen-guard-coverage"
+intent: >-
+  Restore the 100% per-file coverage standard on the new OIDC fail-open guard by driving the nine
+  defensive branches its mirror test never exercised, and give the twice-recurring coverage-escape
+  class a bounded, dated owner on CD.30 instead of a third corrective-only fix.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-oidc-failopen-guard-coverage.yaml
+phase: >-
+  CI-signal-integrity / validation-suite hygiene. No tier_item: this is a ci_rca forward fix, so the
+  Tier Item Freshness Gate does not fire (soft-warn exception category: ci_rca). The DEFERRED
+  preventive half rides candidate decision CD.30, itself gated on T3.7 (status: deferred_post_mvp).
+scope:
+  - file: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
+    action: Modify
+    purpose: >-
+      Add inline-fixture cases driving every defensive early-return branch in the guard: malformed
+      YAML raising inside yaml.safe_load (lines 129-130), a non-dict top-level document (132), a
+      non-dict jobs mapping (136), a non-dict job (139), a non-list steps value (96), a non-dict
+      step element (75 and 101), and an env: mapping mixing str and non-str values (84). Matches the
+      existing file's inline-fixture convention -- these are synthetic shapes, not real-tree
+      extractions, because the branches guard against malformed input the real tree never contains.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Append ONE dated recurrence-evidence discipline_point to candidate decision CD.30 recording
+      that the escape class its sequencing defers has now fired twice with an identical CI-RCA v2
+      fingerprint, why the RCA-proposed shortcut stays rejected, and a third-recurrence escalation
+      trigger that bounds the deferral. Annotation only -- no state, gates, or narrowly_supersedes
+      field is touched, so no ratification machinery is engaged.
+bundled_recommendations:
+  - rec-3147
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/checks/ci_guards/validate_oidc_failopen_guards.py measures 100.0% line coverage against
+    its mirror test, verified by the repository's own coverage instrument.
+  - >-
+    The coverage term-missing report for the module lists ZERO missing lines -- specifically none of
+    75, 84, 96, 101, 129-130, 132, 136, 139.
+  - >-
+    The guard's verdict over the real .github/workflows tree is unchanged (still PASS with no new
+    violations) -- the guard source module is not modified by this plan.
+  - >-
+    CD.30 in docs/ROADMAP-PLATFORM.yaml carries a dated recurrence annotation naming rec-3043 and
+    rec-3147, their shared fingerprint, both grounds for rejecting the --pre promotion, and an
+    explicit third-recurrence escalation trigger.
+  - >-
+    No entry for validate_oidc_failopen_guards.py is added to config/coverage_baseline.yaml -- the
+    debt is paid with tests, not suppressed with a baseline registration.
+  - >-
+    A follow-on recommendation owning the deferred preventive exists and is open, filed with
+    source=tech-debt (never ci_rca, which would re-arm the preflight HARD BLOCK).
+  - rec-3147 closes via the Resolves trailer on the squash-merge commit.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the coverage debt is actually paid, measured by the repository's own gate instrument
+      rather than an ad hoc pytest invocation.
+    command: bin/venv-python -m scripts.test_coverage_checker --check-coverage --files scripts/checks/ci_guards/validate_oidc_failopen_guards.py
+    expected: >-
+      Exit 0, printing "Coverage: all 1 source files at 100%." and "DIAGNOSTIC VERDICT: PASS".
+      Measured red-before this plan was written: exit 1 with
+      "validate_oidc_failopen_guards.py: 89.0% line coverage (expected 100%)".
+    fix_if: >-
+      Exits 1 still naming a sub-100 percentage -- one or more defensive branches remain undriven;
+      run step 2 to see which specific lines are still missing and add the matching fixture.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but graduating it would stand up a SECOND per-file
+      coverage gate on this module alongside the live full-tier validate_test_coverage, which
+      already enforces exactly this threshold whenever the module changes. CD.30 additionally plans
+      to retarget that gate from a per-changed-file 100% floor to a diff-line ratchet, so a
+      graduated check pinned to the 100% floor would have to be retired at CD.30 ratification.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Locate any line still dark, and cross-check the measurement instrument itself. This is the
+      line-number LOCATOR that step 1's fix_if routes to (step 1 prints only a percentage, never
+      the missing line numbers), and it re-measures through a DIFFERENT --cov spec shape (dotted
+      module here versus step 1's parent directory), so two independent spec shapes must AGREE. Note
+      the direction: the dotted shape used here is the historically DEFECTIVE one (rec-943, where a
+      dotted single-file --cov spec silently collected no data and masqueraded as a pass); the
+      parent-directory shape was the fix. It is safe here because the mirror test imports the module
+      normally, and the pinned statement count in expected is what makes a silent no-data outcome
+      detectable -- a missing row rather than a false pass.
+    command: _COVERAGE_SUBPROCESS=1 bin/venv-python -m pytest tests/checks/ci_guards/test_validate_oidc_failopen_guards.py -q --no-header --cov=scripts.checks.ci_guards.validate_oidc_failopen_guards --cov-report=term-missing
+    expected: >-
+      All tests pass and the module's coverage row reads 82 statements, 0 missed, 100%, with an
+      EMPTY Missing column. _COVERAGE_SUBPROCESS=1 is required to suppress the validate.py
+      recursion guard chain (tests/CLAUDE.md test isolation).
+    fix_if: >-
+      The Missing column still lists any of 75, 84, 96, 101, 129-130, 132, 136, 139 -- map each
+      remaining line back to its branch in the scope table's purpose field and add that fixture.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is the line-level diagnostic form of step 1 over the same pytest subprocess; graduating
+      both would run the identical measurement twice per validation pass for one module, and the
+      term-missing line numbers it asserts are position-dependent and would churn on any unrelated
+      edit to the guard source.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the rejected workaround was not silently taken -- registering a sub-100 baseline entry
+      would turn the gate green while leaving the branches untested.
+    command: "! grep -q validate_oidc_failopen_guards config/coverage_baseline.yaml"
+    expected: >-
+      Exit 0 (no match). The module must never appear in the Decision 159 grandfather roster: that
+      roster is a ONE-TIME grandfather of debt pre-existing its own implement time, and this module
+      was born 2026-08-15, after it.
+    fix_if: >-
+      A match is found -- the debt was suppressed rather than paid. Remove the entry and complete
+      steps 1 and 2 instead (Decision 55 no-workaround; rec-2975 precedent).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Expressible as grep_count, but the general invariant it instantiates -- no new sub-100
+      baseline entry without an authorising marker -- is already enforced repo-wide in BOTH tiers by
+      validate_coverage_baseline_edits, so a graduated single-file variant adds no coverage the
+      standing guard lacks.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the recurrence record actually landed on CD.30 with the elements that make it useful to
+      a future reader: both rec ids, and a bounded escalation trigger.
+    command: 'grep -q "^      - \"\[Recurrence evidence" docs/ROADMAP-PLATFORM.yaml && grep -q rec-3043 docs/ROADMAP-PLATFORM.yaml && grep -q rec-3147 docs/ROADMAP-PLATFORM.yaml && grep -qi "third recurrence" docs/ROADMAP-PLATFORM.yaml'
+    expected: >-
+      Exit 0. The first grep asserts the entry landed as an explicitly double-quoted YAML scalar at
+      CD.30's 6-space discipline_points indentation; the remaining greps confirm it is dated per the
+      Decision 151 append-only grammar, cites both recs, and names the third-recurrence escalation
+      trigger that bounds the deferral.
+    fix_if: >-
+      The first grep fails -- the entry is absent, single-quoted, differently indented, or its marker
+      text differs; write it as a double-quoted scalar opening with "[Recurrence evidence, <date>]".
+      Any later grep fails -- the annotation is missing an element. A record that omits the escalation
+      trigger leaves the deferral open-ended, which is the Decision 57 spirit-flag this plan exists to
+      answer.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Expressible as grep_count, but graduating it would pin the exact prose of a one-time dated
+      annotation into a standing check, so any later re-wording of the record -- including the
+      re-read the eventual CD.30 ratifier is expected to perform -- would redden CI for a purely
+      editorial change.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the FULL validation tier before commit, as handoff_policy.full_validation_required_before_commit
+      requires. This is the only tier that runs validate_test_coverage, and it is also where the
+      guard's real-tree verdict and the roadmap schema are re-checked.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0 with no "Failed checks" block. Specifically: the "OIDC fail-open assume-role guard"
+      section prints PASS over the real .github/workflows tree (unchanged by this plan), and
+      validate_platform_roadmap accepts the edited CD.30 entry. Do NOT expect this run to confirm
+      the coverage fix: the Test coverage check prints "No source file changes to check." and
+      declares examined(0), i.e. it is structurally VACUOUS on this branch (Decision 170
+      classification), because get_changed_source_files() filters to src/ and scripts/ while this
+      diff is tests plus YAML. That holds post-merge on main-validate too. The authoritative proof
+      of the coverage fix is steps 1 and 2, never this step. Expect also an advisory
+      "Lambda deploy gating (advisory) ... data-pipeline: 1 file(s) changed" line for the bundled
+      roadmap asset -- advisory-only, a known non-code over-flag, and no deploy step is owed.
+    fix_if: >-
+      Any check fails -- fix on the branch and re-run from the start; per handoff_policy the commit
+      waits for a completed exit-0 full run, and a timeout is dispositioned as blocked, not passed.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: post-deploy
+    action: Confirm rec-3147 actually closed through the Resolves trailer rather than being left open.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync && grep '"rec-3147"'
+      logs/.recommendations-log.jsonl | grep -q '"status": "closed"'
+    expected: >-
+      Exit 0 -- rec-3147 is closed in the warehouse-derived read cache after the squash merge fires
+      rec-autoclose.yml.
+    fix_if: >-
+      Still open -- the Resolves trailer was missing or malformed in the squash commit body. Close it
+      via the documented portal fallback:
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-3147 --status closed --resolution "..."
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Confirm the deferred preventive has a LIVE owner outside the deferred set, and that filing it
+      did not re-arm the preflight ci-rca HARD BLOCK.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync && grep 'coverage-gate escape class'
+      logs/.recommendations-log.jsonl | grep -q '"status": "open"' && ! grep 'coverage-gate escape
+      class' logs/.recommendations-log.jsonl | grep -q '"source": "ci_rca"'
+    expected: >-
+      Exit 0 -- the follow-on rec exists, is open, and carries source=tech-debt. A ci_rca source
+      would make every future /plan session hit the unresolved-ci-rca HARD BLOCK on a rec that is
+      deliberately deferred, which is why the source is constrained.
+    fix_if: >-
+      No match, or the source is ci_rca -- re-file via file_rec with source=tech-debt and close the
+      mis-sourced row.
+test_obligations:
+  - source: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
+    behavior: >-
+      Every defensive early-return branch in validate_oidc_failopen_guards.py stays driven: malformed
+      workflow YAML, a non-dict document, a non-dict jobs mapping, a non-dict job, a non-list steps
+      value, a non-dict step element, and an env mapping holding non-str values must each be handled
+      by a skip rather than an unhandled exception, and the guard must keep classifying the
+      malformed-input cases as non-violations.
+    verification_step: 2
+    test_selector: tests/checks/ci_guards/test_validate_oidc_failopen_guards.py
+    red_green_expectation: >-
+      Red before (89.0%, nine lines missing in the term-missing column), green after (100.0%, empty
+      Missing column). Probed during planning: the added fixtures take the module to 100.0%.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: >-
+      CD.30 carries a dated, source-cited recurrence record naming both prior occurrences and a
+      third-recurrence escalation trigger, and the roadmap stays schema-valid under
+      validate_platform_roadmap.
+    verification_step: 4
+    command: 'grep -q "^      - \"\[Recurrence evidence" docs/ROADMAP-PLATFORM.yaml'
+    waiver_reason: >-
+      A dated append-only annotation carries no executable behaviour to red/green -- its correctness
+      is textual presence plus roadmap schema validity, asserted by the linked step 4 greps and by
+      validate_platform_roadmap inside the step 5 full-tier run. A mirror test asserting the prose
+      would pin editorial wording without guarding any code path.
+constraints:
+  - >-
+    Do NOT promote validate_test_coverage to --pre or add a PR-side coverage job, despite rec-3147's
+    stored preventive_action proposing exactly that. Two independent grounds: CD.30's VTS-07
+    sequencing note forbids the reorder ("promoting the current per-file 100%-floor form straight to
+    --pre would be a breaking strictness jump"), and Decision 163 measured validate_test_coverage at
+    approximately 3m17s over a SINGLE file against Decision 73's 300s fast-tier budget. State that
+    ground PRECISELY, because it is destined for CD.30 and a future ratifier will weigh it: the cost
+    is additive per changed source file, with a small fixed floor per file (roughly 3-5s of pytest
+    spawn and collection) that is then dominated by the size of the MAPPED MIRROR SUITE. Decision
+    163's 3m17s was measured over scripts/validate.py, which
+    map_source_to_test resolves to the tests/validate/ package (13 files, 3976 lines) -- roughly 66%
+    of the whole 300s budget for that one file. Small-mirror files are cheap by comparison: measured
+    on this tree at planning time, this plan's own guard costs 3.68s and a two-file invocation 6.95s.
+    The non-fit is therefore structural but UNEVEN -- a PR touching scripts/validate.py would on its
+    own leave little of the tier's budget for anything else, while a small-mirror PR would not
+    strain it. Do NOT restate this as a flat
+    per-file scaling law; that generalization is false and this plan's own VP step 1 disproves it.
+  - >-
+    Do NOT register validate_oidc_failopen_guards.py in config/coverage_baseline.yaml. Decision 159
+    scopes that roster to debt pre-existing its own implement time; a module born 2026-08-15 does not
+    qualify, and rec-2975 states the rule directly -- pay the debt with tests, not a baseline entry.
+  - >-
+    Do NOT modify scripts/checks/ci_guards/validate_oidc_failopen_guards.py. The guard's behaviour is
+    correct; only its test coverage is deficient. Deleting the defensive branches to raise the
+    percentage is expressly out of scope -- they guard against malformed workflow YAML, and a guard
+    that crashes on a malformed file is worse than one that skips it.
+  - >-
+    The follow-on preventive rec MUST be filed with source=tech-debt, never source=ci_rca. A new
+    unresolved ci_rca rec re-arms the /plan preflight HARD BLOCK for every future session on work
+    that is deliberately deferred.
+  - >-
+    The CD.30 annotation MUST use the Decision 151 dated append-only grammar (extend, never rewrite
+    in place, matching the existing "[VTS-07 correction, 2026-07-25]" shape) and MUST NOT contain the
+    literal phrase "ratification precondition", which WOULD ARM a Decision 105 R4 guard at
+    ratification. R4 cannot fire on CD.30 today, but note the actual mechanism: it is
+    validate_candidate_decision_ratification's DISPATCHER loop that branches to _check_r2_pending and
+    continues for any state == "pending" CD, so R4 is never reached -- not an early-return inside R4
+    itself. The ban is forward-looking, and deliberately broader than the guard's own
+    "ratification precondition (XX-NN)" regex.
+  - >-
+    Only the two files in the Scope table may be modified. Out-of-scope issues become recommendations
+    via the portal, not inline fixes (Decision 55; no rescue agents or workaround loops).
+  - >-
+    New test cases must not assert exact collection counts (no len(X) == N against a growing
+    collection) per the tests/CLAUDE.md test-count-coupling rule, and must follow the file's existing
+    inline-fixture + _run() helper convention. No emojis, ASCII hyphens only, ruff line length 127.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (125 of 125 triaged). CITE: Decision 48, Decision 55, Decision 72, Decision 86, Decision 105, Decision 131, Decision 132, Decision 135, Decision 142, Decision 150, Decision 151, Decision 153, Decision 159, Decision 163, Decision 169, Decision 170. SPIRIT-FLAGGED and invoked substantively by this plan: Decision 57, Decision 93. RELATED: Decision 103, Decision 128, Decision 130, Decision 165, Decision 108, Decision 110, Decision 114, Decision 147."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    RECURRENCE, VERIFIED: rec-3147 shares an identical CI-RCA v2 fingerprint
+    (6e7ad27818dccc594b39886c30a72683eeaaef21765db65be2792bd7831896b9) with rec-3043 (2026-08-05,
+    validate_composite_action_shell_bodies.py at 98.7%). Verified computationally from both stored
+    context_v2_json payloads during planning, as Decision 142 requires before asserting a fingerprint
+    match. rec-3043 was closed corrective-only and its preventive was never built -- which is why
+    this plan records the class rather than silently repeating that outcome.
+  - >-
+    THE REC'S OWN ACCEPTANCE COMMAND IS UNSATISFIABLE and is deliberately NOT copied into this plan.
+    It greps scripts.validate output for the literal
+    "scripts/checks/ci_guards/validate_oidc_failopen_guards.py: 100.0% line coverage", which fails on
+    two independent counts: (a) the "N% line coverage" string is formatted ONLY in
+    test_coverage_checker.check_per_file_coverage (lines 440 and 442), both inside the failure
+    branch, so the success string the rec greps for does not exist anywhere in the codebase (on
+    success the printed line is "Coverage: all N source files at 100%."); and
+    (b) get_changed_source_files() returns only files under src/ or scripts/, so this plan's
+    tests-plus-yaml diff yields zero source files and the check no-ops with "No source file changes
+    to check." This is precisely the Decision 170 vacuous-pass class. Verification steps 1 and 2
+    substitute an explicit --files invocation that measured a genuine red (exit 1, 89.0%) during
+    planning.
+  - >-
+    THE DEFERRED PREVENTIVE IS A CONSCIOUS DEFERRAL, not an oversight, and rides T3.7's existing
+    deferred_post_mvp status (Decision 93: items leave MVP scope only by conscious deferral). The
+    CD.30 annotation plus the follow-on tech-debt rec together give the class a dated record and a
+    live owner, answering the decision-scout's two SPIRIT/NOTE flags (Decision 57: an open-ended
+    deferral with nothing measuring whether it held; Decision 93: implicit rather than conscious
+    parking).
+  - >-
+    GATE PLACEMENT IS TIER-DETERMINED, NOT ENVIRONMENT-DETERMINED. validate_test_coverage is
+    registered at scripts/checks/misc/_manifest.py:18-23 with full_segment="full_after_lint" and no
+    pre=True, so --pre never runs it anywhere and the full tier always runs it anywhere. The failure
+    surfaced in GitHub Actions main-validate (run 31911662199, .github/workflows/ci.yml:95-97,
+    runs-on ubuntu-latest, push-triggered), not in any local container; the 89.0% figure reproduced
+    identically in a local container during planning. Distinguish two separate mechanisms: the diff
+    BASE differs between contexts (push_context_base on a push versus merge-base on a branch), which
+    is a genuine asymmetry -- but that is NOT what makes the gate no-op on this plan's own branch.
+    That is the src/-and-scripts/ PATH FILTER in get_changed_source_files(), which is symmetric and
+    no-ops identically on a branch and on main for any tests-plus-YAML diff.
+  - >-
+    V2 IS THE FLOOR, not an over-classification: validate_tier_floor._compute_floor raises the floor
+    to V2 on ANY .py scope file, with no scripts/ or src/ qualifier, so this plan's test file sets a
+    V2 floor on its own; and the verification genuinely executes Python code paths under pytest with
+    coverage instrumentation. Note that validate_tier_floor skips any plan whose schema_version is
+    not 2, so it never evaluates this schema-4 plan at all.
+  - >-
+    ADJACENT OPEN RECS, deliberately NOT bundled (different files and materially larger scope):
+    rec-2917 (High, M -- full-tier checks must run unscoped; diff-scoping leaves 8 of 90 full_sequence
+    steps examining zero files post-merge) and rec-2975 (Medium, M -- validate_test_coverage itself
+    sits at 72.4% with no baseline entry). rec-2975 is the direct precedent for this plan's
+    no-baseline-entry constraint.
+  - >-
+    Branch was 0 commits behind origin/main at planning time with no overlapping scope files, so the
+    Main Divergence Assessment is a no-op. The admin container this session ran in is NOT required to
+    implement this plan -- no terraform, IAM, or AWS surface is touched; a DEV container serves
+    identically. Portal calls in steps 6 and 7 need the agent_platform profile only.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Re-read scripts/checks/ci_guards/validate_oidc_failopen_guards.py lines 68-148 and map each of
+    the nine target lines to the branch it guards before writing any fixture
+execution_steps:
+  - >-
+    tests/checks/ci_guards/test_validate_oidc_failopen_guards.py -- add module-level inline fixture
+    constants and a test class covering the seven malformed/defensive shapes, following the existing
+    _run(tmp_path, filename, content) helper convention. Seven fixtures cover all nine lines: a
+    non-dict step element covers both 75 and 101, and the malformed-YAML fixture covers 129-130 as a
+    pair. The env fixture must include BOTH a str and a non-str value so the isinstance filter on
+    line 84 is genuinely exercised rather than trivially satisfied.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml -- append ONE discipline_point to candidate_decisions[CD.30], using
+    the dated Decision 151 grammar and opening with the literal marker "[Recurrence evidence,
+    <date>]". WRITE IT AS AN EXPLICITLY DOUBLE-QUOTED YAML SCALAR -- the required content is
+    colon-rich, and the quoting is what keeps it a string. Escape any inner double quotes, or phrase
+    the entry to avoid them. It must record: both occurrences (rec-3043 2026-08-05,
+    rec-3147 2026-08-15) and their shared fingerprint; the registration site that keeps the gate
+    full-tier-only (scripts/checks/misc/_manifest.py, validate_test_coverage Entry,
+    full_segment=full_after_lint with no pre=True); BOTH grounds for rejecting the --pre promotion
+    (the CD.30 VTS-07 sequencing bar and the Decision 163 3m17s-versus-300s budget measurement); the
+    THIRD, independent deferral ground already on the roadmap -- T3.7's own progress_note records
+    that compensating controls for this failure class already landed (the T1.13 c8/c10/c11
+    vacuous-pass detection spine plus the main-validate canary / forward-fix posture, Decision 73)
+    and concludes "Deferral valid."; and an explicit escalation trigger stating that a THIRD
+    recurrence of this fingerprint re-audits the sequencing bar rather than producing another
+    corrective-only fix. Do not touch state, gates, or narrowly_supersedes.
+  - >-
+    File the follow-on preventive recommendation via the portal at implement time. Call
+    get_rec_write_guidance() before file_rec() per the Precision Context Injection rule, then file
+    with source=tech-debt (NEVER ci_rca), a title containing the exact phrase "coverage-gate escape
+    class" so verification step 7 can find it, file=scripts/checks/misc/_manifest.py, and context
+    naming CD.30, T3.7, and both prior rec ids as the deferral's owner chain. The context MUST also
+    name Decision 170's examined()/skipped() accounting channel as a candidate CHEAP instrument --
+    alarm when the coverage gate goes vacuous, rather than promoting it to --pre. validate_test_coverage
+    is one of the five checks that already ADOPTED that channel, and it landed 2026-08-13, two days
+    before rec-3147 fired, so it is a newer tool than the preventive the RCA proposed.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55). Steps 1-5 are pre-merge; steps 6-7 run after the squash merge.
+  - >-
+    Include "Resolves: rec-3147" in the squash-merge commit body so rec-autoclose.yml closes it, then
+    run verification steps 6 and 7.
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Both scope files are additive and independently revertable. Reverting the test-file change restores
+  the 89.0% measurement AS TAKEN BY VP step 1's explicit --files invocation, and does NOT redden any
+  CI tier: the diff-scoped coverage gate no-ops on a tests-only diff (get_changed_source_files()
+  filters to src/ and scripts/), symmetrically on a branch and on main. Do not rely on CI to catch
+  such a revert -- the regression resurfaces only on a later change that puts
+  validate_oidc_failopen_guards.py back into a diff. The guard's own behaviour is unaffected either
+  way, since this plan never modifies it. Reverting the CD.30 discipline_point is a single list
+  entry deletion with no schema or state consequence, since no state, gates, or narrowly_supersedes
+  field is touched. The follow-on rec, if already filed, is closed via the portal with
+  --update-rec <id> --status closed rather than deleted.
