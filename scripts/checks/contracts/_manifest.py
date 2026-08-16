@@ -102,4 +102,20 @@ ENTRIES: tuple[Entry, ...] = (
         pre=True,
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_composite_action_shape_rosters",
+        module="scripts.checks.contracts.validate_composite_action_shape_rosters",
+        attr="validate_composite_action_shape_rosters",
+        pre=True,
+        pre_globs=None,
+        full_segment="full_after_lint",
+    ),
+    Entry(
+        name="validate_iam_simulate_fixture_shape",
+        module="scripts.checks.contracts.validate_iam_simulate_fixture_shape",
+        attr="validate_iam_simulate_fixture_shape",
+        pre=True,
+        pre_globs=None,
+        full_segment="full_after_lint",
+    ),
 )

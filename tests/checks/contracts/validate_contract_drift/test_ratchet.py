@@ -1,6 +1,6 @@
 """VP step 8: the ratchet -- typing, direction, the ratified marker path, and the base-absent
-bootstrap. Fixtures carry all three pins (migration-step-3-grandfathering: grandfathered_max,
-status_active_max, evaluator_none_grandfathered_max) since scripts/checks/contracts/_ratchet.py's
+bootstrap. Fixtures carry both pins (migration-step-3-grandfathering, narrowed to two by rec-3059
+wave 2: grandfathered_max, status_active_max) since scripts/checks/contracts/_ratchet.py's
 validate_ratchet_pins reports a missing-pin error for any pin absent from the ratchet: block."""
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ def _population_yaml(
     *,
     marker: str = "",
     status_active_max: int = 0,
-    evaluator_none_grandfathered_max: int = 0,
 ) -> str:
     return (
         "contract:\n"
@@ -31,7 +30,6 @@ def _population_yaml(
         "ratchet:\n"
         f"  grandfathered_max: {pin}{marker}\n"
         f"  status_active_max: {status_active_max}\n"
-        f"  evaluator_none_grandfathered_max: {evaluator_none_grandfathered_max}\n"
     )
 
 
@@ -159,3 +157,21 @@ class TestRatchet:
         failed: list[str] = []
         validate_contract_drift(failed, contracts_dir=tmp_path)
         assert not any("ratchet" in f for f in failed), failed
+
+    def test_pin_vs_census_cascade_suppressed_when_a_contract_is_skipped(
+        self, tmp_path, install_fake_git, write_contract, FakeGit, class_d_yaml
+    ) -> None:
+        """rec-3101: a contract that fails schema/evaluator resolution increments census.skipped
+        and its own bucket never increments -- the pin-vs-census equality binding must NOT also
+        fire a second, misleading "lower the pin" error on top of the skip failure. The surviving
+        message says to fix the skipped contract, never to lower the pin."""
+        # grandfathered_max=5 deliberately mismatches the live census (0, per
+        # test_pins_must_equal_live_census above) -- WITHOUT the rec-3101 suppression this would
+        # ALSO fire a ratchet cascade error alongside the skip.
+        write_contract(tmp_path, "contract-population.yaml", _population_yaml(5))
+        write_contract(tmp_path, "broken.yaml", class_d_yaml(contract_id="broken", subject="broken", evaluator=None))
+        install_fake_git(FakeGit())
+        failed: list[str] = []
+        validate_contract_drift(failed, contracts_dir=tmp_path)
+        assert any("broken.yaml" in f and "schema" in f for f in failed), failed
+        assert not any("ratchet" in f and "does not equal" in f for f in failed), failed

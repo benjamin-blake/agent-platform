@@ -21,13 +21,12 @@ from scripts.checks.contracts._ratchet import (  # noqa: F401 -- re-export after
     check_pin_direction,
     check_pins_bound_to_census,
     check_ratchet_direction,
-    evaluator_none_grandfathered_max_spec,
     ratchet_spec,
     status_active_max_spec,
     validate_ratchet_pin,
     validate_ratchet_pins,
 )
-from scripts.contracts_schema import ContractMeta, EvaluatorSpec
+from scripts.contracts_schema import EvaluatorSpec
 
 # ---------------------------------------------------------------------------
 # Shape classification (ritual / Class D / unshaped) + Class-A/B smuggling
@@ -257,10 +256,8 @@ def resolve_evaluator(
     check_module_resolver: Callable[[str], Path | None] | None = None,
 ) -> tuple[bool, str]:
     """True + detail iff `evaluator` genuinely READS `contract_basename` -- resolution by
-    evidence, never by mention. `none_grandfathered` never resolves by construction (grandfather
-    forms carry no evaluator to prove); the gate (not this function) is what still permits a
-    file to carry it, and only for a baseline-present file.
-    """
+    evidence, never by mention. `EvaluatorSpec._exactly_one_kind` guarantees exactly one of
+    `check`/`agent_surface` is set, so this function's two branches are exhaustive."""
     if evaluator.check is not None:
         name = evaluator.check
         registered = registered_checks if registered_checks is not None else registry.all_checks()
@@ -280,13 +277,13 @@ def resolve_evaluator(
                 return True, f"one-hop import {hop} contains {contract_basename!r} in executable context"
         return False, f"neither {module_path} nor its one-hop scripts/ imports contain {contract_basename!r}"
 
-    if evaluator.agent_surface is not None:
-        value = evaluator.agent_surface
-        if _agent_surface_resolves(value, contract_basename, root):
-            return True, f"agent_surface {value!r} contains {contract_basename!r}"
-        return False, f"agent_surface {value!r} does not contain {contract_basename!r}"
-
-    return False, "none_grandfathered never resolves (grandfather-only form)"
+    # EvaluatorSpec._exactly_one_kind guarantees agent_surface is set whenever check is None --
+    # the check branch above already returned, so this leg is unconditional, not a fallback.
+    value = evaluator.agent_surface
+    assert value is not None, "EvaluatorSpec guarantees exactly one of check/agent_surface is set"
+    if _agent_surface_resolves(value, contract_basename, root):
+        return True, f"agent_surface {value!r} contains {contract_basename!r}"
+    return False, f"agent_surface {value!r} does not contain {contract_basename!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -392,20 +389,6 @@ def check_amendment_log_for_class_d(base_data: dict[str, Any], head_data: dict[s
     return None
 
 
-def check_evaluator_kind_change(base_meta: ContractMeta | None, head_meta: ContractMeta | None) -> str | None:
-    """FAIL iff the base document carried a RESOLVING evaluator (check or agent_surface) and the
-    head carries none_grandfathered -- a kind change only. `absent -> none_grandfathered` (base
-    was not a valid Class D envelope at all, e.g. one of the free-form population-sweep targets)
-    is PERMITTED and never reaches this function's failing branch, since base_meta is None."""
-    if base_meta is None or head_meta is None or base_meta.evaluator is None or head_meta.evaluator is None:
-        return None
-    base_resolving = base_meta.evaluator.check is not None or base_meta.evaluator.agent_surface is not None
-    head_grandfathered = head_meta.evaluator.none_grandfathered is not None
-    if base_resolving and head_grandfathered:
-        return "evaluator kind changed from a resolving evaluator to none_grandfathered"
-    return None
-
-
 def check_conformance_loss(base_shape: str, head_shape: str) -> str | None:
     """FAIL iff the base carried a valid shape (ritual or class_d) and the head does not --
     closes the delete-the-contract-block fallback by identity, not by the ratchet pin's value."""
@@ -415,9 +398,9 @@ def check_conformance_loss(base_shape: str, head_shape: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Ratchet (grandfathered_max / status_active_max / evaluator_none_grandfathered_max pins) --
-# moved to _ratchet.py (Decision 128 decompose-by-default); re-imported at module top so existing
-# callers reaching through this module's namespace keep working.
+# Ratchet (grandfathered_max / status_active_max pins) -- moved to _ratchet.py (Decision 128
+# decompose-by-default); re-imported at module top so existing callers reaching through this
+# module's namespace keep working.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -431,15 +414,13 @@ class Census:
     ritual: int = 0
     declared: int = 0
     grandfathered: int = 0
-    evaluator_none_grandfathered: int = 0
     status_active: int = 0
     skipped: int = 0
 
     def render(self) -> str:
         return (
             f"scanned={self.scanned} ritual={self.ritual} declared={self.declared} "
-            f"grandfathered={self.grandfathered} evaluator_none_grandfathered={self.evaluator_none_grandfathered} "
-            f"status_active={self.status_active} skipped={self.skipped}"
+            f"grandfathered={self.grandfathered} status_active={self.status_active} skipped={self.skipped}"
         )
 
     def bucket_identity_holds(self) -> bool:

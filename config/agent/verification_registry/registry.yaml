@@ -4790,11 +4790,17 @@ entries:
     primitive_slot: test_selector
     guard_target: scripts/checks/contracts/validate_contract_drift.py
     guard_symbol: validate_contract_drift
-    plan_slug: contracts-first-class-migration
-    graduated_at: '2026-08-10'
+    plan_slug: class-d-enforcers-wave-2
+    graduated_at: '2026-08-16'
     graduated_by: implement-agent
     check_spec:
-      node_id: tests/checks/contracts/validate_contract_drift/test_grandfather_only.py::TestGrandfatherOnly::test_absent_to_none_grandfathered_on_baseline_present_file_is_permitted
+      # NARROWED CLAIM (rec-3059 wave 2): the none_grandfathered kind is retired, so its
+      # kind-change and absent->none_grandfathered legs no longer exist to guard --
+      # post-deletion "both directions" collapses to the sole surviving direction, the
+      # status:active grandfather-by-status birth case. Repointed at the surviving leg's node
+      # (test_absent_to_none_grandfathered_on_baseline_present_file_is_permitted, the node this
+      # row previously named, is deleted along with the kind it exercised).
+      node_id: tests/checks/contracts/validate_contract_drift/test_grandfather_only.py::TestGrandfatherOnly::test_baseline_present_active_status_loads_without_new_file_prohibition
   - check_id: outbox-retirement-sole-home-exports
     primitive_slot: command_exit_zero
     guard_target: src/common/outbox_retirement.py
@@ -5521,15 +5527,6 @@ entries:
         ids={c.id for c in s.conditions}
         assert {'probe-token-expiry','probe-monitor-blind'} <= ids, ids
         print('stanza armed:', sorted(ids))
-  - check_id: enforcement-route-required-on-none-grandfathered
-    primitive_slot: test_selector
-    guard_target: scripts/contracts_schema.py
-    guard_symbol: EnforcementRoute
-    plan_slug: migration-step-3-grandfathering
-    graduated_at: '2026-08-13'
-    graduated_by: implement-agent
-    check_spec:
-      node_id: tests/test_contracts.py::TestEvaluatorSpec::test_none_grandfathered_requires_complete_enforcement_route
   - check_id: evaluator-matcher-rejects-prose-literal
     primitive_slot: test_selector
     guard_target: scripts/checks/contracts/_population.py
@@ -5697,7 +5694,6 @@ entries:
         assert shape == 'class_d', shape
         meta = load_contract_meta(p)
         assert meta.status.value != 'active', meta.status.value
-        assert meta.evaluator.none_grandfathered is None, 'grandfather-only evaluator form'
         resolves, detail = _population.resolve_evaluator('environment-taxonomy.yaml', meta.evaluator, root=Path('.'))
         assert resolves, detail
         print('DECLARED-OK')
@@ -5947,3 +5943,25 @@ entries:
     check_spec:
       node_id: >-
         tests/roadmap/plan_document/test_optional_fields.py::TestFallbackReevaluation::test_all_historical_plans_still_valid_with_field_absent
+  - check_id: none-grandfathered-kind-unrepresentable
+    primitive_slot: test_selector
+    guard_target: scripts/contracts_schema.py
+    guard_symbol: EvaluatorSpec
+    plan_slug: class-d-enforcers-wave-2
+    graduated_at: "2026-08-16"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_contracts_schema.py::TestEvaluatorSpec::test_none_grandfathered_is_not_a_declarable_kind
+  - check_id: composite-action-roster-parity-red-path
+    primitive_slot: test_selector
+    guard_target: scripts/checks/contracts/validate_composite_action_shape_rosters.py
+    guard_symbol: validate_composite_action_shape_rosters
+    plan_slug: class-d-enforcers-wave-2
+    graduated_at: "2026-08-16"
+    graduated_by: implement-agent
+    check_spec:
+      # ONE exemplar red path, deliberately -- a test_selector check_spec carries a single
+      # node_id, so this row does not claim to guard the mirror test's other red paths (those
+      # are guarded by the standing mirror test itself, not by the registry -- the wave 1
+      # read-engine-verb-parity-red-path precedent for this exact scoping).
+      node_id: tests/checks/contracts/test_validate_composite_action_shape_rosters.py::TestRosterDriftRedPath::test_extra_key_not_in_r1_known_violators_fails

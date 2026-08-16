@@ -48,6 +48,62 @@ amendment_log:
       log-storage and inference-provider move buckets -- they are status:ratified; the other
       four are status:active and stay grandfathered by status regardless of evaluator quality).
       status_active_max stays 16 -- no contract's status changed.
+  - date: "2026-08-16"
+    semantic_break: false
+    change_class: accepted_values_narrow
+    summary: >-
+      rec-3059 wave 2 (PLAN-class-d-enforcers-wave-2), the FINAL enforcer wave: converted the last
+      two evaluator.none_grandfathered contracts (composite-action-shape, iam-simulate-fixture) to
+      resolving {check: <name>} evaluators, then RETIRED the none_grandfathered kind itself --
+      evaluator_kinds narrows from three declarable kinds to two (check, agent_surface); the
+      EnforcementRoute model and EvaluatorSpec.none_grandfathered field no longer exist, so the
+      retired kind is unrepresentable, not merely unused. grandfather_only_forms.
+      evaluator_none_grandfathered, change_detection.evaluator_kind_change and
+      census.fields.evaluator_none_grandfathered are removed as dead prose describing a deleted
+      rule. Ratchet pins: evaluator_none_grandfathered_max deleted outright (its bucket no longer
+      exists); grandfathered_max and status_active_max stay 17/16 -- neither contract's status
+      changed. See retirement_notes.evaluator_none_grandfathered below for the full record.
+
+retirement_notes:
+  evaluator_none_grandfathered:
+    date: "2026-08-16"
+    what: >-
+      The evaluator.none_grandfathered kind and its EnforcementRoute structured debt record are
+      retired. It is no longer a declarable evaluator kind at all: scripts.contracts_schema.
+      EvaluatorSpec carries only `check` and `agent_surface`, and its `extra="forbid"` makes the
+      old `{none_grandfathered: <route>}` form raise a pydantic ValidationError at load time.
+      scripts.checks.contracts._population.check_evaluator_kind_change (the kind-change rule) and
+      its Pass 2 call site in validate_contract_drift.py are deleted; the Census.
+      evaluator_none_grandfathered bucket and the evaluator_none_grandfathered_max ratchet pin are
+      deleted; _ratchet.PIN_KEYS now carries exactly (grandfathered_max, status_active_max).
+    why: >-
+      rec-3059 opened because 21 free-form docs/contracts files were seeded as Class D with a form
+      that never resolves by design -- nothing enforced their CONTENT, only the kind-change rule
+      stopped regression. Wave 1 (#905) converted six of the eight files then carrying the form to
+      genuinely-resolving evaluators. This wave converts the last two
+      (composite-action-shape.yaml, iam-simulate-fixture.yaml). With zero referents left, the form
+      itself is deleted rather than left dormant and unused, so the debt class this contract
+      exists to police cannot be re-entered by a future Class D landing.
+    reversal_path: >-
+      Re-add the EnforcementRoute model and the EvaluatorSpec.none_grandfathered field in
+      scripts/contracts_schema.py (restoring the three-kind union and its extra="forbid"
+      rejection boundary), restore _population.check_evaluator_kind_change and its Pass 2 call
+      site in validate_contract_drift.py, restore the Census.evaluator_none_grandfathered bucket
+      and its render() segment, and re-add the evaluator_none_grandfathered_max ratchet pin in
+      scripts/checks/contracts/_ratchet.py at the then-current census count (0, since no contract
+      would carry the form at time of reversal).
+    no_decision_minted: >-
+      This is a field-semantics narrowing of the evaluator-kind union this contract itself owns --
+      Decision 168's own words: "the full shape grammar, evaluator-kind union, and
+      change-detection rules live in docs/contracts/contract-population.yaml per Decision 86/127
+      routing, not restated here." decision-entry.yaml's significance.routing.field_semantics
+      routes a field-semantics change to a governance note in the owning contract, explicitly
+      "Never a numbered Decision" -- this note, plus the amendment_log entry above, is that
+      governance note. Deletion VACATES a permission ("absent -> none_grandfathered is permitted")
+      rather than contradicting a guarantee, so no active Decision requires amendment. Decision
+      168's body carries a dated, number-free amendment_forms annotation (docs/DECISIONS.md)
+      pointing here as the live record, per decision-entry.yaml's ratified `trailing_bracket` /
+      `blockquote_update` amendment_forms.
 
 honesty_clauses:
   not_a_new_bar: >-
@@ -121,16 +177,11 @@ evaluator_kinds:
     rule an agent reads on every turn is at least as strong evidence of a genuine evaluator as a
     skill loaded on demand.
   none_grandfathered: >-
-    `{none_grandfathered: <EnforcementRoute>}`. Never resolves -- it is the grandfather-only form,
-    not a fourth resolving kind. Since migration-step-3-grandfathering, a bare free-text reason is
-    no longer sufficient: the value is a STRUCTURED debt record
-    (scripts/contracts_schema.EnforcementRoute) with four required non-empty fields -- `reason`
-    (why no evaluator exists yet), `mechanism` (what the future check would assert), `blocker`
-    (what stops building it today), `shape` (`check` or `agent_surface`, the eventual evaluator's
-    kind) -- plus an optional `consumer` (`str | None`, the module/file that would host the
-    future evaluator; null where no consumer module exists at all, e.g. telemetry-lexicon.yaml).
-    An unenforced Class D claim can no longer be filed without a route: the rec-3059 enforcer
-    build inherits a per-file design map instead of a blessed permanent exemption.
+    RETIRED (rec-3059 wave 2, see retirement_notes.evaluator_none_grandfathered below). This kind
+    is no longer declarable at all -- EvaluatorSpec carries only `check` and `agent_surface`, and
+    its `extra="forbid"` makes the old `{none_grandfathered: <route>}` form raise at validation.
+    Every Class D contract's evaluator must genuinely resolve; there is no grandfather-only form
+    left for a new or existing file to fall back on.
 
 grandfather_only_forms:
   status_active: >-
@@ -142,20 +193,17 @@ grandfather_only_forms:
     three OUTBOUND edges (active->ratified, active->deprecated, active->superseded) and
     deliberately no inbound edge.
   evaluator_none_grandfathered: >-
-    `evaluator.none_grandfathered` is grandfather-only in the SAME two senses: closed at birth
-    (a new file may not declare it) AND closed on KIND CHANGE (a Class D file whose base carried
-    a resolving evaluator -- check or agent_surface -- may never transition its head to
-    none_grandfathered; that is a regression, not a sweep). It is explicitly PERMITTED to arrive
-    at none_grandfathered from an ABSENT base (the base document was not a valid Class D envelope
-    at all) on a baseline-present file -- that is exactly the population sweep's own shape, and a
-    literal reading that failed it would block this plan's declared completing act.
+    RETIRED (rec-3059 wave 2) -- see evaluator_kinds.none_grandfathered above and
+    retirement_notes.evaluator_none_grandfathered below. No Class D file, new or baseline-present,
+    may carry this form any longer; there is no kind-change rule left to enforce because there is
+    no kind left to change into.
   counters_open_at_zero: >-
-    SUPERSEDED by the three ratchet pins below (migration-step-3-grandfathering) -- this section's
-    original claim (both counters open at ZERO, deliberately unpinned so the sweep could raise
-    them once) described the PRE-SWEEP state. Post-sweep, both grandfather-only counters are
-    pinned by ratchet.status_active_max / ratchet.evaluator_none_grandfathered_max and bound to
-    the live census by EQUALITY (see the ratchet block and census section below) -- the one-time
-    "raise them once" latitude was exactly this sweep, and is now spent.
+    SUPERSEDED by the two ratchet pins below (migration-step-3-grandfathering, narrowed to two by
+    rec-3059 wave 2) -- this section's original claim (both counters open at ZERO, deliberately
+    unpinned so the sweep could raise them once) described the PRE-SWEEP state. Post-sweep, the
+    grandfather-only counter is pinned by ratchet.status_active_max and bound to the live census
+    by EQUALITY (see the ratchet block and census section below) -- the one-time "raise it once"
+    latitude was exactly the original sweep, and is now spent.
 
 subject_namespace:
   uniqueness: >-
@@ -173,13 +221,13 @@ subject_namespace:
     docs/contracts/exit-criteria-ledger.yaml is the SINGLE named exception among the 21 free-form
     files this sweep found: genuinely Class-A-field-shaped (per-ExitCriterion field descriptors),
     so the Class-A/B smuggling detector correctly rejects it as a Class D envelope -- it stays
-    free-form, not restructured to evade the detector. Its enforcement route (since it cannot
-    carry a Class D envelope at all, this route lives HERE rather than in the file itself):
-    consumer scripts/roadmap/platform_roadmap.py (the ExitCriterion dataclass); mechanism assert
-    exit_criterion_object fields match the dataclass; blocker the file cannot carry a Class D
-    envelope at all (field-shaped); shape check; reason genuinely Class-A-field-shaped content
-    has no Class D home, and restructuring it to fit one would be exactly the smuggling this
-    gate's own detector exists to catch.
+    free-form, not restructured to evade the detector. It carries no Class D envelope at all, so
+    it declares no evaluator (the retired EnforcementRoute-shaped route record this paragraph
+    once described no longer exists as a model, rec-3059 wave 2). Its nearest thing to
+    enforcement is structural rather than a registered check: scripts/roadmap/platform_roadmap.py's
+    ExitCriterion dataclass parses the file, so a shape drift there fails loudly at load time.
+    Restructuring exit-criteria-ledger.yaml to fit a Class D envelope, purely to acquire a
+    registered evaluator, would be exactly the smuggling this gate's own detector exists to catch.
 
 change_detection:
   amendment_log: >-
@@ -193,10 +241,6 @@ change_detection:
     A file is genuinely NEW only if all three miss -- path alone is defeated by a rename, `-M`
     alone is defeated by a rewrite past the similarity threshold, id alone is defeated by editing
     the id (a one-line, cheaper-than-either evasion).
-  evaluator_kind_change: >-
-    FAILS iff the base document carried a resolving evaluator (check or agent_surface) and the
-    head carries none_grandfathered -- see grandfather_only_forms.evaluator_none_grandfathered
-    above for the full statement, including the permitted absent->none_grandfathered case.
   conformance_loss: >-
     FAILS iff the base carried a valid shape (ritual or Class D) and the head does not -- this,
     not the ratchet pin's exact value, is the primary defence against a delete-the-contract-block
@@ -204,7 +248,7 @@ change_detection:
     count happens to be.
 
 census:
-  fields: [scanned, ritual, declared, grandfathered, evaluator_none_grandfathered, status_active, skipped]
+  fields: [scanned, ritual, declared, grandfathered, status_active, skipped]
   discriminating_assertions: >-
     scanned > 0, ritual > 0, and skipped == 0 against the real tree. The bucket identity
     (scanned == ritual + declared + grandfathered + skipped) is retained only as a
@@ -212,12 +256,13 @@ census:
     a mutually exclusive partition and is explicitly NOT claimed as evidence against a vacuous
     pass. Counts are always derived from the scan, never hardcoded.
   pin_binding: >-
-    (migration-step-3-grandfathering) All three ratchet.*_max pins below are bound to their
-    matching census bucket by EQUALITY, not a ceiling -- validate_contract_drift fails when a pin
-    does NOT EQUAL its live bucket, in EITHER direction. This forces every enforcer landing under
-    rec-3059 (which lowers evaluator_none_grandfathered by converting a none_grandfathered file to
-    a resolving evaluator) to lower the matching pin in the SAME PR, closing the "stale slack left
-    behind" failure mode a `>=` ceiling would permit.
+    (migration-step-3-grandfathering, narrowed to two pins by rec-3059 wave 2) Both ratchet.*_max
+    pins below are bound to their matching census bucket by EQUALITY, not a ceiling --
+    validate_contract_drift fails when a pin does NOT EQUAL its live bucket, in EITHER direction.
+    This binding is SUPPRESSED when census.skipped > 0 (rec-3101): a skipped contract's own bucket
+    never increments, so without the suppression the equality check would emit a second, misleading
+    error whose obvious reading is "lower the pin" -- the correct fix is always to fix the skipped
+    contract, never to shrink the debt ratchet.
 
 ratchet:
   # The gate-visible non-ritual population BEFORE this sweep: 40 depth-1 *.yaml files = 16 ritual
@@ -236,7 +281,6 @@ ratchet:
   # direction comparison for that pin.
   grandfathered_max: 17
   status_active_max: 16
-  evaluator_none_grandfathered_max: 2
   raise_mechanism: >-
     An inline `# raise-approved: dec-NNN <reason>` comment on a pin's entry line, routed through
     scripts.checks._marker_guard.authorization_failure via the RegistrySpec
@@ -250,11 +294,10 @@ ratchet:
     PR citing dec-168 -- the same Decision 166 point 6 KEY-not-VALUE weakness this plan calls out
     for config/structural_size_budgets.yaml (authorization_failure matches the entry KEY, never
     its VALUE, so one marker permanently authorizes every future bump of that entry). By contrast
-    `status_active_max` and `evaluator_none_grandfathered_max` are single-segment keys (no `/`, so
-    `_expand_ancestor_candidates` generates no ancestor beyond the bare key itself) named in NO
-    existing Decision body -- dec-168 predates this plan and cannot mention keys this plan
-    invents, so a future `# raise-approved: dec-168 ...` marker on either would FAIL authorization;
-    raising them requires a NEW numbered Decision that names the key. Practical risk is low: all
-    three grandfather forms are closed at birth (grandfather_only_forms above), so the census
-    cannot grow to exploit a raised ceiling without a new baseline-present file, which does not
-    exist.
+    `status_active_max` is a single-segment key (no `/`, so `_expand_ancestor_candidates`
+    generates no ancestor beyond the bare key itself) named in NO existing Decision body --
+    dec-168 predates this plan and cannot mention a key this plan invents, so a future
+    `# raise-approved: dec-168 ...` marker on it would FAIL authorization; raising it requires a
+    NEW numbered Decision that names the key. Practical risk is low: the one surviving grandfather
+    form (status: active) is closed at birth (grandfather_only_forms above), so the census cannot
+    grow to exploit a raised ceiling without a new baseline-present file, which does not exist.

@@ -115,18 +115,6 @@ class TestEvaluatorResolution:
         )
         assert not resolves2
 
-    def test_none_grandfathered_never_resolves(self) -> None:
-        route = {
-            "reason": "pre-ritual free-form doc",
-            "consumer": "scripts/some_consumer.py",
-            "mechanism": "assert some_field matches reality",
-            "blocker": "no check reads it yet",
-            "shape": "check",
-        }
-        resolves, detail = _population.resolve_evaluator("anything.yaml", EvaluatorSpec(none_grandfathered=route), root=_ROOT)
-        assert not resolves
-        assert "never resolves" in detail
-
     def test_exact_equality_not_substring(self, tmp_path) -> None:
         (tmp_path / "primary.py").write_text('_TARGET = "my-file-router.yaml"\n', encoding="utf-8")
         resolves, _detail = _population.resolve_evaluator(

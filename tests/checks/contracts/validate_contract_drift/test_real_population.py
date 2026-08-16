@@ -56,14 +56,16 @@ class TestRealPopulationRegression:
         assert int(counts["skipped"]) == 0
         assert failed == []
 
-    def test_every_seeded_contract_declares_resolving_or_routed_evaluator(self) -> None:
+    def test_every_seeded_contract_declares_a_resolving_evaluator(self) -> None:
         """Each of the 20 seeded files (migration-step-3-grandfathering) declares a valid Class D
-        envelope with a unique subject and an evaluator that either genuinely RESOLVES (check /
-        agent_surface) or carries a complete routed none_grandfathered debt record -- the shared
-        guard the per-file test_obligations rows are all proven by. red before (each file was
-        free-form, so the gate's own real-tree pass above would have found no Class D envelope
-        for it and this loop would KeyError/AttributeError on a missing contract block); green
-        after."""
+        envelope with a unique subject and an evaluator that genuinely RESOLVES (check /
+        agent_surface) -- the shared guard the per-file test_obligations rows are all proven by.
+        UNCONDITIONAL since rec-3059 wave 2 retired the routed none_grandfathered debt-record
+        escape: there is no longer a routed half to branch on, so this is the standing proof that
+        the debt class is empty. Genuinely red before this plan lands (composite-action-shape.yaml
+        and iam-simulate-fixture.yaml still carry none_grandfathered on main, and the retired kind
+        is unrepresentable once this plan's schema deletion lands, so an unconverted file would
+        fail to even LOAD); green after."""
         from scripts.checks.contracts import _population
         from scripts.contracts import load_contract_meta
 
@@ -75,15 +77,8 @@ class TestRealPopulationRegression:
             assert meta.subject, f"{name}: subject is empty"
             assert meta.evaluator is not None, f"{name}: evaluator is absent"
 
-            if meta.evaluator.none_grandfathered is not None:
-                route = meta.evaluator.none_grandfathered
-                assert route.reason.strip(), f"{name}: none_grandfathered.reason is empty"
-                assert route.mechanism.strip(), f"{name}: none_grandfathered.mechanism is empty"
-                assert route.blocker.strip(), f"{name}: none_grandfathered.blocker is empty"
-                assert route.shape in ("check", "agent_surface"), f"{name}: none_grandfathered.shape invalid"
-            else:
-                resolves, detail = _population.resolve_evaluator(name, meta.evaluator, root=_REPO_ROOT)
-                assert resolves, f"{name}: evaluator does not resolve -- {detail}"
+            resolves, detail = _population.resolve_evaluator(name, meta.evaluator, root=_REPO_ROOT)
+            assert resolves, f"{name}: evaluator does not resolve -- {detail}"
 
 
 class TestContractPopulationSelfHosting:

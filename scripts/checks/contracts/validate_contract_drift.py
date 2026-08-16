@@ -12,9 +12,9 @@ orchestrates. `contract-population.yaml`'s own basename appears below (`_CONTRAC
 this module's `{check: validate_contract_drift}` evaluator declaration genuinely resolves.
 
 Pass 2 (diff-aware, scoped to files changed vs the git merge-base): amendment-log + status
-transition for ritual contracts (unchanged categories 6/7), plus the Class D rules -- amendment
-log, evaluator-kind-change, and conformance-loss -- resolving each file's base content via the
-three-way union (path, `-M` rename map, `contract.id`).
+transition for ritual contracts (unchanged categories 6/7), plus the Class D amendment-log rule
+-- resolving each file's base content via the three-way union (path, `-M` rename map,
+`contract.id`).
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ def validate_contract_drift(
     target_dir = contracts_dir if contracts_dir is not None else _common.ROOT / "docs" / "contracts"
     if not target_dir.is_dir():
         failed.append(f"Contract drift (fail-closed): {target_dir} does not exist -- docs/contracts/ is required.")
+        registry.skipped(f"{target_dir} does not exist")
         return
 
     router = router_path if router_path is not None else _common.ROOT / "docs" / "contracts" / "file-router.yaml"
@@ -239,36 +240,25 @@ def validate_contract_drift(
             # envelope cannot pass schema validation without a non-None evaluator.
             assert meta.evaluator is not None
 
-            if is_new:
-                if meta.status.value == "active":
-                    failed.append(
-                        f"Contract drift (grandfather): {name}: a NEW Class D file may not declare "
-                        "status: active (grandfather-only)."
-                    )
-                    census.skipped += 1
-                    continue
-                if meta.evaluator.none_grandfathered is not None:
-                    failed.append(
-                        f"Contract drift (grandfather): {name}: a NEW Class D file may not declare "
-                        "evaluator.none_grandfathered (grandfather-only)."
-                    )
-                    census.skipped += 1
-                    continue
+            if is_new and meta.status.value == "active":
+                failed.append(
+                    f"Contract drift (grandfather): {name}: a NEW Class D file may not declare "
+                    "status: active (grandfather-only)."
+                )
+                census.skipped += 1
+                continue
 
-            if meta.evaluator.none_grandfathered is None:
-                resolves, detail = _population.resolve_evaluator(name, meta.evaluator, root=_common.ROOT)
-                if not resolves:
-                    failed.append(f"Contract drift (evaluator): {name}: evaluator does not resolve -- {detail}")
-                    census.skipped += 1
-                    continue
+            resolves, detail = _population.resolve_evaluator(name, meta.evaluator, root=_common.ROOT)
+            if not resolves:
+                failed.append(f"Contract drift (evaluator): {name}: evaluator does not resolve -- {detail}")
+                census.skipped += 1
+                continue
 
-            grandfather_kind = meta.status.value == "active" or meta.evaluator.none_grandfathered is not None
+            grandfather_kind = meta.status.value == "active"
             if grandfather_kind:
                 census.grandfathered += 1
             else:
                 census.declared += 1
-            if meta.evaluator.none_grandfathered is not None:
-                census.evaluator_none_grandfathered += 1
             if meta.status.value == "active":
                 census.status_active += 1
 
@@ -354,17 +344,11 @@ def validate_contract_drift(
                     amend_err = _population.check_amendment_log_for_class_d(base_data, head_data)
                     if amend_err:
                         failed.append(f"Contract drift (amendment): {name}: {amend_err}")
-
-                base_meta = _class_d_meta_from_text(base_text) if base_shape == "class_d" else None
-                head_meta = class_d_metas.get(name) if head_shape == "class_d" else None
-                kind_change = _population.check_evaluator_kind_change(base_meta, head_meta)
-                if kind_change:
-                    failed.append(f"Contract drift (kind-change): {name}: {kind_change}")
         else:
             print("  advisory-SKIP: Pass 2 (diff-aware) checks skipped -- origin/main unreachable.")
 
-        # ---- ratchet (contract-population.yaml's three pins: grandfathered_max,
-        # status_active_max, evaluator_none_grandfathered_max) ----
+        # ---- ratchet (contract-population.yaml's two pins: grandfathered_max,
+        # status_active_max) ----
         pins, pin_errors = _population.validate_ratchet_pins(target_dir)
         for err in pin_errors:
             failed.append(f"Contract drift (ratchet): {err}")
@@ -374,14 +358,18 @@ def validate_contract_drift(
                     failed.append(f"Contract drift (ratchet): {err}")
 
         # ---- pin-vs-census equality binding: every pin must EQUAL its live census bucket,
-        # never merely be >= it (acceptance criterion 4) ----
+        # never merely be >= it (acceptance criterion 4). Suppressed when any contract was
+        # SKIPPED (rec-3101): a skipped contract's bucket never increments, so the equality
+        # binding would otherwise emit a SECOND error whose obvious reading is "lower the pin" --
+        # the correct fix is always to fix the skipped contract, never to shrink the debt ratchet.
+        # ----
         census_values = {
             "grandfathered_max": census.grandfathered,
             "status_active_max": census.status_active,
-            "evaluator_none_grandfathered_max": census.evaluator_none_grandfathered,
         }
-        for err in _population.check_pins_bound_to_census(pins, census_values):
-            failed.append(f"Contract drift (ratchet): {err}")
+        if census.skipped == 0:
+            for err in _population.check_pins_bound_to_census(pins, census_values):
+                failed.append(f"Contract drift (ratchet): {err}")
 
         # ---- census (every run) ----
         print(f"  Census: {census.render()}")
@@ -389,6 +377,8 @@ def validate_contract_drift(
             failed.append(f"Contract drift (census): bucket identity failed -- {census.render()}")
         if self_hosting_seen:
             print(f"  Self-hosting: {_CONTRACT_POPULATION} was scanned by this run.")
+
+        registry.examined(len(yaml_paths), unit="contracts")
 
         new_failures = len(failed) - error_count_before
         if new_failures == 0:
@@ -413,26 +403,3 @@ def _load_router_routes(router_path: Path, yaml_module) -> list[dict]:
         return []
     routes = data.get("routes")
     return routes if isinstance(routes, list) else []
-
-
-def _class_d_meta_from_text(text: str) -> ContractMeta | None:
-    """Best-effort ContractMeta from raw base-content text -- None (never raises) on any parse
-    or schema failure, since Pass 2 must not crash on a malformed base."""
-    import yaml as _yaml
-    from pydantic import ValidationError
-
-    from scripts.contracts_schema import ContractMeta
-
-    try:
-        data = _yaml.safe_load(text)
-    except _yaml.YAMLError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    contract = data.get("contract")
-    if not isinstance(contract, dict):
-        return None
-    try:
-        return ContractMeta.model_validate(contract)
-    except ValidationError:
-        return None
