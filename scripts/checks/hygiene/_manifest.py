@@ -67,4 +67,11 @@ ENTRIES: tuple[Entry, ...] = (
         pre_globs=("scripts/checks/**", "config/check_accounting_baseline.yaml"),
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_licence_consistency",
+        module="scripts.checks.hygiene.validate_licence_consistency",
+        attr="validate_licence_consistency",
+        pre=True,
+        full_segment="full_after_lint",
+    ),
 )

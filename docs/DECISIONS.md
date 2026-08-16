@@ -50,6 +50,44 @@ conditions:
 
 ---
 
+## Decision 171: The repository is renamed agent-platform -> theseus and relicensed Apache-2.0 -> BUSL-1.1, forward-only (Decided)
+
+```yaml
+number: 171
+status: Decided
+decided_date: "2026-08-16"
+amends: [101, 127]
+significance:
+  value: numbered_decision
+  justification: An irreversible change to the repository's public identity and outbound licence, with standing consequences for contribution posture, the sanctioned-prose taxonomy, and every trust claim keyed on the repository slug.
+```
+
+**Status:** Decided
+**Date:** 2026-08-16
+**Warehouse ID:** dec-171 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 101 ratified Theseus as the platform's external brand but froze the repository name as an internal identifier "not to be altered without a separate explicit decision", and deferred a paid service offering as separately gated. The repo therefore shipped under a name used nowhere externally, under Apache-2.0 -- a licence permitting unrestricted commercial redistribution of a platform whose engineering IS the product. Both need one explicit decision because they share a blast radius: the slug is embedded in every OIDC trust policy, and the licence flip needs an unambiguous boundary commit a rename must not disturb.
+
+**Decision:**
+1. **Rename `benjamin-blake/agent-platform` -> `benjamin-blake/theseus`, in place.** This promotes ONLY Decision 101 point (b)'s repository-name row into the presentation layer. Every other (b) row is re-affirmed FROZEN -- `agent-platform-*` AWS resource names, the `agent_platform` profile and Glue database, `/agent-platform/*` SSM paths, `project_id = trading-system` -- and the deep internal rename stays deferred post-MVP. In place rather than a fresh repository; that rationale is in `LICENSING.md`.
+2. **Relicense to BUSL-1.1, forward-only.** Every version published up to and including commit `4de9df86e02b7eeccf58df83e74f6061fc1303e2` remains Apache-2.0 irrevocably, preserved verbatim at `LICENSE-APACHE`; no artefact makes a retroactive claim. The boundary, its provenance-scoped self-verifying rule, and why it lives in `LICENSING.md` rather than `NOTICE` (Apache-2.0 4(d) burdens a root NOTICE with a redistribution obligation) are stated there, not restated here.
+3. **Change Date 2030-08-15, Change License Apache-2.0.** The date is the exact four-year anniversary of the flip, rounded DOWN, never up: rounding up would breach BUSL-1.1's own cap, and a published version's Change Date may only ever move EARLIER. Apache-2.0 satisfies BUSL-1.1's GPL-compatibility requirement for the Change License because it is GPLv3-compatible; it is not GPLv2-compatible, and BUSL does not require that.
+4. **The Additional Use Grant restates the non-production baseline AND disclaims exhaustiveness inside the parameter value.** That slot exists to permit LIMITED PRODUCTION use, so a bare enumeration there invites an expressio unius reading that NARROWS the baseline the Terms already grant. The non-limitation sentence sits inside the parameter -- a clause in another section does not qualify a parameter.
+5. **Contribution posture changes, and Decision 101 point (f)'s "secondary aspiration: open-source community" is amended accordingly.** BUSL-1.1 is source-available, NOT OSI open source. Dual licensing rests on sole copyright ownership, which is UNVERIFIED: GitHub's inbound=outbound terms put contributions under the outbound licence, conferring no right to sublicense commercially, and AGENTS.md mandates a `Co-Authored-By` trailer on every commit (54 of the 60 commits visible in this shallow clone carry one). A trailer is a convention, not an assignment. `CONTRIBUTING.md` therefore requires assignment or an equivalently broad grant; a real CLA/DCO mechanism is a follow-on recommendation, and the trailer convention is NOT quietly dropped as a workaround.
+6. **Point (f)'s paid-service gate is discharged for the LICENCE half only.** Dual licensing is authorised; no commercial surface, pricing or terms is built here. `COMMERCIAL-LICENSE.md` is a contact stub at the repo root -- deliberately not `marketing/`, which Decision 101(c) names as the home for commercial PROSE, whereas a licence file belongs where licence files conventionally live.
+7. **Decision 127 point 1 gains a permanent prose class: licence-and-attribution artefacts** (`LICENSING.md`, `CONTRIBUTING.md`, `COMMERCIAL-LICENSE.md`). They enter `prose_allowlist.allowed_globs`, never `grandfathered_globs`, which is ratchet-only and may not grow. Precedent: Decision 101(c)'s scoped `marketing/**` carve-out. `validate_licence_consistency` enforces mutual consistency of the licence artefacts and guards the class-(a) repository-reference / class-(b) AWS-name split the rename turns on.
+
+**Rationale:**
+Decision 111's curated public-portal enumeration goes stale on merge -- three new root portal files land. The invariant is untouched, because licence artefacts are curated projection rather than an operational-data export, so Decision 111's reversal conditions do not fire; the enumeration is simply extended.
+
+**Reversal conditions:**
+Asymmetric by half. The RENAME was reversible by an owner-executed rename-back only while the old-slug OIDC subjects stayed trusted; that window closed with Decision 172's contraction, and a further rename now follows Decision 172 point 2's pre-stage playbook. The LICENCE flip is not reversible for published versions -- a later, more permissive relicense is always available prospectively, but no published BUSL version can be unpublished. Re-decide if: (a) a copyright-provenance audit finds a contribution not covered by an assignment, in which case the dual-licensing posture must be settled BEFORE any commercial licence is sold, not after; or (b) the Additional Use Grant is read as narrowing despite point 4, in which case it reverts to "None" and the Terms stand alone.
+
+**Related:** Decision 101, Decision 111, Decision 127, Decision 128, Decision 167, Decision 172.
+
+---
+
 ## Decision 170: The registered-check contract gains a second, declarative output channel -- examined()/skipped() -- so a vacuous pass, a skip, and an enforced pass stop collapsing into one indistinguishable green, governed by a shrink-only adoption ratchet (Decided)
 
 ```yaml
@@ -2416,6 +2454,13 @@ authored in DECISIONS.md then backfilled to `ops_decisions`, never written direc
 **Date:** 2026-07-13
 **Warehouse ID:** dec-127 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
 
+> **Amended by Decision 171 (2026-08-16):** point 1's enumeration gains a second separately
+> sanctioned NON-agent-instruction class, **licence-and-attribution artefacts** (added inline
+> below). The taxonomy's rule is unchanged; this is an addition to the permanent classes, made
+> as an `allowed_globs` entry and never as a `grandfathered_globs` one, since point 3's
+> grandfathered set is ratchet-only and may not grow. Points 2, 3 and 4 are unedited; see
+> Decision 171 for the full derivation.
+
 **Problem:**
 Decision 86 forbade new *standing prose-architecture / deliberation* documents and retired the
 INTENT-*.md corpus, but it never named the positive rule the repo actually needs: which prose is
@@ -2452,6 +2497,16 @@ and the INTENT-doc freeze existed), so new prose files could land anywhere with 
    not "prose whose audience-of-record is a human" in the sense this Decision forbids storing;
    it is pre-sanctioned here even though `marketing/` does not exist on disk yet, so a future
    marketing-content plan does not need to re-litigate this taxonomy.
+   Also permanently and separately sanctioned as a NON-agent-instruction class (Decision 171):
+   **licence-and-attribution artefacts** at the repository root -- `LICENSING.md` (the
+   forward-only licence boundary and its self-verifying rule), `CONTRIBUTING.md` (the copyright
+   position dual licensing depends on) and `COMMERCIAL-LICENSE.md` (the commercial-licence
+   contact). These are legal instruments and their operative companions, not human narrative:
+   their audience-of-record is a licensee, their content is normative rather than explanatory,
+   and no `procedure:` block in a contract can carry them, because a licence must sit where a
+   licensee looks for it. Their consistency is machine-checked by
+   `validate_licence_consistency`, which is what keeps this class from becoming the
+   unenforced-prose drift point 3 exists to prevent.
 2. **`docs/runbooks/` is a retiring class.** Operator runbooks are human-audience prose by
    construction. The existing `docs/runbooks/ducklake-catalog-operations.md` is grandfathered
    (this Decision deletes nothing), but no new file may be added under `docs/runbooks/`; new
@@ -3683,6 +3738,20 @@ to this numbered Decision).
 **Status:** Decided
 **Date:** 2026-06-28
 **Warehouse ID:** dec-101 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+> **Amended by Decision 171 (2026-08-16):** three clauses move, and only three. (1) Point (b)'s
+> **repository-name row** is promoted into the presentation layer -- the repository is renamed
+> `benjamin-blake/agent-platform` -> `benjamin-blake/theseus`. This is the "separate explicit
+> decision" that row required. The other four (b) rows -- `agent-platform-*` AWS resource
+> prefixes, the `agent_platform` IAM profile, the `agent_platform` Glue database, and
+> `project_id = trading-system` -- are re-affirmed FROZEN, and the deep internal rename stays
+> deferred post-MVP. (2) Point (f)'s **deferred paid service offering** is discharged for the
+> LICENCE half only: Decision 171 relicenses to BUSL-1.1 and authorises dual licensing, but
+> builds no commercial surface, pricing or terms, so the remainder of that deferral stands.
+> (3) Point (f)'s **"secondary aspiration: open-source community"** is amended: BUSL-1.1 is
+> source-available, NOT OSI open source, and contributions now require a copyright assignment
+> or equivalently broad grant (`CONTRIBUTING.md`). Points (a), (c), (d) and (e) are unedited;
+> see Decision 171 for the full derivation.
 
 **Problem:**
 The platform and its trading product were operating under purely internal identifiers (repo

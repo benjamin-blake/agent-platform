@@ -380,22 +380,28 @@ verification_plan:
       validate_licence_consistency.
   - step: 6
     phase: pre-deploy
-    action: LICENSING.md's boundary SHA equals the last pre-flip commit, and an annotated tag anchors it.
+    action: LICENSING.md's boundary SHA equals the last pre-flip commit.
     command: >-
-      test "$(grep -oE '[0-9a-f]{40}' LICENSING.md | head -1)" = "$(git rev-parse origin/main)" &&
-      git rev-parse -q --verify refs/tags/apache-final >/dev/null &&
-      test "$(git rev-list -n1 apache-final)" = "$(git rev-parse origin/main)"
+      test "$(grep -oE '[0-9a-f]{40}' LICENSING.md | head -1)" = "$(git rev-parse origin/main)"
     expected: >-
-      Exit 0. The SHA in LICENSING.md is the tip of main this branch was cut from, and the
-      annotated tag apache-final points at that same commit.
+      Exit 0. The SHA in LICENSING.md is the tip of main this branch was cut from.
     fix_if: >-
       A mismatch means main advanced after LICENSING.md was written. Rebase onto origin/main,
-      update the SHA, re-point the tag, and re-run. Run this immediately before the final push. To
-      re-verify AFTER the squash-merge, compare against the flip commit's FIRST PARENT
-      (git rev-parse HEAD^1), NOT origin/main -- post-merge origin/main IS the flip commit, so
-      re-running the command verbatim is guaranteed to fail and would be a false alarm. The repository
-      has ZERO tags today, so "every version published" otherwise has no durable referent; the
-      annotated tag is that referent.
+      update the SHA, and re-run. Run this immediately before the final push. To re-verify AFTER
+      the squash-merge, compare against the flip commit's FIRST PARENT (git rev-parse HEAD^1),
+      NOT origin/main -- post-merge origin/main IS the flip commit, so re-running the command
+      verbatim is guaranteed to fail and would be a false alarm.
+      DEVIATION -- TAG HALF RETIRED AT IMPLEMENT TIME (operator decision, 2026-08-16). This step
+      originally also asserted that an annotated apache-final tag resolved to the same commit.
+      `git push origin apache-final` fails from the DEV container on every attempt, including
+      four retries with exponential backoff, while a branch push over the same remote succeeds --
+      the agent proxy blocks tag refs specifically. CC-web is this project's only dev surface, so
+      there is no other container from which an agent could push it, and a local-only tag is not
+      an anchor. The boundary is therefore anchored on the 40-hex SHA alone, which LICENSING.md
+      already carries, backed by its provenance-scoped self-verifying rule -- that rule was
+      designed to survive SHA churn and does not depend on a tag existing. The local tag was
+      created and then DELETED rather than left behind, so no artefact names a referent the
+      public repository does not have.
     graduation: waive
     graduation_waiver_reason: >-
       Same moving-reference problem as step 5: the assertion is anchored on origin/main at flip
@@ -1277,12 +1283,14 @@ execution_steps:
     revert all travel together to rec-3142, which sequences them after rec-3143 closes
     github_ci_deploy's evidence gap so all five roles contract in one reviewed change.
   - >-
-    Create and push the boundary tag BEFORE writing LICENSING.md's SHA, in the PR-4 working tree:
-    git tag -a apache-final "$(git rev-parse origin/main)" -m "Last version released under
-    Apache-2.0; later versions are BUSL-1.1 per Decision 171" && git push origin apache-final.
-    The repository has ZERO tags today, so this is the first durable referent for "every version
-    published up to the flip". A local-only tag is not an anchor -- the push is load-bearing, and
-    VP step 6 asserts the tag resolves to the same commit as LICENSING.md's SHA.
+    BOUNDARY TAG NOT CREATED -- planned, attempted, abandoned at implement time. The plan called
+    for an annotated apache-final tag pushed before writing LICENSING.md's SHA, on the reasoning
+    that a repository with ZERO tags has no durable referent for "every version published up to
+    the flip". The push is impossible from the DEV container (see VP step 6's deviation) and
+    CC-web is the only dev surface, so the SHA plus LICENSING.md's provenance-scoped
+    self-verifying rule carries the boundary alone. If a tag is ever wanted, an operator can push
+    it out-of-band against the same SHA; nothing in the licence artefacts needs changing if they
+    do.
   - >-
     PR-4 (relicense + decision) -- LAST. Fetch the canonical BUSL-1.1 text and fill only its Parameters
     block. Write validate_licence_consistency here (NOT in PR-3): its licence invariant cannot be

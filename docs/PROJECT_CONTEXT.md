@@ -1,4 +1,4 @@
-# Agentic Software Engineering Platform - Project Context
+# Theseus - Agentic Software Engineering Platform
 
 Canonical Layer 2 project knowledge base for Claude Code. This file is loaded on demand by workflows; keep rules in `CLAUDE.md` / `AGENTS.md`, workflow method in `.claude/commands/` and `.claude/skills/`, and machine semantics in `docs/contracts/*.yaml`.
 
