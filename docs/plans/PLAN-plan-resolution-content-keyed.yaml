@@ -5,10 +5,10 @@ handoff_policy:
 slug: "plan-resolution-content-keyed"
 intent: >-
   Re-key the two plan-verification gates off commit-message convention and onto an explicit,
-  schema-validated declaration carried in the plan file itself, so their applicability predicate
-  becomes decidable and their "nothing to do" outcome rests on positive evidence rather than the
-  absence of a signal. Contributes to the North Star by hardening the verification safety envelope
-  that admits every other change.
+  schema-validated declaration carried in the plan file itself, and adopt Decision 170's ratified
+  examined()/skipped() channel so a vacuous pass is declared rather than indistinguishable from a
+  real one. Contributes to the North Star by hardening the verification safety envelope that admits
+  every other change.
 plan_type: IMPLEMENTATION
 verification_tier: V2
 plan_path: docs/plans/PLAN-plan-resolution-content-keyed.yaml
@@ -24,23 +24,30 @@ scope:
     action: Modify
     purpose: >-
       Add the optional `implementation_declared` boolean to PlanDocument. Optional and defaulted, so
-      the entire existing corpus keeps validating unchanged and no schema_version bump is owed;
-      absence means "not yet implemented".
+      the entire existing corpus keeps validating unchanged (Decision 85 / the Decision 132 clause-1
+      precedent) and no schema_version bump is owed; absence means "not yet implemented".
   - file: scripts/checks/_common.py
     action: Modify
     purpose: >-
       Add the content-based plan resolver and retire feat_commit_slugs (defined at :208) once no
-      caller remains. The resolver reuses the existing `git show origin/main:<path>` baseline idiom
-      from two sibling checks; the genuinely new part is the two-tree comparison.
+      caller remains. Decision 148 makes this module the SOLE home for resolution helpers, so the new
+      resolver lands here and nowhere else.
   - file: scripts/checks/verification/validate_vp_replay.py
     action: Modify
     purpose: >-
       Re-key BOTH legs off commit subjects -- the implement leg at :174 and the plan-only leg's
-      co-presence test at :150, which sits inside _plan_only_pr_leg (136-165). Split the output into
-      PASS / FAIL / N/A.
+      co-presence test at :150, inside _plan_only_pr_leg (136-165) -- and adopt Decision 170's
+      examined()/skipped() declaration.
   - file: scripts/checks/verification/validate_graduation_completeness.py
     action: Modify
-    purpose: Same re-key at :186 and the same three-state split.
+    purpose: Same re-key at :186 and the same Decision 170 declaration.
+  - file: config/check_accounting_baseline.yaml
+    action: Modify
+    purpose: >-
+      Remove validate_graduation_completeness (:75) and validate_vp_replay (:129) from the frozen
+      baseline as both modules adopt the declaration. Shrink-only, which the baseline's own guard
+      permits; leaving them listed while editing their defining modules fails validate_check_accounting
+      in both tiers (the touch-it-fix-it rule).
   - file: .claude/hooks/edit_scope_guard.py
     action: Modify
     purpose: >-
@@ -59,8 +66,14 @@ scope:
       Correct the now-false hermetic-authoring note at :334-337, which tells every future planning
       agent that "the implement PR resolves PLAN-{slug}.yaml from feat({slug}) commits on git log
       origin/main..HEAD". This surface has ZERO bytes of headroom (55788/55788), so the replacement
-      must be strictly the same size or smaller -- a replace-in-place that is shorter than the
-      sentence it removes.
+      must be no longer than the sentence it removes.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add an `[Amendment YYYY-MM-DD: ...]` line to Decision 132 and Decision 148, both of which name
+      the retired commit-subject mechanism in their Decision text. Provenance for the clarification
+      (Decision 151 clause 3(iii)) is EXPLICIT OPERATOR DIRECTION given during this plan's authoring;
+      no new Decision is minted.
   - file: tests/roadmap/plan_document/test_optional_fields.py
     action: Modify
     purpose: >-
@@ -70,27 +83,28 @@ scope:
   - file: tests/checks/_common/test_primitives.py
     action: Modify
     purpose: >-
-      Add TestImplementationDeclaredResolver; remove the feat_commit_slugs assertion at :173 and the
-      one at :188, keeping the origin_main_reachable half of the :187 test, which survives. This
-      package is _common.py's mapped 100%-coverage home.
+      Add TestImplementationDeclaredResolver; remove the feat_commit_slugs assertions at :173 and
+      :188, keeping the origin_main_reachable half of the :187 test, which survives.
   - file: tests/checks/verification/test_validate_vp_replay.py
     action: Modify
     purpose: >-
       Re-point both legs' tests at the resolver and add TestContentKeyedResolution, including the
       mutation-style meta-test proving a resolved plan with a failing VP step still reddens the check.
+      340 SLOC of a 500 limit.
   - file: tests/checks/verification/test_validate_graduation_completeness.py
     action: Modify
-    purpose: Same re-point plus TestContentKeyedResolution and the same can-this-check-actually-fail meta-test.
+    purpose: Same re-point plus TestContentKeyedResolution and the same meta-test. 372 SLOC of a 500 limit.
   - file: tests/test_edit_scope_guard.py
     action: Modify
     purpose: >-
       Add TestActivePlanSelfEditExempt covering the exemption and confirming out-of-scope files are
-      still denied.
+      still denied. 313 SLOC of a 500 limit.
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      One row per graduated verification_plan step. Every test_selector row's node_id names a class
-      absent at origin/main (verified), so the differential admission gate can discriminate.
+      One row per graduated step. The file is at 5949 of its 6000-line cap (Decision 166) averaging
+      13.6 lines per row, so only THREE rows fit -- which is exactly the number of steps this plan
+      graduates. Every other step waives with a substantive reason.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -99,30 +113,37 @@ acceptance_criteria:
     still validates with no edits and no schema_version bump.
   - >-
     scripts/checks/_common.py exposes a resolver returning the plans whose `implementation_declared`
-    is true in the working tree and was not true at origin/main, and feat_commit_slugs has no caller
-    anywhere under scripts/checks/.
+    is true in the working tree and was not true at the diff base, and feat_commit_slugs has no
+    caller anywhere under scripts/checks/.
+  - >-
+    The resolver derives its baseline via push_context_base() with a fallback to origin/main, so the
+    post-merge full-tier run on main does not silently resolve nothing (Decision 159's diff-base
+    class fix).
   - >-
     The resolver reads the plan with a raw YAML load, failing loudly only on an OSError or a YAML
     parse error in the WORKING TREE. A plan that parses but fails PlanDocument schema validation is
     NOT a resolver failure -- both checks keep their existing "schema validity is
-    validate_plan_documents' concern" SKIP carve-out. A baseline that does not resolve at origin/main
-    is a legitimate "not declared at baseline", never an error.
+    validate_plan_documents' concern" SKIP carve-out. A baseline that does not resolve is a
+    legitimate "not declared at baseline", never an error.
   - >-
-    validate_vp_replay resolves BOTH legs from the declaration -- the implement leg and the
-    plan-only leg's co-presence test -- so a branch that declares an implementation has its hermetic
-    pre-deploy steps replayed regardless of commit topology, including when every content commit is
-    an automated checkpoint. The plan-only DEFER outcome and its printed reason survive.
+    validate_vp_replay resolves BOTH legs from the declaration, so a branch that declares an
+    implementation has its hermetic pre-deploy steps replayed regardless of commit topology,
+    including when every content commit is an automated checkpoint. The plan-only DEFER outcome and
+    its printed reason survive.
   - >-
-    When origin/main is unreachable, the plan-only leg DEFERs every plan (matching today's
-    conservative behaviour) and the implement leg SKIPs; no plan is left with no outcome, and neither
-    unreachability nor an absent baseline is ever reported as N/A or PASS.
+    When the diff base is unreachable, the plan-only leg DEFERs every plan (matching today's
+    conservative behaviour) and the implement leg declares skipped(reason); no plan is left with no
+    outcome.
   - >-
     validate_graduation_completeness resolves its implement-PR obligation the same way and is
     likewise independent of commit topology.
   - >-
-    Each check's declaration-resolution leg emits three distinct outcomes -- PASS, FAIL, and an
-    explicit `N/A` line printed only on positive evidence that no plan declared an implementation in
-    this diff. The pre-existing origin/main-unreachable SKIP stays a separate, distinct outcome.
+    Both checks declare through Decision 170's channel -- registry.examined(count) where count == 0
+    is the empty-domain VACUOUS declaration, and registry.skipped(reason) reserved for "could not
+    examine", never for "examined nothing". Neither module invents a separate outcome vocabulary.
+  - >-
+    Both check names are removed from config/check_accounting_baseline.yaml, so
+    validate_check_accounting's touch-it-fix-it rule is satisfied rather than tripped.
   - >-
     Each check has a mutation-style meta-test proving it can still fail - a resolved plan with a
     failing verification step reddens the check rather than passing.
@@ -133,36 +154,39 @@ acceptance_criteria:
     The stale instruction at .claude/skills/planning/SKILL.md:334-337 no longer describes
     commit-subject resolution, and that file is no larger than its 55788-byte budget.
   - >-
+    Decision 132 and Decision 148 each carry an amendment line recording that the commit-subject
+    resolution mechanism their text describes has been replaced.
+  - >-
     edit_scope_guard allows an Edit/Write to the active plan's own path and still denies a file
     outside the active plan's Scope.
   - >-
     The implement flow sets the declaration in the plan file before the mandatory full-validation
     run, so the gates resolve it from the working tree without needing any commit to exist.
-  - Every graduated verification_plan step has a registry row admitted by the differential gate.
+  - Every graduated step has a registry row admitted by the differential gate, within the 6000-line cap.
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
       Exercise the content resolver -- a plan whose declaration flipped resolves; a plan already
-      declared at origin/main does not re-resolve; a diff with no declaration resolves nothing; a
-      plan file ABSENT at origin/main resolves as newly-declared rather than erroring; an unreadable
+      declared at the baseline does not re-resolve; a diff with no declaration resolves nothing; a
+      plan file ABSENT at the baseline resolves as newly-declared rather than erroring; an unreadable
       or YAML-malformed working-tree plan raises rather than returning an empty list; a plan that
-      parses but is schema-invalid does NOT raise.
+      parses but is schema-invalid does NOT raise; the baseline derives from push_context_base().
     command: bin/venv-python -m pytest tests/checks/_common/test_primitives.py -q
     expected: "All tests pass; output reports `passed` and no failures."
     fix_if: >-
       A resolver that returns empty on an unreadable working-tree plan reintroduces the
       absence-as-claim defect. One that ERRORS on a baseline-absent plan breaks this plan's own
-      implement PR, since its plan file is not on origin/main. One that errors on a schema-invalid
-      plan breaks both checks' double-reporting carve-out and their pinned tests.
+      implement PR. One that errors on a schema-invalid plan breaks both checks' carve-out. One that
+      hardcodes origin/main silently resolves nothing on the post-merge main run (Decision 159).
     hermetic: false
     graduation: graduate
     graduation_check_id: plan-resolution-content-resolver
   - step: 2
     phase: pre-deploy
     action: >-
-      Exercise validate_vp_replay's two re-keyed legs, the unreachable-origin behaviour, the
-      three-state output, and the mutation-style meta-test proving the check still reddens on a
+      Exercise validate_vp_replay's two re-keyed legs, the unreachable-base behaviour, the Decision
+      170 declaration, and the mutation-style meta-test proving the check still reddens on a
       genuinely failing VP step.
     command: bin/venv-python -m pytest tests/checks/verification/test_validate_vp_replay.py -q
     expected: "All tests pass; output reports `passed` and no failures."
@@ -170,17 +194,23 @@ verification_plan:
       If the meta-test passes while the injected failing step is present, the check has become
       incapable of failing and is now decorative -- the exact condition this plan is closing.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: vp-replay-content-keyed
+    graduation: waive
+    graduation_waiver_reason: >-
+      Decision 170's check-accounting channel is now the standing guard for this exact property -- an
+      examined(0) declaration surfaces this check as VACUOUS in the accounting output, which is what a
+      registry row here would be asserting. A row would duplicate a repo-wide mechanism that already
+      watches every registered check, and the registry is at 5949 of its 6000-line cap.
   - step: 3
     phase: pre-deploy
-    action: Same for validate_graduation_completeness -- re-keyed leg, three-state output, can-it-fail meta-test.
+    action: Same for validate_graduation_completeness -- re-keyed leg, Decision 170 declaration, can-it-fail meta-test.
     command: bin/venv-python -m pytest tests/checks/verification/test_validate_graduation_completeness.py -q
     expected: "All tests pass; output reports `passed` and no failures."
     fix_if: As step 2 -- a meta-test that cannot redden the check means the gate is decorative.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: graduation-completeness-content-keyed
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same as step 2 -- the accounting channel's vacuous-status detection is the standing guard for
+      this check, and the registry cannot absorb duplicate rows at 51 lines of remaining headroom.
   - step: 4
     phase: pre-deploy
     action: >-
@@ -192,8 +222,10 @@ verification_plan:
       Any existing plan failing means the field was added as required rather than optional; make it
       optional rather than editing the corpus.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: plan-document-corpus-back-compat
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_plan_documents is a registered check that already re-validates the whole corpus in both
+      tiers, so corpus back-compatibility has a standing guard; a registry row would shadow it.
   - step: 5
     phase: pre-deploy
     action: >-
@@ -212,39 +244,39 @@ verification_plan:
   - step: 6
     phase: pre-deploy
     action: >-
-      Prove the three-state output landed -- each check emits the canonical `N/A` marker, distinct
-      from PASS, so a not-applicable outcome is greppable and auditable.
-    command: test "$(grep -c 'N/A' scripts/checks/verification/validate_vp_replay.py)" -ge "1" && test "$(grep -c 'N/A' scripts/checks/verification/validate_graduation_completeness.py)" -ge "1"
-    expected: Exit 0 (both checks carry the marker; both are 0 today).
+      Prove Decision 170 adoption landed on both modules and the frozen baseline was shrunk to match,
+      satisfying the touch-it-fix-it rule rather than tripping it.
+    command: test "$(grep -c 'examined(' scripts/checks/verification/validate_vp_replay.py)" -ge "1" && test "$(grep -c 'examined(' scripts/checks/verification/validate_graduation_completeness.py)" -ge "1" && test "$(grep -c 'validate_vp_replay\|validate_graduation_completeness' config/check_accounting_baseline.yaml)" = "0"
+    expected: Exit 0 (both modules declare; neither name remains baselined -- 0/0 and 2 today).
     fix_if: >-
-      A zero count means the check still prints PASS for the not-applicable case. `N/A` is the
-      canonical spelling -- prose elsewhere in this plan writes N-A only to stay YAML-safe.
+      A module edited without adopting the declaration while still listed in the baseline fails
+      validate_check_accounting in both tiers. Follow the validate_licence_consistency.py:198
+      precedent - registry.examined(total, unit="...").
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Steps 2 and 3 assert the three outcomes through the checks' real code paths; this grep only
-      confirms a marker string is present, so a registry row would guard the spelling rather than the
-      behaviour and would go red on any future rewording.
+      validate_check_accounting AST-scans every registered check's defining module for exactly this
+      declaration and enforces the baseline shrink itself, in both tiers -- this step is a plan-time
+      pre-check of a one-time adoption, so a registry row would shadow the repo-wide guard.
   - step: 7
     phase: pre-deploy
     action: >-
       Prove the implement flow actually sets the declaration -- if this instruction is ever lost,
-      implement sessions silently stop declaring and both gates go quietly not-applicable, which is
-      this plan's own failure mode reappearing one level up.
+      implement sessions silently stop declaring and both gates go quietly vacuous, which is this
+      plan's own failure mode reappearing one level up.
     command: test "$(grep -c 'implementation_declared' .claude/skills/implement/SKILL.md)" -ge "1"
     expected: Exit 0 (the flow names the field; 0 occurrences today).
     fix_if: >-
       A zero count means nothing in the documented flow sets the declaration, so every future
-      implement PR resolves to N/A and verifies nothing.
+      implement PR resolves vacuous and verifies nothing.
     hermetic: true
     graduation: graduate
     graduation_check_id: implement-flow-sets-declaration
   - step: 8
     phase: pre-deploy
     action: >-
-      Sweep the instruction surface for the retired mechanism -- the planning skill's
-      hermetic-authoring note must no longer tell future planning agents that plans resolve from
-      commit subjects -- and confirm the byte budget still holds on a zero-headroom surface.
+      Sweep the instruction surface for the retired mechanism, and confirm the byte budget still holds
+      on a zero-headroom surface.
     command: test "$(grep -c 'commits on .git log origin/main..HEAD' .claude/skills/planning/SKILL.md)" = "0" && test "$(wc -c < .claude/skills/planning/SKILL.md)" -le "55788"
     expected: Exit 0 (the stale sentence is gone -- 1 occurrence today -- and the file is within budget).
     fix_if: >-
@@ -252,8 +284,11 @@ verification_plan:
       size means the replacement was longer than the sentence removed; this surface has ZERO bytes of
       headroom, so shorten the replacement rather than taking a raise.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: planning-skill-no-commit-subject-resolution
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time correction of a specific sentence. Once the stale text is gone it cannot regress
+      without someone re-authoring it, and a registry row pinned to this exact phrase would go red on
+      any future legitimate rewording of that paragraph.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -265,17 +300,39 @@ verification_plan:
       If the exemption widens beyond the single active plan path, the guard stops being fail-closed
       for the case it exists to cover.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: edit-scope-guard-active-plan-exempt
+    graduation: waive
+    graduation_waiver_reason: >-
+      The hook is inert until a plan context is declared (nothing sets CLAUDE_ACTIVE_PLAN today), so a
+      standing registry row would guard a dormant code path; its mirror test file is the appropriate
+      guard until activation lands, and the registry has room for only three rows.
   - step: 10
+    phase: pre-deploy
+    action: >-
+      Prove the two Decision entries describing the retired mechanism carry their amendment lines, so
+      the decision log does not keep asserting a dead mechanism.
+    command: test "$(grep -c 'implementation_declared' docs/DECISIONS.md)" -ge "2"
+    expected: Exit 0 (both Decision 132 and Decision 148 reference the replacement; 0 today).
+    fix_if: >-
+      A count below 2 means one of the two entries still describes commit-subject resolution with no
+      amendment. Provenance for the clarification is explicit operator direction recorded in context;
+      no new Decision is minted.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time documentation amendment on two specific entries. The amendment convention is
+      explicitly enforcement-free (Decision 151 / Decision 146 operator-disposed stance), so a
+      registry row here would unilaterally impose enforcement the convention deliberately declines.
+  - step: 11
     phase: pre-deploy
     action: Run the full local gate before handoff.
     command: bin/venv-python -m scripts.validate
     expected: "Exit 0 with a final `Validation Summary (scope: all)` PASS and no failures."
     fix_if: >-
       Any failure blocks handoff; fix and re-run the full tier from the start. Watch specifically for
-      validate_graduation_completeness, which this plan modifies and must satisfy against its own
-      change, and for validate_prose_limits on the two zero-or-near-zero-headroom skill surfaces.
+      validate_check_accounting (touch-it-fix-it on both modified checks), validate_prose_limits on
+      the two zero-or-near-zero-headroom skill surfaces, validate_structural_size_limits on the
+      registry's 6000-line cap, and validate_graduation_completeness, which this plan modifies and
+      must satisfy against its own change.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -292,26 +349,31 @@ test_obligations:
     red_green_expectation: red before (the field is rejected by extra=forbid), green after.
   - source: scripts/checks/_common.py
     behavior: >-
-      The resolver returns plans whose declaration flipped, resolves nothing when none did, treats a
-      baseline-absent plan as newly-declared, fails loudly on an unreadable or YAML-malformed
-      working-tree plan, and does not fail on a schema-invalid one.
+      The resolver returns plans whose declaration flipped against a push_context_base-derived
+      baseline, treats a baseline-absent plan as newly-declared, fails loudly on an unreadable or
+      YAML-malformed working-tree plan, and does not fail on a schema-invalid one.
     verification_step: 1
     test_selector: tests/checks/_common/test_primitives.py::TestImplementationDeclaredResolver
     red_green_expectation: red before (the resolver does not exist), green after.
   - source: scripts/checks/verification/validate_vp_replay.py
     behavior: >-
-      Both legs resolve from the declaration, unreachable origin/main DEFERs rather than resolving,
-      output is three-state, and the check still reddens on a genuinely failing VP step.
+      Both legs resolve from the declaration, an unreachable base DEFERs rather than resolving, the
+      check declares examined()/skipped(), and it still reddens on a genuinely failing VP step.
     verification_step: 2
     test_selector: tests/checks/verification/test_validate_vp_replay.py::TestContentKeyedResolution
     red_green_expectation: >-
       red before (a checkpoint-only branch with a declaration resolves nothing and no-ops), green after.
   - source: scripts/checks/verification/validate_graduation_completeness.py
-    behavior: Same content-keyed resolution, three-state output, and can-it-fail property.
+    behavior: Same content-keyed resolution, Decision 170 declaration, and can-it-fail property.
     verification_step: 3
     test_selector: tests/checks/verification/test_validate_graduation_completeness.py::TestContentKeyedResolution
     red_green_expectation: >-
       red before (a checkpoint-only branch with a declaration resolves nothing and no-ops), green after.
+  - source: config/check_accounting_baseline.yaml
+    behavior: Neither modified check remains frozen in the baseline once both declare.
+    verification_step: 6
+    command: test "$(grep -c 'validate_vp_replay\|validate_graduation_completeness' config/check_accounting_baseline.yaml)" = "0"
+    red_green_expectation: red before (2 occurrences at :75 and :129), green after.
   - source: .claude/hooks/edit_scope_guard.py
     behavior: The active plan's own path is allowed; out-of-scope files are still denied fail-closed.
     verification_step: 9
@@ -329,9 +391,14 @@ test_obligations:
     verification_step: 8
     command: test "$(grep -c 'commits on .git log origin/main..HEAD' .claude/skills/planning/SKILL.md)" = "0"
     red_green_expectation: red before (1 occurrence at :336), green after.
+  - source: docs/DECISIONS.md
+    behavior: Decisions 132 and 148 each carry an amendment line naming the replacement mechanism.
+    verification_step: 10
+    command: test "$(grep -c 'implementation_declared' docs/DECISIONS.md)" -ge "2"
+    red_green_expectation: red before (0 occurrences), green after.
   - source: config/agent/verification_registry/registry.yaml
     behavior: Every graduated step has a row that survives the differential admission gate.
-    verification_step: 10
+    verification_step: 11
     command: bin/venv-python -m scripts.validate
     red_green_expectation: >-
       red before (validate_graduation_completeness fails a graduate step with no new-in-diff row),
@@ -340,170 +407,190 @@ constraints:
   - No rescue agents or workaround loops (Decision 55). On an unrecoverable failure, stop and RCA.
   - >-
     Commit-message shape must remain UNVERIFIED by this repo. This plan removes a commit-subject
-    dependency; it must not introduce a replacement obligation on commit grammar anywhere. No check
-    may fail a branch because of what its commit subjects do or do not say.
+    dependency; it must not introduce a replacement obligation on commit grammar anywhere.
   - >-
-    The declaration must be resolvable from the WORKING TREE via a diff against origin/main, not from
-    commit history. The mandatory pre-handoff full-validation run happens before any commit is made,
-    so a signal that requires a commit to exist would deadlock it.
+    Adopt Decision 170's ratified vocabulary; do NOT mint a parallel one. registry.examined(count)
+    with count == 0 IS the vacuous/empty-domain declaration, and registry.skipped(reason) is reserved
+    for "could not examine", never "examined nothing". An earlier draft of this plan invented an
+    "N/A" marker for exactly this; that invention is withdrawn. Follow
+    validate_licence_consistency.py:198 as the adoption precedent.
   - >-
-    Resolver read semantics, pinned three ways because two of them are easy to conflate. (a) Use a
-    RAW yaml.safe_load plus a .get lookup -- NOT _common.load_plan, whose PlanDocument validation
-    would make a schema-invalid plan redden the resolver and break both checks' deliberate
-    "schema validity is validate_plan_documents' concern" carve-out and its pinned tests. (b)
-    Fail-loud covers OSError and YAMLError on the WORKING-TREE read only. (c) A baseline that does
-    not resolve at origin/main is a legitimate "not declared at baseline" -- brand-new plan files are
-    absent there by construction, including THIS plan's own file on its own implement PR.
+    TOUCH-IT-FIX-IT (Decision 170). Both modified checks are frozen in
+    config/check_accounting_baseline.yaml (:75, :129). Editing a baselined check's defining module
+    without adopting the declaration in the SAME PR fails validate_check_accounting in both tiers.
+    Adopt and shrink the baseline together; a baseline edit alone is also refused.
   - >-
-    Guard placement, pinned at BOTH call sites. The origin_main_reachable guard exists today only in
-    _implement_pr_leg (validate_vp_replay.py:170); _plan_only_pr_leg (136-165) has none and takes no
-    failed list. When origin/main is unreachable the plan-only leg must DEFER every plan, matching
-    today's conservative outcome (feat_commit_slugs returns [] on a failed git call). Without this,
-    every `git show origin/main:<path>` fails with the same exit 128 the baseline-absent rule reads as
-    "not declared", so every declared plan resolves, hands off, and is then SKIPped by the implement
-    leg -- neither deferred, replayed, nor labelled with any outcome.
+    Baseline derivation (Decision 159). Use push_context_base() with a fallback, NOT a hardcoded
+    `git show origin/main:<path>`. On the post-merge full-tier run on main the declaration is already
+    true at origin/main, so an origin/main-anchored resolver returns empty and both checks declare
+    vacuous -- silently recreating this plan's own defect on the branch where it matters most.
   - >-
-    N/A is a positive-evidence outcome and the canonical marker spelling. A check may print it only
-    when it has established that no plan declared an implementation in this diff. Note
-    _common.get_changed_files() silently falls back to `git diff --name-only HEAD` when the
-    origin/main diff fails; that pre-existing second degradation path is out of scope, but do not
-    build new N/A semantics on top of it.
+    Resolver read semantics. Use a RAW yaml.safe_load plus a .get lookup -- NOT _common.load_plan,
+    whose PlanDocument validation would make a schema-invalid plan redden the resolver and break both
+    checks' deliberate "schema validity is validate_plan_documents' concern" carve-out and its pinned
+    tests. Fail-loud covers OSError and YAMLError on the WORKING-TREE read only. A baseline that does
+    not resolve is a legitimate "not declared at baseline".
   - >-
-    The optional field must not force a schema_version bump or any edit to an existing plan. If the
-    corpus needs editing, the field was modelled wrong. Do not back-fill the field onto other plans --
-    that would fabricate implementation history.
+    Guard placement at BOTH call sites. The reachability guard exists today only in _implement_pr_leg
+    (validate_vp_replay.py:170); _plan_only_pr_leg (136-165) has none and takes no failed list. When
+    the base is unreachable the plan-only leg must DEFER every plan, matching today's conservative
+    outcome. Without this, every baseline read fails with the same exit code the baseline-absent rule
+    reads as "not declared", so every declared plan resolves, hands off, and is then skipped --
+    neither deferred, replayed, nor labelled.
   - >-
-    Decision 132's reversal condition authorizes exactly this - revisit the resolution mechanism
-    rather than reverting the gate. Do not weaken either gate's failure behaviour while re-keying it.
+    Registry capacity is a hard constraint. config/agent/verification_registry/registry.yaml is at
+    5949 of its 6000-line cap (Decision 166) at 13.6 lines per row -- THREE rows fit. This plan
+    graduates exactly three steps; every other step waives with a substantive reason. Do not add a
+    fourth row, and do not raise the cap (that needs an authorizing Decision this plan does not mint).
   - >-
     Byte budgets are binding and one is at ZERO. .claude/skills/planning/SKILL.md is 55788 of 55788 --
     the replacement sentence must be no longer than the one it removes.
     .claude/skills/implement/SKILL.md has 6 bytes (48196/48202); compress the "Run the full gate
-    locally first" preamble, and if that is insufficient the named fallback target is the Wait-for-CI
-    paragraph, which restates wake-signal detail AGENTS.md already owns. No prose raise; this plan
-    mints no Decision to authorize one.
+    locally first" preamble, fallback the Wait-for-CI paragraph. No prose raise (Decision 165 requires
+    an authorizing Decision, which this plan does not mint).
+  - >-
+    Decision 148 makes scripts/checks/_common.py the SOLE home for plan-resolution helpers. The new
+    resolver lands there; do not create a second home.
+  - >-
+    The optional field must not force a schema_version bump or any edit to an existing plan, and must
+    not be back-filled onto other plans -- that would fabricate implementation history.
+  - >-
+    Decision 128/130 -- every test file in scope stays under 500 SLOC. Current sizes measured -
+    test_validate_graduation_completeness.py 372, test_validate_vp_replay.py 340,
+    test_edit_scope_guard.py 313, test_optional_fields.py 211. All have room; decompose rather than
+    raise if any approaches the limit.
 context:
   - >-
-    "Decision-scout verdict + CITE list (verbatim decision ids): re-dispatched against THIS scope
-    after the predecessor scope's run; verdict and CITE list to be folded in verbatim on return.
-    Prior run (predecessor scope, at Decision 169) returned FLAGS_FOUND, 122 of 122 triaged, with
-    Decision 127 / 163 / 165 / 168 flags that are MOOT here - this scope adds no ambient prose, takes
-    no budget raise, mints no Decision, and creates no registry-without-a-reader."
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (125 of 125 triaged),
+    re-dispatched against THIS scope. CITE: Decision 132, Decision 148, Decision 85, Decision 169,
+    Decision 150 (+ Decision 167), Decision 151, Decision 55, Decision 76, Decision 131. CONTRADICT
+    flags, all resolved in this revision: Decision 170 [WARN] (touch-it-fix-it on both baselined
+    modules, and a ratified examined()/skipped() vocabulary this plan was duplicating) -> adopted;
+    Decision 159 [WARN] (origin/main-anchored baseline silently no-ops post-merge) -> push_context_base
+    adopted; Decision 165 [WARN] (zero-headroom prose budgets, no authorizing Decision for a raise) ->
+    both edits constrained byte-neutral; Decision 128 [NOTE] (test-file sizes) -> scout's figures were
+    stale, measured 372/313 not 445/429, ample room; Decision 166 [NOTE] (registry 6000-line cap) ->
+    graduations cut from 8 to 3, the number that fits. SPIRIT: Decision 163 [WARN] (the declaration is
+    a flag an agent must remember) -> see the successor-seam residual below. RELATED: Decision 155,
+    Decision 142, Decision 87."
   - >-
-    "gates: decision-scout=re-dispatched against this scope (pending); plan-critique=REVISE after 3
-    rounds on the predecessor scope then re-scoped, plus REVISE on rounds 1 and 2 of this scope; the
-    round-2 blockers were both in the test-decomposition half, which has since landed on main as a
-    separate PR, removing 7 scope entries from this plan"
+    "gates: decision-scout=FLAGS_FOUND (this scope, 125 of 125); plan-critique=REVISE after 3 rounds
+    on the predecessor scope then re-scoped, plus REVISE on rounds 1 and 2 of this scope; round 3
+    pending against this revision"
   - >-
-    PREREQUISITE LANDED. The tests/test_plan_document.py decomposition shipped separately and is on
-    main as of this rebase. Verified post-rebase - the monolith is gone, tests/roadmap/plan_document/
-    exists with 4 modules plus __init__.py, map_source_to_test resolves to tests/roadmap/plan_document
-    (the path the mirror algebra actually produces, NOT tests/test_plan_document/), zero registry rows
-    still name the deleted file, and test_optional_fields.py sits at 211 SLOC of a 500 limit. Both of
-    round 2's blockers are dissolved rather than worked around, and this plan drops from 19 scope
-    entries to 13.
+    Q1 ADJUDICATION, recorded because it qualifies this plan's authorization. Decision 132's reversal
+    condition triggers on the false-negative rate proving material IN PRACTICE, and names a
+    `Resolves: rec-NNNN` secondary trigger as an illustrative ("e.g.") alternative -- so declining that
+    specific remedy is authorized, but the trigger is a measured-materiality finding this plan does not
+    supply. This plan proceeds on the DECIDABILITY defect instead - absence of a signal is being used
+    as a claim, and no predicate over {marker present?} can separate "genuinely plan-less" from
+    "marker destroyed" - not on a rate measurement. Stated plainly rather than dressed as a rate finding.
+  - >-
+    Q2 ADJUDICATION and its provenance. The `[Amendment YYYY-MM-DD: ...]` grammar in
+    docs/contracts/decision-entry.yaml is CONVENTION-ONLY -- no validator, no stored guard (Decision
+    151 / Decision 146 operator-disposed stance) -- so nothing would have failed had Decisions 132/148
+    been left stale. The convention nonetheless requires every clarification to cite a ratified source,
+    and with no Decision minted the only legal source is explicit operator direction. That direction
+    was given during this plan's authoring and is the recorded provenance for both amendment lines.
+  - >-
+    Q4 ADJUDICATION. Nothing in the corpus requires or forbids a numbered Decision for a change of
+    this shape. The significance bar is a ceiling on what MAY become an entry, not a floor obliging
+    one (decision-entry.yaml's routing_rule - the bound is on what may appear in significance.value,
+    "never an acceptance mandate that a specific row must be claimed"). Minting one would be
+    defensible, since this negates a clause of two live Decisions and the corpus's practice for that
+    is an amending entry -- but it is not required, and this plan deliberately does not mint one.
   - >-
     THE DEFECT, stated precisely. Both gates locate the plan they verify by scanning commit subjects
     on `git log origin/main..HEAD` for feat({slug}) (scripts/checks/_common.py:208 feat_commit_slugs,
     consumed at validate_vp_replay.py:150 and :174 and validate_graduation_completeness.py:186 --
-    line numbers re-verified post-rebase, the checks were untouched by the 18 commits main advanced).
+    line numbers re-verified post-rebase; the checks were untouched by the 18 commits main advanced).
     When no such subject is found, neither fails - each prints a no-op PASS. That is deliberate,
     because most PRs legitimately implement no plan. The consequence is that the checks use the
     ABSENCE of a signal as a claim, and absence has two indistinguishable causes - genuinely
-    plan-less, or plan-implementing with the marker destroyed. No predicate over {marker present?}
-    can separate them. Decision 132 disclosed this as an accepted rare false negative; any automated
-    commit-writing mechanism makes it systematic.
+    plan-less, or plan-implementing with the marker destroyed.
   - >-
-    WHY CONTENT AND NOT COMMITS. The asymmetry that makes this work - an automated `git add -A`
-    DESTROYS commit-subject signals (by leaving the intended marker commit empty) while PRESERVING
-    tree content. Moving the applicability signal into the plan file therefore makes it robust to any
-    commit topology. This is explicitly NOT the diff-based resolution Decision 132 rejected - that
-    was heuristic inference from which source files changed. This is an explicit, schema-validated
-    declaration that merely travels in the diff.
+    WHY CONTENT AND NOT COMMITS. The asymmetry - an automated `git add -A` DESTROYS commit-subject
+    signals (by leaving the intended marker commit empty) while PRESERVING tree content. Moving the
+    applicability signal into the plan file makes it robust to any commit topology. This is explicitly
+    NOT the diff-based resolution Decision 132 rejected - that was heuristic inference from which
+    source files changed. This is an explicit, schema-validated declaration that travels in the diff.
   - >-
     PARTIAL REUSE, stated honestly. validate_vp_replay.py:145 already resolves plans from the diff via
-    _common.plan_paths_from_changed(changed_files) for its plan-only leg, and the
-    `git show origin/main:<path>` baseline read is the established idiom in two sibling checks. What
-    is genuinely NEW is the two-tree comparison primitive that combines them.
+    _common.plan_paths_from_changed(changed_files), and push_context_base() plus the
+    `git show <base>:<path>` idiom already exist in _common.py and two sibling checks. What is
+    genuinely NEW is the two-tree comparison primitive that combines them.
   - >-
     RESOLVER SPECIFICATION, pinned so no improvisation is needed. Candidate set - the plan files
-    already present in `changed_files` (reuse plan_paths_from_changed), NOT a whole-docs/plans scan,
-    which would cost a `git show` per plan. Signature - widen `_implement_pr_leg(root, failed)` to
-    accept `changed_files`, matching the seam both test suites already inject. Placement - inside the
-    origin_main_reachable guard at both call sites (see the guard-placement constraint). Comparison -
-    working tree true AND baseline not-true, where baseline not-true covers both "false" and "file
-    absent at origin/main". Read - raw yaml.safe_load, never load_plan.
+    already present in `changed_files` (reuse plan_paths_from_changed), NOT a whole-docs/plans scan.
+    Signature - widen `_implement_pr_leg(root, failed)` to accept `changed_files`, matching the seam
+    both test suites already inject. Baseline - push_context_base() with fallback. Placement - inside
+    the reachability guard at both call sites. Comparison - working tree true AND baseline not-true,
+    where baseline not-true covers both "false" and "file absent at the base". Read - raw
+    yaml.safe_load, never load_plan.
   - >-
     NO COST TO LOSING feat({slug}). Branch commit subjects never reach main - the merging agent
-    composes the squash commit message at merge time (the audit found implement/SKILL.md's "inherits
-    the PR body" claim empirically false). Every other feat({slug}) mention in the repo (AGENTS.md,
-    implement/SKILL.md's commit flow, the PR template) is a CONVENTION, never a resolution. So once
-    nothing resolves plans from feat(), its absence has no downstream consumer. --allow-empty on
-    marker commits remains optional hygiene at most and is deliberately NOT in scope.
+    composes the squash commit message at merge time. Every other feat({slug}) mention in the repo
+    (AGENTS.md, implement/SKILL.md's commit flow, the PR template) is a CONVENTION, never a
+    resolution. --allow-empty on marker commits remains optional hygiene at most and is NOT in scope.
   - >-
-    REJECTED ALTERNATIVES, all three from the predecessor plan. (A) A new guard requiring any
-    recognised commit prefix when checkpoint commits are present - catches total loss only, misses the
-    partial case, and passes while both gates still no-op. (B) The same guard demanding feat()
-    specifically - fails every legitimately plan-less PR, including planning and audit PRs. (C) The
-    same predicate relocated into the two existing checks - identical false positives to (B), since
-    any turn-boundary mechanism fires on planning sessions too. The decisive objection to all three is
-    that each would make commit-message shape a VERIFIED requirement, which this repo has deliberately
-    never had - no conformance gate exists, and the only surfaces touching commit subjects use them
-    for resolution, never verification.
+    REJECTED ALTERNATIVES from the predecessor plan. (A) A new guard requiring any recognised commit
+    prefix when checkpoint commits are present - catches total loss only, misses the partial case.
+    (B) The same guard demanding feat() specifically - fails every legitimately plan-less PR,
+    including planning and audit PRs. (C) The same predicate relocated into the two existing checks -
+    identical false positives to (B). The decisive objection to all three is that each would make
+    commit-message shape a VERIFIED requirement, which this repo has deliberately never had.
   - >-
-    FABLE ADVICE-CONSULT informed this design. Industry framing - this is a vacuous-pass / fail-open
-    gate problem; the prescription is three-state semantics (PASS / FAIL / NOT-APPLICABLE) where
-    not-applicable requires positive evidence of inapplicability, plus mutation-style validation that
-    the gate can still fail. Precedent - pytest exits 5 on no-tests-collected, Terraform's
-    -detailed-exitcode separates no-changes from success, and selection-based CI systems treat the
-    selector as trusted computing base keyed on structural inputs, never free-text convention. One
-    piece of that advice is deliberately NOT adopted - it proposed retaining feat({slug}) as a
-    consistency tripwire (declaration-without-marker fails), but that re-introduces a commit-shape
-    obligation to protect a marker that is no longer load-bearing.
+    FABLE ADVICE-CONSULT informed this design - vacuous-pass / fail-open gate problem, prescription is
+    three-state semantics where not-applicable requires positive evidence, plus mutation-style
+    validation that the gate can still fail. Precedent - pytest exits 5 on no-tests-collected,
+    Terraform's -detailed-exitcode separates no-changes from success. Notably the repo reached the
+    same conclusion independently and ratified it as Decision 170 while this plan was being authored,
+    which is why the three-state design is now an ADOPTION rather than an invention.
   - >-
-    DISCLOSED RESIDUAL -- the successor seam. The new signal is robust to commit topology but is still
-    written by the same agent at the same step as the old one, so an implement session that skips the
-    plan-file edit entirely yields a silent N/A on both gates. This is strictly narrower than the
-    defect being closed (which fired by accident, with no agent omission required), but it is not
-    zero. VP step 7 guards the instruction's presence; nothing guards an agent ignoring it. Recorded
-    per Decision 132's precedent of stating residual limitations explicitly.
+    DISCLOSED RESIDUAL -- the successor seam (Decision 163 spirit flag). The new signal is robust to
+    commit topology but is still written by the same agent at the same step as the old one, so an
+    implement session that skips the plan-file edit yields a clean pass. This is strictly narrower
+    than the defect being closed (which fired by accident, with no agent omission required), and
+    Decision 170's channel materially improves it - an omitted declaration now surfaces the check as
+    VACUOUS in the accounting output rather than being invisible. VP step 7 guards the instruction's
+    presence; nothing guards an agent ignoring it. Recorded per Decision 132's precedent.
   - >-
-    SCOPE-GUARD INTERACTION. .claude/hooks/edit_scope_guard.py denies fail-closed for any file outside
-    the active plan's Scope, and this plan makes the implement flow edit the plan file itself. The
-    guard is inert today (re-verified post-rebase - nothing sets CLAUDE_ACTIVE_PLAN and no
-    .claude/active_plan marker exists), so this is pre-emptive - but without the exemption, activation
-    would later break every implement session unless each plan listed its own path in its own Scope,
-    boilerplate that fails closed when forgotten.
+    SCOPE-GUARD INTERACTION. edit_scope_guard.py denies fail-closed for any file outside the active
+    plan's Scope, and this plan makes the implement flow edit the plan file itself. The guard is inert
+    today (re-verified post-rebase - nothing sets CLAUDE_ACTIVE_PLAN, no .claude/active_plan marker),
+    so this is pre-emptive - but without the exemption, activation would later break every implement
+    session unless each plan listed its own path in its own Scope.
   - >-
-    GRADUATION ADMISSION RULE. validate_verification_registry re-runs each added row against an
-    origin/main worktree AND live, rejecting any row that passes on both. A test_selector row naming a
-    WHOLE FILE that already exists at origin/main passes on both legs and is rejected. Every
-    test_selector node_id in this plan therefore names a class VERIFIED absent at origin/main --
-    TestImplementationDeclared, TestImplementationDeclaredResolver, TestContentKeyedResolution (both
-    files), TestActivePlanSelfEditExempt (all confirmed 0 occurrences at origin/main). Steps 5, 7 and
-    8 are grep_count rows and discriminate cleanly (4 to 0, 0 to >=1, 1 to 0).
+    GRADUATION ADMISSION AND CAPACITY. validate_verification_registry re-runs each added row against a
+    baseline worktree AND live, rejecting rows that pass on both; a test_selector row naming a whole
+    file that exists at the baseline is rejected. The three graduated rows are - step 1
+    (test_selector naming TestImplementationDeclaredResolver, verified 0 occurrences at origin/main),
+    step 5 and step 7 (both grep_count rows discriminating 4->0 and 0->=1). Capacity forced the cut
+    from eight graduations to three; the five now-waived steps each name the standing repo-wide
+    mechanism that guards their property instead.
   - >-
     SURFACE-RETIREMENT OBLIGATION (12k trigger 2) fires on the mechanism cutover even with no Delete
-    row, and is satisfied by two sweeps - VP step 5 covers the code surface (no feat_commit_slugs
-    reference anywhere under scripts/checks/, including its own definition) and VP step 8 covers the
-    instruction surface (the planning skill's stale note).
+    row, satisfied by three sweeps - VP step 5 (code surface), VP step 8 (instruction surface), VP
+    step 10 (decision-log surface).
+  - >-
+    PREREQUISITE LANDED. The tests/test_plan_document.py decomposition shipped separately and is on
+    main as of this rebase - the monolith is gone, tests/roadmap/plan_document/ exists with 4 modules,
+    map_source_to_test resolves to tests/roadmap/plan_document (the path the mirror algebra actually
+    produces, NOT tests/test_plan_document/), and zero registry rows still name the deleted file. Both
+    of round 2's blockers are dissolved rather than worked around.
   - >-
     Branch was 18 commits behind origin/main and was rebased onto it at the human's direction before
-    this rewrite; overlapping scope files - .claude/skills/planning/SKILL.md and
-    config/agent/verification_registry/registry.yaml both changed on main, and every premise was
-    re-verified post-rebase rather than assumed. Two changed materially - planning/SKILL.md dropped
-    from 6 bytes of headroom to ZERO (55788/55788), and the decision corpus grew from 169 to 172,
-    which is why decision-scout was re-dispatched.
+    this revision; every premise was re-verified post-rebase rather than assumed. Two moved materially
+    - planning/SKILL.md dropped from 6 bytes of headroom to ZERO, and the decision corpus grew from
+    169 to 172, adding Decision 170 which this revision now adopts.
   - >-
     DEFERRED, and unsafe to build before this lands - a turn-boundary Stop hook that commits and
     pushes checkpoint work so an ephemeral container cannot lose it. Its full design, the harness
     Stop-hook interaction, the public-repo exposure of `git add -A` (checkpoint pushes are irrevocable
-    publication - unreachable commits stay fetchable by SHA after branch deletion), and a T4.1
-    progress_note recording the executor-side step-wrapper contract against CD.43's existing
-    option_set entry git_as_store_commit_at_step_boundaries, all move to that follow-on plan. Also
-    deferred - switching branch integration from rebase to merge, and substrate-owned freshness (a
-    SubagentStart / UserPromptSubmit TTL-guarded fetch retiring the fetch instructions embedded in
-    gate dispatch prompts). rec-2362 is unbundled and returns to the open queue.
+    publication), and a T4.1 progress_note recording the executor-side step-wrapper contract against
+    CD.43's existing option_set entry git_as_store_commit_at_step_boundaries all move to that
+    follow-on plan. Also deferred - switching branch integration from rebase to merge, and
+    substrate-owned freshness. rec-2362 is unbundled and returns to the open queue.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -513,34 +600,40 @@ pre_implementation_checklist:
   - >-
     Read validate_vp_replay.py and validate_graduation_completeness.py IN FULL before editing -- both
     have a two-leg structure, and validate_vp_replay's plan-only leg (136-165) contains a
-    feat_commit_slugs call at :150 that is easy to miss when re-keying only the obvious implement leg
-    at :174.
+    feat_commit_slugs call at :150 that is easy to miss when re-keying only the implement leg at :174.
   - >-
-    Measure both skill surfaces before and after editing; planning/SKILL.md has ZERO bytes of headroom.
+    Read scripts/checks/hygiene/validate_licence_consistency.py (:30-31 and :198) as the Decision 170
+    adoption precedent before declaring in either check.
+  - >-
+    Measure both skill surfaces and the registry line count before and after editing; planning/SKILL.md
+    has ZERO bytes of headroom and the registry has room for exactly three rows.
 execution_steps:
   - >-
     Add the optional `implementation_declared: bool = False` field to PlanDocument in
-    scripts/roadmap/plan_document.py. Optional and defaulted, so the existing corpus validates
-    untouched; do not bump schema_version.
+    scripts/roadmap/plan_document.py. Optional and defaulted; do not bump schema_version.
   - >-
-    Add the content resolver to scripts/checks/_common.py per the pinned RESOLVER SPECIFICATION -
-    candidate set from plan_paths_from_changed(changed_files), baseline read via
-    `git show origin/main:<path>`, working-tree true AND baseline not-true, read with a raw
-    yaml.safe_load. Fail loudly on OSError or YAMLError from the working-tree read only; treat a
-    non-resolving baseline as not-declared and a schema-invalid plan as not-a-resolver-concern.
+    Add the content resolver to scripts/checks/_common.py (Decision 148 - sole home) per the pinned
+    RESOLVER SPECIFICATION - candidate set from plan_paths_from_changed(changed_files), baseline from
+    push_context_base() with fallback, working-tree true AND baseline not-true, read with a raw
+    yaml.safe_load. Fail loudly on OSError or YAMLError from the working-tree read only.
   - >-
-    Re-key BOTH of validate_vp_replay's legs. The implement leg at :174 resolves from the declaration.
-    The plan-only leg's co-presence test at :150 -- inside _plan_only_pr_leg (136-165) -- becomes
-    declaration-based too - a plan in the diff whose declaration flipped hands off to the implement
-    leg, everything else DEFERs with its printed reason preserved. Add the origin_main_reachable guard
-    to the plan-only leg so an unreachable baseline DEFERs everything rather than resolving everything.
-    Split the output into PASS, FAIL and an explicit `N/A` line, keeping SKIP distinct.
+    Re-key BOTH of validate_vp_replay's legs. The implement leg at :174 resolves from the declaration;
+    the plan-only leg's co-presence test at :150 becomes declaration-based too - a plan in the diff
+    whose declaration flipped hands off to the implement leg, everything else DEFERs with its printed
+    reason preserved. Add the reachability guard to the plan-only leg so an unreachable base DEFERs
+    everything rather than resolving everything.
   - >-
-    Re-key validate_graduation_completeness at :186 the same way, with the same three-state split and
-    the same preservation of its existing SKIP and schema-error carve-out semantics.
+    Re-key validate_graduation_completeness at :186 the same way, preserving its existing SKIP and
+    schema-error carve-out semantics.
   - >-
-    Retire feat_commit_slugs from scripts/checks/_common.py (defined at :208) once neither check calls
-    it. Describe the retirement in the rewritten docstrings WITHOUT naming the symbol anywhere under
+    Adopt Decision 170's declaration in BOTH modules - registry.examined(count, unit=...) on the
+    resolution path, where count == 0 is the vacuous/empty-domain case, and registry.skipped(reason)
+    for an unreachable base. Follow validate_licence_consistency.py:198. Then remove both names from
+    config/check_accounting_baseline.yaml in the SAME change; adopting without shrinking, or shrinking
+    without adopting, both fail validate_check_accounting.
+  - >-
+    Retire feat_commit_slugs from scripts/checks/_common.py (:208) once neither check calls it.
+    Describe the retirement in the rewritten docstrings WITHOUT naming the symbol anywhere under
     scripts/checks/, or VP step 5's sweep goes red on the docstring itself.
   - >-
     Exempt the active plan's own path in .claude/hooks/edit_scope_guard.py -- resolve the active plan
@@ -548,32 +641,32 @@ execution_steps:
   - >-
     Update .claude/skills/implement/SKILL.md so the flow sets `implementation_declared: true` in the
     plan file BEFORE the mandatory full-validation run. Absorb the bytes by compressing the "Run the
-    full gate locally first" preamble; if insufficient, compress the Wait-for-CI paragraph, which
-    restates wake-signal detail AGENTS.md already owns.
+    full gate locally first" preamble; fallback target is the Wait-for-CI paragraph.
   - >-
-    Rewrite .claude/skills/planning/SKILL.md:334-337 so it describes declaration-based resolution
-    instead of feat({slug}) commits on git log origin/main..HEAD. This surface has ZERO bytes of
-    headroom - the replacement must be no longer than the sentence it replaces.
+    Rewrite .claude/skills/planning/SKILL.md:334-337 to describe declaration-based resolution. ZERO
+    bytes of headroom - the replacement must be no longer than the sentence it replaces.
   - >-
-    Update the five test files - resolver cases (including baseline-absent and schema-invalid), both
-    re-keyed legs, the unreachable-origin DEFER behaviour, three-state assertions, the scope-guard
-    exemption, the two mutation-style meta-tests, and the two feat_commit_slugs assertions in
-    tests/checks/_common/test_primitives.py at :173 and :188 (keep the origin_main_reachable half of
-    the :187 test, which survives). New classes must be named exactly as the test_obligations declare,
-    since the graduated registry rows depend on those node_ids being absent at origin/main.
+    Add an `[Amendment YYYY-MM-DD: ...]` line to Decision 132 and Decision 148 in docs/DECISIONS.md,
+    each naming implementation_declared as the replacement for the commit-subject resolution their
+    text describes, and citing explicit operator direction as the provenance. Mint no new Decision.
   - >-
-    Add one config/agent/verification_registry/registry.yaml row per graduated step, each carrying
-    plan_slug plan-resolution-content-keyed. If a row genuinely cannot discriminate between the
-    pre-change and post-change trees, reclassify that step to waive with a substantive reason rather
-    than weakening the row.
+    Update the five test files - resolver cases (baseline-absent, schema-invalid, push_context_base),
+    both re-keyed legs, unreachable-base DEFER, the Decision 170 declarations, the scope-guard
+    exemption, and the two mutation-style meta-tests. Remove the two feat_commit_slugs assertions in
+    tests/checks/_common/test_primitives.py at :173 and :188, keeping the origin_main_reachable half
+    of the :187 test. Name new classes exactly as the test_obligations declare.
+  - >-
+    Add exactly THREE config/agent/verification_registry/registry.yaml rows -- steps 1, 5 and 7 --
+    each carrying plan_slug plan-resolution-content-keyed. Do not add a fourth; the file is at 5949 of
+    a 6000-line cap. Re-measure the line count after adding.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
     RCA (Decision 55).
   - >-
-    Report - what was implemented, verification results, and explicit confirmation that a branch whose
-    content commits are all automated checkpoints still has its VP steps replayed.
+    Report - what was implemented, verification results, the measured registry line count and both
+    skill-surface byte counts, and explicit confirmation that a branch whose content commits are all
+    automated checkpoints still has its VP steps replayed.
 rollback: >-
   Single-PR revert. The change is self-contained - the new field is optional and unused by anything
-  else, and reverting restores commit-subject resolution exactly as it stands today. No data
-  migration, no external state, and no other plan depends on the field until the deferred
-  checkpoint-hook plan lands.
+  else, and reverting restores commit-subject resolution exactly as it stands today. The Decision 170
+  adoption reverts with it, restoring both baseline entries. No data migration, no external state.
