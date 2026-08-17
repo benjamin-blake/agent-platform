@@ -39,7 +39,7 @@ def _escalate_ci_rca_probe_health(
 
     Skips (returns None) when creds are unavailable or the warm cache did not load -- degraded
     offline sessions never attempt a portal write. This is the deterministic preflight trigger
-    that substitutes for a cron until Lambda scheduled agents re-enable (AGENTS.md runbook).
+    that substitutes for a cron until Lambda scheduled agents re-enable (T4.12).
 
     Only a classified-transient reader outage (is_reader_unavailable, Decision 155) is swallowed
     to a [WARN]; every other exception propagates out of this call (Decision 55 -- a blanket

@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.checks import registry
 from scripts.checks.ops_governance.validate_warehouse_write_sources import validate_warehouse_write_sources
 
 
@@ -87,6 +88,40 @@ class TestValidateWarehouseWriteSources:
             failed: list[str] = []
             validate_warehouse_write_sources(failed)
         assert not any("DuckLake-migrated table" in e for e in failed)
+
+    def test_declares_examined_accounting_outcome(self, tmp_path: Path, capsys) -> None:
+        """The check declares an examined() outcome, satisfying the check-accounting ratchet.
+
+        Red/green pair for this module's baseline exit (config/check_accounting_baseline.yaml):
+        on origin/main the check declared nothing, so pop_declaration() returned None and the
+        run's CheckOutcome status was "undeclared". The count is asserted as a positive floor,
+        not an exact literal -- the scanned-file population grows.
+        """
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "clean_script.py").write_text("x = 1\n", encoding="utf-8")
+        with patch("scripts.checks._common.ROOT", tmp_path), registry.outcome_scope("test_scope"):
+            failed: list[str] = []
+            validate_warehouse_write_sources(failed)
+            declaration = registry.pop_declaration()
+        assert declaration is not None, "check declared no accounting outcome"
+        assert declaration.kind == "examined"
+        assert declaration.unit == "files"
+        assert declaration.count is not None and declaration.count > 0
+
+    def test_unreadable_file_is_skipped_not_flagged(self, tmp_path: Path, capsys) -> None:
+        """A file that raises OSError on read (e.g. a broken symlink) is skipped, not crashed on."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        bad_file = scripts_dir / "unreadable.py"
+        bad_file.write_text('OpsWriter().write("ops_recommendations", entry)\n', encoding="utf-8")
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("pathlib.Path.read_text", side_effect=OSError("simulated read failure")),
+        ):
+            failed: list[str] = []
+            validate_warehouse_write_sources(failed)
+        assert failed == []
 
     def test_clean_script_with_no_warehouse_writes_passes(self, tmp_path: Path, capsys) -> None:
         """Scripts that only call portal functions (file_rec) pass cleanly."""
