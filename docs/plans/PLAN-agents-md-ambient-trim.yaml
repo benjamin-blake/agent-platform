@@ -1,4 +1,5 @@
 schema_version: 4
+implementation_declared: true
 handoff_policy:
   full_validation_required_before_commit: true
   timeout_disposition: blocked
@@ -39,8 +40,19 @@ scope:
   - file: scripts/checks/ops_governance/validate_warehouse_write_sources.py
     action: Modify
     purpose: >-
-      Comment-only repoint at line 53 ("see the AGENTS.md re-enable runbook caveat") onto
-      T4.12 / Decision 84, so the reference does not dangle once the runbook is deleted.
+      Comment repoint at line 53 ("see the AGENTS.md re-enable runbook caveat") onto T4.12 /
+      Decision 84, so the reference does not dangle once the runbook is deleted, PLUS the
+      check-accounting declaration this module is now obliged to adopt. SCOPE WIDENED AT
+      IMPLEMENTATION (operator-directed, 2026-08-17): this module is a registered check listed in
+      config/check_accounting_baseline.yaml's shrink-only grandfather roster, and
+      docs/contracts/check-accounting.yaml's TOUCH-IT-FIX-IT rule fails the PR when a baselined
+      check's own module is edited in a diff that leaves it undeclared. The comment repoint IS
+      such an edit, so the declaration is not optional and not severable -- reverting to
+      comment-only does not restore green, it swaps the failure for "declares no
+      examined()/skipped() outcome and is not in the baseline". Adoption is the minimum legal
+      edit: a file_count counter over the loop the check already runs plus one
+      registry.examined(file_count, unit="files") call. The whitelist, migrated-table block,
+      exemption set and every failure string are untouched.
   - file: scripts/preflight/ci_rca_gauges.py
     action: Modify
     purpose: >-
@@ -63,6 +75,35 @@ scope:
       the Decision 86 intent-doc freeze: validate_intent_doc_freeze gates a doc's EXISTENCE against
       the docs/intent-migration/MANIFEST.yaml grandfather set, never its content, so a one-line
       prose repoint inside an already-grandfathered doc adds no new standing surface.
+  - file: config/check_accounting_baseline.yaml
+    action: Modify
+    purpose: >-
+      SCOPE WIDENED AT IMPLEMENTATION (operator-directed, 2026-08-17). Remove the single
+      validate_warehouse_write_sources entry from the shrink-only grandfather roster, now that the
+      module adopts the examined() declaration above. This is the roster's sanctioned SHRINK
+      direction (docs/contracts/check-accounting.yaml baseline_grammar: "A name can leave the
+      roster (adopt the declaration, shrink) but can never re-enter once removed"), so it needs no
+      marker and cannot be a ratchet violation. Exactly one line changes -- no other roster member
+      is touched. HONESTY NOTE (measured, not assumed): this removal is NOT load-bearing. It was
+      tested by re-adding the line while the module declares and re-running
+      validate_check_accounting, which PASSED ("112 registered check(s) scanned; 94 baselined") --
+      baseline membership only exempts a module from the declaration requirement, so a declaring
+      module that is also still rostered is merely stale, not failing. The removal is therefore
+      truth-maintenance on the roster (it "records the honest starting point", per the file's own
+      header) rather than a gate fix, and it carries a per-source waiver rather than a red/green
+      claim. The declaration in the module above IS the load-bearing half.
+  - file: tests/checks/ops_governance/test_validate_warehouse_write_sources.py
+    action: Modify
+    purpose: >-
+      SCOPE WIDENED AT IMPLEMENTATION (operator-directed, 2026-08-17). Two tests for the
+      declaration adoption above. (1) test_declares_examined_accounting_outcome is the genuine
+      red/green pair for the behavior change -- verified RED in a git worktree at origin/main
+      ("AssertionError: check declared no accounting outcome"), GREEN here -- and replaces the
+      now-void "comment text only" waiver this plan originally carried for this file.
+      (2) test_unreadable_file_is_skipped_not_flagged covers the pre-existing
+      `except OSError: continue` branch at lines 72-73, which was never exercised; the full tier's
+      per-file 100%-coverage gate fails the PR without it once this module enters the diff's
+      coverage scope. The six original detection tests are unmodified.
   - file: tests/test_agents_md_citations.py
     action: Create
     purpose: >-
@@ -98,7 +139,16 @@ acceptance_criteria:
     the send_later/trigger-out-of-scope rule, the auto-merge-does-not-subsume-conflict-wake rule,
     the get_rec_write_guidance()-before-file_rec() rule, the read-cache-is-never-a-write-source hard
     rule, the Windows-subprocess bullet, and the PowerShell prohibition.
+  - >-
+    validate_warehouse_write_sources declares an examined() outcome, config/check_accounting_baseline.yaml
+    no longer lists it (roster shrinks by exactly one line), and validate_check_accounting passes --
+    the indivisible pair the touch-it-fix-it rule requires of any edit to that module.
+  - >-
+    The six original detection tests in tests/checks/ops_governance/test_validate_warehouse_write_sources.py
+    are byte-identical to origin/main and still pass, proving the declaration adoption changed no
+    detection behavior.
   - "bin/venv-python -m scripts.validate --pre exits 0."
+  - "bin/venv-python -m scripts.validate (full tier) exits 0, including the per-file 100%-coverage gate."
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -177,6 +227,15 @@ verification_plan:
       Each match is a dangling pointer to deleted ambient content. Repoint it at T4.12 / Decision 84
       the same way as the four known sites; do not restore the runbook. Uses git grep (tracked files
       only) rather than grep -r, which would descend into .venv and other untracked trees.
+      TRACKED-STATE TRAP (hit for real on this plan, PR #928 CI): because git grep and git ls-files
+      see ONLY TRACKED files, running this step while tests/test_agents_md_citations.py is still
+      untracked yields a FALSE PASS -- the guard file is invisible to its own sweep. Both this step
+      and step 6 went green locally that way and then failed in CI the moment the file was
+      committed, because the assertion message on its last line carried a raw
+      "AGENTS.md" + " runbook" literal that the split-literal discipline had been applied to
+      _PATTERNS but not to the message. RUN BOTH STEPS AFTER `git add` OF THE GUARD, never before.
+      The guard now self-verifies (it asserts its own path appears in the scanned set), so this
+      false-pass mode fails loudly instead of passing vacuously.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -359,26 +418,39 @@ verification_plan:
   - step: 14
     phase: pre-deploy
     action: >-
-      Prove the validate_warehouse_write_sources.py repoint changed no executable code, by comparing
-      the docstring-stripped AST against origin/main.
+      REVISED AT IMPLEMENTATION (operator-directed scope widening, 2026-08-17). The original step
+      asserted the docstring-stripped AST of validate_warehouse_write_sources.py was byte-identical
+      to origin/main, on the premise that the repoint was comment-only. That premise is void: the
+      touch-it-fix-it rule makes the check-accounting declaration mandatory for any edit to this
+      module (see the Scope row), so executable code necessarily changed and the original command
+      can only fail. Per the original step's own fix_if, the waiver is replaced by a real red/green
+      test, and this step now verifies what actually matters -- that the check's DETECTION BEHAVIOR
+      is unchanged and the declaration landed. Both are proven positively: the six original
+      detection tests still pass untouched, the new declaration test passes, and the check-accounting
+      ratchet (which failed before the adoption) is green.
     command: >-
-      bin/venv-python -c "import ast,subprocess; p='scripts/checks/ops_governance/validate_warehouse_write_sources.py';
-      s=lambda src:(lambda t:[setattr(n,'body',n.body[1:]) for n in ast.walk(t) if isinstance(n,(ast.Module,ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))
-      and ast.get_docstring(n) is not None] and ast.dump(t) or ast.dump(t))(ast.parse(src));
-      b=subprocess.run(['git','show','origin/main:'+p],capture_output=True,text=True).stdout;
-      assert b.strip(), 'BASE_UNREADABLE: git show returned empty -- fetch origin/main, do not read this as a code change';
-      assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
-    expected: "Prints NO_EXECUTABLE_CHANGE -- the docstring-stripped AST is identical to origin/main."
+      bin/venv-python -m pytest tests/checks/ops_governance/test_validate_warehouse_write_sources.py -q
+      && bin/venv-python -c "from scripts.checks.hygiene.validate_check_accounting import
+      validate_check_accounting as v; f=[]; v(f); assert not f, f; print('CHECK_ACCOUNTING_RATCHET_OK')"
+    expected: >-
+      All 8 tests pass (the 6 original detection tests unmodified, plus the red/green declaration
+      test and the OSError-branch coverage test), then prints CHECK_ACCOUNTING_RATCHET_OK.
     fix_if: >-
-      An assertion failure means executable code changed, so the test_obligations waiver ("comment
-      text only") is void. Either revert the logic change or replace the waiver with a real
-      red/green test. AST equality is used rather than a '#'-line grep because a grep cannot
-      distinguish a comment from a docstring line.
-    hermetic: true
+      A failure in any of the SIX ORIGINAL tests means the adoption altered detection behavior --
+      that is a real regression: revert to the minimum edit (counter + one examined() call) and
+      re-run. A ratchet failure names which half is missing: "declares no examined()/skipped()
+      outcome and is not in config/check_accounting_baseline.yaml" means the module declares
+      nothing while the roster entry was already removed (re-add the declaration, never the roster
+      line); "was edited on this branch but still declares no examined()/skipped() outcome
+      (touch-it-fix-it)" means the declaration was dropped while the roster entry survives. The two
+      halves are indivisible -- do not fix one by reverting the other.
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      Asserts a property of this PR's own diff against a specific base commit; it is meaningless as a
-      standing check because the diff disappears the moment the change merges.
+      Both halves already have registered standing owners -- pytest runs the test file in both
+      validate tiers, and validate_check_accounting is itself the registered check enforcing the
+      declaration ratchet. Graduating this step would register a check whose entire body is
+      "run one pytest file and call one already-registered check".
   - step: 15
     phase: pre-deploy
     action: >-
@@ -434,16 +506,30 @@ test_obligations:
       ci_rca_gauges.py:42, inference-provider.yaml:90 and docs/INTENT-ci-rca-methodology.md:523
       (the fourth was missed by the planning sweep and found at the critique gate) -- green after
       all four are repointed. VP step 7 proves the red side unscoped so the count cannot be
-      self-confirming.
+      self-confirming. Re-proven with the FIXED guard in a detached worktree at origin/main after
+      the PR #928 self-match defect: it still names exactly those four paths, so removing the raw
+      literal from the assertion message did not weaken detection. The guard additionally asserts
+      its own path is in the scanned set -- verified live, not assumed, by neutralizing the four
+      citations inside that worktree (where the copied guard is untracked): `offenders` went empty
+      and the self-assertion fired, which is the false pass it exists to convert into a failure.
   - source: scripts/checks/ops_governance/validate_warehouse_write_sources.py
-    behavior: "The check's logic is unchanged; only the comment's pointer target moves to T4.12 / Decision 84."
+    behavior: >-
+      The check declares its examined() accounting outcome (adopted under the touch-it-fix-it
+      obligation the comment repoint triggers), while its detection behavior -- whitelist,
+      migrated-table block, s3_log_store exemption, failure strings -- is unchanged.
     verification_step: 14
-    command: "assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
-    waiver_reason: >-
-      Comment-text-only edit with no behavior change, so no test can go red-then-green on it. The
-      linked step proves it positively by comparing the docstring-stripped AST against origin/main
-      (strictly stronger than a comment-line grep), and the repointed target itself is guarded by
-      the new dangling-citation test.
+    test_selector: >-
+      tests/checks/ops_governance/test_validate_warehouse_write_sources.py::TestValidateWarehouseWriteSources::test_declares_examined_accounting_outcome
+    red_green_expectation: >-
+      WAIVER REMOVED AT IMPLEMENTATION (operator-directed scope widening, 2026-08-17). The original
+      "comment text only, no test can go red-then-green" waiver is void because the touch-it-fix-it
+      rule forced a real behavior change. Red side proven empirically, not asserted: the test was
+      copied into a `git worktree --detach origin/main` and run there, failing with "AssertionError:
+      check declared no accounting outcome" (pop_declaration() returns None because the pre-change
+      module declares nothing); green on this branch, where it returns kind="examined", unit="files",
+      count>0. The count is asserted as a positive floor rather than an exact literal, since the
+      scanned-file population grows (tests/CLAUDE.md test-count-coupling rule). The unchanged-detection
+      half is carried by the six original tests, which are byte-identical to origin/main and still pass.
   - source: scripts/preflight/ci_rca_gauges.py
     behavior: >-
       The gauge's logic is unchanged; only the pointer target inside
@@ -455,6 +541,23 @@ test_obligations:
       this is a docstring, NOT a '#' comment (the planning draft misclassified it), which is why the
       linked step uses AST comparison rather than a comment-line filter that would silently fail to
       match. The repointed target is guarded by the new dangling-citation test.
+  - source: config/check_accounting_baseline.yaml
+    behavior: >-
+      The shrink-only grandfather roster no longer claims validate_warehouse_write_sources needs a
+      declaration exemption, matching the declaration that module now carries.
+    verification_step: 14
+    command: "assert not f, f; print('CHECK_ACCOUNTING_RATCHET_OK')"
+    waiver_reason: >-
+      No test can go red-then-green on this line, because the removal is not independently enforced
+      -- measured, not assumed: re-adding the entry while the module declares was applied and
+      validate_check_accounting still PASSED (baseline membership only exempts from the declaration
+      requirement, so a declaring-and-still-rostered module is stale rather than failing). Claiming
+      a red/green pair here would be the vacuous-check defect this plan's own critique rounds
+      repeatedly caught. The load-bearing half of the pair -- the module's examined() declaration --
+      does carry a real red/green (test_declares_examined_accounting_outcome, proven red in a
+      worktree at origin/main), and the linked step re-runs the registered validate_check_accounting
+      gate over the resulting roster state. The shrink direction is additionally protected by that
+      gate's own never-re-enter ratchet, so this line cannot silently come back.
   - source: docs/contracts/inference-provider.yaml
     behavior: >-
       The scheduled_agents ref points at a live owner (T4.12) and the Class D amendment_log
@@ -629,6 +732,33 @@ context:
   - >-
     Branch was 0 commits behind origin/main at planning time with no overlapping scope files, so the
     Main Divergence Assessment is a no-op. Preflight: venv ok, creds ok, no uncommitted changes.
+  - >-
+    SCOPE WIDENING (operator-directed at implementation, 2026-08-17). Three files were added to Scope
+    after the plan was approved: config/check_accounting_baseline.yaml,
+    tests/checks/ops_governance/test_validate_warehouse_write_sources.py, and a widened purpose for
+    scripts/checks/ops_governance/validate_warehouse_write_sources.py. Cause: planning classified
+    that file's edit as "comment text only" without checking whether the module is a REGISTERED
+    CHECK. It is, and it sits on config/check_accounting_baseline.yaml's shrink-only grandfather
+    roster, where docs/contracts/check-accounting.yaml's TOUCH-IT-FIX-IT rule fails the PR on any
+    diff that edits a baselined check's own module while leaving it undeclared. The consequence was
+    discovered by validate --pre (not predicted), and the full tier then surfaced a second
+    consequence: entering the diff's coverage scope exposed a pre-existing untested
+    `except OSError: continue` branch that the per-file 100% gate fails on. Severability was tested
+    empirically, not assumed -- reverting to a literally comment-only edit was applied and
+    validate_check_accounting still failed, with the complementary message ("declares no
+    examined()/skipped() outcome and is not in the baseline"). There is no version of this plan's
+    own required repoint that lands green without the declaration; the only alternative is to
+    abandon the repoint, which would leave the dangling citation the plan exists to remove and fail
+    VP steps 5 and 6. The widening is therefore forced-by-the-repo, not opportunistic: the code-review
+    gate correctly flagged it as out-of-scope against the plan as written, the operator was presented
+    with the finding and the evidence, and directed that scope be increased to register the file
+    rather than reverting. Minimum-edit discipline held -- one counter, one examined() call, one
+    roster line, two tests; no detection logic, no other roster member, no other check module.
+  - >-
+    Follow-on (not filed as scope creep here): the friction that produced this widening is recorded
+    in the postflight evidence's guard_candidates as a planning-time or preflight check that flags
+    when a plan's scope includes a file registered in config/check_accounting_baseline.yaml, so the
+    touch-it-fix-it consequence is surfaced before implementation rather than discovered mid-VP-run.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -688,6 +818,17 @@ execution_steps:
     scripts/checks/ops_governance/validate_warehouse_write_sources.py -- repoint the line-53 comment
     from "see the AGENTS.md re-enable runbook caveat" to T4.12 / Decision 84. Comment text only; do
     not touch the check's logic.
+  - >-
+    scripts/checks/ops_governance/validate_warehouse_write_sources.py (SCOPE-WIDENED STEP,
+    operator-directed 2026-08-17) -- adopt the check-accounting declaration the repoint above
+    obliges, as one indivisible edit with config/check_accounting_baseline.yaml. Add a file_count
+    counter to the loop the check already runs and a single
+    registry.examined(file_count, unit="files") call before the errors branch; remove the module's
+    one line from the baseline roster. Touch NOTHING else: not the whitelist, not
+    _MIGRATED_BLOCK_PATTERNS, not _MIGRATED_BLOCK_EXEMPT, not any failure string, and no other
+    roster member. Then add the two tests named in the Scope row -- the red/green declaration test
+    (prove its red side in a `git worktree --detach origin/main`, never by assertion) and the
+    OSError-branch coverage test the full tier's per-file 100% gate requires.
   - >-
     scripts/preflight/ci_rca_gauges.py -- repoint the line-42 reference from "(AGENTS.md runbook)" to
     T4.12. This line is inside _escalate_ci_rca_probe_health's DOCSTRING (spanning roughly lines

@@ -4647,6 +4647,15 @@ semantics preserved inside the priority_queue_current verb)" citation above is a
 Decision 70 governs Physical Deletion of Bootstrap Records, not queue current-state semantics; the
 queue current-state semantics referenced here are this decision's own `priority_queue_current` verb.]
 
+> **[Amendment 2026-08-17, PLAN-agents-md-ambient-trim]:** rehomes the Iceberg-DELETE-resurrection
+> mechanism condensed out of AGENTS.md's read-cache-is-never-a-write-source hard rule. An Iceberg
+> DELETE removes only a snapshot; if the same row is re-staged from a stale local cache on any
+> clone, runner, or worktree, it is re-injected as a new append and wins the SCD2 dedupe because
+> `_prepare_record` (`scripts/ops_writer.py:199`) refreshes `last_updated_timestamp = now` --
+> producing an infinite resurrection loop in which deletes never stick. Scoped to the
+> still-Iceberg tables; the never-re-stage-from-a-read-cache rule applies to DuckLake tables (I-4)
+> regardless.
+
 ---
 
 ## Decision 83: Branch Protection Now Active -- Amends Decision 89 Premise (Decided)
