@@ -174,32 +174,20 @@ locals {
         Resource = ["arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/agent-platform-counters"]
       },
       {
-        # TRUST-ONLY (Decision 143, unchanged by DEP-02 / rec-2842): iam:UpdateAssumeRolePolicy on
-        # ENUMERATED roles ONLY -- the Resource is deliberately NOT widened to role/agent-platform-*.
-        # A widened trust Resource would silently grant a fleet-wide trust rewrite (any
-        # agent-platform-* role's trust policy), and DEP-05 (a dedicated trust-boundary control) is
-        # still open, so this narrow identity grant is the ONLY control against that. The
-        # non-trust role metadata/lifecycle verbs that used to share this Sid (TagRole/UntagRole) are
-        # split OUT into the prefix-scoped IAMRoleMetadataWrite Sid below -- they are non-escalating
-        # role-metadata writes, not trust, so they get the wider agent-platform-* prefix while trust
-        # stays fleet-narrow at exactly these enumerated roles.
-        #
-        # TEMPORARY -- RENAME WINDOW ONLY (rec-3132, PLAN-repo-rename-relicense). The planner and
-        # deploy entries below are a time-boxed exception, NOT a permanent grant. They exist solely
-        # so the rename window's dual-slug trust expansion (PR-1) and its contraction (PR-3) can run
-        # through the normal gated-apply channel instead of two break-glass admin applies.
-        #
-        # These two roles are NOT privilege-equivalent to branch/pr, which is why they were excluded
-        # originally and why this must revert: github_ci_branch carries an explicit
-        # DenyConvergenceRecordWrite and github_ci_pr is read-only, whereas github_ci_planner holds
-        # the fail-closed ConvergenceRecordWrite (the anti-masking anchor) and github_ci_deploy is
-        # the production Lambda code-deploy channel. While these entries stand, a subverted merge
-        # path could rewrite those two roles' trust to an arbitrary repository.
-        #
-        # REVERT OBLIGATION: PR-3 of PLAN-repo-rename-relicense removes these two entries in the
-        # SAME bootstrap apply that contracts the apply role's own trust. Ordering is load-bearing --
-        # the terraform/personal contraction must apply FIRST (it needs this grant), then this
-        # narrow-back. Do not revert early, and do not let this outlive PR-3.
+        # TRUST-ONLY (Decision 143 clause 1, worst-verb scoping -- a standing rule that needs no
+        # other control's status as a contingency): iam:UpdateAssumeRolePolicy on ENUMERATED roles
+        # ONLY -- the Resource is deliberately NOT widened to role/agent-platform-*. A widened trust
+        # Resource would silently grant a fleet-wide trust rewrite (any agent-platform-* role's
+        # trust policy); Decision 143 clause 1 forbids that for a worst-verb like this one on its
+        # own terms, regardless of what other controls exist alongside it. The enforcement primitive
+        # is the TestIAMRoleReconcileScope pin test in
+        # tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py, a standing guard pinning this
+        # Resource set to exactly {branch, pr} -- a re-widening must be a reviewed edit to that
+        # test, never a quiet comment nobody enforces. The non-trust role metadata/lifecycle verbs
+        # that used to share this Sid (TagRole/UntagRole) are split OUT into the prefix-scoped
+        # IAMRoleMetadataWrite Sid below -- they are non-escalating role-metadata writes, not trust,
+        # so they get the wider agent-platform-* prefix while trust stays fleet-narrow at exactly
+        # these enumerated roles.
         Sid    = "IAMRoleReconcile"
         Effect = "Allow"
         Action = [
@@ -208,9 +196,6 @@ locals {
         Resource = [
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-branch",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-pr",
-          # TEMPORARY (rec-3132) -- remove both in PR-3's bootstrap apply:
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-planner",
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-deploy",
         ]
       },
       {
