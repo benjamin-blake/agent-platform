@@ -159,8 +159,11 @@ verification_plan:
       The deploy job assumes agent-platform-github-ci-deploy, builds/uploads/deploys the three prod
       artifacts, and the smoke job asserts status=disabled / skipped_comparison=true / statusCode=400.
       Measured blast radius: compute_affected_artifacts over every file changed since the last prod
-      deploy (d024e63) returns exactly {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']} -- re-measure
-      rather than trusting a count, the file total grows as main advances but the artifact set has not
+      deploy (d024e63) returns exactly {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']} -- RE-MEASURE it, do not
+      trust this stated result: bin/venv-python -c "import subprocess; from scripts.lambda_manifest
+      import compute_affected_artifacts; print(compute_affected_artifacts(subprocess.run(['git',
+      'diff','--name-only','d024e63','origin/main'],capture_output=True,text=True).stdout.split()))"
+      -- the file total grows as main advances; the artifact set has not
       -- handler code byte-identical, ops-compaction untouched, all three functions schedule-disabled
       (Decision 61/37/116).
     fix_if: >-
@@ -256,6 +259,11 @@ verification_plan:
       assert 'rec-3132' not in t, 'stale rec-3132 time-box marker survives';
       assert 'DEP-05 (a dedicated trust-boundary control) is' not in t,
       'stale DEP-05-is-open premise survives (T2.50 completed 2026-07-24)';
+      import pathlib as _pl;
+      stale=[f for f in ['terraform/personal/oidc.tf','terraform/bootstrap/github_ci_apply.tf',
+      'tests/checks/iam_tf/test_oidc_trust_slug_invariants.py']
+      if 'PR-3' in _pl.Path(f).read_text()];
+      assert not stale, f'stale PR-3 pointers survive in {stale}';
       print('reconcile-narrow-ok')"
     expected: "reconcile-narrow-ok"
     fix_if: >-
@@ -389,7 +397,8 @@ verification_plan:
       NOT the presubmit step (-m scripts.validate), which says nothing about whether the contraction
       reached live IAM. Paste that step's command WRAPPED IN A SUBSHELL:
       ( <ORDERING CONTROL command> ) && terraform -chdir=terraform/bootstrap plan
-      -var-file=terraform/bootstrap/terraform.bootstrap.tfvars . The parentheses are load-bearing:
+      -var-file=terraform/bootstrap/terraform.bootstrap.tfvars
+      <<END OF COMMAND -- do not paste beyond this marker>> The parentheses are load-bearing:
       that command ends in an exit, so pasting it bare would exit YOUR shell before terraform ever
       runs, silently skipping the plan instead of gating it. Named by PURPOSE, not by step number,
       deliberately: a renumbering silently repointed this precondition at the presubmit once already,
@@ -438,7 +447,7 @@ verification_plan:
     expected: "both-sub-forms-ok"
     fix_if: >-
       A missing environment:tf-gated-apply form silently UNGATES every gated apply -- the regression
-      Decision 94 exists to prevent (its own VP9, a different plan's numbering, not this plan's step 9). Restore it in the same bootstrap apply immediately.
+      Decision 94 exists to prevent (its own VP9, a different plan's numbering, not this plan's step 9). Restore it via A SECOND operator bootstrap apply, immediately -- step 10's apply has already completed by the time this step runs, so "the same apply" is not available.
   - step: 13
     phase: post-deploy
     action: >-
@@ -446,9 +455,13 @@ verification_plan:
       comparison. Between the two dispatches nothing in the Lambda-packaged set changes (terraform/**,
       tests/**, config/agent/** and terraform/** are all unpackaged), so this ships byte-identical
       code. Asserts the SAME evidence class as step 2 -- the deterministic deploy record FIRST, then
-      the lagged RoleLastUsed -- so the post-contraction proof is not weaker than the pre-contraction
+      the lagged RoleLastUsed (steps 2-3 together) -- so the post-contraction proof is not weaker than the pre-contraction
       proof for the same role against the same failure mode. Export REDEPLOY_SHA from this dispatch.
     command: >-
+      echo "DISPATCH FIRST: mcp__github__actions_run_trigger(method='run_workflow',
+      owner='benjamin-blake', repo='theseus', workflow_id='deploy-prod-lambdas.yml', ref='main').
+      Record the run id and its head sha, export REDEPLOY_SHA=<that sha>, wait for completion, THEN
+      run the assertions below." &&
       aws s3 cp s3://agent-platform-data-lake/deploy-records/prod/agent-platform-findings-processor.json -
       --region eu-west-2 --profile agent_platform_admin | bin/venv-python -c "import json,sys,os;
       sha=json.load(sys.stdin)['source_git_sha']; assert sha==os.environ['REDEPLOY_SHA'],
@@ -471,17 +484,28 @@ verification_plan:
       this role's assume. Do NOT "roll back" by restoring the name-only entries: they are unmintable,
       so they cannot restore an assume, and they red both standing guards (see rollback). Diagnose the
       IMMUTABLE literal instead -- re-read the live trust document and compare against
-      benjamin-blake@217728084/theseus@1252427466 -- correct it in BOTH roots in one commit, re-apply
-      the personal root via the gated path immediately, then RCA. Do not leave CI unable to deploy
-      while investigating.
+      benjamin-blake@217728084/theseus@1252427466. THEN FOLLOW THE ROLLBACK FIELD'S POST-STEP-10
+      REMEDY, not a bare personal-root re-apply: by this point step 10 has removed the
+      IAMRoleReconcile grant, so a gated trust re-apply on planner or deploy AccessDenies. The order
+      is a second operator bootstrap apply restoring those two ARNs FIRST (carrying the same-commit
+      test_resource_set_is_exactly_branch_and_pr edit rollback describes), then the personal
+      re-apply, then RCA. Do not leave CI unable to deploy while investigating -- and do not attempt
+      the blocked shortcut either.
   - step: 14
     phase: post-deploy
     action: >-
-      POST-CONTRACTION LIVENESS, apply role. Dispatch terraform-apply-sandbox (the
-      acknowledge-and-retry path re-plans fresh and applies; a converged sandbox makes it a no-op that
-      still writes a green convergence record), then RUN the comparison. Proves the
-      ref:refs/heads/main form post-contraction.
+      POST-CONTRACTION LIVENESS, apply role. Dispatch terraform-apply-sandbox as a ROUTINE MANUAL
+      APPLY -- workflow_dispatch with acknowledge_red_commit LEFT BLANK. It re-plans fresh and
+      applies; a converged sandbox makes it a no-op that still writes a green convergence record.
+      Deliberately NOT called "the acknowledge-and-retry path": in terraform/CLAUDE.md that names the
+      red-unlatch form with acknowledge_red_commit SET, and supplying an unlatch input here would
+      clear a red record nobody reviewed. If the record is already red this dispatch is REFUSED --
+      that is a separate incident (step 9's fix_if), not this step. Proves the ref:refs/heads/main
+      form post-contraction.
     command: >-
+      echo "DISPATCH FIRST: mcp__github__actions_run_trigger(method='run_workflow',
+      owner='benjamin-blake', repo='theseus', workflow_id='terraform-apply-sandbox.yml', ref='main')
+      with NO acknowledge_red_commit input. Wait for completion, THEN run the assertions below." &&
       aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin
       --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,os,datetime as dt;
       raw=sys.stdin.read().strip(); assert raw and raw!='None', f'RoleLastUsed ABSENT ({raw!r}) --
@@ -829,7 +853,13 @@ execution_steps:
     test_every_entry_is_immutable_format to TestImmutableSubjectEntry, asserting every entry in both
     roots matches _IMMUTABLE_ENTRY_RE. Update the module docstring, which currently states a count
     assertion "would fail the moment the plan's own cleanup lands" -- that cleanup is now landing, and
-    the format assertion is the durable successor. Confirm it FAILS before editing the .tf.
+    the format assertion is the durable successor. ALSO sweep the file's THREE stale cross-plan
+    pointers, all naming PLAN-repo-rename-relicense's PR-3 whose non-existence is this plan's own
+    premise: line 3 (a "PR-3 contraction" reference), line 15 (a dangling verification-step pointer
+    into that plan's numbering), and line 33 (another one). Their line numbers are given rather than
+    their literal text so this instruction does not itself read as a live cross-reference. Leaving dangling pointers in the very file this plan modifies would reproduce the
+    comment-outlives-its-referent defect this plan exists to close; VP step 5 now asserts their
+    absence. Confirm the new test FAILS before editing the .tf.
   - >-
     terraform/personal/oidc.tf -- MODIFY. Contract local.github_repos to the single immutable entry.
     Rewrite the dual-slug-transition comment: the transition is over; state the contracted steady
