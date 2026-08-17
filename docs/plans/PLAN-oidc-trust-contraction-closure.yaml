@@ -466,8 +466,15 @@ verification_plan:
       run the assertions below." &&
       aws s3 cp s3://agent-platform-data-lake/deploy-records/prod/agent-platform-findings-processor.json -
       --region eu-west-2 --profile agent_platform_admin | bin/venv-python -c "import json,sys,os;
-      sha=json.load(sys.stdin)['source_git_sha']; assert sha==os.environ['REDEPLOY_SHA'],
-      (sha, os.environ['REDEPLOY_SHA']); print('redeploy-record-fresh-ok', sha[:8])" &&
+      d=json.load(sys.stdin); sha=d['source_git_sha']; assert sha==os.environ['REDEPLOY_SHA'],
+      (sha, os.environ['REDEPLOY_SHA']);
+      import datetime as dt;
+      assert dt.datetime.fromisoformat(d['deployed_at'].replace('Z','+00:00')) >
+      dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']),
+      f\"deploy record predates the bootstrap apply (deployed_at={d['deployed_at']}) -- it is the
+      step-2 record, not this dispatch's; the deploy record carries no run_id, so deployed_at is the
+      binding\";
+      print('redeploy-record-fresh-ok', sha[:8], d['deployed_at'])" &&
       aws iam get-role --role-name agent-platform-github-ci-deploy --profile agent_platform_admin
       --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,os,datetime as dt;
       raw=sys.stdin.read().strip(); assert raw and raw!='None', f'RoleLastUsed ABSENT ({raw!r}) --
@@ -496,8 +503,13 @@ verification_plan:
   - step: 14
     phase: post-deploy
     action: >-
-      POST-CONTRACTION LIVENESS, apply role. Dispatch terraform-apply-sandbox as a ROUTINE MANUAL
-      APPLY -- workflow_dispatch with acknowledge_red_commit LEFT BLANK. It re-plans fresh and
+      POST-CONTRACTION LIVENESS, apply role. OPERATOR-DIRECTED, NOT AGENT-SELF-DIRECTED: a
+      terraform-apply-sandbox workflow_dispatch is a terraform apply, and docs/contracts/deploy-paths.yaml
+      sanctions exactly three agent triggers (open a PR touching terraform/**; the governed code-deploy
+      channel; the input-free Reconcile action). This is none of them, and provision.note reads
+      "Agents never run terraform apply as a self-directed, routine action". An agent may execute it
+      only after a human has reviewed and explicitly directed it -- the same gate as step 10.
+      Dispatched with acknowledge_red_commit LEFT BLANK. It re-plans fresh and
       applies; a converged sandbox makes it a no-op that still writes a green convergence record.
       Deliberately NOT called "the acknowledge-and-retry path": in terraform/CLAUDE.md that names the
       red-unlatch form with acknowledge_red_commit SET, and supplying an unlatch input here would
@@ -506,9 +518,13 @@ verification_plan:
       reviewed acknowledge-and-retry unlatch (terraform/CLAUDE.md), not anything in this plan. Proves the ref:refs/heads/main
       form post-contraction.
     command: >-
-      echo "DISPATCH FIRST: mcp__github__actions_run_trigger(method='run_workflow',
-      owner='benjamin-blake', repo='theseus', workflow_id='terraform-apply-sandbox.yml', ref='main')
-      with NO acknowledge_red_commit input. Wait for completion, THEN run the assertions below." &&
+      echo "OPERATOR-DIRECTED DISPATCH (a human must review and direct this before an agent runs it,
+      Decision 126): mcp__github__actions_run_trigger(method='run_workflow', owner='benjamin-blake',
+      repo='theseus', workflow_id='terraform-apply-sandbox.yml', ref='main') with NO
+      acknowledge_red_commit input. THIS PATH RE-PLANS FRESH -- it is the only auto-apply path that
+      does -- so if the sandbox has drifted since the merge apply it will apply a diff no human
+      reviewed on a PR. Confirm the sandbox is converged BEFORE directing it. Record the RUN ID.
+      Then run the assertions below." &&
       aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin
       --query 'Role.RoleLastUsed.LastUsedDate' --output text | bin/venv-python -c "import sys,os,datetime as dt;
       raw=sys.stdin.read().strip(); assert raw and raw!='None', f'RoleLastUsed ABSENT ({raw!r}) --
@@ -519,6 +535,11 @@ verification_plan:
       aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --region eu-west-2
       --profile agent_platform_admin | bin/venv-python -c "import json,sys,os,datetime as dt; d=json.load(sys.stdin);
       assert d['status']=='green', d['status'];
+      assert d['run_id'] == os.environ['DISPATCH_RUN_ID'],
+      f\"convergence record was NOT written by THIS dispatch (record run_id={d['run_id']},
+      dispatched={os.environ['DISPATCH_RUN_ID']}) -- a concurrent push to main touching
+      terraform/personal/** writes a green, fresh record too, which would satisfy a
+      timestamp-only check while THIS dispatch guard-BLOCKED and applied nothing\";
       assert dt.datetime.fromisoformat(d['timestamp'].replace('Z','+00:00')) >
       dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']),
       f\"convergence record NOT REWRITTEN by this dispatch (ts={d['timestamp']}) -- a guard-BLOCK
@@ -527,10 +548,17 @@ verification_plan:
       print('convergence-green-and-fresh-ok', d['timestamp'])"
     expected: >-
       "apply-liveness-ok <timestamp>" later than BOOTSTRAP_APPLY_TS, then
-      "convergence-green-and-fresh-ok <timestamp>" -- the record must be BOTH green AND rewritten by
-      this dispatch. Green alone is insufficient: a guard-BLOCK dispatch routes, applies nothing,
+      "convergence-green-and-fresh-ok <timestamp>" -- the record must be green, rewritten after the
+      bootstrap apply, AND carry THIS dispatch's run_id (export DISPATCH_RUN_ID from the recorded run).
+      The run_id binding is what stops a concurrent terraform/personal merge from satisfying the check
+      on this dispatch's behalf. Green alone is insufficient: a guard-BLOCK dispatch routes, applies nothing,
       skips the record write, and still exits SUCCESS.
     fix_if: >-
+      GUARD-PASS WITH A NON-EMPTY DIFF is the outcome to fear most and the one this step cannot
+      distinguish on its own: the fresh re-plan applied a real delta that no human reviewed on a PR.
+      Read the run's plan output before accepting the green record; if it applied anything beyond a
+      no-op, treat it as an unreviewed apply and RCA it (Decision 55/72), regardless of the assertions
+      below passing.
       A record that is green but NOT rewritten means the dispatch guard-BLOCKED and routed: it applied
       nothing, so the apply role's liveness is still proven (the assume happens at the credentials step
       regardless) but the convergence claim is not. Investigate the routed diff -- rec-2755's spurious
@@ -588,9 +616,22 @@ verification_plan:
       rows={r['id']: r for r in (json.loads(l) for l in
       pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip())};
       bad=[i for i in ('rec-3161','rec-3143') if rows.get(i,{}).get('status')!='closed'];
-      assert not bad, bad; print('rec-closures-verified-ok')"
+      assert not bad, bad;
+      opens=[r for r in rows.values() if r.get('status')=='open'];
+      disch=[r for r in opens if r.get('title','').startswith('Discharge Decision 172')];
+      expiry=[r for r in opens if r.get('title','').startswith('Machine-checkable expiry')];
+      assert disch, 'AC6: no open rec titled \'Discharge Decision 172...\' -- the reversal-condition
+      discharge was rehomed to a rec that was never filed, so Decision 172 condition (a) is armed with
+      no tracker and the verbatim amendment text is lost with this plan';
+      assert expiry, 'no open rec titled \'Machine-checkable expiry...\' -- the TEMPORARY-grant class
+      fix was deferred to a rec that was never filed';
+      print('rec-closures-and-followons-verified-ok', disch[0]['id'], expiry[0]['id'])"
     expected: >-
-      "rec-closures-verified-ok". rec-3142 needs no action (already closed, resolution corrected to
+      "rec-closures-and-followons-verified-ok <disch-id> <expiry-id>". Asserts BOTH closures AND that
+      the two rehomed follow-on recs actually exist and are open -- acceptance criterion 6 otherwise
+      rests on an execution_steps bullet with no executable check, which is Decision 163 point 2's
+      declared-vs-executed failure mode and the same class this plan exists to close.
+      rec-3142 needs no action (already closed, resolution corrected to
       name rec-3161 as successor). rec-3132 needs no action -- it was already closed on 2026-08-15 when
       the widening LANDED, so no open rec tracks the revert (this plan is its only tracking vehicle).
     fix_if: >-
@@ -688,8 +729,10 @@ constraints:
     get-role output, or the 12-digit account id (Decision 101; the pre-commit never-commit hook
     shape-blocks it).
   - >-
-    Agents never self-direct a terraform apply. Step 10 is executed by the operator, or by an agent
-    only after a human has reviewed the plan output and explicitly directed it (Decision 126).
+    Agents never self-direct a terraform apply. This binds BOTH step 10 (the bootstrap apply) AND
+    step 14 (the terraform-apply-sandbox dispatch, which is an apply and is not among the three agent
+    triggers docs/contracts/deploy-paths.yaml sanctions). Each is executed by the operator, or by an
+    agent only after a human has reviewed the plan output and explicitly directed it (Decision 126).
   - No rescue agents or workaround loops (Decision 55). A failed VP step is RCA'd, never retried into green.
 context:
   - >-
@@ -925,6 +968,9 @@ execution_steps:
     bootstrap apply has landed -- do NOT edit docs/DECISIONS.md in this plan; and (b) the
     machine-checkable-expiry rec for TEMPORARY IAM grants, noting that rec-3139's finding generalises
     to validate_graduation_completeness as well as validate_vp_replay.
+    TITLES ARE LOAD-BEARING -- VP step 16 greps for them: (a) MUST start "Discharge Decision 172"
+    and (b) MUST start "Machine-checkable expiry". Filing under other titles passes the write but
+    fails the verification, which is the intended coupling.
   - 'Report: what was implemented, verification results, and the live-IAM evidence for each of the five roles.'
 work_areas: []
 rollback: >-
