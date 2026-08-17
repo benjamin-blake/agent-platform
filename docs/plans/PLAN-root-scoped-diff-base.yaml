@@ -167,7 +167,9 @@ verification_plan:
     action: >-
       Prove the new guard actually guards -- synthetic violation is caught, a `# root-scoped-ok:`
       marker suppresses it, and the live scripts/checks tree reports zero violations.
-    command: bin/venv-python -m pytest tests/checks/hygiene/test_validate_root_scoped_diff_base.py -q
+    command: >-
+      bin/venv-python -m pytest tests/checks/hygiene/test_validate_root_scoped_diff_base.py
+      tests/checks/hygiene/test__manifest.py -q
     expected: >-
       Exit 0. Fails at origin/main (the module does not exist there). The negative-control test
       confirms a root-taking function calling a bare primitive is reported; the live-tree test
@@ -226,19 +228,27 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Confirm the Decision 159 amendment landed and names the split, so the widened contract is
-      recorded rather than silently assumed.
-    command: grep -q "root-scoped" docs/DECISIONS.md && grep -q "Decision 159" docs/DECISIONS.md
-    expected: Exit 0 -- the amendment text is present in DECISIONS.md.
+      Confirm the governance and registration artefacts landed -- the Decision 159 amendment, the
+      ci_rca_taxonomy row, and the check-accounting baseline shrink-removal. These three are
+      config/prose edits with no behavioural unit test of their own, so this step is their evidence.
+    command: 'grep -q "root-scoped" docs/DECISIONS.md && grep -q "Decision 159" docs/DECISIONS.md
+      && grep -qE "^  validate_root_scoped_diff_base: code_regression$" config/ci_rca_taxonomy.yaml
+      && ! grep -qE "^  - (validate_handoff_full_tier|validate_decisions_size)$" config/check_accounting_baseline.yaml'
+    expected: >-
+      Exit 0 -- the amendment text is present, the taxonomy row exists, and neither declaration-
+      adopting module remains in the accounting baseline.
     fix_if: >-
-      Missing -- the contract widening shipped undocumented; add the forward-reference amendment
-      clause before merging.
+      Amendment missing -- the contract widening shipped undocumented. Taxonomy row missing --
+      validate_ci_rca_taxonomy's totality assertion will fail in step 6 anyway. Baseline names still
+      present -- the shrink-removal was skipped and the Decision 170 ratchet will fire.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      A one-off governance amendment. Graduating a standing grep on DECISIONS.md prose would
-      ossify the wording of a document that is edited every session, guarding text rather than
-      behaviour; the behavioural half of this contract is already graduated by steps 1 and 2.
+      Three chained greps over prose and config, not a single kernel-expressible primitive. The
+      DECISIONS.md half would ossify the wording of a document edited every session, guarding text
+      rather than behaviour; the taxonomy and baseline halves are already enforced live and more
+      strongly by validate_ci_rca_taxonomy's totality assertion and validate_check_accounting's
+      legs (b)/(c)/(d) in step 6. The behavioural surface is graduated by steps 1, 2 and 3.
   - step: 6
     phase: pre-deploy
     action: >-
@@ -342,6 +352,50 @@ test_obligations:
     red_green_expectation: >-
       Red before the module exists (import error), green after; the negative-control test fails if
       the AST matcher stops detecting the call shape.
+  - source: scripts/checks/hygiene/_manifest.py
+    behavior: >-
+      The new Entry resolves to a callable of its own name inside the hygiene package and is
+      registered in BOTH the pre and full sequences.
+    verification_step: 2
+    test_selector: tests/checks/hygiene/test__manifest.py
+    red_green_expectation: >-
+      Red before the Entry is added -- the mirror test parametrizes over ENTRIES, so
+      test_entry_resolves_to_a_callable_named_its_own_attr and test_registry_resolve_matches_the_manifest_entry
+      fail for the new name -- green after, plus a new both-sequences assertion mirroring the
+      existing validate_check_accounting one.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: >-
+      Every registered check carries a function_to_category row, so the new check is classifiable
+      when it fires.
+    verification_step: 5
+    command: 'grep -qE "^  validate_root_scoped_diff_base: code_regression$" config/ci_rca_taxonomy.yaml'
+    red_green_expectation: >-
+      Red before the row is added, green after. The live enforcement is stronger than this probe:
+      validate_ci_rca_taxonomy asserts TOTALITY over the registered-check set (it printed "All 112
+      registered check(s) present in function_to_category" on this PR's own run), so registering
+      the new check without the row fails VP step 6 in both tiers.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      The three graduated rows key on nodes absent at origin/main, so each is admitted by the
+      differential gate rather than rejected as non-discriminating.
+    verification_step: 6
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      These rows ARE graduated checks; unit-testing them would be circular. Their real guard is
+      validate_verification_registry's differential admission gate, which materializes each
+      check_spec, reverts a worktree to origin/main, and requires FAIL-on-base / PASS-on-HEAD --
+      strictly stronger than any assertion this plan could add, and exercised by the named command.
+  - source: config/check_accounting_baseline.yaml
+    behavior: >-
+      validate_handoff_full_tier and validate_decisions_size are shrink-removed once both declare,
+      and neither can ever be re-added.
+    verification_step: 5
+    command: '! grep -qE "^  - (validate_handoff_full_tier|validate_decisions_size)$" config/check_accounting_baseline.yaml'
+    red_green_expectation: >-
+      Red before the shrink-removal (both names are live in the baseline at lines 65 and 75), green
+      after. Re-addition needs no separate guard: validate_check_accounting leg (b) rejects any name
+      absent from the frozen _BASELINE_SEED and leg (c) rejects any growth, so the direction is
+      structurally one-way; leg (d) verifies the removal live against this plan's changed-file set.
 constraints:
   - No rescue agents or workaround loops (Decision 55). The defect is a SILENT collapse to an empty
     added-plan set; neither the fix nor the guard may add a new silent path. Corollary - a
