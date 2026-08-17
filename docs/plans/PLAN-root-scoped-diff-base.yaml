@@ -33,13 +33,21 @@ scope:
     purpose: Pass root to get_changed_files and push_context_base (identical latent leak).
   - file: scripts/checks/verification/validate_handoff_full_tier.py
     action: Modify
-    purpose: Pass root to get_changed_files (latent leak, same class).
+    purpose: >-
+      Pass root to get_changed_files (latent leak, same class), AND adopt the Decision 170
+      declaration this edit obligates (touch-it-fix-it) on both reachable exit paths.
   - file: scripts/checks/decisions/validate_decisions_size.py
     action: Modify
     purpose: >-
-      Add a `# root-scoped-ok:` waiver marker on the using_default_root-gated get_changed_files
-      call -- that conjunct already prevents the leak, so this is a disclosed non-violation, not a
-      fix.
+      Pass root to the using_default_root-gated get_changed_files call -- a provable no-op there,
+      since root is already rebound to _common.ROOT on the only path that reaches it -- so the file
+      needs no waiver marker. Adopt the Decision 170 declaration this edit obligates on all five
+      reachable exit paths.
+  - file: config/check_accounting_baseline.yaml
+    action: Modify
+    purpose: >-
+      Shrink-remove validate_handoff_full_tier and validate_decisions_size now that both declare
+      (removal is always permitted; re-adding never is).
   - file: scripts/checks/hygiene/validate_root_scoped_diff_base.py
     action: Create
     purpose: >-
@@ -65,11 +73,13 @@ scope:
   - file: tests/checks/_common/test_push_context_base.py
     action: Modify
     purpose: >-
-      Cover root-scoped probing: with root=<fixture repo>, both push-context triggers resolve the
+      Add TestRootScopedProbes: with root=<fixture repo>, both push-context triggers resolve the
       FIXTURE's commits, never the real repo's; default root=None is unchanged.
   - file: tests/checks/_common/test_primitives.py
     action: Modify
-    purpose: Cover the root passthrough in get_changed_files and get_status_aware_diff.
+    purpose: >-
+      Cover the root passthrough in get_changed_files and get_status_aware_diff, including the
+      fail-loud behaviour on a nonexistent root.
   - file: tests/checks/verification/test_validate_graduation_completeness.py
     action: Modify
     purpose: >-
@@ -80,10 +90,10 @@ scope:
     purpose: Root-scoped base regression coverage.
   - file: tests/checks/verification/test_validate_handoff_full_tier.py
     action: Modify
-    purpose: Cover the root passthrough.
+    purpose: Cover the root passthrough and the new declaration on both exit paths.
   - file: tests/checks/decisions/test_validate_decisions_size.py
     action: Modify
-    purpose: Lock the using_default_root gating that the waiver marker documents.
+    purpose: Cover the root passthrough and the new declaration on all five exit paths.
   - file: tests/checks/hygiene/test_validate_root_scoped_diff_base.py
     action: Create
     purpose: >-
@@ -102,12 +112,14 @@ acceptance_criteria:
     GITHUB_EVENT_NAME=push env path and the on-main branch + merge-base==HEAD git-state path).
   - >-
     push_context_base, get_changed_files and get_status_aware_diff each accept an optional root and
-    run every git subprocess and every path-existence filter against it; calling them with no
-    argument produces byte-identical behaviour to today for all existing callers.
+    run every git subprocess and every path-existence filter against it. Calling them with NO root
+    argument -- which is every existing caller in the tree -- produces byte-identical behaviour to
+    today. (Scoped deliberately: passing a nonexistent root is a new fail-loud path, see criterion 8.)
   - >-
     No function in scripts/checks/** that accepts a `root` parameter calls push_context_base,
-    get_changed_files or get_status_aware_diff without passing that root, except where an explicit
-    `# root-scoped-ok: <reason>` marker documents an existing gate.
+    get_changed_files or get_status_aware_diff without passing that root. The guard's
+    `# root-scoped-ok:` suppression marker ships tested but with ZERO in-tree users -- every one of
+    the six sweep hits is fixed by passing root, not waived.
   - >-
     validate_root_scoped_diff_base is registered in scripts/checks/hygiene/_manifest.py, carries a
     ci_rca_taxonomy row, declares registry.examined()/skipped() on every reachable exit path, and
@@ -119,27 +131,34 @@ acceptance_criteria:
   - >-
     validate_graduation_completeness still composes exactly ONE terminal Decision 170 declaration
     on every path after the reorder, and both legs keep their Decision 132 obligations.
+  - >-
+    validate_check_accounting reports zero violations against this plan's own changed-file set:
+    validate_handoff_full_tier and validate_decisions_size both declare on every reachable exit
+    path, and both names are shrink-removed from config/check_accounting_baseline.yaml.
+  - >-
+    Calling a widened primitive with a nonexistent root raises rather than silently reading the real
+    repository -- the pre-fix behaviour was the silent wrong-repo read that caused rec-3166, so
+    failing loud here is the intended change (Decision 55), and it is covered by a test.
   - Decision 159 cl.1 carries a forward-reference amendment describing the ENV-global / git-root-scoped split.
   - rec-3166 is closed and no open source=ci_rca recommendation remains.
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Prove the leak is closed across every affected check -- run the regression suites for the
-      four root-seamed checks plus the _common primitives.
+      Prove the rec-3166 leak is closed at the primitive and at the failing check, on a NARROW,
+      replay-budget-safe node set that discriminates against origin/main.
     command: >-
-      bin/venv-python -m pytest tests/checks/_common/
-      tests/checks/verification/test_validate_graduation_completeness.py
-      tests/checks/verification/test_validate_vp_replay.py
-      tests/checks/verification/test_validate_handoff_full_tier.py
-      tests/checks/decisions/test_validate_decisions_size.py -q
+      bin/venv-python -m pytest
+      tests/checks/_common/test_push_context_base.py::TestRootScopedProbes
+      tests/checks/verification/test_validate_graduation_completeness.py::TestPlanPrLeg -q
     expected: >-
-      Exit 0. The new both-trigger regression tests fail on the pre-fix code (net-new detection
-      collapses) and pass after root-scoping.
+      Exit 0, well inside validate_vp_replay's 30s PER_STEP_TIMEOUT_SECONDS. Fails at origin/main
+      (TestRootScopedProbes does not exist there, so collection errors) -- which is what makes the
+      graduated row admissible under validate_verification_registry's differential gate.
     fix_if: >-
-      test_net_new_plan_with_zero_dispositions_fails still reports the
-      "merely-modified, zero dispositions -- pre-field plan carve-out" SKIP -- the base is still
-      being derived against the real repo somewhere on the path.
+      test_net_new_plan_with_zero_dispositions_fails still reports the "merely-modified, zero
+      dispositions -- pre-field plan carve-out" SKIP -- the base is still being derived against the
+      real repo somewhere on the path.
     hermetic: true
     graduation: graduate
     graduation_check_id: root-scoped-diff-base-regression-suite
@@ -148,26 +167,43 @@ verification_plan:
     action: >-
       Prove the new guard actually guards -- synthetic violation is caught, a `# root-scoped-ok:`
       marker suppresses it, and the live scripts/checks tree reports zero violations.
-    command: >-
-      bin/venv-python -m pytest tests/checks/hygiene/test_validate_root_scoped_diff_base.py
-      tests/checks/hygiene/test__manifest.py -q
+    command: bin/venv-python -m pytest tests/checks/hygiene/test_validate_root_scoped_diff_base.py -q
     expected: >-
-      Exit 0. The negative-control test confirms a root-taking function calling a bare primitive is
-      reported; the live-tree test confirms the real repository is clean after this plan's fixes.
+      Exit 0. Fails at origin/main (the module does not exist there). The negative-control test
+      confirms a root-taking function calling a bare primitive is reported; the live-tree test
+      confirms the real repository is clean after this plan's fixes.
     fix_if: >-
       Live-tree test reports violations -- a call site was missed; add the root passthrough rather
-      than a waiver. Negative control passes vacuously -- the AST matcher is not detecting the
-      call shape (attribute vs bare name, or kwarg vs positional root).
+      than a waiver. Negative control passes vacuously -- the AST matcher is not detecting the call
+      shape (attribute vs bare name, or kwarg vs positional root).
     hermetic: true
     graduation: graduate
     graduation_check_id: root-scoped-diff-base-guard-tests
   - step: 3
     phase: pre-deploy
     action: >-
+      Run the full regression surface across every touched check, including the two modules
+      adopting Decision 170 declarations. Carried as non-hermetic so it is NOT replayed against the
+      30s per-step budget (measured 18.08s / 148 tests before this plan's additions).
+    command: >-
+      bin/venv-python -m pytest tests/checks/_common/
+      tests/checks/verification/test_validate_graduation_completeness.py
+      tests/checks/verification/test_validate_vp_replay.py
+      tests/checks/verification/test_validate_handoff_full_tier.py
+      tests/checks/decisions/test_validate_decisions_size.py
+      tests/checks/hygiene/ -q
+    expected: Exit 0 across all five suites plus the hygiene package.
+    fix_if: >-
+      A declaration test fails -- an exit path in validate_handoff_full_tier (2 paths) or
+      validate_decisions_size (5 paths) still returns without declaring.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: >-
       Confirm the Decision 159 amendment landed and names the split, so the widened contract is
       recorded rather than silently assumed.
-    command: >-
-      grep -q "root-scoped" docs/DECISIONS.md && grep -q "Decision 159" docs/DECISIONS.md
+    command: grep -q "root-scoped" docs/DECISIONS.md && grep -q "Decision 159" docs/DECISIONS.md
     expected: Exit 0 -- the amendment text is present in DECISIONS.md.
     fix_if: >-
       Missing -- the contract widening shipped undocumented; add the forward-reference amendment
@@ -178,18 +214,23 @@ verification_plan:
       A one-off governance amendment. Graduating a standing grep on DECISIONS.md prose would
       ossify the wording of a document that is edited every session, guarding text rather than
       behaviour; the behavioural half of this contract is already graduated by steps 1 and 2.
-  - step: 4
+  - step: 5
     phase: pre-deploy
-    action: Run the fast presubmit tier, which now includes the new guard.
+    action: >-
+      Run the fast presubmit tier, which now includes the new guard AND the check-accounting
+      ratchet evaluated against this plan's own changed-file set.
     command: bin/venv-python -m scripts.validate --pre
-    expected: Exit 0.
+    expected: >-
+      Exit 0. Specifically, the "Check-accounting declaration ratchet" reports no violations --
+      the touch-it-fix-it clause (Decision 170 cl.3) is satisfied for both edited baselined modules.
     fix_if: >-
-      The new guard fires on an unfixed call site, or the reorder in
-      validate_graduation_completeness broke its single-declaration accounting
-      (validate_check_accounting reports a double or missing declaration).
+      The ratchet names validate_handoff_full_tier or validate_decisions_size -- their declarations
+      are missing or their baseline entries were not shrink-removed. The new guard fires on an
+      unfixed call site. Or the reorder in validate_graduation_completeness broke its
+      single-declaration accounting.
     hermetic: false
     graduation: not-applicable
-  - step: 5
+  - step: 6
     phase: pre-deploy
     action: >-
       Run the full presubmit tier to completion before committing (handoff_policy
@@ -201,7 +242,7 @@ verification_plan:
       blocked, not passed; resume later and rerun full from the start.
     hermetic: false
     graduation: not-applicable
-  - step: 6
+  - step: 7
     phase: post-deploy
     action: Confirm rec-3166 closed through the Resolves trailer rather than being left open.
     command: >-
@@ -214,7 +255,7 @@ verification_plan:
       Still open -- the Resolves trailer was missing or malformed in the squash commit body. Close
       it via the documented portal fallback:
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-3166 --status closed --resolution "..."
-  - step: 7
+  - step: 8
     phase: post-deploy
     action: >-
       Confirm main is actually unblocked -- no open source=ci_rca recommendation remains, so the
@@ -247,24 +288,26 @@ test_obligations:
       green after.
   - source: scripts/checks/verification/validate_vp_replay.py
     behavior: Content-keyed plan resolution reads its base from the injected root's repository.
-    verification_step: 1
+    verification_step: 3
     test_selector: tests/checks/verification/test_validate_vp_replay.py
     red_green_expectation: Red before the change under a simulated push context, green after.
   - source: scripts/checks/verification/validate_handoff_full_tier.py
-    behavior: The changed-file set defaults from the injected root's repository, not the real one.
-    verification_step: 1
+    behavior: >-
+      The changed-file set defaults from the injected root's repository, and the check declares an
+      examined()/skipped() outcome on both of its reachable exit paths.
+    verification_step: 3
     test_selector: tests/checks/verification/test_validate_handoff_full_tier.py
-    red_green_expectation: Red before the change under a simulated push context, green after.
+    red_green_expectation: >-
+      Red before the change (no declaration is emitted on either path, and the changed-file default
+      reads the real repo), green after.
   - source: scripts/checks/decisions/validate_decisions_size.py
     behavior: >-
-      The get_changed_files call stays gated behind using_default_root, so an injected root never
-      reaches the real repository's diff.
-    verification_step: 1
+      The get_changed_files call takes the (already-ROOT-rebound) root explicitly, and the check
+      declares an examined()/skipped() outcome on all five reachable exit paths.
+    verification_step: 3
     test_selector: tests/checks/decisions/test_validate_decisions_size.py
-    waiver_reason: >-
-      This file's change is a comment-only `# root-scoped-ok:` waiver marker; its behaviour is
-      unchanged and already covered. The marker itself is guarded by the new AST check's live-tree
-      assertion in verification step 2, so a silent removal of the gate would fail CI there.
+    red_green_expectation: >-
+      Red before the change (no declaration is emitted on any of the five paths), green after.
   - source: scripts/checks/hygiene/validate_root_scoped_diff_base.py
     behavior: >-
       A root-taking function calling a ROOT-pinned diff-base primitive without passing root is
@@ -276,7 +319,8 @@ test_obligations:
       the AST matcher stops detecting the call shape.
 constraints:
   - No rescue agents or workaround loops (Decision 55). The defect is a SILENT collapse to an empty
-    added-plan set; neither the fix nor the guard may add a new silent path.
+    added-plan set; neither the fix nor the guard may add a new silent path. Corollary - a
+    nonexistent injected root must RAISE, not degrade quietly to the real repository.
   - Forward-fix only -- never revert PR #924 / commit 7fa00f2 (Decision 72, Decision 73).
   - Decision 104 -- widen the primitives IN PLACE in scripts/checks/_common.py. Never fork a
     root-aware variant, never import bare names; consumers keep the qualified `_common.<name>` form
@@ -286,10 +330,21 @@ constraints:
     root, it does not move it into the resolver.
   - Decision 169 -- the new Entry uses bare string literals for name/module/attr; never
     "module:attr", never computed.
-  - Decision 170 -- config/check_accounting_baseline.yaml is shrink-only against a frozen
-    _BASELINE_SEED, so a NEW check cannot be grandfathered; validate_root_scoped_diff_base must call
-    registry.examined()/registry.skipped() on every reachable exit path. validate_graduation_completeness
-    must still compose exactly ONE terminal declaration after the reorder.
+  - >-
+    Decision 170 -- ALL THREE clauses bind here. (cl.1/cl.2) The new check declares
+    registry.examined()/registry.skipped() on every reachable exit path, and
+    validate_graduation_completeness must still compose exactly ONE terminal declaration after the
+    reorder. (cl.3, touch-it-fix-it) Editing a baselined non-declaring module obligates adopting its
+    declaration in the SAME PR -- this plan edits two such modules
+    (validate_handoff_full_tier at baseline line 75, validate_decisions_size at line 65), so both
+    adopt declarations and both names are shrink-removed from the baseline.
+    config/check_accounting_baseline.yaml is shrink-only against a frozen _BASELINE_SEED, so a new
+    check can never be grandfathered and a removed name can never be re-added.
+  - Decision 165 -- marker grammar is consolidated onto scripts/checks/_marker_guard.py for
+    Decision-CITING raise/authorization markers across five named guards. `# root-scoped-ok:` is a
+    free-text suppression marker on the `# count-coupling-ok:` precedent
+    (validate_test_count_coupling.py:34), NOT an authorization grammar, so it does not belong in
+    _marker_guard.py. Do not add it there.
   - Decision 131 -- mirror-rule test placement. scripts/checks/_common.py maps to the
     tests/checks/_common/ package (both test_primitives.py and test_push_context_base.py are valid
     homes); the other scope files map to single mirror files.
@@ -300,6 +355,9 @@ constraints:
   - tests/conftest.py::_clear_push_context_env_vars strips GITHUB_EVENT_NAME and GITHUB_EVENT_BEFORE
     for EVERY test. New push-context tests must opt back in via their own monkeypatch.setenv inside
     the test body -- setting them in the shell will not reach the test process.
+  - Keep the Decision 159 amendment OUT of that Decision's `**Problem:**` body -- that body is its
+    triage_excerpt source. An `> **Amendment ...**` blockquote above the `**Status:**` line leaves
+    scripts.decisions_index.build_index() byte-identical, so docs/decisions-index.json needs no edit.
   - Do not assert an exact len() against a growing production collection (tests/CLAUDE.md
     test-count-coupling rule) when asserting on the guard's violation list.
 context:
@@ -336,48 +394,66 @@ context:
     -- the test PR #924 added to lock down push-awareness -- is itself a VACUOUS PASS. It
     monkeypatches GITHUB_EVENT_BEFORE to the fixture's before_sha, but push_context_base runs
     `git cat-file -e` against the real repo, where that SHA is absent, so it falls through to the
-    REAL repo's HEAD~1 (measured: it derived f4a747ac, not the fixture's 3964d358). The test then
-    passes only because that unusable base makes every `git show` fail, yielding an empty baseline in
-    which all rows look new. Root-scoping fixes it automatically; the plan additionally asserts on
-    the derived base so it cannot silently re-vacuum.
+    REAL repo's HEAD~1. The test then passes only because that unusable base makes every `git show`
+    fail, yielding an empty baseline in which all rows look new. Independently reproduced by the
+    plan-critique gate. Root-scoping fixes it automatically; the plan additionally asserts on the
+    derived base so it cannot silently re-vacuum.
   - >-
     AST sweep of scripts/checks/** found 6 call sites in 4 files where a root-taking function calls a
-    ROOT-pinned diff-base primitive bare: validate_graduation_completeness (x2, the live break),
-    validate_vp_replay (x2, latent), validate_handoff_full_tier (x1, latent), and
-    validate_decisions_size (x1, already safe -- gated behind a `using_default_root` conjunct, hence
-    the waiver marker rather than a change). Full-closure scope was chosen over a minimal CI unblock
-    by explicit human direction.
+    ROOT-pinned diff-base primitive bare: validate_graduation_completeness:266,267 (the live break),
+    validate_vp_replay:226,241 (latent), validate_handoff_full_tier:75 (latent), and
+    validate_decisions_size:167 (already safe behind a `using_default_root` conjunct, but fixed by
+    passing root anyway -- a provable no-op there, since root is already _common.ROOT on the only
+    path that reaches the call). The plan-critique gate reproduced this sweep path-for-path and
+    line-for-line, and swept scripts/** OUTSIDE scripts/checks/ finding ZERO further instances.
+    Full-closure scope was chosen over a minimal CI unblock by explicit human direction.
+  - >-
+    Guard-scope residual (disclosed, not fixed): the guard globs scripts/checks/** only.
+    scripts/test_coverage_checker.py:466 calls push_context_base() bare and is one of Decision 159's
+    three named consumers; it has no `root` parameter today so it is not a violation, but the guard
+    would be blind if one were ever added. Widening the glob is a follow-on, not this CI unblock.
   - >-
     Registration obligations verified clean via `bin/venv-python -m scripts.roadmap.plan_obligations`
-    against this Scope table (the ci_rca_taxonomy row was added in response to it).
+    against this Scope table (the ci_rca_taxonomy row was added in response to it). Note that
+    plan_obligations does NOT model Decision 170's touch-it-fix-it clause -- that gap was caught by
+    the plan-critique gate running validate_check_accounting against this plan's own Scope table.
   - >-
     Decision-scout verdict: FLAGS_FOUND (125 of 125 decisions triaged). CITE list (verbatim):
     Decision 135, Decision 148, Decision 132, Decision 169, Decision 104, Decision 55, Decision 72,
-    Decision 73, Decision 131, Decision 128, Decision 163.
+    Decision 73, Decision 131, Decision 128, Decision 163. Decision 165 and Decision 170 cl.3 were
+    added by the plan-critique gate, which the scout's CITE list had missed.
   - >-
-    Scout flag resolutions. (a) Decision 170 WARN -- resolved: the new check declares
-    examined()/skipped() on every exit path (baseline is shrink-only, no grandfathering), and
-    "exactly one terminal declaration preserved" is acceptance criterion 6. (b) Decision 159 NOTE --
-    accepted by the human: the ENV-global / git-root-scoped split widens push_context_base's
-    sole-home contract, so docs/DECISIONS.md is in Scope for a forward-reference amendment to
-    Decision 159 cl.1. (c) Decision 132 NOTE -- resolved: _plan_pr_leg consumes `base` BEFORE the
-    empty-domain early return today, so the reorder moves the leg WITH the base derivation and emits
-    both PASS lines directly; neither leg loses its obligation. (d) Decision 104 SPIRIT WARN --
-    resolved by widening all THREE primitives (including get_status_aware_diff) so the guard's
-    primitive list is uniformly satisfiable rather than containing one that cannot take a root.
+    Scout flag resolutions. (a) Decision 170 WARN -- resolved: the new check declares on every exit
+    path, and criteria 6 and 7 cover the single-declaration reorder and the touch-it-fix-it ratchet.
+    (b) Decision 159 NOTE -- accepted by the human: the ENV-global / git-root-scoped split widens
+    push_context_base's sole-home contract, so docs/DECISIONS.md is in Scope for a forward-reference
+    amendment to Decision 159 cl.1. (c) Decision 132 NOTE -- resolved: _plan_pr_leg consumes `base`
+    BEFORE the empty-domain early return today, so the reorder moves the leg WITH the base
+    derivation and emits both PASS lines directly; the critique gate traced all three resulting
+    paths and confirmed no obligation, output line, or declaration is lost. (d) Decision 104 SPIRIT
+    WARN -- resolved by widening all THREE primitives (including get_status_aware_diff) so the
+    guard's primitive list is uniformly satisfiable.
   - >-
     Decision 135 pt 3 ("contract unchanged for existing callers") is scoped to BEHAVIOUR, not to a
     frozen signature -- a defaulted `root: Path | None = None` keeps every existing call
     byte-identical, so there is no contradiction. Recorded here because both _common.py:56 and
     Decision 159 cl.1 invoke that clause by name.
   - >-
+    VP replay budget: the plan-critique gate measured the full regression surface at 18.08s / 148
+    tests against validate_vp_replay's 30s PER_STEP_TIMEOUT_SECONDS, before this plan's new git-fixture
+    tests. Steps 1 and 2 were therefore narrowed to discriminating node sets and the broad run was
+    moved to non-hermetic step 3, so nothing this plan graduates can time out in replay.
+  - >-
     Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 behind / 0 ahead),
-    so the Main Divergence Assessment found no overlap and no rebase was needed.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+    so the Main Divergence Assessment found no overlap and no rebase was needed. The critique gate
+    re-confirmed `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` is empty.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->re-dispatched after 1 round(s)"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - Only the plan-cited decision sections read (135, 148, 132, 170, 169, 159, 163, 104, 131, 128, 55, 72, 73)
+  - >-
+    Only the plan-cited decision sections read (55, 72, 73, 104, 128, 131, 132, 135, 148, 159, 163,
+    165, 169, 170)
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
   - >-
@@ -390,14 +466,15 @@ execution_steps:
     else ROOT` and route EVERY subprocess and EVERY path-existence filter through it (note
     get_changed_files:110 and get_status_aware_diff:173,182 use `(ROOT / path).exists()` -- those
     become cwd-relative). get_changed_files and get_status_aware_diff must forward their root into
-    their own internal push_context_base call. Do NOT root-scope the os.environ reads.
+    their own internal push_context_base call. Do NOT root-scope the os.environ reads. Let a
+    nonexistent root raise (Decision 55 fail-loud); do not swallow FileNotFoundError.
   - >-
     scripts/checks/verification/validate_graduation_completeness.py -- restructure the public
     function so plan_files is computed first; if empty, print both existing PASS lines, declare
     registry.examined(0, unit="declared_plans") and return BEFORE any base derivation (this is what
-    keeps root=Path("/nonexistent") from becoming a subprocess cwd). Only then derive
-    base = _common.push_context_base(root) or "origin/main" and call _plan_pr_leg. Pass root to
-    get_changed_files as well. Update the module docstring, which currently claims the base is
+    keeps root=Path("/nonexistent") from becoming a subprocess cwd in the existing tests). Only then
+    derive base = _common.push_context_base(root) or "origin/main" and call _plan_pr_leg. Pass root
+    to get_changed_files as well. Update the module docstring, which currently claims the base is
     defaulted "at this module's call site" without stating the root pairing.
   - >-
     scripts/checks/verification/validate_vp_replay.py -- pass root to get_changed_files (line 226)
@@ -405,10 +482,20 @@ execution_steps:
     origin_main_reachable guards, so no reorder is needed.
   - >-
     scripts/checks/verification/validate_handoff_full_tier.py -- pass root to get_changed_files
-    (line 75).
+    (line 75), AND adopt the Decision 170 declaration on both reachable exit paths: the
+    empty-plan_files return at line 80 (examined(0, unit="declared_plans") or equivalent unit) and
+    the loop fall-through (examined(len(plan_files), ...)).
   - >-
-    scripts/checks/decisions/validate_decisions_size.py -- add `# root-scoped-ok: gated behind
-    using_default_root, so an injected root never reaches this call` on the line 167 call.
+    scripts/checks/decisions/validate_decisions_size.py -- pass root to get_changed_files at line
+    167 (provable no-op: root is already _common.ROOT on the only path that reaches it, because the
+    `using_default_root and ...` conjunct short-circuits otherwise), AND adopt the Decision 170
+    declaration on all five reachable exit paths (lines 149, 153, 168, 172, and the fall-through).
+    Do NOT add a `# root-scoped-ok:` marker here -- passing root removes the violation outright.
+  - >-
+    config/check_accounting_baseline.yaml -- shrink-remove `validate_handoff_full_tier` (line 75)
+    and `validate_decisions_size` (line 65). Do NOT touch _BASELINE_SEED in
+    scripts/checks/hygiene/validate_check_accounting.py -- the seed is the frozen cross-check and
+    removal from the config alone is the permitted direction.
   - >-
     scripts/checks/hygiene/validate_root_scoped_diff_base.py -- new @registry.register check
     modelled on validate_test_count_coupling (137 SLOC, same waiver-marker idiom: it uses
@@ -427,18 +514,25 @@ execution_steps:
   - >-
     docs/DECISIONS.md -- append a forward-reference amendment to Decision 159 cl.1 recording that
     push_context_base's git probes are root-scoped while its ENV signals remain job-global, and why
-    (a root seam without a paired base seam produced rec-3166). Mint no new Decision number.
+    (a root seam without a paired base seam produced rec-3166). Insert it as an
+    `> **Amendment ...**` blockquote ABOVE the `**Status:**` line, never inside `**Problem:**`.
+    Mint no new Decision number.
   - >-
     Tests -- write the both-trigger regression tests FIRST and confirm they fail against the
     pre-fix code (the whole point of this plan is that one of these was green when it should have
-    been red). Opt back into push context inside each test via monkeypatch.setenv, since conftest
-    strips those vars globally. De-vacuum
+    been red). Name the new class in test_push_context_base.py `TestRootScopedProbes` -- steps 1
+    and the graduated registry row both key on it. Opt back into push context inside each test via
+    monkeypatch.setenv, since conftest strips those vars globally. De-vacuum
     test_registry_baseline_and_resolution_stay_correct_on_simulated_post_merge_main by asserting the
     derived base equals the fixture's before_sha, not merely that failed == [].
   - >-
-    config/agent/verification_registry/registry.yaml -- add the graduated rows for steps 1 and 2
-    (check_ids root-scoped-diff-base-regression-suite and root-scoped-diff-base-guard-tests,
-    plan_slug root-scoped-diff-base).
+    config/agent/verification_registry/registry.yaml -- add the two graduated rows with plan_slug
+    root-scoped-diff-base. Each check_spec MUST key on a node that is ABSENT at origin/main, or
+    validate_verification_registry's FAIL-on-base / PASS-on-HEAD differential rejects it as
+    non-discriminating: root-scoped-diff-base-regression-suite keys on
+    tests/checks/_common/test_push_context_base.py::TestRootScopedProbes, and
+    root-scoped-diff-base-guard-tests keys on tests/checks/hygiene/test_validate_root_scoped_diff_base.py.
+    Follow the existing `node_id:`-bearing row precedent already in the file.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
     RCA (Decision 55).
@@ -448,7 +542,10 @@ execution_steps:
 work_areas: []
 rollback: >-
   Every source change is additive and default-preserving (a new optional parameter plus
-  pass-through call sites), so reverting this commit restores the pre-fix behaviour exactly --
-  including the red main run. Rollback is therefore only appropriate if the fix itself breaks a
-  different check; the correct response to a residual rec-3166-class failure is a forward-fix
-  (Decision 55/72), never a revert of this commit or of PR #924.
+  pass-through call sites, plus declaration adoption that only adds accounting output), so
+  reverting this commit restores the pre-fix behaviour exactly -- including the red main run.
+  Rollback is therefore only appropriate if the fix itself breaks a different check; the correct
+  response to a residual rec-3166-class failure is a forward-fix (Decision 55/72), never a revert
+  of this commit or of PR #924. Note that re-adding a shrink-removed name to
+  config/check_accounting_baseline.yaml is permanently blocked by the frozen _BASELINE_SEED
+  cross-check, so a partial revert must restore the declarations, not the baseline entries.
