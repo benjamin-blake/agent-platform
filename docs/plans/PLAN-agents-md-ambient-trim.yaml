@@ -29,8 +29,13 @@ scope:
     action: Modify
     purpose: >-
       Append a dated amendment to Decision 84 carrying the Iceberg-DELETE-resurrection mechanism
-      being condensed out of AGENTS.md -- verified recorded nowhere else in the repo, so without
-      this the why is lost permanently.
+      being condensed out of AGENTS.md. Grounds (corrected at critique): the OUTCOME half is
+      already duplicated at scripts/checks/ops_governance/validate_warehouse_write_sources.py:22-27
+      and adjacently at src/common/outbox_retirement.py:4-5, but the CAUSAL half -- that
+      _prepare_record refreshes last_updated_timestamp = now, which is WHY the re-staged row wins
+      the SCD2 dedupe -- is recorded nowhere. The amendment rehomes that causal link into the
+      Decision that owns the rationale (Decision 86 routing), rather than leaving it only in a
+      check docstring.
   - file: scripts/checks/ops_governance/validate_warehouse_write_sources.py
     action: Modify
     purpose: >-
@@ -48,11 +53,24 @@ scope:
       Repoint operative_state.scheduled_agents.ref (line 90, 'AGENTS.md runbook') onto T4.12, and
       add the amendment_log[] entry that check_amendment_log_for_class_d requires for any parsed
       content change to a Class D contract.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      FOURTH citation site, found at the critique gate and missed by the planning sweep (which
+      searched phrase variants but never the bare string repo-wide). Line 523 reads "until Lambda
+      scheduled agents re-enable (see the AGENTS.md runbook)" -- repoint onto T4.12. Legal despite
+      the Decision 86 intent-doc freeze: validate_intent_doc_freeze gates a doc's EXISTENCE against
+      the docs/intent-migration/MANIFEST.yaml grandfather set, never its content, so a one-line
+      prose repoint inside an already-grandfathered doc adds no new standing surface.
   - file: tests/test_agents_md_citations.py
     action: Create
     purpose: >-
-      Standing guard that no tracked file cites a deleted AGENTS.md runbook. Red today (3 live
-      citations), green after -- and discharges the surface-retiring closure obligation.
+      Standing guard that no tracked file cites a deleted AGENTS.md runbook. Red today (FOUR live
+      citations), green after -- and discharges the surface-retiring closure obligation. Must build
+      its search patterns from split literals (e.g. "AGENTS.md" + " runbook") so the file never
+      contains the literal it searches for; otherwise it self-matches and can never pass. The
+      repo's alternative precedent is the _self_path exclusion at
+      scripts/checks/ops_governance/validate_warehouse_write_sources.py:32,40.
 bundled_recommendations:
   - rec-3098
 infrastructure_dependencies: []
@@ -178,12 +196,19 @@ verification_plan:
       Prove the red side -- the same guard fires against the pre-change tree, confirming it is a
       real regression guard and not a vacuous pass.
     command: >-
-      git grep -c -e 'AGENTS\.md runbook' -e 'AGENTS\.md re-enable runbook' origin/main --
-      scripts/ docs/contracts/ | tee /dev/stderr | wc -l
-    expected: "Reports 3 matching files on origin/main (validate_warehouse_write_sources.py, ci_rca_gauges.py, inference-provider.yaml)."
+      git grep -lI -e 'AGENTS\.md runbook' -e 'AGENTS\.md re-enable runbook' origin/main -- .
+      ':!docs/plans' ':!docs/audit-prompts' ':!audits' ':!logs' | tee /dev/stderr | wc -l
+    expected: >-
+      Reports exactly 4 files on origin/main -- docs/INTENT-ci-rca-methodology.md,
+      docs/contracts/inference-provider.yaml,
+      scripts/checks/ops_governance/validate_warehouse_write_sources.py and
+      scripts/preflight/ci_rca_gauges.py -- matching the four Scope rows that repoint them.
     fix_if: >-
-      Zero matches on origin/main means the guard is vacuous -- it would pass on any tree. Rewrite
-      the test to assert the invariant that actually changed.
+      Fewer than 4 means the guard is vacuous or the patterns are wrong. MORE than 4 means a fifth
+      citation site exists that this plan does not repoint: add it to Scope rather than narrowing
+      this command. Deliberately unscoped by path -- the planning sweep missed a site precisely
+      because it searched only the directories it already expected to fix, so a red-side proof
+      restricted to the author's prior belief cannot falsify the citation inventory.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -192,13 +217,17 @@ verification_plan:
   - step: 8
     phase: pre-deploy
     action: Confirm the Class D contract edit carries its required amendment_log entry.
-    command: "bin/venv-python -m scripts.checks.contracts.validate_contract_drift"
-    expected: "Exits 0 -- no 'Contract drift (amendment)' failure for inference-provider.yaml."
+    command: >-
+      bin/venv-python -c "from scripts.checks.contracts.validate_contract_drift import
+      validate_contract_drift as v; f=[]; v(f); print(f); assert not f, f; print('CONTRACT_DRIFT_OK')"
+    expected: "Prints [] then CONTRACT_DRIFT_OK -- no 'Contract drift (amendment)' failure for inference-provider.yaml."
     fix_if: >-
       "parsed content changed but no new amendment_log[] entry was added" means the entry is missing
       or duplicates an existing one. Add a distinct entry: date, semantic_break: false,
       change_class: prose_improvement, summary naming the ref repoint. Do not bump contract_version
-      (deploy-paths.yaml's 2026-08-13 prose_improvement precedent did not).
+      (deploy-paths.yaml's 2026-08-13 prose_improvement precedent did not). NOTE: the check module
+      has no __main__ block, so `python -m` on it silently exits 0 without running anything -- this
+      step must import and call the function, never invoke the module.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -210,13 +239,16 @@ verification_plan:
       Confirm the Iceberg resurrection mechanism landed on Decision 84 and the decision-log ceilings
       still hold.
     command: >-
-      grep -q 'Amendment 2026-08-17' docs/DECISIONS.md && grep -qi 'resurrection' docs/DECISIONS.md
-      && bin/venv-python -m scripts.checks.governance.validate_decisions_size
-    expected: "The amendment and the mechanism text are both present, and the size check exits 0."
+      grep -q 'Amendment 2026-08-17' docs/DECISIONS.md && grep -q '_prepare_record' docs/DECISIONS.md
+      && bin/venv-python -c "from scripts.checks.decisions.validate_decisions_size import
+      validate_decisions_size as v; f=[]; v(f); assert not f, f; print('DECISIONS_SIZE_OK')"
+    expected: "The dated amendment and the _prepare_record causal link are both present, and the size check prints DECISIONS_SIZE_OK."
     fix_if: >-
-      A missing grep means the mechanism was condensed out of AGENTS.md without being rehomed -- the
-      why is then lost permanently; add the amendment before proceeding. If the module path differs,
-      locate it via bin/venv-python -m scripts.validate --list-checks.
+      A missing grep means the causal half of the mechanism was condensed out of AGENTS.md without
+      being rehomed -- and that half exists nowhere else, so the why is lost permanently; add the
+      amendment before proceeding. The check lives at scripts/checks/decisions/ (NOT
+      scripts.checks.governance, which does not exist) and has no __main__ block, so it must be
+      imported and called rather than invoked with python -m.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -303,15 +335,20 @@ verification_plan:
   - step: 14
     phase: pre-deploy
     action: >-
-      Confirm the validate_warehouse_write_sources.py citation repoint touched comment lines only,
-      leaving the check's logic byte-identical.
+      Prove the validate_warehouse_write_sources.py repoint changed no executable code, by comparing
+      the docstring-stripped AST against origin/main.
     command: >-
-      ! (git diff origin/main -- scripts/checks/ops_governance/validate_warehouse_write_sources.py |
-      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
-    expected: "Prints COMMENT_ONLY -- every changed line in the diff is a comment line."
+      bin/venv-python -c "import ast,subprocess; p='scripts/checks/ops_governance/validate_warehouse_write_sources.py';
+      s=lambda src:(lambda t:[setattr(n,'body',n.body[1:]) for n in ast.walk(t) if isinstance(n,(ast.Module,ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))
+      and ast.get_docstring(n) is not None] and ast.dump(t) or ast.dump(t))(ast.parse(src));
+      b=subprocess.run(['git','show','origin/main:'+p],capture_output=True,text=True).stdout;
+      assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
+    expected: "Prints NO_EXECUTABLE_CHANGE -- the docstring-stripped AST is identical to origin/main."
     fix_if: >-
-      A non-comment line changed, so this is no longer a comment-only edit and the waiver in
-      test_obligations is void. Either revert the logic change or add a real red/green test for it.
+      An assertion failure means executable code changed, so the test_obligations waiver ("comment
+      text only") is void. Either revert the logic change or replace the waiver with a real
+      red/green test. AST equality is used rather than a '#'-line grep because a grep cannot
+      distinguish a comment from a docstring line.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -320,15 +357,19 @@ verification_plan:
   - step: 15
     phase: pre-deploy
     action: >-
-      Confirm the ci_rca_gauges.py citation repoint touched comment lines only, leaving the gauge's
-      logic byte-identical.
+      Prove the ci_rca_gauges.py repoint changed no executable code. The edited line is inside
+      _escalate_ci_rca_probe_health's DOCSTRING, not a '#' comment, so a comment-line filter cannot
+      verify it -- AST comparison is required.
     command: >-
-      ! (git diff origin/main -- scripts/preflight/ci_rca_gauges.py |
-      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
-    expected: "Prints COMMENT_ONLY -- every changed line in the diff is a comment line."
+      bin/venv-python -c "import ast,subprocess; p='scripts/preflight/ci_rca_gauges.py';
+      s=lambda src:(lambda t:[setattr(n,'body',n.body[1:]) for n in ast.walk(t) if isinstance(n,(ast.Module,ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))
+      and ast.get_docstring(n) is not None] and ast.dump(t) or ast.dump(t))(ast.parse(src));
+      b=subprocess.run(['git','show','origin/main:'+p],capture_output=True,text=True).stdout;
+      assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
+    expected: "Prints NO_EXECUTABLE_CHANGE -- the docstring-stripped AST is identical to origin/main."
     fix_if: >-
-      A non-comment line changed, so this is no longer a comment-only edit and the waiver in
-      test_obligations is void. Either revert the logic change or add a real red/green test for it.
+      An assertion failure means executable code changed, so the test_obligations waiver is void.
+      Either revert the logic change or replace the waiver with a real red/green test.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -342,33 +383,37 @@ test_obligations:
     verification_step: 6
     test_selector: "tests/test_agents_md_citations.py::test_no_dangling_agents_md_runbook_citations"
     red_green_expectation: >-
-      Red before (3 live citations: validate_warehouse_write_sources.py:53, ci_rca_gauges.py:42,
-      inference-provider.yaml:90), green after all three are repointed.
+      Red before against FOUR live citations -- validate_warehouse_write_sources.py:53,
+      ci_rca_gauges.py:42, inference-provider.yaml:90 and docs/INTENT-ci-rca-methodology.md:523
+      (the fourth was missed by the planning sweep and found at the critique gate) -- green after
+      all four are repointed. VP step 7 proves the red side unscoped so the count cannot be
+      self-confirming.
   - source: scripts/checks/ops_governance/validate_warehouse_write_sources.py
     behavior: "The check's logic is unchanged; only the comment's pointer target moves to T4.12 / Decision 84."
     verification_step: 14
-    command: >-
-      ! (git diff origin/main -- scripts/checks/ops_governance/validate_warehouse_write_sources.py |
-      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
+    command: "assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
     waiver_reason: >-
-      Comment-only edit with no behavior change, so no test can go red-then-green on it; the
-      companion command proves the diff touches comment lines exclusively, and the repointed target
-      is guarded by the new dangling-citation test.
+      Comment-text-only edit with no behavior change, so no test can go red-then-green on it. The
+      linked step proves it positively by comparing the docstring-stripped AST against origin/main
+      (strictly stronger than a comment-line grep), and the repointed target itself is guarded by
+      the new dangling-citation test.
   - source: scripts/preflight/ci_rca_gauges.py
-    behavior: "The gauge's logic is unchanged; only the comment's pointer target moves to T4.12."
+    behavior: >-
+      The gauge's logic is unchanged; only the pointer target inside
+      _escalate_ci_rca_probe_health's DOCSTRING moves to T4.12.
     verification_step: 15
-    command: >-
-      ! (git diff origin/main -- scripts/preflight/ci_rca_gauges.py |
-      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
+    command: "assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
     waiver_reason: >-
-      Comment-only edit with no behavior change, identical rationale to the sibling check module
-      above; the repointed target is guarded by the new dangling-citation test.
+      Docstring-text-only edit with no behavior change, so no test can go red-then-green on it. Note
+      this is a docstring, NOT a '#' comment (the planning draft misclassified it), which is why the
+      linked step uses AST comparison rather than a comment-line filter that would silently fail to
+      match. The repointed target is guarded by the new dangling-citation test.
   - source: docs/contracts/inference-provider.yaml
     behavior: >-
       The scheduled_agents ref points at a live owner (T4.12) and the Class D amendment_log
       discipline is satisfied; the provider-tier body and its Decision 116 note are untouched.
     verification_step: 8
-    command: "bin/venv-python -m scripts.checks.contracts.validate_contract_drift"
+    command: "assert not f, f; print('CONTRACT_DRIFT_OK')"
     waiver_reason: >-
       The invariant already has a registered standing owner in validate_contract_drift
       (check_amendment_log_for_class_d); adding a mirror test would duplicate an enforced gate
@@ -411,9 +456,11 @@ constraints:
     sleep/poll loop against explicit harness suggestions to poll. Deliberately declined.
   - >-
     Close rec-3098 via ops_data_portal --update-rec with an explicit resolution, NOT via the
-    'Resolves: rec-3098' squash trailer. Decision 103 permits a direct close only for deterministic
-    acceptance-probe satisfaction; this is a semantic removal-of-defect verdict, and rec-autoclose.yml
-    would execute the trailer as a direct close. Omit rec-3098 from the trailer entirely.
+    'Resolves: rec-3098' squash trailer. Classification (corrected at critique): under the Decision
+    121 precedent this is a DETERMINISTIC stale_target -- the caveat the rec targets is physically
+    absent after the deletion -- not a bare semantic assertion. That is the more permissive branch of
+    Decision 103, so the explicit --update-rec path with a recorded resolution is conservative and
+    correct either way; the trailer is still omitted because it records no evidence.
   - >-
     Keep the per-Lambda gating rule stated OPERATIVELY in AGENTS.md (one line) and point at the
     planning skill for method only. Decision 139: AGENTS.md is the realized harness-portability
@@ -449,7 +496,11 @@ context:
     will ratchet S1 down to its true measured size at that point. Reseeding now would force that
     successor to take an authorized raise for bytes this change just freed. Leaving current < budget
     is mechanically legal: scripts/checks/prose/prose_limits.py errors only when current > budget and
-    emits a non-blocking advisory when current < budget.
+    emits a non-blocking advisory when current < budget. Re-ratchet ownership if the successor is
+    dropped: nothing mechanically schedules the S1 ratchet, so if migration step 4 of
+    audits/contract-first-governance-33c8667.yaml is abandoned or lands without touching AGENTS.md,
+    the next session that edits AGENTS.md for any reason owns reseeding S1 to its then-measured size.
+    The standing "reseed to ratchet down" advisory on every validate run is the reminder.
   - >-
     Decision-scout Decision 43 [WARN] on that reservation is ACCEPTED WITH DEFERRAL by explicit
     operator direction ("no reseed"). The scout's observation stands on the record: the reserved
@@ -486,7 +537,7 @@ context:
     plan and must not patch scripts/checks/verification/validate_graduation_completeness.py here.
   - >-
     Measured byte arithmetic (re-measured at planning time; sweep figures independently confirmed
-    within 0.5%). Deletes 3,658 B: runbook 1,957, T2.12 security-gate bullet 654, CI-runner section
+    within 0.5%). Deletes 3,656 B: runbook 1,955, T2.12 security-gate bullet 654, CI-runner section
     464, stale REVERSAL html comment 177, duplicate validate.py sentence 139, INTENT-grandfather
     sentence 120, venv-wrapper clause 104, em-dash rationale clause 43. Condenses 4,114 B net:
     git-ops step-4 bullets 1,662->427 (1,235), instruction-architecture table 859->212 (647),
@@ -495,10 +546,17 @@ context:
     Precision Context Injection 453->180 (273), /overseer paragraph 564->351 (213), SLOC rationale
     clause 182->118 (64). Total ~7,650 B; AGENTS.md 33,150 -> ~25,500.
   - >-
-    The Iceberg-resurrection mechanism is verified recorded NOWHERE else: grep for
-    resurrect/restage/re-inject across docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md returns no
-    match. _prepare_record is live at scripts/ops_writer.py:199, so the mechanism text is accurate
-    and current, not stale. The Decision 84 amendment is therefore load-bearing, not bookkeeping.
+    Iceberg-mechanism provenance (CORRECTED at the critique gate -- the planning draft overstated
+    this). The planning grep was scoped to docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md but the
+    conclusion was written as repo-wide. Repo-wide, the OUTCOME half IS duplicated:
+    scripts/checks/ops_governance/validate_warehouse_write_sources.py:22-27 states "Iceberg DELETE
+    removes the snapshot, the next replay re-injects, SCD2 dedupe surfaces the resurrection as the
+    current row", with an adjacent statement at src/common/outbox_retirement.py:4-5. What is
+    recorded NOWHERE is the CAUSAL half -- that _prepare_record refreshes last_updated_timestamp =
+    now, which is precisely WHY the re-staged row wins the dedupe. _prepare_record is live at
+    scripts/ops_writer.py:199, so the text is accurate and current, not stale. The amendment
+    therefore proceeds on narrower but true grounds: it rehomes the causal link into the Decision
+    that owns rationale (Decision 86 routing) instead of leaving it only in a check docstring.
   - >-
     docs/DECISIONS.md headroom at planning time: 125 of 132 live '## Decision' headers, 734,356 of
     780,000 combined bytes (45,644 free). The amendment appends to the existing Decision 84 entry, so
@@ -570,8 +628,13 @@ execution_steps:
     from "see the AGENTS.md re-enable runbook caveat" to T4.12 / Decision 84. Comment text only; do
     not touch the check's logic.
   - >-
-    scripts/preflight/ci_rca_gauges.py -- repoint the line-42 comment from "(AGENTS.md runbook)" to
-    T4.12. Comment text only; do not touch the gauge's logic.
+    scripts/preflight/ci_rca_gauges.py -- repoint the line-42 reference from "(AGENTS.md runbook)" to
+    T4.12. This line is inside _escalate_ci_rca_probe_health's DOCSTRING (spanning roughly lines
+    38-47), not a '#' comment -- edit the docstring text only; do not touch the gauge's logic.
+  - >-
+    docs/INTENT-ci-rca-methodology.md -- repoint the line-523 reference "until Lambda scheduled
+    agents re-enable (see the AGENTS.md runbook)" onto T4.12. Prose text only; add nothing else to
+    this grandfathered doc (validate_intent_doc_freeze gates existence, not content).
   - >-
     docs/contracts/inference-provider.yaml -- change operative_state.scheduled_agents.ref from
     "AGENTS.md runbook" to a T4.12 reference, and prepend an amendment_log[] entry (date 2026-08-17,
@@ -579,10 +642,15 @@ execution_steps:
     deleted ambient runbook). Do not bump contract_version and do not disturb the adjacent Decision
     116 note.
   - >-
-    tests/test_agents_md_citations.py -- create the guard: walk tracked files excluding .git, logs/,
-    audits/, docs/plans/ and docs/audit-prompts/, and assert no file contains "AGENTS.md runbook" or
-    "AGENTS.md re-enable runbook". Include a docstring naming this plan and T4.12 so a future reader
-    knows why the guard exists.
+    tests/test_agents_md_citations.py -- create the guard as
+    test_no_dangling_agents_md_runbook_citations: walk tracked files excluding .git, logs/, audits/,
+    docs/plans/ and docs/audit-prompts/, and assert none cites a deleted AGENTS.md runbook. CRITICAL:
+    build the two search patterns from split literals (e.g. "AGENTS.md" + " runbook" and "AGENTS.md"
+    + " re-enable runbook") so this file never contains the literals it searches for -- otherwise it
+    self-matches and can never pass, and VP step 5's shell sweep would flag it too. The alternative
+    precedent is a _self_path skip (validate_warehouse_write_sources.py:32,40); split literals are
+    preferred here because they keep the sweep unweakened rather than adding a tests/ exclusion.
+    Include a docstring naming this plan and T4.12 so a future reader knows why the guard exists.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55). Do NOT reseed config/prose_budgets.yaml in response to the step-13 advisory.
