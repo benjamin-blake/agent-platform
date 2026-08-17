@@ -71,20 +71,16 @@ scope:
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
-      Two distinct edits, both dated in-place annotations (amendment_forms trailing_bracket or
-      blockquote_update), neither minting a header. (1) On Decision 167: an amendment carrying ONLY the
+      A dated in-place annotation on Decision 167 (amendment_forms trailing_bracket or
+      blockquote_update), minting no header: an amendment carrying ONLY the
       routing-consistency lint's REJECTION and its rationale -- legitimate clause-2 lifecycle, since
       the lint was that clause's declared forcing partner -- plus the fenced
       "```yaml reversal-conditions" stanza placed between the prose "**Reversal conditions:**" section
-      and "**Related:**", matching the three live stanzas (Decisions 133, 172, 83). (2) On BOTH
-      Decision 153 and Decision 167 clause 3 -- the two entries that currently sanction warn-tier
-      enforcement -- a POINTER annotation marking that sanction under review and naming the follow-on
-      rec. These are partial-supersession flags on those entries' own rulings, so they are those
-      entries' own lifecycle; each carries a pointer, never the policy text, since a full policy in a
-      trailer would be an unindexed shadow record. Both entries are baseline-present, so the per-entry
-      cap does not apply. The repo-wide no-NEW-permanently-advisory-check rule itself is NOT recorded
-      by this plan in any surface -- it clears the significance bar and is deferred to a follow-on
-      numbered Decision via the rec (see Context).
+      and "**Related:**", matching the three live stanzas (Decisions 133, 172, 83). The
+      repo-wide no-NEW-permanently-advisory-check rule is NOT recorded by this plan in any surface --
+      it clears the significance bar and is deferred to a follow-on numbered Decision via a rec (see
+      Context). No other entry is annotated: neither Decision 153 nor Decision 167 clause 3 grants the
+      open-ended shape that rule would prohibit, so there is no misleading sanction to flag.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -129,9 +125,6 @@ acceptance_criteria:
     or CD ratification alike, matching both branches of the Decision Significance Gate.
   - Decision 167 carries a dated amendment trailer whose reversal-conditions stanza is parsed and
     surfaced by preflight (decision 167 appears in decision_conditions.monitored).
-  - Decisions 153 and 167 each carry a dated under-review pointer annotation on their warn-tier
-    sanction, so the corpus no longer reads as an unqualified endorsement of the mode the deferred
-    rule would narrow.
   - docs/DECISIONS.md gains no new "## Decision NNN:" header -- the live header count and maximum
     decision number are unchanged from origin/main.
   - T1.5 carries exactly one additional exit criterion, appended at position 8, and the roadmap
@@ -271,7 +264,7 @@ verification_plan:
       Confirm the Decision 167 amendment's reversal-conditions stanza is well-formed AND actually
       monitored by preflight -- not merely present as prose.
     command: |-
-      bin/venv-python -c "from scripts.preflight.decision_conditions import preflight_bucket; import sys; r=preflight_bucket(); sys.exit(f'167 not monitored or malformed -- {r}') if (167 not in (r.get('monitored') or []) or r.get('malformed')) else print('OK 167 monitored')"
+      bin/venv-python -c "from scripts.preflight.decision_conditions import preflight_bucket; import sys; r=preflight_bucket(); bad=[m for m in (r.get('malformed') or []) if str(m).find('167')>=0]; sys.exit(f'167 not monitored or malformed -- {r}') if (167 not in (r.get('monitored') or []) or bad) else print('OK 167 monitored')"
     expected: "Prints 'OK 167 monitored'; exit 0."
     fix_if: >-
       '167 not monitored' means the fence opener is not at column 0 or the stanza is outside the
@@ -404,24 +397,6 @@ verification_plan:
       Read the named failing check and fix at its source. Do not add a check to ci.yml without adding
       it to validate.py first.
     graduation: not-applicable
-  - step: 16
-    phase: pre-deploy
-    action: >-
-      Confirm both warn-tier-sanctioning entries carry a dated under-review pointer, so the corpus no
-      longer reads as an unqualified endorsement of the mode the deferred rule would narrow.
-    command: |-
-      bin/venv-python -c "import re,pathlib,sys; t=pathlib.Path('docs/DECISIONS.md').read_text(); h=[(m.start(),int(m.group(1))) for m in re.finditer(r'^## Decision (\d+):',t,re.M)]; b={n:t[s:(h[i+1][0] if i+1<len(h) else len(t))] for i,(s,n) in enumerate(h)}; miss=[n for n in (153,167) if not (('[Amendment ' in b[n] or '> **Update (' in b[n]) and 'advisory' in b[n].lower())]; sys.exit(f'under-review pointer missing on {miss}') if miss else print('OK both sanctioning entries flagged')"
-    expected: "Prints 'OK both sanctioning entries flagged'; exit 0."
-    fix_if: >-
-      A missing entry means only one of the two sanctioning rulings was flagged, leaving the other
-      reading as an unqualified green light. Both must carry the pointer; neither may carry the policy
-      text itself.
-    graduation: waive
-    graduation_waiver_reason: >-
-      Interim-state assertion by construction: these pointers exist only until the follow-on numbered
-      Decision lands, at which point the annotations are superseded by a real supersession marker and
-      a standing guard demanding the literal token 'advisory' in both entries would fail. Graduating a
-      check on deliberately temporary content would outlive the content it guards.
   - step: 15
     phase: pre-deploy
     action: >-
@@ -434,7 +409,7 @@ verification_plan:
       A failure here that --pre missed is a full-tier-only check; fix at its source and re-run the
       whole tier from the start rather than resuming mid-run.
     graduation: not-applicable
-  - step: 17
+  - step: 16
     phase: post-deploy
     action: >-
       After the squash-merge Resolves trailer fires rec-autoclose, confirm both bundled
@@ -464,7 +439,7 @@ test_obligations:
       by preflight, so the revisit trigger is watched rather than left as unread prose.
     verification_step: 7
     command: |-
-      bin/venv-python -c "from scripts.preflight.decision_conditions import preflight_bucket; import sys; r=preflight_bucket(); sys.exit(f'167 not monitored or malformed -- {r}') if (167 not in (r.get('monitored') or []) or r.get('malformed')) else print('OK 167 monitored')"
+      bin/venv-python -c "from scripts.preflight.decision_conditions import preflight_bucket; import sys; r=preflight_bucket(); bad=[m for m in (r.get('malformed') or []) if str(m).find('167')>=0]; sys.exit(f'167 not monitored or malformed -- {r}') if (167 not in (r.get('monitored') or []) or bad) else print('OK 167 monitored')"
     red_green_expectation: >-
       Red before: exits non-zero on origin/main, where Decision 167 carries no stanza and 167 is
       absent from the monitored set. Green after: exits 0 with 167 monitored and no malformed entries.
@@ -599,16 +574,17 @@ context:
     three questions yields yes/yes/yes, which routes to numbered_decision -- it narrows what Decisions
     153 and 167 clause 3 currently sanction, so it is reversal-relevant, and no other routing row
     claims it. The operator's no-new-Decision constraint forbids that home for this change, so the
-    rule is NOT minted by this plan and is filed as a follow-on rec instead. The hazard this creates
-    is cured rather than merely disclosed: bare defer-and-track would leave DECISIONS.md positively
-    SANCTIONING what the deferred rule prohibits (Decision 153 "warn, not hard-fail"; Decision 167
-    clause 3's WARN-tier norm), which is authoritative-but-wrong guidance, not a neutral omission. So
-    this plan annotates those two entries with dated under-review pointers now, and the numbered
-    Decision follows as its own small governance change via the rec. That sequencing is deliberate on
-    both sides: minting an org-wide prohibition inside an unrelated change is the legislative-rider
-    anti-pattern, and the policy deserves its own deliberation moment. The annotations are phrased
-    under-review rather than operative because no operator has ratified the narrowing. Constraint 3
-    still binds THIS plan's own work, which installs no check at all.
+    rule is NOT minted by this plan and is filed as a follow-on rec instead. The resulting gap is a
+    plain omission, NOT authoritative-but-wrong guidance: the two entries that mention warn-tier
+    enforcement both grant the sanctioned shape, not the prohibited one. Decision 153 is a bounded
+    single-case waiver with a derived hard ceiling that fails closed and says in terms it is "not a
+    general weakening"; Decision 167 clause 3 is a dated pre-commitment whose arming event already
+    fired (eaff804, 2026-08-13), so its WARN tier is spent, not live. Neither is an open-ended
+    advisory with no arming trigger, so no entry is annotated -- an earlier draft of this plan
+    proposed under-review flags on both and was withdrawn once that premise was checked. Deferring is
+    also right on its own terms: minting an org-wide prohibition inside an unrelated change is the
+    legislative-rider anti-pattern, and no operator has ratified the narrowing. Constraint 3 still
+    binds THIS plan's own work, which installs no check at all.
   - >-
     Known gap, accepted. This plan installs no mechanical detector for mis-declared significance
     routing. Detection is human/agent judgement at the plan-critique gate. The Decision 167
@@ -650,21 +626,12 @@ execution_steps:
     routing-consistency lint is REJECTED (naming the construct-validity and Goodhart grounds) and that
     the deterministic subset already deployed is the permanent control. Do NOT put the
     no-advisory-tier rule here; it routes to check-accounting.yaml below. Include a fenced
-    "```yaml reversal-conditions" stanza (column-0 fence; keys decision, review_by, on_trigger,
-    conditions) whose condition is a post-167 entry demonstrated mis-routed past both the conformance
-    check and the plan-critique verdict. Place the fence between the prose "**Reversal conditions:**"
+    "```yaml reversal-conditions" stanza whose condition is a post-167 entry demonstrated mis-routed
+    past both the conformance check and the plan-critique verdict. Shape enforced by
+    scripts/preflight/decision_conditions.py: column-0 fence; top-level keys decision, review_by,
+    on_trigger, conditions; and every conditions[] item carries id, kind and description, with kind
+    one of manual|repo_state. Place the fence between the prose "**Reversal conditions:**"
     section and "**Related:**", matching Decisions 133, 172 and 83. Mint no new header.
-  - >-
-    docs/DECISIONS.md -- add a dated POINTER annotation (amendment_forms trailing_bracket or
-    blockquote_update) to BOTH Decision 153 and Decision 167 clause 3, the two entries that currently
-    sanction warn-tier enforcement. Each states that the sanction granted there is UNDER REVIEW for
-    prospective narrowing and points at the follow-on rec -- phrased as under-review, never as an
-    operative prohibition, because no operator has ratified the narrowing rule. Keep each to a
-    pointer: putting the policy text in a trailer would smuggle an unindexed shadow record into the
-    corpus, which is worse than the tracked rec. This cures the actively-misleading state in which a
-    searcher finds these two entries SANCTIONING what the deferred rule would prohibit, and it is the
-    established append-only remedy (the RFC "Updated by" header stamp; legal-citator negative
-    treatment; annotated-code amendment notes).
   - >-
     docs/contracts/check-accounting.yaml -- add a field-semantics note beside status_vocabulary
     recording ONLY that the vocabulary has no "warned" member, so a print-only check declaring
