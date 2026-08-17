@@ -1,21 +1,28 @@
-"""Standing guards for the OIDC trust invariants PLAN-repo-rename-relicense depends on.
+"""Standing guards for the OIDC trust invariants, originated by PLAN-repo-rename-relicense and
+carried forward by PLAN-oidc-trust-contraction-closure's contraction to the immutable entry alone.
 
-Two DURABLE invariants -- deliberately chosen to survive the plan's PR-3 contraction, which
-narrows local.github_repos back to a one-element list:
+THREE durable invariants -- the first two survive any future contraction or rename; the third is
+the contraction's own durable successor, replacing what used to be a time-boxed dual-slug window:
 
   1. Decision 94 both-sub-forms: the bootstrap apply role's trust carries BOTH the
      ref:refs/heads/main form (routine auto-apply) and the environment:tf-gated-apply form
      (the gated-apply job, where GitHub OVERRIDES sub to the environment claim). Dropping the
      environment form silently ungates every gated apply -- the VP9 regression Decision 94 was
-     written to prevent, and the exact failure class the rename window makes easy to hit.
+     written to prevent, and the exact failure class a rename window makes easy to hit.
 
   2. Cross-root slug-list agreement: terraform/personal and terraform/bootstrap each declare
      their own local.github_repos (no cross-root resource reference is possible). The two lists
      must stay identical, or a contraction can narrow one root and miss the other -- a divergence
-     otherwise caught only post-deploy by VP step 23, after the destructive apply has landed.
+     otherwise caught only post-deploy, after the apply has landed.
 
-Neither assertion pins the NUMBER of trusted slugs: the dual-slug state is transient by design,
-so a count assertion would fail the moment the plan's own cleanup lands (tests/CLAUDE.md
+  3. Immutable-format-only (Decision 172, TestImmutableSubjectEntry.test_every_entry_is_immutable_format):
+     every declared entry must match OWNER@OWNER-ID/REPO@REPO-ID. A legacy name-only entry mints
+     nothing post-rename and must never survive a contraction.
+
+Assertions 1 and 2 pin no COUNT of trusted slugs. Assertion 3 is a FORMAT assertion for the same
+reason: Decision 172 point 2's pre-stage playbook adds a future name's immutable entry additively,
+BEFORE any later rename, so a transient multi-entry state must stay green throughout -- a count
+assertion would wrongly reject that additive staging the moment it happened (tests/CLAUDE.md
 "Test-count coupling").
 """
 
@@ -30,7 +37,7 @@ _BOOTSTRAP_APPLY = _REPO_ROOT / "terraform" / "bootstrap" / "github_ci_apply.tf"
 # Decision 172 (immutable-subject entry): three of the five expected sub suffixes are declared
 # by sub sites that live OUTSIDE oidc.tf / github_ci_apply.tf -- :ref:refs/heads/agent/* and
 # :pull_request/:ref:refs/pull/* are rendered only in oidc_ci_roles.tf and oidc_pipeline_roles.tf.
-# TestImmutableSubjectEntry reads these two files as well so VP step 2 can pass.
+# TestImmutableSubjectEntry reads these two files as well to cover all five sub sites.
 _BRANCH_AND_PR_ROLES = _REPO_ROOT / "terraform" / "personal" / "oidc_ci_roles.tf"
 _PIPELINE_ROLES = _REPO_ROOT / "terraform" / "personal" / "oidc_pipeline_roles.tf"
 
@@ -134,6 +141,21 @@ class TestImmutableSubjectEntry:
     renamed/transferred after 2026-07-15. benjamin-blake/theseus renamed at
     2026-08-15T12:55:57Z and now mints ONLY repo:benjamin-blake@217728084/theseus@1252427466:<...>
     -- the two legacy name-only entries mint nothing post-rename."""
+
+    def test_every_entry_is_immutable_format(self) -> None:
+        """FORMAT assertion, never a count assertion (Decision 172 point 2's pre-stage playbook
+        adds a future name's immutable entry additively, BEFORE any later rename -- a count
+        assertion would wrongly reject that additive staging). Red while any legacy name-only
+        entry survives in either root; green once every declared entry matches
+        OWNER@OWNER-ID/REPO@REPO-ID."""
+        for path in (_PERSONAL_LOCALS, _BOOTSTRAP_APPLY):
+            slugs = _declared_slugs(path)
+            non_immutable = [s for s in slugs if not _IMMUTABLE_ENTRY_RE.match(s)]
+            assert not non_immutable, (
+                f"{path} declares non-immutable-format entries {non_immutable} in "
+                "local.github_repos -- every entry must match OWNER@OWNER-ID/REPO@REPO-ID; a "
+                "legacy name-only slug is unmintable post-rename and must be removed."
+            )
 
     def test_both_roots_declare_the_immutable_entry(self) -> None:
         for path in (_PERSONAL_LOCALS, _BOOTSTRAP_APPLY):

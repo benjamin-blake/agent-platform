@@ -11,22 +11,21 @@
 # The trust references the OIDC provider as a literal ARN (no cross-root resource reference).
 
 locals {
-  # Dual-slug transition (Decision 171 / PLAN-repo-rename-relicense): mirrors
-  # terraform/personal/oidc.tf's local.github_repos -- both slugs trusted simultaneously while
-  # the rename lands, narrowed back to a one-element list at PR-3 cleanup (VP steps 21-23).
-  # This list MUST stay identical to terraform/personal's; the two roots cannot reference each
-  # other, so agreement is enforced by tests/checks/iam_tf/test_oidc_trust_slug_invariants.py.
+  # CONTRACTED STEADY STATE (Decision 172 / PLAN-oidc-trust-contraction-closure): mirrors
+  # terraform/personal/oidc.tf's local.github_repos. The dual-slug transition (Decision 171 /
+  # PLAN-repo-rename-relicense) is over -- both pre-rename name-only entries were unmintable
+  # post-rename and have been removed with live proof. This list MUST stay identical to
+  # terraform/personal's; the two roots cannot reference each other, so agreement is enforced by
+  # tests/checks/iam_tf/test_oidc_trust_slug_invariants.py.
   #
-  # IMMUTABLE-SUBJECT ENTRY (Decision 172): mirrors terraform/personal/oidc.tf's third entry --
-  # a repo SEGMENT "OWNER@OWNER-ID/REPO@REPO-ID", never a "repo:"-prefixed literal (this root's
-  # two sub sites below already render "repo:${repo}:<suffix>"). GitHub applies the immutable
-  # numeric-id subject to any repo renamed/transferred after 2026-07-15; theseus renamed at
-  # 2026-08-15T12:55:57Z and now presents ONLY this shape. The two name-only entries mint
-  # nothing post-rename and are provably dead, but stay trusted until a follow-on contraction
-  # (NOT this plan) removes them with live proof.
+  # IMMUTABLE-SUBJECT ENTRY (Decision 172): mirrors terraform/personal/oidc.tf's entry -- a repo
+  # SEGMENT "OWNER@OWNER-ID/REPO@REPO-ID", never a "repo:"-prefixed literal (this root's two sub
+  # sites below already render "repo:${repo}:<suffix>"). GitHub applies the immutable numeric-id
+  # subject to any repo renamed/transferred after 2026-07-15; theseus renamed at
+  # 2026-08-15T12:55:57Z and now presents ONLY this shape. Decision 172 point 2's pre-stage
+  # playbook adds a future name's immutable entry to this list ADDITIVELY, BEFORE the rename
+  # lands; never remove an entry without live proof of the replacement first.
   github_repos = [
-    "benjamin-blake/agent-platform",
-    "benjamin-blake/theseus",
     "benjamin-blake@217728084/theseus@1252427466",
   ]
 }
