@@ -134,12 +134,17 @@ verification_plan:
     phase: pre-deploy
     action: Confirm the scope boundary held -- the Commit-message conventions section is untouched.
     command: >-
-      git diff origin/main -- AGENTS.md | grep -E '^[-+].*(feat\(\{slug\}\)|plan\(\{slug\}\)|roadmap\(\{ids\}\)|scope\(\{slug\}\)|audit\(\{slug\}\))'
-      && echo BOUNDARY_VIOLATION && exit 1 || echo BOUNDARY_OK
-    expected: "Prints BOUNDARY_OK -- no added or removed line touches the conventions table rows."
+      bin/venv-python -c "import subprocess,re; f=lambda t: re.search(r'^### Commit-message
+      conventions.*?(?=^### |^## )', t, re.S|re.M);
+      b=subprocess.run(['git','show','origin/main:AGENTS.md'],capture_output=True,text=True).stdout;
+      h=open('AGENTS.md').read(); mb,mh=f(b),f(h); assert mb and mh, 'conventions section not found';
+      assert mb.group(0)==mh.group(0), 'conventions section changed'; print('BOUNDARY_OK')"
+    expected: "Prints BOUNDARY_OK -- the section is byte-identical to origin/main."
     fix_if: >-
-      BOUNDARY_VIOLATION means an edit strayed into the section reserved for the successor plan.
-      Restore those lines exactly as they are on origin/main.
+      'conventions section changed' means an edit strayed into the section reserved for the successor
+      plan; restore it exactly as it is on origin/main. Compares the whole extracted section rather
+      than grepping the five table rows, so a change to the heading, the column header or the
+      separator row is caught too -- which is what acceptance criterion 3 actually claims.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -334,13 +339,18 @@ verification_plan:
     action: >-
       Run the authoritative fast presubmit and confirm the expected S1 under-budget advisory appears
       and is correctly non-blocking.
-    command: "bin/venv-python -m scripts.validate --pre 2>&1 | tee /tmp/pre.log; grep -i 'below budget' /tmp/pre.log || true"
+    command: >-
+      bin/venv-python -m scripts.validate --pre > /tmp/pre.log 2>&1; rc=$?; tail -40 /tmp/pre.log;
+      grep -i 'below budget' /tmp/pre.log || true; test $rc -eq 0 && echo PRE_TIER_GREEN
     expected: >-
-      validate --pre exits 0. The S1 'bytes below budget 33161; reseed config/prose_budgets.yaml to
-      ratchet down' advisory is present and does NOT fail the run.
+      Prints PRE_TIER_GREEN. The S1 'bytes below budget 33161; reseed config/prose_budgets.yaml to
+      ratchet down' advisory is present in the output and does NOT fail the run.
     fix_if: >-
       A non-zero exit is a real failure -- diagnose it. If the advisory is absent, the trim did not
-      land. Do NOT reseed the budget in response to the advisory under any circumstances.
+      land. Do NOT reseed the budget in response to the advisory under any circumstances. The exit
+      code is captured from a redirect rather than a pipeline, because `validate --pre | tee` would
+      report tee's status and silently exit 0 on a RED run; `set -o pipefail` is deliberately not
+      used, as dash (which replays hermetic steps) does not support it.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -502,7 +512,19 @@ context:
     scheduled_agents note being repointed), Decision 112 (ratifies CD.21, the already-ratified home
     of the CI-runner fact being deleted), Decision 103, Decision 139, Decision 127, Decision 43,
     Decision 93.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)". Round 1 REVISE
+    (8 findings: a missed fourth citation site, two vacuous python -m commands against __main__-less
+    check modules, a nonexistent module path, a comment-line filter aimed at a docstring, a red-side
+    proof scoped to the directories it was meant to falsify, an overstated Iceberg-provenance claim,
+    and a mislabelled rec closure). Round 2 REVISE (1 blocking: the rewritten Decision 84 check was
+    vacuous a second way -- 'Amendment 2026-08-17' and '_prepare_record' already matched file-wide
+    on origin/main for unrelated reasons, so it went green with the amendment absent; now
+    section-scoped and slug-anchored). Round 3 PROCEED, with two recommended hardenings applied
+    before merge (step 13's exit code was masked by a tee pipeline; step 3 now compares the whole
+    conventions section rather than five row literals). Recurring defect class across all rounds:
+    commands that run but cannot fail -- every VP step was executed against the live tree and
+    checked for red-capability, not merely for exit 0.
   - >-
     BUDGET RESERVATION (deliberate, operator-directed -- not an oversight). config/prose_budgets.yaml
     is intentionally NOT reseeded and NOT touched; S1 root_ambient_load_set stays at 33161 while the
@@ -620,7 +642,9 @@ execution_steps:
     condition; drop the executor-queue derivation and the list of enforcing surfaces); Lambda-gating
     bullet (keep one operative line -- gating is per-Lambda not blanket, active artifacts need
     build+deploy+smoke-test, stubs do not, config/agent/ is not packaged -- then point at the
-    planning skill for method); OAuth section (keep setup command, secret name, do-not-share; drop
+    planning skill for method; the operative line MUST retain the "status: active in
+    src/lambdas/<slug>/manifest.yaml" parenthetical, because manifest.yaml occurs exactly once in
+    AGENTS.md and VP step 10's anchor list will fail loudly if the condense drops it); OAuth section (keep setup command, secret name, do-not-share; drop
     the rotation procedure and the duplicated 2027-05-31 expiry, both carried by
     .github/workflows/ghas-probe.yml's header); Iceberg mechanism (keep the hard rule "a read cache
     is never a write source"; move the mechanism to Decision 84); Precision Context Injection (keep
