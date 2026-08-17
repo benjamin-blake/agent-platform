@@ -468,19 +468,31 @@ context:
   - >-
     VP replay budget: the plan-critique gate measured the full regression surface at 18.08s / 148
     tests against validate_vp_replay's 30s PER_STEP_TIMEOUT_SECONDS, before this plan's new git-fixture
-    tests. Steps 1 and 2 were therefore narrowed to discriminating node sets and the broad run was
-    moved to non-hermetic step 3, so nothing this plan graduates can time out in replay.
+    tests. Steps 1, 2 and 3 were therefore narrowed to discriminating node sets and the broad run
+    was moved to non-hermetic step 4, so nothing this plan graduates can time out in replay. The
+    round-3 gate re-measured the four hermetic steps at ~3.4s / ~3.3s / ~5.3s / ~0s (aggregate
+    ~12.1s against MAX_AGGREGATE_SECONDS=120, 4 steps against MAX_REPLAYED_STEPS=20).
   - >-
-    Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 behind / 0 ahead),
-    so the Main Divergence Assessment found no overlap and no rebase was needed. The critique gate
-    re-confirmed `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` is empty.
+    Main divergence: the branch was 0 behind / 0 ahead at planning time, but main advanced during
+    the critique rounds (commits 17bde4b and 6a0f651) and the branch is now 2 behind.
+    `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` is still empty, so no
+    cited Decision or roadmap item moved under this plan. There IS one scope-file overlap:
+    6a0f651 appended `oidc-trust-slug-immutable-only` and `iam-role-reconcile-scope-branch-pr-only`
+    to the TAIL of config/agent/verification_registry/registry.yaml, which is exactly where this
+    plan appends its three rows. Expect a tail conflict at commit-flow-time rebase and resolve it by
+    KEEPING BOTH SIDES' appends -- neither set collides (the round-3 gate confirmed all three of this
+    plan's check_ids are unique at both HEAD and origin/main), and `_new_registry_rows` computes
+    additions only, so absent rows are never read as removals.
   - >-
-    gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE x2, re-dispatched after 2 round(s).
-    Round 1 REVISE (blocking: Decision 170 cl.3 touch-it-fix-it, mechanically reproduced -- VP
-    steps would have gone red; plus VP replay budget and differential-admission findings). Round 2
-    REVISE (all six round-1 items verified closed; one single-field finding -- VP step 4's broad
-    pytest run was a suspect not-applicable, now waive-with-reason, plus the optional obligation
-    re-anchoring onto new graduated step 3).
+    gates: decision-scout=FLAGS_FOUND; plan-critique=converged after 3 round(s). Round 1 REVISE
+    (blocking: Decision 170 cl.3 touch-it-fix-it, mechanically reproduced -- VP steps 4/5 would
+    have gone red; plus VP replay budget and differential-admission findings). Round 2 REVISE (all
+    six round-1 items verified closed; one single-field finding -- the broad pytest run was a
+    suspect not-applicable, now waive-with-reason -- plus the optional obligation re-anchoring onto
+    new graduated step 3). Round 3 REVISE on a single mechanical residual only (a stale "step 3"
+    reference the renumbering left in context, fixed here), with the gate stating verbatim that
+    "no re-critique round is warranted after this edit -- the plan is otherwise verified complete,
+    internally consistent, and ready to implement."
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
