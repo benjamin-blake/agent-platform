@@ -4,12 +4,13 @@
 Carries the BULK of the new coverage this plan introduces: extractor shapes (class-table
 exclusion, comment immunity), the authorization rule (bare-root negative, band positive, no
 body tokenization), composite `dir::step-id` keys, the supersession hop, moved-from, the empty
-grandfather hook, and the cross-registry live-marker invariant + population upper bound. Thin
-binding assertions for each of the five consumer guards live alongside their own tests instead
-(mirror convention, Decision 131)."""
+grandfather hook, and the cross-registry live-marker invariant + an independent-scan population
+cross-check. Thin binding assertions for each of the five consumer guards live alongside their
+own tests instead (mirror convention, Decision 131)."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -182,8 +183,10 @@ class TestSupersessionHop:
 
 class TestLiveMarkerCorpusInvariant:
     """VP step 6: every token-bearing marker across all five REAL registries is
-    authorization-clean, and the install-state population is bounded above (<=3), not pinned to
-    an equality that would red CI on the next legitimate marker addition."""
+    authorization-clean, and the extractor-found population is cross-checked against an
+    independent raw-text scan of the same files -- never a hardcoded population count, which
+    would red CI on the next legitimate marker addition to a PR that never touched this test
+    file (tests/CLAUDE.md Test-count coupling; the exact rec-2572..2576 failure shape)."""
 
     _SPECS = (
         sloc_module._SPEC,
@@ -210,8 +213,21 @@ class TestLiveMarkerCorpusInvariant:
         for spec, key, marker in self._live_marker_entries():
             assert not authorization_failure(marker, key, bodies, spec.mention_candidates), (spec.rel_path, key, marker)
 
-    def test_install_state_marker_population_upper_bound(self) -> None:
-        assert len(self._live_marker_entries()) <= 3
+    def test_live_marker_population_matches_independent_raw_scan(self) -> None:
+        """Independent cross-check, not a hardcoded count: a raw-text regex scan of each
+        registry file (keyed on the same spec.token, but never touching spec.extractor) must
+        find exactly as many markers as _live_marker_entries()'s structured extractors do. This
+        catches an extractor regression (over- or under-counting) while staying growth-safe --
+        the population may grow indefinitely by legitimate addition without ever reddening this
+        assertion, since both sides of the comparison grow together."""
+        independent_count = 0
+        for spec in self._SPECS:
+            path = _common.ROOT / spec.rel_path
+            if not path.exists():
+                continue
+            marker_re = re.compile(rf"#\s*{re.escape(spec.token)}:\s*dec-\d+")
+            independent_count += len(marker_re.findall(path.read_text(encoding="utf-8")))
+        assert len(self._live_marker_entries()) == independent_count
 
 
 class TestRetroactiveScanWiredIntoAllFourGenericConsumers:

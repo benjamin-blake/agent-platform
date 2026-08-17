@@ -18,7 +18,11 @@
 ## Decisions
 
 <!-- Optional. Decision IDs this change references or is gated by (e.g. Decision 73, Decision 101).
-     Omit this section if no decisions apply. -->
+     Omit this section if no decisions apply.
+
+     DD-B: if a drafted Decision was blocked on routing grounds instead of landing as a fresh
+     number, name the routing row applied in one line (e.g. "Routing: field_semantics ->
+     docs/contracts/decision-entry.yaml"). -->
 
 ## Resolves
 
@@ -37,7 +41,7 @@
      secrets / API keys, trading alpha / strategy performance data, or internal hostnames that
      provide an attack surface. See AGENTS.md "PUBLIC repository / confidential-data boundary".
 
-     COMMIT-MESSAGE CONVENTIONS: feat({slug}), plan({slug}), roadmap({ids}), scope({slug}).
-     See AGENTS.md "Commit-message conventions".
+     COMMIT-MESSAGE CONVENTIONS: feat({slug}), plan({slug}), roadmap({ids}), scope({slug}),
+     audit({slug}). See AGENTS.md "Commit-message conventions".
 
      Drop any section above that does not apply to this PR. -->
