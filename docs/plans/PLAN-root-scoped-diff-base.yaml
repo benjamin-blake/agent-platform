@@ -182,9 +182,29 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: >-
-      Run the full regression surface across every touched check, including the two modules
-      adopting Decision 170 declarations. Carried as non-hermetic so it is NOT replayed against the
-      30s per-step budget (measured 18.08s / 148 tests before this plan's additions).
+      Prove the Decision 170 declaration adoptions and the two remaining root-scoping fixes, on a
+      narrow discriminating node set -- so these three behaviours get a durable graduated guard
+      rather than anchoring to the broad, ungraduated step 4.
+    command: >-
+      bin/venv-python -m pytest
+      tests/checks/verification/test_validate_vp_replay.py::TestRootScopedBase
+      tests/checks/verification/test_validate_handoff_full_tier.py::TestDeclarationAdoption
+      tests/checks/decisions/test_validate_decisions_size.py::TestDeclarationAdoption -q
+    expected: >-
+      Exit 0. Fails at origin/main (all three classes are new there, so collection errors) --
+      which is what makes the graduated row admissible under the differential gate.
+    fix_if: >-
+      A declaration assertion fails -- an exit path in validate_handoff_full_tier (2 paths) or
+      validate_decisions_size (5 paths) still returns without declaring.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: root-scoped-diff-base-declaration-adoption
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run the full regression surface across every touched check. Carried as non-hermetic so it is
+      NOT replayed against the 30s per-step budget (measured 18.08s / 148 tests before this plan's
+      additions).
     command: >-
       bin/venv-python -m pytest tests/checks/_common/
       tests/checks/verification/test_validate_graduation_completeness.py
@@ -194,11 +214,16 @@ verification_plan:
       tests/checks/hygiene/ -q
     expected: Exit 0 across all five suites plus the hygiene package.
     fix_if: >-
-      A declaration test fails -- an exit path in validate_handoff_full_tier (2 paths) or
-      validate_decisions_size (5 paths) still returns without declaring.
+      A regression appears outside the narrow node sets graduated by steps 1-3 -- most likely a
+      collateral break in a sibling check that shares the widened primitives.
     hermetic: false
-    graduation: not-applicable
-  - step: 4
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but redundant: its discriminating surface is already
+      graduated by steps 1, 2 and 3 at narrower node sets, and the broad run measured 18.08s / 148
+      tests against validate_vp_replay's 30s PER_STEP_TIMEOUT_SECONDS -- graduating it would put a
+      near-budget step into every future replay.
+  - step: 5
     phase: pre-deploy
     action: >-
       Confirm the Decision 159 amendment landed and names the split, so the widened contract is
@@ -214,7 +239,7 @@ verification_plan:
       A one-off governance amendment. Graduating a standing grep on DECISIONS.md prose would
       ossify the wording of a document that is edited every session, guarding text rather than
       behaviour; the behavioural half of this contract is already graduated by steps 1 and 2.
-  - step: 5
+  - step: 6
     phase: pre-deploy
     action: >-
       Run the fast presubmit tier, which now includes the new guard AND the check-accounting
@@ -230,7 +255,7 @@ verification_plan:
       single-declaration accounting.
     hermetic: false
     graduation: not-applicable
-  - step: 6
+  - step: 7
     phase: pre-deploy
     action: >-
       Run the full presubmit tier to completion before committing (handoff_policy
@@ -242,7 +267,7 @@ verification_plan:
       blocked, not passed; resume later and rerun full from the start.
     hermetic: false
     graduation: not-applicable
-  - step: 7
+  - step: 8
     phase: post-deploy
     action: Confirm rec-3166 closed through the Resolves trailer rather than being left open.
     command: >-
@@ -255,7 +280,7 @@ verification_plan:
       Still open -- the Resolves trailer was missing or malformed in the squash commit body. Close
       it via the documented portal fallback:
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-3166 --status closed --resolution "..."
-  - step: 8
+  - step: 9
     phase: post-deploy
     action: >-
       Confirm main is actually unblocked -- no open source=ci_rca recommendation remains, so the
@@ -289,14 +314,14 @@ test_obligations:
   - source: scripts/checks/verification/validate_vp_replay.py
     behavior: Content-keyed plan resolution reads its base from the injected root's repository.
     verification_step: 3
-    test_selector: tests/checks/verification/test_validate_vp_replay.py
+    test_selector: tests/checks/verification/test_validate_vp_replay.py::TestRootScopedBase
     red_green_expectation: Red before the change under a simulated push context, green after.
   - source: scripts/checks/verification/validate_handoff_full_tier.py
     behavior: >-
       The changed-file set defaults from the injected root's repository, and the check declares an
       examined()/skipped() outcome on both of its reachable exit paths.
     verification_step: 3
-    test_selector: tests/checks/verification/test_validate_handoff_full_tier.py
+    test_selector: tests/checks/verification/test_validate_handoff_full_tier.py::TestDeclarationAdoption
     red_green_expectation: >-
       Red before the change (no declaration is emitted on either path, and the changed-file default
       reads the real repo), green after.
@@ -305,7 +330,7 @@ test_obligations:
       The get_changed_files call takes the (already-ROOT-rebound) root explicitly, and the check
       declares an examined()/skipped() outcome on all five reachable exit paths.
     verification_step: 3
-    test_selector: tests/checks/decisions/test_validate_decisions_size.py
+    test_selector: tests/checks/decisions/test_validate_decisions_size.py::TestDeclarationAdoption
     red_green_expectation: >-
       Red before the change (no declaration is emitted on any of the five paths), green after.
   - source: scripts/checks/hygiene/validate_root_scoped_diff_base.py
@@ -356,8 +381,10 @@ constraints:
     for EVERY test. New push-context tests must opt back in via their own monkeypatch.setenv inside
     the test body -- setting them in the shell will not reach the test process.
   - Keep the Decision 159 amendment OUT of that Decision's `**Problem:**` body -- that body is its
-    triage_excerpt source. An `> **Amendment ...**` blockquote above the `**Status:**` line leaves
-    scripts.decisions_index.build_index() byte-identical, so docs/decisions-index.json needs no edit.
+    triage_excerpt source (build_index's fallback order is Intent -> Problem -> Context -> Decision,
+    and Decision 159's Problem is populated). An `> **Amendment ...**` blockquote placed below the
+    `**Status:**` block leaves scripts.decisions_index.build_index() byte-identical, so
+    docs/decisions-index.json needs no edit.
   - Do not assert an exact len() against a growing production collection (tests/CLAUDE.md
     test-count-coupling rule) when asserting on the guard's violation list.
 context:
@@ -447,7 +474,13 @@ context:
     Branch was 0 commits behind origin/main at planning time (main_freshness ok, 0 behind / 0 ahead),
     so the Main Divergence Assessment found no overlap and no rebase was needed. The critique gate
     re-confirmed `git diff origin/main -- docs/DECISIONS.md docs/ROADMAP-PLATFORM.yaml` is empty.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->re-dispatched after 1 round(s)"
+  - >-
+    gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE x2, re-dispatched after 2 round(s).
+    Round 1 REVISE (blocking: Decision 170 cl.3 touch-it-fix-it, mechanically reproduced -- VP
+    steps would have gone red; plus VP replay budget and differential-admission findings). Round 2
+    REVISE (all six round-1 items verified closed; one single-field finding -- VP step 4's broad
+    pytest run was a suspect not-applicable, now waive-with-reason, plus the optional obligation
+    re-anchoring onto new graduated step 3).
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -489,8 +522,10 @@ execution_steps:
     scripts/checks/decisions/validate_decisions_size.py -- pass root to get_changed_files at line
     167 (provable no-op: root is already _common.ROOT on the only path that reaches it, because the
     `using_default_root and ...` conjunct short-circuits otherwise), AND adopt the Decision 170
-    declaration on all five reachable exit paths (lines 149, 153, 168, 172, and the fall-through).
-    Do NOT add a `# root-scoped-ok:` marker here -- passing root removes the violation outright.
+    declaration on all five reachable exit paths (the returns at lines 149, 153, 168 and 173, plus
+    the fall-through). Do NOT add a `# root-scoped-ok:` marker here -- passing root removes the
+    violation outright. Name the new assertion class TestDeclarationAdoption (VP step 3 and its
+    graduated registry row both key on it).
   - >-
     config/check_accounting_baseline.yaml -- shrink-remove `validate_handoff_full_tier` (line 75)
     and `validate_decisions_size` (line 65). Do NOT touch _BASELINE_SEED in
@@ -506,8 +541,11 @@ execution_steps:
     `# root-scoped-ok:` marker. Declare registry.examined(<functions scanned>, unit=...) on the
     normal path and registry.skipped(...) on any degraded path.
   - >-
-    scripts/checks/hygiene/_manifest.py -- add the Entry with pre=True and
-    full_segment="full_after_lint" (matching its hygiene siblings), bare string literals only.
+    scripts/checks/hygiene/_manifest.py -- add the Entry with pre=True,
+    pre_globs=("scripts/checks/**",) and full_segment="full_after_lint", bare string literals only.
+    The pre_globs choice mirrors validate_check_accounting's and is deliberate: the guard only ever
+    has something to say about scripts/checks/**, so gating it there costs nothing (the AST walk
+    measured 0.103s over 171 files, so running it ungated would also be defensible).
   - >-
     config/ci_rca_taxonomy.yaml -- add a function_to_category row mapping
     validate_root_scoped_diff_base to code_regression.
@@ -515,7 +553,9 @@ execution_steps:
     docs/DECISIONS.md -- append a forward-reference amendment to Decision 159 cl.1 recording that
     push_context_base's git probes are root-scoped while its ENV signals remain job-global, and why
     (a root seam without a paired base seam produced rec-3166). Insert it as an
-    `> **Amendment ...**` blockquote ABOVE the `**Status:**` line, never inside `**Problem:**`.
+    `> **Amendment ...**` blockquote BELOW the `**Status:**` / `**Date:**` / `**Warehouse ID:**`
+    block, matching the file's two existing amendment precedents (Decision 159's own Decision-165
+    amendment and Decision 163's Decision-169 amendment). Never place it inside `**Problem:**`.
     Mint no new Decision number.
   - >-
     Tests -- write the both-trigger regression tests FIRST and confirm they fail against the
@@ -526,12 +566,15 @@ execution_steps:
     test_registry_baseline_and_resolution_stay_correct_on_simulated_post_merge_main by asserting the
     derived base equals the fixture's before_sha, not merely that failed == [].
   - >-
-    config/agent/verification_registry/registry.yaml -- add the two graduated rows with plan_slug
-    root-scoped-diff-base. Each check_spec MUST key on a node that is ABSENT at origin/main, or
-    validate_verification_registry's FAIL-on-base / PASS-on-HEAD differential rejects it as
-    non-discriminating: root-scoped-diff-base-regression-suite keys on
-    tests/checks/_common/test_push_context_base.py::TestRootScopedProbes, and
-    root-scoped-diff-base-guard-tests keys on tests/checks/hygiene/test_validate_root_scoped_diff_base.py.
+    config/agent/verification_registry/registry.yaml -- add the THREE graduated rows with plan_slug
+    root-scoped-diff-base, primitive_slot test_selector. Each check_spec MUST key on a node that is
+    ABSENT at origin/main, or validate_verification_registry's FAIL-on-base / PASS-on-HEAD
+    differential rejects it as non-discriminating:
+    root-scoped-diff-base-regression-suite keys on
+    tests/checks/_common/test_push_context_base.py::TestRootScopedProbes;
+    root-scoped-diff-base-guard-tests keys on tests/checks/hygiene/test_validate_root_scoped_diff_base.py;
+    root-scoped-diff-base-declaration-adoption keys on
+    tests/checks/decisions/test_validate_decisions_size.py::TestDeclarationAdoption.
     Follow the existing `node_id:`-bearing row precedent already in the file.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
