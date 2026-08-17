@@ -49,8 +49,17 @@ scope:
       the planning skill's Decision Significance Gate (a fresh governance Decision and a CD
       ratification), and requires a verbatim body quote that satisfies or fails the three-question
       routing rule. Scoping it to ratification blocks alone would not have fired on DD-B -- the
-      audit's own demonstrated enforcement event, which was a fresh Decision draft. The 106-byte
-      headroom is certainly exceeded, so the dec-75 raise is required, not conditional.
+      audit's own demonstrated enforcement event, which was a fresh Decision draft. Three details are
+      fixed here, not left to the implementer: (a) TRIGGER DETECTION -- the control fires when the
+      plan carries a ratification block OR its scope includes docs/DECISIONS.md and the plan text
+      drafts a "## Decision NNN:" heading; a DECISIONS.md scope row that only adds an amendment
+      trailer (this plan's own shape) does NOT fire it, since an amendment carries no significance
+      envelope. (b) VERDICT IMPACT -- a claimed-row/body mismatch forces REVISE, not an informational
+      note; a surfaced-only verdict would reproduce the discretionary-enforcement failure mode this
+      plan rejects elsewhere. (c) N/A BRANCH -- when the trigger does not fire, the Phase-3 row emits
+      "Category consistency: N/A -- plan drafts no numbered Decision text", so a silent omission is
+      distinguishable from a pass. The 106-byte headroom is certainly exceeded, so the dec-75 raise is
+      required, not conditional.
   - file: config/prose_budgets.yaml
     action: Modify
     purpose: >-
@@ -87,11 +96,13 @@ scope:
   - file: docs/contracts/check-accounting.yaml
     action: Modify
     purpose: >-
-      Governance note recording the no-NEW-permanently-advisory-check rule beside the status
-      vocabulary that motivates it, plus an amendment_log entry (the contract is Class D, ratified,
-      and validate_contract_drift requires amendment-on-change). This is a forward-standing
-      enforcement-shape commitment, so it is homed in the owning contract per Decision 86/127 routing
-      rather than buried in another entry's amendment trailer where decision-scout cannot index it.
+      Field-semantics note ONLY, beside status_vocabulary -- recording that the vocabulary has no
+      "warned" member, so a print-only check declaring examined(n>0) is recorded as "enforced". That
+      is a true field_semantics route under decision-entry.yaml significance.routing (the meaning of a
+      declared value, collocated with the field), and a correct Decision 86/127 home. Plus an
+      amendment_log entry, required because the contract is Class D and ratified
+      (check_amendment_log_for_class_d). The repo-wide no-NEW-permanently-advisory-check RULE is
+      deliberately NOT recorded here -- see the Context note on its deferral.
 bundled_recommendations:
   - rec-3015
   - rec-3016
@@ -116,8 +127,9 @@ acceptance_criteria:
   - T1.5 carries exactly one additional exit criterion, appended at position 8, and the roadmap
     passes referential-integrity validation.
   - config/prose_budgets.yaml's S1 root_ambient_load_set entry equals its measured size (the reserved
-    headroom is claimed and closed), and every raised entry carries an authorizing marker. Nine other
-    surfaces sit below budget for unrelated reasons and are explicitly out of this plan's reach.
+    headroom is claimed and closed), and every raised entry carries an authorizing marker. Seven
+    other surfaces sit below budget for unrelated reasons and are explicitly out of this plan's reach
+    (ten are below budget today; this plan's own raises reseed plan-critique and planning).
   - bin/venv-python -m scripts.validate --pre exits 0.
 verification_plan:
   - step: 1
@@ -144,14 +156,20 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Confirm AGENTS.md points at the contract's routing_rule rather than restating the three
-      questions, per the requester's explicit "point at it, never restate it" constraint.
+      questions, and that the DD-B convention is recorded in BOTH AGENTS.md and the PR template.
+      DD-B lives here rather than in graduated step 3 because a literal-token guard over re-editable
+      prose is exactly what steps 1/2/5/6 are waived for.
     command: >-
-      bin/venv-python -c "import pathlib,sys; t=pathlib.Path('AGENTS.md').read_text();
-      s=t[t.index('### Commit-message conventions'):t.index('### Commit signing')];
+      bin/venv-python -c "import pathlib,sys; a=pathlib.Path('AGENTS.md').read_text();
+      p=pathlib.Path('.github/pull_request_template.md').read_text();
+      s=a[a.index('### Commit-message conventions'):a.index('### Commit signing')];
       sys.exit('restates the routing rule') if ('reversal-relevant' in s and 'durable architectural
-      commitment' in s) else (print('OK: points, does not restate') if 'decision-entry.yaml' in s
-      else sys.exit('no pointer to decision-entry.yaml'))"
-    expected: "Prints 'OK: points, does not restate'; exit 0."
+      commitment' in s) else None;
+      sys.exit('no pointer to decision-entry.yaml') if 'decision-entry.yaml' not in s else None;
+      sys.exit('DD-B absent from AGENTS.md') if 'routing row' not in a else None;
+      sys.exit('DD-B absent from PR template') if 'routing row' not in p else
+      print('OK: points not restates, DD-B in both surfaces')"
+    expected: "Prints 'OK: points not restates, DD-B in both surfaces'; exit 0."
     fix_if: >-
       Exit 'restates the routing rule' means the section duplicated the contract's three questions --
       replace with a pointer. Exit 'no pointer' means the reference is missing entirely.
@@ -163,20 +181,19 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: >-
-      Confirm the DD-B convention is recorded in AGENTS.md and the PR template carries all five
-      commit prefixes plus the DD-B prompt.
+      Confirm the PR template's conventions comment names all five commit prefixes. Scope is
+      deliberately the prefix enumeration ALONE, so the graduated check_id and the assertion agree --
+      DD-B presence is asserted by waived step 2 instead.
     command: >-
-      bin/venv-python -c "import pathlib,sys; a=pathlib.Path('AGENTS.md').read_text();
+      bin/venv-python -c "import pathlib,sys;
       p=pathlib.Path('.github/pull_request_template.md').read_text();
       miss=[x for x in ('feat({slug})','plan({slug})','roadmap({ids})','scope({slug})','audit({slug})')
-      if x not in p]; sys.exit(f'PR template missing prefixes: {miss}') if miss else None;
-      sys.exit('DD-B convention absent from AGENTS.md') if 'routing row' not in a else None;
-      sys.exit('DD-B prompt absent from PR template') if 'routing row' not in p else
-      print('OK: five prefixes + DD-B in both surfaces')"
-    expected: "Prints 'OK: five prefixes + DD-B in both surfaces'; exit 0."
+      if x not in p]; sys.exit(f'PR template missing prefixes: {miss}') if miss else
+      print('OK: five prefixes present')"
+    expected: "Prints 'OK: five prefixes present'; exit 0."
     fix_if: >-
-      A missing-prefix list means the template comment was not updated. A DD-B failure means the
-      convention landed in only one of the two surfaces.
+      A missing-prefix list means the template comment was not updated. DD-B failures surface in
+      step 2, not here.
     graduation: graduate
     graduation_check_id: pr-template-commit-prefix-completeness
     graduation_waiver_reason: null
@@ -193,9 +210,10 @@ verification_plan:
       trailer would then autoclose a rec whose acceptance was never met.
     graduation: waive
     graduation_waiver_reason: >-
-      These are the two recs' own filed acceptance commands, which retire when the recs close on
-      merge; graduating them would install a permanent guard on transient closure criteria rather
-      than on a durable behavior.
+      Same brittleness as steps 1/2/5/6: two literal token greps over skill prose that is expected to
+      be re-edited, so a standing guard would fire on any rewording while proving nothing about
+      whether authors follow the instruction. (These happen to be the recs' filed acceptance commands,
+      but the file property they assert is durable -- the transience is in the recs, not the guard.)
   - step: 5
     phase: pre-deploy
     action: >-
@@ -203,13 +221,15 @@ verification_plan:
       envelope marker (Decision 167 clause 2), closing migration step 4's first clause.
     command: >-
       bin/venv-python -c "import pathlib,sys; t=pathlib.Path('.claude/skills/planning/SKILL.md').read_text();
-      i=t.index('## Decision Significance Gate'); s=t[i:i+2500];
-      sys.exit('gate does not cite the significance envelope marker') if 'significance' not in
-      s.lower() or 'envelope' not in s.lower() else print('OK: envelope marker cited at the gate')"
+      s=t[t.index('## Decision Significance Gate'):]; s=s[:s.index(chr(10)+'## ',5)];
+      sys.exit('gate section does not cite the envelope marker') if 'envelope' not in s.lower()
+      else print('OK: envelope marker cited at the gate')"
     expected: "Prints 'OK: envelope marker cited at the gate'; exit 0."
     fix_if: >-
       Failure means the gate still references only the four routing rows, leaving migration step 4's
-      first clause open -- the exact gap this plan exists to close.
+      first clause open -- the exact gap this plan exists to close. The window is bounded by the next
+      '## ' heading rather than a fixed character count, so the assertion cannot be satisfied by text
+      belonging to the following section.
     graduation: waive
     graduation_waiver_reason: >-
       Section-scoped prose grep on a skill file expected to be re-edited; brittle as a standing
@@ -301,8 +321,10 @@ verification_plan:
   - step: 10
     phase: pre-deploy
     action: >-
-      Confirm no prose surface sits below its budget -- the standing S1 advisory deliberately left by
-      PLAN-agents-md-ambient-trim must be closed by this plan's reseed.
+      Confirm the S1 entry specifically equals its measured size -- the standing advisory deliberately
+      left by PLAN-agents-md-ambient-trim must be closed by this plan's reseed. Scope is S1 ALONE:
+      seven other surfaces sit below budget for unrelated reasons and are out of this plan's reach
+      under constraint 6.
     command: |-
       bin/venv-python -c "from scripts.preflight.prose_context import measure_prose_context as m; import yaml,pathlib,sys; b=yaml.safe_load(pathlib.Path('config/prose_budgets.yaml').read_text()); cur=m()['S1']['prose_bytes']; bud=b['S1']['root_ambient_load_set']; sys.exit(f'S1 not reseeded -- current {cur} budget {bud}') if cur!=bud else print('OK S1 tight')"
     expected: "Prints 'OK S1 tight'; exit 0."
@@ -314,8 +336,11 @@ verification_plan:
       cannot detect the condition this step exists to close.
     graduation: waive
     graduation_waiver_reason: >-
-      Direct invocation of an already-registered check that runs in both validate tiers; graduating
-      it would add a second registry row asserting exactly what validate_prose_limits already asserts.
+      Not a duplicate -- validate_prose_limits CANNOT assert this (a below-budget surface appends to
+      its advisory list, never its failure list), which is why the step asserts equality directly. The
+      real reason to waive is that a permanent zero-headroom equality guard would fail every future PR
+      that legitimately trims the ambient set without reseeding in the same diff -- converting a
+      one-time reseed obligation into a standing tax on unrelated work.
   - step: 11
     phase: pre-deploy
     action: >-
@@ -343,8 +368,9 @@ verification_plan:
       the roadmap no longer parses; re-check that the criterion was appended, not inserted.
     graduation: waive
     graduation_waiver_reason: >-
-      Runs an existing committed test module rather than a kernel-expressible primitive; the durable
-      guard is the test file itself, which is already collected by the full tier.
+      test_selector IS a canonical slot, so this is graduatable in principle -- but the durable guard
+      already exists as the committed test module, which the full tier collects on every run. A
+      registry row would schedule a second invocation of tests that already run.
   - step: 13
     phase: pre-deploy
     action: >-
@@ -414,6 +440,30 @@ test_obligations:
     red_green_expectation: >-
       Red before: exits non-zero on origin/main, where Decision 167 carries no stanza and 167 is
       absent from the monitored set. Green after: exits 0 with 167 monitored and no malformed entries.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Each graduated VP step owns exactly one registry row whose command still discriminates -- it
+      must pass on HEAD and fail against an origin/main worktree, or the row is inadmissible.
+    verification_step: 14
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      No test this plan could author would be stronger evidence than the mechanism already applied to
+      every new row: validate_verification_registry's differential admission re-executes each
+      new-in-diff row's command against a real origin/main worktree and rejects it unless the revert
+      genuinely FAILS. That runs in the --pre tier this step invokes. Authoring a separate unit test
+      asserting the rows exist would assert strictly less than the differential already proves.
+  - source: docs/contracts/check-accounting.yaml
+    behavior: >-
+      The Class D contract keeps a resolving evaluator and gains an amendment_log entry whenever its
+      body changes, so the field-semantics note cannot land as an undeclared edit.
+    verification_step: 14
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      The required shape is asserted by two existing registered checks that both run in the tier this
+      step invokes -- validate_contract_drift (schema, refs, status transitions, amendment-on-change)
+      and _population.check_amendment_log_for_class_d. The change is a prose note plus a log entry
+      with no executable surface of its own, so a bespoke test would restate those checks rather than
+      guard any behavior they miss.
   - source: docs/ROADMAP-PLATFORM.yaml
     behavior: >-
       T1.5's exit criteria stay append-only, so the positional ids c1 and c2 that DECISIONS.md, the
@@ -516,6 +566,17 @@ context:
     bytes) landed 2026-08-11, before that arming, so it is grandfathered by the forward-only baseline
     rule and is not a live violation.
   - >-
+    Deferred, with the record damage named. The no-NEW-permanently-advisory-check rule is a
+    forward-standing repo-wide commitment: applying decision-entry.yaml significance.routing_rule's
+    three questions yields yes/yes/yes, which routes to numbered_decision -- it narrows what Decisions
+    153 and 167 clause 3 currently sanction, so it is reversal-relevant, and no other routing row
+    claims it. The operator's no-new-Decision constraint forbids that home for this change, so the
+    rule is NOT recorded by this plan and is filed as a follow-on rec instead. The cost is real and
+    stated plainly: until that Decision lands, an author asking "may I add a WARN-tier check?" will
+    consult DECISIONS.md, find Decision 153 ("warn, not hard-fail") and Decision 167 clause 3
+    SANCTIONING warn-tier checks, and will not find the prohibition. Constraint 3 still binds THIS
+    plan's own work, which installs no check at all.
+  - >-
     Known gap, accepted. This plan installs no mechanical detector for mis-declared significance
     routing. Detection is human/agent judgement at the plan-critique gate. The Decision 167
     amendment's reversal condition is what converts that from a permanent gap into a monitored one.
@@ -548,6 +609,9 @@ execution_steps:
     whenever a plan drafts numbered "## Decision NNN:" text -- fresh governance Decision or CD
     ratification -- and states whether the drafted entry's claimed significance row matches its body,
     quoting verbatim the body sentence that satisfies or fails the three-question routing rule.
+    Implement all three fixed details from the scope row: trigger detection (ratification block, or a
+    docs/DECISIONS.md scope row plus a drafted "## Decision NNN:" heading -- amendment-only changes do
+    not fire it), REVISE on mismatch, and the explicit N/A emission when the trigger does not fire.
   - >-
     docs/DECISIONS.md -- add a dated in-place amendment to Decision 167 recording ONLY that the f2
     routing-consistency lint is REJECTED (naming the construct-validity and Goodhart grounds) and that
@@ -558,13 +622,17 @@ execution_steps:
     check and the plan-critique verdict. Place the fence between the prose "**Reversal conditions:**"
     section and "**Related:**", matching Decisions 133, 172 and 83. Mint no new header.
   - >-
-    docs/contracts/check-accounting.yaml -- add a governance note beside status_vocabulary recording
-    the no-NEW-permanently-advisory-check rule: the sanctioned shape is a dated, staged pre-commitment
-    with a measurable arming event and a reversal condition if it never fires (Decision 167 clause 3
-    as the worked example); the prohibited shape is an open-ended advisory with no arming trigger.
-    Note that the vocabulary has no "warned" member, so a print-only check declaring examined(n>0) is
-    recorded as "enforced". Add an amendment_log entry and bump contract_version -- the contract is
-    Class D and ratified, so validate_contract_drift requires amendment-on-change.
+    docs/contracts/check-accounting.yaml -- add a field-semantics note beside status_vocabulary
+    recording ONLY that the vocabulary has no "warned" member, so a print-only check declaring
+    examined(n>0) is recorded as "enforced". Do NOT record the repo-wide
+    no-NEW-permanently-advisory-check rule here -- that is a forward-standing enforcement-shape
+    commitment which clears the significance bar and needs a numbered Decision, and this contract's
+    declared subject does not cover it. Add an amendment_log entry and bump contract_version -- the
+    contract is Class D and ratified, so validate_contract_drift requires amendment-on-change.
+  - >-
+    File a follow-on recommendation via `bin/venv-python -m scripts.ops_data_portal` for the
+    repo-wide no-NEW-permanently-advisory-check rule, so the deferred commitment has a tracked owner
+    rather than disappearing. Reference this plan's slug and the routing reasoning in its context.
   - >-
     config/agent/verification_registry/registry.yaml -- add one row per surviving graduate step (VP
     steps 3 and 7), each with plan_slug "migration-step-4-cfg-audit" and check_id matching the step's
