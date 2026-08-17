@@ -91,8 +91,9 @@ scope:
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      One new row per surviving graduate-disposition VP step (steps 3 and 7), each carrying
-      plan_slug "migration-step-4-cfg-audit" and the step's declared graduation_check_id.
+      One new row for the single surviving graduate-disposition VP step (step 7), carrying
+      plan_slug "migration-step-4-cfg-audit" and its declared graduation_check_id
+      "dec-167-reversal-stanza-monitored".
       validate_graduation_completeness's implement-PR leg fails any graduate step without a matching
       new-in-diff row, and constraint 6 forbids touching files absent from Scope -- so this row is
       required, not optional.
@@ -197,9 +198,14 @@ verification_plan:
     fix_if: >-
       A missing-prefix list means the template comment was not updated. DD-B failures surface in
       step 2, not here.
-    graduation: graduate
-    graduation_check_id: pr-template-commit-prefix-completeness
-    graduation_waiver_reason: null
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating this would install a permanent CI check over a surface whose originating finding
+      rules one out in terms: CFG-08's severity_rationale reads "Wording-only; enforcement
+      deliberately not proposed", its refutation records "no gate proposed", and its current_behavior
+      notes "no check reads the template". The check would also hard-code five prefix literals,
+      including scope({slug}), which Decision 67 currently suspends -- retiring it would redden main
+      until the registry row was updated. Waiving keeps the plan faithful to the finding it closes.
   - step: 4
     phase: pre-deploy
     action: >-
@@ -415,7 +421,7 @@ verification_plan:
       After the squash-merge Resolves trailer fires rec-autoclose, confirm both bundled
       recommendations actually closed in the warehouse.
     command: |-
-      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib,sys; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; st={r['id']:r.get('status') for r in rows if r.get('id') in ('rec-3015','rec-3016')}; sys.exit(f'not closed -- {st}') if len(st)!=2 or any(v!='closed' for v in st.values()) else print('OK both recs closed')"
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib,sys; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; st={r['id']:r.get('status') for r in rows if r.get('id') in ('rec-3015','rec-3016')}; sys.exit(f'not closed -- {st}') if len(st)!=2 or any(v!='closed' for v in st.values()) else print('OK both recs closed')"
     expected: "Prints 'OK both recs closed'; exit 0."
     fix_if: >-
       A non-closed status means the Resolves trailer was omitted from the squash-merge commit body or
@@ -523,7 +529,8 @@ context:
     Scout flags and their disposition. CONTRADICT/NOTE on Decision 167 -- proxy P1 duplicates the
     armed hard cap: resolved by dropping the lint entirely. SPIRIT/WARN on Decision 163 -- a
     permanently advisory tier is universal-in-name/discretionary-in-enforcement: resolved by
-    introducing no check at all and recording the standing no-advisory-tier policy in the amendment.
+    introducing no check at all; the standing no-advisory-tier policy is deferred to a follow-on rec
+    (see the deferral note below), NOT recorded in the amendment.
     SPIRIT/WARN on Decision 150 -- suppressing the ruling would leave the mechanism with no reversal
     record: resolved by the Decision 167 amendment carrying a preflight-monitored stanza.
     NOTE on Decision 170 -- no "warned" state exists: resolved, since no check is added.
@@ -575,8 +582,11 @@ context:
     153 and 167 clause 3 currently sanction, so it is reversal-relevant, and no other routing row
     claims it. The operator's no-new-Decision constraint forbids that home for this change, so the
     rule is NOT minted by this plan and is filed as a follow-on rec instead. The resulting gap is a
-    plain omission, NOT authoritative-but-wrong guidance: the two entries that mention warn-tier
-    enforcement both grant the sanctioned shape, not the prohibited one. Decision 153 is a bounded
+    plain omission, NOT authoritative-but-wrong guidance: neither of the two entries that mention
+    warn-tier enforcement grants an open-ended advisory with no arming trigger, which is the shape the
+    deferred rule would prohibit. (They are not the same KIND of sanctioned instrument -- 167 clause 3
+    is a dated staged pre-commitment, 153 a bounded waiver -- so what carries the argument is that
+    neither is the prohibited shape, not that both match one sanctioned template.) Decision 153 is a bounded
     single-case waiver with a derived hard ceiling that fails closed and says in terms it is "not a
     general weakening"; Decision 167 clause 3 is a dated pre-commitment whose arming event already
     fired (eaff804, 2026-08-13), so its WARN tier is spent, not live. Neither is an open-ended
@@ -592,7 +602,9 @@ context:
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - Only the plan-cited decision sections read (167, 150, 163, 168, 170, 75, 86) -- not the full log
+  - Only the plan-cited decision sections read (167, 153, 150, 163, 168, 170, 75, 86, 128, 165) --
+    not the full log. 153 carries load-bearing claims for constraint 3 and the deferral note; 128/165
+    govern the raise-marker mechanism the implementer must operate.
   - docs/contracts/decision-entry.yaml amendment_forms and significance sections read
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
@@ -645,10 +657,9 @@ execution_steps:
     repo-wide no-NEW-permanently-advisory-check rule, so the deferred commitment has a tracked owner
     rather than disappearing. Reference this plan's slug and the routing reasoning in its context.
   - >-
-    config/agent/verification_registry/registry.yaml -- add one row per surviving graduate step (VP
-    steps 3 and 7), each with plan_slug "migration-step-4-cfg-audit" and check_id matching the step's
-    declared graduation_check_id (pr-template-commit-prefix-completeness,
-    dec-167-reversal-stanza-monitored). Steps 8 and 9 are waived and owe no row.
+    config/agent/verification_registry/registry.yaml -- add ONE row, for VP step 7, with plan_slug
+    "migration-step-4-cfg-audit" and check_id "dec-167-reversal-stanza-monitored". Every other
+    pre-deploy step is waived or not-applicable and owes no row.
   - >-
     docs/ROADMAP-PLATFORM.yaml -- APPEND the retrieval-quality criterion to T1.5's exit_criteria as
     the eighth entry. Cover findability parity complementing c2's recoverability; fresh baseline
