@@ -268,6 +268,63 @@ class TestMainFailClosed:
 
 
 # ---------------------------------------------------------------------------
+# main() -- active plan's own path is exempt from its own Scope
+# ---------------------------------------------------------------------------
+
+
+class TestActivePlanSelfEditExempt:
+    def test_allow_edit_to_active_plans_own_path(self, tmp_path: Path) -> None:
+        """The active plan's own path is allowed even though it is not listed in its own Scope
+        -- the implement flow edits the plan file itself to set implementation_declared."""
+        plan = tmp_path / "PLAN-self-edit.yaml"
+        plan.write_text("scope:\n  - scripts/validate.py\n", encoding="utf-8")
+        payload = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(plan)},
+        }
+        code, stderr = _run_main(payload, env_plan=str(plan))
+        assert code == 0
+        assert "BLOCKED" not in stderr
+
+    def test_allow_write_to_active_plans_own_relative_path(self, tmp_path: Path) -> None:
+        """The exemption applies regardless of whether the tool call names the plan absolutely
+        or (after root-prefix stripping) relatively -- both normalise to the same rel_path."""
+        plan = tmp_path / "docs" / "plans" / "PLAN-self-edit-rel.yaml"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("scope:\n  - scripts/validate.py\n", encoding="utf-8")
+        with patch.object(_MOD, "_ROOT", tmp_path):
+            payload = {
+                "tool_name": "Write",
+                "tool_input": {"file_path": "docs/plans/PLAN-self-edit-rel.yaml"},
+            }
+            code, _ = _run_main(payload, env_plan="docs/plans/PLAN-self-edit-rel.yaml")
+        assert code == 0
+
+    def test_still_denies_a_file_outside_scope_and_not_the_active_plan(self, tmp_path: Path) -> None:
+        """The exemption is narrow: a file that is neither in Scope nor the active plan's own
+        path is still denied fail-closed."""
+        plan = tmp_path / "PLAN-self-edit-deny.yaml"
+        plan.write_text("scope:\n  - scripts/validate.py\n", encoding="utf-8")
+        payload = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "scripts/execute_recommendation.py"},
+        }
+        code, stderr = _run_main(payload, env_plan=str(plan))
+        assert code == 2
+        assert "BLOCKED" in stderr
+
+    def test_no_active_plan_case_still_allows_everything(self) -> None:
+        """No active plan declared -> the exemption logic never engages; every edit is allowed,
+        unaffected by this addition."""
+        payload = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "docs/plans/PLAN-anything.yaml"},
+        }
+        code, _ = _run_main(payload)  # env_plan=None -> no active plan
+        assert code == 0
+
+
+# ---------------------------------------------------------------------------
 # main() -- marker file path (no env var)
 # ---------------------------------------------------------------------------
 

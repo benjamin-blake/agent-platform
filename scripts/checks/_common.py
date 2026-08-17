@@ -18,11 +18,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).parent.parent.parent
 PYTHON = sys.executable  # Use same interpreter that's running this script
 
 PLAN_PATH_RE = re.compile(r"^docs/plans/PLAN-([^/]+)\.yaml$")
-_FEAT_COMMIT_RE = re.compile(r"^feat\(([^)]+)\):")
 _ZERO_SHA = "0" * 40
 
 
@@ -205,25 +206,57 @@ def load_plan(rel_path: str, root: Path):
             _sys.path.remove(root_str)
 
 
-def feat_commit_slugs(root: Path) -> list[str]:
-    """Ordered, de-duplicated slugs from feat({slug}) commit subjects in origin/main..HEAD."""
-    result = run(
-        ["git", "log", "origin/main..HEAD", "--format=%s"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=root,
-    )
+def _plan_declared_at_ref(plan_rel: str, root: Path, ref: str) -> bool:
+    """Whether `implementation_declared` reads true for `plan_rel` at git ref `ref`.
+
+    Mirrors check_graduation_guard.py:98-105's `git show` + returncode-!=0-is-empty-baseline
+    rule: an unresolvable ref, a missing path at that ref, or an unparseable/non-dict payload
+    are all a legitimate "not declared at this ref" rather than an error -- never raised.
+    """
+    result = run(["git", "show", f"{ref}:{plan_rel}"], capture_output=True, text=True, encoding="utf-8", cwd=root)
     if result.returncode != 0:
-        return []
-    slugs: list[str] = []
-    seen: set[str] = set()
-    for line in result.stdout.strip().splitlines():
-        match = _FEAT_COMMIT_RE.match(line.strip())
-        if match and match.group(1) not in seen:
-            seen.add(match.group(1))
-            slugs.append(match.group(1))
-    return slugs
+        return False
+    try:
+        data = yaml.safe_load(result.stdout)
+    except yaml.YAMLError:
+        return False
+    return isinstance(data, dict) and bool(data.get("implementation_declared"))
+
+
+def resolve_declared_plans(changed_files: list[str], root: Path, base: str) -> list[str]:
+    """Content-keyed plan resolution (Decision 148 sole home; Decision 170's declaration
+    channel is the consumer, not this function).
+
+    Returns the diff-present `docs/plans/PLAN-*.yaml` paths whose `implementation_declared`
+    field is true in the WORKING TREE but was not true at `base` -- an edge-triggered
+    False->True flip (absence at `base` counts as False, so a net-new declared plan resolves
+    too), mirroring check_graduation_guard.py:111-116's flip detector.
+
+    `base` is an injected parameter, never derived here (callers default it from
+    `push_context_base() or "origin/main"` at their own call site -- this function must never
+    call push_context_base() itself, or a check running against an injected `root` would read
+    the REAL repository's base while evaluating the FIXTURE repository). The candidate set is
+    likewise derived from the injected `changed_files` via `plan_paths_from_changed` -- this
+    function never calls get_changed_files() or globs docs/plans/ itself.
+
+    A candidate absent from the working tree (deleted in this diff) is silently skipped -- that
+    is the caller's concern (each check already prints its own "deleted in diff" SKIP), not an
+    error here. A candidate PRESENT on disk is read with a raw `yaml.safe_load`, never
+    `PlanDocument` validation (schema validity is `validate_plan_documents`' concern, not this
+    resolver's) -- an `OSError` or `yaml.YAMLError` on that WORKING-TREE read propagates
+    (fail-loud, Decision 55). The baseline read never raises (see `_plan_declared_at_ref`).
+    """
+    resolved: list[str] = []
+    for plan_rel in plan_paths_from_changed(changed_files):
+        plan_path = root / plan_rel
+        if not plan_path.exists():
+            continue
+        working_data = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
+        if not (isinstance(working_data, dict) and working_data.get("implementation_declared")):
+            continue
+        if not _plan_declared_at_ref(plan_rel, root, base):
+            resolved.append(plan_rel)
+    return resolved
 
 
 def origin_main_reachable(root: Path) -> bool:

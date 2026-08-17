@@ -144,7 +144,7 @@ class TestCommonPrimitives:
         assert doc.slug == slug
         assert str(tmp_path) not in sys.path  # injected then cleaned up
 
-    def _git_repo_with_feat_commits(self, repo: Path) -> None:
+    def _git_repo_with_base_commit(self, repo: Path) -> None:
         def _git(args: list[str]) -> None:
             result = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
             assert result.returncode == 0, f"git {args} failed: {result.stderr}"
@@ -160,33 +160,163 @@ class TestCommonPrimitives:
         ).stdout.strip()
         _git(["update-ref", "refs/remotes/origin/main", base_sha])
 
-        (repo / "alpha_first.txt").write_text("x\n", encoding="utf-8")
-        _git(["add", "-A"])
-        _git(["commit", "-q", "-m", "feat(alpha): first commit"])
-        (repo / "alpha_second.txt").write_text("y\n", encoding="utf-8")
-        _git(["add", "-A"])
-        _git(["commit", "-q", "-m", "feat(alpha): duplicate slug, deduped"])
-        (repo / "unrelated.txt").write_text("z\n", encoding="utf-8")
-        _git(["add", "-A"])
-        _git(["commit", "-q", "-m", "docs: unrelated non-feat commit"])
-
-    def test_feat_commit_slugs_dedupes_ordered_and_ignores_non_feat(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        self._git_repo_with_feat_commits(repo)
-
-        assert _common.feat_commit_slugs(repo) == ["alpha"]
-
     def test_origin_main_reachable_true_with_ref(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
-        self._git_repo_with_feat_commits(repo)
+        self._git_repo_with_base_commit(repo)
 
         assert _common.origin_main_reachable(repo) is True
 
-    def test_feat_commit_slugs_and_origin_main_reachable_false_without_repo(self, tmp_path: Path) -> None:
-        assert _common.feat_commit_slugs(tmp_path) == []
+    def test_origin_main_reachable_false_without_repo(self, tmp_path: Path) -> None:
         assert _common.origin_main_reachable(tmp_path) is False
+
+
+class TestImplementationDeclaredResolver:
+    """scripts.checks._common.resolve_declared_plans -- content-keyed plan resolution
+    (Decision 148 sole home, PLAN-plan-resolution-content-keyed)."""
+
+    @staticmethod
+    def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
+        result = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
+        assert result.returncode == 0, f"git {args} failed: {result.stderr}"
+        return result
+
+    def _init_repo(self, repo: Path) -> None:
+        repo.mkdir(parents=True, exist_ok=True)
+        self._git(repo, ["init", "-q"])
+        self._git(repo, ["config", "user.email", "test@example.com"])
+        self._git(repo, ["config", "user.name", "Test"])
+
+    def _commit_all(self, repo: Path, message: str) -> str:
+        self._git(repo, ["add", "-A"])
+        self._git(repo, ["commit", "-q", "-m", message])
+        return self._git(repo, ["rev-parse", "HEAD"]).stdout.strip()
+
+    def _write_plan(self, repo: Path, slug: str, declared: bool | None) -> str:
+        rel = f"docs/plans/PLAN-{slug}.yaml"
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content: dict = {"schema_version": 1, "slug": slug}
+        if declared is not None:
+            content["implementation_declared"] = declared
+        path.write_text(yaml.dump(content), encoding="utf-8")
+        return rel
+
+    def test_flip_resolves(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base")
+        self._git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+
+        rel = self._write_plan(repo, "flip", declared=True)
+        self._commit_all(repo, "declare implementation")
+
+        assert _common.resolve_declared_plans([rel], repo, "origin/main") == [rel]
+
+    def test_already_declared_at_base_does_not_reresolve(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        rel = self._write_plan(repo, "steady", declared=True)
+        base_sha = self._commit_all(repo, "base, already declared")
+        self._git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+
+        (repo / "unrelated.txt").write_text("x\n", encoding="utf-8")
+        self._commit_all(repo, "unrelated change")
+
+        assert _common.resolve_declared_plans([rel], repo, "origin/main") == []
+
+    def test_no_declaration_resolves_nothing(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base")
+        self._git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+
+        rel = self._write_plan(repo, "undeclared", declared=False)
+        self._commit_all(repo, "plan added, not declared")
+
+        assert _common.resolve_declared_plans([rel], repo, "origin/main") == []
+
+    def test_absent_at_base_resolves_as_newly_declared(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base")
+        self._git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+
+        rel = self._write_plan(repo, "net-new", declared=True)
+        self._commit_all(repo, "net-new declared plan")
+
+        assert _common.resolve_declared_plans([rel], repo, "origin/main") == [rel]
+
+    def test_malformed_yaml_at_base_is_not_declared(self, tmp_path: Path) -> None:
+        """A baseline read that succeeds (git show returncode 0) but is malformed YAML is a
+        legitimate 'not declared at this ref', never raised -- unlike a malformed WORKING-TREE
+        read, which does raise."""
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        rel = "docs/plans/PLAN-base-malformed.yaml"
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not: [valid, yaml, shape", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base with malformed plan")
+        self._git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+
+        path.write_text(yaml.dump({"schema_version": 1, "slug": "base-malformed", "implementation_declared": True}))
+        self._commit_all(repo, "fix and declare")
+
+        assert _common.resolve_declared_plans([rel], repo, "origin/main") == [rel]
+
+    def test_deleted_in_diff_candidate_is_skipped_not_resolved(self, tmp_path: Path) -> None:
+        assert _common.resolve_declared_plans(["docs/plans/PLAN-gone.yaml"], tmp_path, "origin/main") == []
+
+    def test_unreadable_working_tree_plan_raises(self, tmp_path: Path) -> None:
+        rel = "docs/plans/PLAN-unreadable.yaml"
+        (tmp_path / rel).mkdir(parents=True)  # a directory where a file is expected
+        with pytest.raises(OSError):
+            _common.resolve_declared_plans([rel], tmp_path, "origin/main")
+
+    def test_malformed_working_tree_yaml_raises(self, tmp_path: Path) -> None:
+        rel = "docs/plans/PLAN-malformed.yaml"
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not: [valid, yaml, shape", encoding="utf-8")
+        with pytest.raises(yaml.YAMLError):
+            _common.resolve_declared_plans([rel], tmp_path, "origin/main")
+
+    def test_schema_invalid_plan_does_not_raise(self, tmp_path: Path) -> None:
+        """A working-tree plan that's valid YAML but would fail PlanDocument schema validation
+        (missing required fields) is not this resolver's concern -- it only reads the raw
+        implementation_declared key, never PlanDocument."""
+        rel = "docs/plans/PLAN-schema-invalid.yaml"
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.dump({"implementation_declared": True}), encoding="utf-8")
+        assert _common.resolve_declared_plans([rel], tmp_path, "origin/main") == [rel]
+
+    def test_base_is_injected_not_derived_from_push_context_base(self, tmp_path: Path) -> None:
+        """The resolver must never call push_context_base() itself -- callers default `base` at
+        their own call site so an injected `root` reads its baseline from the FIXTURE repo, not
+        the real one (GITHUB_EVENT_NAME=push would otherwise make push_context_base() resolve
+        against this session's real repo state)."""
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base")
+        self._git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+        rel = self._write_plan(repo, "push-aware", declared=True)
+        self._commit_all(repo, "declare")
+
+        def _explode(*args, **kwargs):
+            raise AssertionError("resolve_declared_plans must not call push_context_base() internally")
+
+        with (
+            patch("scripts.checks._common.push_context_base", side_effect=_explode),
+            patch.dict("os.environ", {"GITHUB_EVENT_NAME": "push"}),
+        ):
+            result = _common.resolve_declared_plans([rel], repo, "origin/main")
+        assert result == [rel]
 
 
 class TestMockInterceptionPreservation:

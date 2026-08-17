@@ -168,6 +168,38 @@ class TestGraduationDisposition:
         assert _main([]) == 0
 
 
+class TestImplementationDeclared:
+    """PLAN-plan-resolution-content-keyed: implementation_declared is an additive optional
+    field (Decision 85), defaulted False so the entire existing corpus keeps validating."""
+
+    def test_defaults_to_false(self) -> None:
+        doc = PlanDocument.model_validate(_base())
+        assert doc.implementation_declared is False
+
+    def test_accepts_explicit_true(self) -> None:
+        d = _mutate(implementation_declared=True)
+        doc = PlanDocument.model_validate(d)
+        assert doc.implementation_declared is True
+
+    def test_accepts_explicit_false(self) -> None:
+        d = _mutate(implementation_declared=False)
+        doc = PlanDocument.model_validate(d)
+        assert doc.implementation_declared is False
+
+    def test_absent_field_backward_compatible(self) -> None:
+        d = _base()
+        assert "implementation_declared" not in d
+        doc = PlanDocument.model_validate(d)
+        assert doc.implementation_declared is False
+
+    def test_historical_plans_all_validate(self) -> None:
+        """No PLAN-*.yaml on disk carries the new field yet -- confirms the field is optional
+        and does not force a schema_version bump or a corpus edit."""
+        from scripts.roadmap.plan_document import main as _main
+
+        assert _main([]) == 0
+
+
 class TestFallbackReevaluation:
     """ESB-02 remediation (PLAN-esb-fallback-spec-carrier): the optional fallback_reevaluation
     block a plan carries when it names a CD.27-gated tier item (scripts/checks/roadmap/
