@@ -1,11 +1,13 @@
-"""Tests for validate_graduation_completeness() (T3.21, VF-05 enforcement).
+"""Tests for validate_graduation_completeness() (T3.21, VF-05 enforcement, re-keyed to content
+resolution -- Decision 148/plan-resolution-content-keyed).
 
 TestPlanPrLeg exercises the plan-PR leg via the changed_files/root injection seams (no real
 git needed for most cases; one net-new case uses a throwaway git repo, mirroring
-tests/test_verification_graduation.py's `refs/remotes/origin/main` pattern). TestImplementPrLeg
-and TestWaiver exercise the implement-PR leg, which resolves feat({slug}) commits via real
-`git log origin/main..HEAD` and reads the registry baseline via the seamed
-baseline_registry_reader (avoiding a second real-git fixture for registry content).
+tests/test_verification_graduation.py's `refs/remotes/origin/main` pattern). TestImplementPrLeg,
+TestWaiver, and TestContentKeyedResolution exercise the implement leg, which resolves plans via
+`_common.resolve_declared_plans` (implementation_declared, content-keyed) and reads the registry
+baseline via the seamed baseline_registry_reader (avoiding a second real-git fixture for registry
+content).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts.checks import registry
 from scripts.checks.verification.validate_graduation_completeness import (
     _current_registry_entries,
     _default_baseline_registry_entries,
@@ -156,8 +159,9 @@ class TestPlanPrLeg:
 
 
 class _ImplementFixture:
-    """Shared repo builder for the implement-PR leg: a git repo with a feat({slug}) commit
-    ahead of a refs/remotes/origin/main ref, plus the plan file and registry state."""
+    """Shared repo builder for the implement leg: a git repo with a base commit (origin/main)
+    then a second commit that DECLARES the plan (implementation_declared: true) -- the
+    resolvable, content-keyed shape. Registry state is written alongside."""
 
     def build(
         self,
@@ -166,38 +170,41 @@ class _ImplementFixture:
         steps: list[dict],
         registry_entries: list[dict] | None = None,
         plan_overrides: dict | None = None,
-    ) -> Path:
+        commit_message: str = "checkpoint",
+    ) -> tuple[Path, str]:
         repo = tmp_path / "repo"
         _init_repo(repo)
         (repo / "README.md").write_text("base\n", encoding="utf-8")
         base_sha = _commit_all(repo, "base")
         _git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
 
-        _write_plan(repo, slug, steps, plan_overrides)
+        overrides = {"implementation_declared": True}
+        overrides.update(plan_overrides or {})
+        rel = _write_plan(repo, slug, steps, overrides)
         if registry_entries is not None:
             _write_registry(repo, registry_entries)
-        _commit_all(repo, f"feat({slug}): implement fixture")
-        return repo
+        _commit_all(repo, commit_message)
+        return repo, rel
 
 
 class TestImplementPrLeg:
     fixture = _ImplementFixture()
 
     def test_graduate_step_missing_row_fails(self, tmp_path: Path) -> None:
-        repo = self.fixture.build(
+        repo, rel = self.fixture.build(
             tmp_path,
             "gc-impl-missing",
             [_step(1, graduation="graduate", graduation_check_id="gc-impl-missing-check")],
             registry_entries=[],
         )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
         assert any("no matching new-in-diff registry row" in f for f in failed)
 
     def test_graduate_step_with_matching_row_passes(self, tmp_path: Path) -> None:
         cid = "gc-impl-present-check"
         slug = "gc-impl-present"
-        repo = self.fixture.build(
+        repo, rel = self.fixture.build(
             tmp_path,
             slug,
             [_step(1, graduation="graduate", graduation_check_id=cid)],
@@ -212,51 +219,41 @@ class TestImplementPrLeg:
             ],
         )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
         assert failed == []
 
     def test_flip_to_waive_passes_with_no_row(self, tmp_path: Path) -> None:
-        repo = self.fixture.build(
+        repo, rel = self.fixture.build(
             tmp_path,
             "gc-impl-waived",
             [_step(1, graduation="waive", graduation_waiver_reason="proved un-graduatable at implement time")],
             registry_entries=[],
         )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
         assert failed == []
 
-    def test_unresolvable_plan_advisory_skips(self, tmp_path: Path) -> None:
-        """A feat({slug}) commit naming a plan absent on disk (typo/archived/.md-era) never fails."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "README.md").write_text("base\n", encoding="utf-8")
-        base_sha = _commit_all(repo, "base")
-        _git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
-        (repo / "unrelated.py").write_text("x = 1\n", encoding="utf-8")
-        _commit_all(repo, "feat(gc-nonexistent-slug): code with no matching plan file")
-
+    def test_undeclared_plan_is_noop_pass(self, tmp_path: Path) -> None:
+        """A plan in the diff whose implementation_declared is false resolves nothing -- the
+        implement leg no-ops (plan-only PR, not yet implemented)."""
+        rel = _write_plan(
+            tmp_path, "gc-undeclared", [_step(1, graduation="graduate", graduation_check_id="gc-undeclared-check")]
+        )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=tmp_path, baseline_registry_reader=lambda r: [])
         assert failed == []
 
-    def test_origin_main_unreachable_advisory_skips(self, tmp_path: Path) -> None:
-        """No git repo at all (origin/main unreachable) never fails the implement-PR leg."""
+    def test_origin_main_unreachable_advisory_skips(self, tmp_path: Path, capsys) -> None:
+        """No git repo at all (origin/main unreachable) never fails the implement leg."""
+        rel = _write_plan(tmp_path, "gc-unreachable", [_step(1)])
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=tmp_path)
+        validate_graduation_completeness(failed, changed_files=[rel], root=tmp_path)
         assert failed == []
+        assert "SKIP (implement-PR leg)" in capsys.readouterr().out
 
-    def test_no_feat_commits_is_noop_pass(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "README.md").write_text("base\n", encoding="utf-8")
-        base_sha = _commit_all(repo, "base")
-        _git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
-        (repo / "unrelated.py").write_text("x = 1\n", encoding="utf-8")
-        _commit_all(repo, "docs: unrelated non-feat commit")
-
+    def test_no_plan_in_diff_is_noop_pass(self) -> None:
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=["scripts/unrelated.py"], root=Path("/nonexistent"))
         assert failed == []
 
 
@@ -264,25 +261,25 @@ class TestWaiver:
     fixture = _ImplementFixture()
 
     def test_waive_with_reason_requires_no_registry_row(self, tmp_path: Path) -> None:
-        repo = self.fixture.build(
+        repo, rel = self.fixture.build(
             tmp_path,
             "gc-waiver-only",
             [_step(1, graduation="waive", graduation_waiver_reason="requires live infra, not kernel-expressible")],
             registry_entries=[],
         )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
         assert failed == []
 
     def test_not_applicable_requires_no_registry_row(self, tmp_path: Path) -> None:
-        repo = self.fixture.build(
+        repo, rel = self.fixture.build(
             tmp_path,
             "gc-not-applicable-only",
             [_step(1, graduation="not-applicable")],
             registry_entries=[],
         )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
         assert failed == []
 
 
@@ -320,7 +317,7 @@ class TestObligationAwareDiagnostics:
         ]
 
     def test_missing_row_names_the_obligation_sources_losing_their_guard(self, tmp_path: Path) -> None:
-        repo = self.fixture.build(
+        repo, rel = self.fixture.build(
             tmp_path,
             "gc-obligation-named",
             self._steps(),
@@ -328,11 +325,11 @@ class TestObligationAwareDiagnostics:
             plan_overrides=self._overrides(["scripts/example.py", "scripts/other.py"]),
         )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
         assert any("test obligation(s) losing their guard: scripts/example.py, scripts/other.py" in f for f in failed)
 
     def test_missing_row_without_obligations_keeps_the_original_diagnostic(self, tmp_path: Path) -> None:
-        repo = self.fixture.build(
+        repo, rel = self.fixture.build(
             tmp_path,
             "gc-obligation-absent",
             self._steps(),
@@ -340,7 +337,7 @@ class TestObligationAwareDiagnostics:
             plan_overrides=self._overrides([]),
         )
         failed: list[str] = []
-        validate_graduation_completeness(failed, changed_files=[], root=repo, baseline_registry_reader=lambda r: [])
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
         assert any("no matching new-in-diff registry row" in f for f in failed)
         assert not any("losing their guard" in f for f in failed)
 
@@ -376,11 +373,11 @@ class TestLoadErrorHandling:
         assert "SKIP (plan-PR leg)" in capsys.readouterr().out
 
     def test_implement_leg_import_error_is_fail_loud(self, tmp_path: Path) -> None:
-        repo = self.fixture.build(tmp_path, "gc-impl-import", [_step(1)], registry_entries=[])
+        repo, rel = self.fixture.build(tmp_path, "gc-impl-import", [_step(1)], registry_entries=[])
         failed: list[str] = []
         validate_graduation_completeness(
             failed,
-            changed_files=[],
+            changed_files=[rel],
             root=repo,
             load_plan=self._raiser(ImportError("no module")),
             baseline_registry_reader=lambda r: [],
@@ -388,11 +385,11 @@ class TestLoadErrorHandling:
         assert any("could not import scripts.roadmap.plan_document" in f for f in failed)
 
     def test_implement_leg_schema_error_skips_without_double_reporting(self, tmp_path: Path, capsys) -> None:
-        repo = self.fixture.build(tmp_path, "gc-impl-schema", [_step(1)], registry_entries=[])
+        repo, rel = self.fixture.build(tmp_path, "gc-impl-schema", [_step(1)], registry_entries=[])
         failed: list[str] = []
         validate_graduation_completeness(
             failed,
-            changed_files=[],
+            changed_files=[rel],
             root=repo,
             load_plan=self._raiser(ValueError("bad schema")),
             baseline_registry_reader=lambda r: [],
@@ -429,6 +426,17 @@ class TestRegistryReaders:
         repo = self._repo_with_baseline(tmp_path, yaml.safe_dump({"entries": [{"check_id": "baseline-row"}]}))
         assert _default_baseline_registry_entries(repo) == [{"check_id": "baseline-row"}]
 
+    def test_baseline_reads_entries_from_injected_base(self, tmp_path: Path) -> None:
+        """The base is an injected parameter, not hardcoded -- a non-'origin/main' ref works too."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = repo / _REGISTRY_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump({"entries": [{"check_id": "tagged-row"}]}), encoding="utf-8")
+        sha = _commit_all(repo, "base")
+        _git(repo, ["tag", "custom-base", sha])
+        assert _default_baseline_registry_entries(repo, base="custom-base") == [{"check_id": "tagged-row"}]
+
     @pytest.mark.parametrize("body", _MALFORMED_REGISTRIES)
     def test_malformed_baseline_is_empty(self, tmp_path: Path, body: str) -> None:
         assert _default_baseline_registry_entries(self._repo_with_baseline(tmp_path, body)) == []
@@ -443,3 +451,120 @@ class TestRegistryReaders:
         sha = _commit_all(repo, "base")
         _git(repo, ["update-ref", "refs/remotes/origin/main", sha])
         return repo
+
+
+class TestContentKeyedResolution:
+    """The defect this re-key closes: a checkpoint-only commit-message branch still resolves for
+    the implement leg (resolution is content-keyed, not commit-message-keyed). Also covers the
+    single terminal Decision 170 declaration and the push-aware registry baseline."""
+
+    fixture = _ImplementFixture()
+
+    def test_checkpoint_only_commit_message_still_resolves_for_implement_leg(self, tmp_path: Path) -> None:
+        """Red before this plan: a checkpoint-only branch with a declaration resolved nothing
+        and no-opped (commit-subject resolution found no feat({slug}) subject). Green after:
+        the missing registry row is genuinely detected."""
+        repo, rel = self.fixture.build(
+            tmp_path,
+            "gc-checkpoint-only",
+            [_step(1, graduation="graduate", graduation_check_id="gc-checkpoint-only-check")],
+            registry_entries=[],
+            commit_message="chore: automated checkpoint",
+        )
+        failed: list[str] = []
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
+        assert any("no matching new-in-diff registry row" in f for f in failed)
+
+    def test_declaration_enforced_when_a_plan_resolves(self, tmp_path: Path) -> None:
+        repo, rel = self.fixture.build(
+            tmp_path,
+            "gc-declared-enforced",
+            [_step(1, graduation="not-applicable")],
+            registry_entries=[],
+        )
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 1
+        assert declaration.unit == "declared_plans"
+
+    def test_declaration_vacuous_when_plan_present_but_undeclared(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        base_sha = _commit_all(repo, "base")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+        rel = _write_plan(repo, "gc-declared-vacuous", [_step(1)])
+        _commit_all(repo, "add undeclared plan")
+
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 0
+
+    def test_declaration_vacuous_when_no_plan_in_diff(self) -> None:
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_graduation_completeness(failed, changed_files=["scripts/foo.py"], root=Path("/nonexistent"))
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 0
+
+    def test_declaration_skipped_when_base_unreachable(self, tmp_path: Path) -> None:
+        rel = _write_plan(tmp_path, "gc-declared-skipped", [_step(1)])
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_graduation_completeness(failed, changed_files=[rel], root=tmp_path)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "skipped"
+        assert failed == []
+
+    def test_registry_baseline_and_resolution_stay_correct_on_simulated_post_merge_main(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Both diff baselines must be push-aware, not hardcoded to "origin/main" (Decision 159
+        class): origin/main is pinned to HEAD here (simulating post-merge main) while
+        GITHUB_EVENT_BEFORE names the true pre-merge commit; a hardcoded baseline would equal
+        HEAD and falsely report the registry row missing."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        before_sha = _commit_all(repo, "before merge")
+
+        slug = "gc-post-merge-main"
+        cid = "gc-post-merge-main-check"
+        rel = _write_plan(
+            repo,
+            slug,
+            [_step(1, graduation="graduate", graduation_check_id=cid)],
+            {"implementation_declared": True},
+        )
+        _write_registry(
+            repo,
+            [
+                {
+                    "check_id": cid,
+                    "primitive_slot": "command_exit_zero",
+                    "guard_target": "scripts/example.py",
+                    "plan_slug": slug,
+                    "graduated_at": "2026-08-17",
+                }
+            ],
+        )
+        after_sha = _commit_all(repo, "feature merged to main")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", after_sha])  # origin/main == HEAD
+
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+        monkeypatch.setenv("GITHUB_EVENT_BEFORE", before_sha)
+
+        failed: list[str] = []
+        validate_graduation_completeness(failed, changed_files=[rel], root=repo)
+        assert failed == []

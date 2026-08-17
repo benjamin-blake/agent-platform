@@ -482,18 +482,18 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 
 This workflow runs on Claude Code on the web: the harness assigns this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Branch protection is LIVE; the squash-merge-after-CI gate transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
 
-### Run the full gate locally first
-Run in order:
+### Run the full gate locally first (in order)
 
 1. Run `bin/venv-python -m scripts.session.github_readiness`. States are independent: `unknown` is unproven, never PASS; fetch/API PASS never authorizes push/PR.
 2. Run `bin/venv-python -m scripts.test_coverage_checker --check-tests --check-coverage`. Repair failures; this is a diagnostic, not an overall gate.
-3. Run `bin/venv-python -m scripts.validate --pre`, then `bin/venv-python -m scripts.validate`. Handoff requires full exit 0, final `Validation Summary (scope: all)` PASS, and `logs/debug/validation-result.json` with scope `all`, exit 0, no failures, and current pre-commit HEAD. Child output, mypy, CI, and stale evidence cannot substitute. Any incomplete/mismatched result is BLOCKED; fix and rerun full from the start.
-4. Create `/tmp/implementation-retrospective.json` with the ten `scripts.session.postflight_evidence.CATEGORIES` keys. Values are bounded fact-string lists (`[]` if none); exclude credentials/raw output. Run `bin/venv-python -m scripts.session.postflight --evidence /tmp/implementation-retrospective.json` and confirm its gitignored output. `--auto` stops with `evidence_failed` before commit when invalid.
+3. Set `implementation_declared: true` in the plan file, now that the graduation walk above wrote its registry rows.
+4. Run `bin/venv-python -m scripts.validate --pre`, then `bin/venv-python -m scripts.validate`. Handoff requires full exit 0, final `Validation Summary (scope: all)` PASS, and `logs/debug/validation-result.json` with scope `all`, exit 0, no failures, and current pre-commit HEAD. Child output, mypy, CI, and stale evidence cannot substitute. Any incomplete/mismatched result is BLOCKED; fix and rerun full from the start.
+5. Create `/tmp/implementation-retrospective.json` with the ten `scripts.session.postflight_evidence.CATEGORIES` keys. Values are bounded fact-string lists (`[]` if none); exclude credentials/raw output. Run `bin/venv-python -m scripts.session.postflight --evidence /tmp/implementation-retrospective.json` and confirm its gitignored output. `--auto` stops with `evidence_failed` before commit when invalid.
 
 Report readiness, validator verdicts, evidence, review, and real push/PR outcome separately.
 
 ### Wait-for-CI: event-driven, never polled
-Wait for the PR-tier CI (the fast `--pre` tier, ~1-3 min; Decision 73) via subscription, never polling. The wake mechanism -- `subscribe_pr_activity`, ending the turn, the `ci.yml` "CI green" comment wake signal, the `pr-conflict-signal.yml` merge-conflict wake, and the GitHub-native auto-merge successor -- is canonical in AGENTS.md `## Git-ops procedure` steps 3-5; do not restate it here.
+Wait for the PR-tier CI (fast `--pre` tier; Decision 73) via subscription, never polling -- the wake mechanism is canonical in AGENTS.md `## Git-ops procedure` steps 3-5, not restated here.
 
 **On wake**, always confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging, then branch on status:
    - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge. **Carve-out:** for a PR touching `terraform/personal/**`, do NOT unsubscribe here -- defer to the "Hold subscription through apply" section below (the real outcome is the post-merge apply, not the merge).

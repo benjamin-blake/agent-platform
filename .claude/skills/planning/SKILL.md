@@ -329,13 +329,13 @@ existence-only ("Confirm the Athena view was created" doesn't confirm correct da
 apply` succeeded" -- infra existing isn't enough); prose-only (no executable command -- the
 implement agent will substitute a weaker check).
 
-**Hermetic authoring (T3.15 / VF-01, amended by Decision 148):** `hermetic: true` is the correct
-default again for `pre-deploy` feature-verification steps -- narrow, deterministic, creds-free
-commands. Steps are replayed at implement time by `validate_vp_replay`, not plan time: a
-plan-only PR defers with a printed reason (no `feat({slug})` commit -- Decision 76); the implement
-PR resolves `PLAN-{slug}.yaml` from `feat({slug})` commits on `git log origin/main..HEAD` and
-replays its hermetic steps against the complete tree. Advisory-SKIPs on unreachable `origin/main`
-or an absent plan (Decision 132 limitation B). `bin/venv-python` is now safe here -- it falls back
+**Hermetic authoring (T3.15 / VF-01, amended by Decision 148/plan-resolution-content-keyed):**
+`hermetic: true` is the correct default again for `pre-deploy` feature-verification steps --
+narrow, deterministic, creds-free commands. Steps are replayed at implement time by
+`validate_vp_replay`, not plan time: a plan-only PR defers with a printed reason
+(`implementation_declared` not newly true); the implement PR resolves plans via
+`_common.resolve_declared_plans` and replays their hermetic steps against the complete tree.
+Advisory-SKIPs on unreachable `origin/main`. `bin/venv-python` is now safe here -- it falls back
 to a sentinel-dep-importing interpreter when `.venv` is absent, resolving in venv-less CI too.
 Never mark a step hermetic if it invokes `scripts/validate.py --pre` (recursion). Steps needing
 pytest/deploys stay `hermetic: false`, excluded with a printed reason.

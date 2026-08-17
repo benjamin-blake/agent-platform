@@ -1242,6 +1242,8 @@ This Decision is the structural mechanism Decision 145's own reversal conditions
 
 **Related:** Decision 132 (the two-leg replay/enforcement model this mirrors), Decision 104 (`_common.py` sole-home discipline, extended here), Decision 76 (the two-PR plan/implement flow whose absence-of-implementation this fix accounts for), Decision 73 (fast-tier budget guards, preserved unchanged), Decision 55 (fail-loud, no silent substitution -- governs both the replay advisory-SKIPs and the wrapper fallback).
 
+[Amendment 2026-08-17: the commit-subject resolution mechanism this entry describes (`feat({slug})` commit subjects on `git log origin/main..HEAD`) is replaced by an explicit, schema-validated `implementation_declared` boolean on `PlanDocument`, resolved content-keyed via `scripts.checks._common.resolve_declared_plans` (PLAN-plan-resolution-content-keyed, provenance: explicit operator direction given during that plan's authoring). The two-leg model and advisory-SKIP shape this entry describes are unchanged; only the resolution signal moves from commit-message grammar to diff-carried plan content.]
+
 ---
 
 ## Decision 147: Respond to Decision 114 reversal trigger by compacting ROADMAP-PLATFORM.yaml terminal content in place (single file preserved) (Decided)
@@ -2142,6 +2144,8 @@ default discipline both new files stay under). Roadmap/audit refs (not DECISIONS
 grounded directly): CD.29 (six-slot kernel vocabulary, never touched by this Decision), VF-05
 (the producer this Decision makes an obligation), VF-06 (the differential gate this Decision does
 not modify), VF-11, tier_item T3.18 (predecessor, complete) and T3.21 (this Decision's carrier).
+
+[Amendment 2026-08-17: the implement-PR leg's commit-subject resolution (`feat({slug})` commit subjects on `git log origin/main..HEAD`) is replaced by an explicit, schema-validated `implementation_declared` boolean on `PlanDocument`, resolved content-keyed via `scripts.checks._common.resolve_declared_plans` (PLAN-plan-resolution-content-keyed, provenance: explicit operator direction given during that plan's authoring). The plan-PR leg's disposition-presence obligation and the differential admission gate are unchanged; only the implement-PR leg's resolution signal moves from commit-message grammar to diff-carried plan content.]
 
 ---
 

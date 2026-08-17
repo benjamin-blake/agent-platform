@@ -245,6 +245,7 @@ class PlanDocument(BaseModel):
     tier_waiver: str | None = None
     handoff_policy: HandoffPolicy | None = None
     fallback_reevaluation: FallbackReevaluation | None = None
+    implementation_declared: bool = False
 
     @field_validator("schema_version")
     @classmethod

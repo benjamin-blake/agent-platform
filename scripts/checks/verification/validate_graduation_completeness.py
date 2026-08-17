@@ -1,4 +1,5 @@
-"""Verification graduation completeness gate (T3.21, VF-05 enforcement).
+"""Verification graduation completeness gate (T3.21, VF-05 enforcement, re-keyed to content
+resolution -- see the amendment on Decision 132/148 in docs/DECISIONS.md).
 
 VF-05 (T3.18) shipped the graduation PRODUCER (the implement skill's Tier_item bookkeeping
 walk graduates a plan's own kernel-expressible VP steps into
@@ -17,23 +18,31 @@ OWN declared graduation dispositions across two legs:
     modified plan that declares zero dispositions anywhere (a correction to a pre-field plan, or
     the lagged .yaml archival sweep) is a pre-field plan and is skipped, not failed.
 
-  Implement-PR leg: resolves the plan(s) referenced by feat({slug}) commit subjects on
-    `git log origin/main..HEAD`, loads PLAN-{slug}.yaml, and asserts every VP step declared
+  Implement leg: resolves plans via `_common.resolve_declared_plans` (content-keyed: an
+    edge-triggered `implementation_declared` False->True flip between the diff base and the
+    working tree), loads each resolved PLAN-{slug}.yaml, and asserts every VP step declared
     graduate produced a matching NEW-in-diff registry row (plan_slug == slug AND
     check_id == graduation_check_id). waive/not-applicable steps require no row. A step whose
     graduation proved impossible at implement time is expected to have been flipped to waive
     (with a reason) in the same PR -- that flip satisfies this leg with no row.
 
 Fail-loud (Decision 55) on genuine errors (a schema-import failure). Advisory SKIP (never a
-failure) on two disclosed residual-limitation shapes that must not wedge a legitimate PR:
-  (a) origin/main is unreachable (no fetch, detached clone, etc) -- skips the WHOLE
-      implement-PR leg (the leg cannot resolve new-vs-baseline without it).
-  (b) a feat({slug}) commit subject names a plan whose PLAN-{slug}.yaml is absent (legacy
-      .md-era plan, archived, or a typo'd slug) -- skips just that commit's obligation.
+failure): origin/main is unreachable (no fetch, detached clone, etc) -- skips the WHOLE implement
+leg (content resolution cannot tell a flip from a pre-existing declaration without a reachable
+base). One terminal Decision 170 declaration per dispatch (docs/contracts/check-accounting.yaml):
+no plan present in the diff at all is an empty domain (`examined(0)`, never skipped); a
+diff-present plan set with an unreachable base declares `skipped`; otherwise
+`examined(len(resolved), unit="declared_plans")`.
+
+Both of this check's own diff baselines -- `_default_baseline_registry_entries` and
+`_added_plan_paths` -- take their base as an injected parameter, defaulted at this module's call
+site from `push_context_base() or "origin/main"`, so neither silently computes an empty
+added-row/added-plan set on the post-merge main run (where a hardcoded `origin/main` literal
+equals HEAD).
 
 Injection seams (changed_files, root, load_plan, baseline_registry_reader) mirror the
 validate_vp_replay / validate_sloc_budget_raises precedents for testability without real git
-state, except where a seam would defeat the point of the test (feat-commit resolution and the
+state, except where a seam would defeat the point of the test (content resolution and the
 net-new-plan-path predicate use real `git log` / `git diff` against `root` -- tests set up a
 throwaway repo with a `refs/remotes/origin/main` ref, mirroring tests/test_verification_graduation.py).
 
@@ -55,10 +64,15 @@ LoadPlanFn = Callable[[str, Path], object]
 BaselineRegistryReaderFn = Callable[[Path], list[dict]]
 
 
-def _added_plan_paths(root: Path) -> set[str]:
-    """Plan paths added (git diff-filter=A) in this diff vs origin/main -- net-new plans."""
+def _added_plan_paths(root: Path, base: str) -> set[str]:
+    """Plan paths added (git diff-filter=A) in this diff vs `base` -- net-new plans.
+
+    `base` is an injected parameter (defaulted at the check's call site from
+    `push_context_base() or "origin/main"`) -- never derived here, so a check running against
+    an injected `root` reads its baseline from THAT repository rather than the real one.
+    """
     result = _common.run(
-        ["git", "diff", "--name-only", "--diff-filter=A", "origin/main"],
+        ["git", "diff", "--name-only", "--diff-filter=A", base],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -69,14 +83,16 @@ def _added_plan_paths(root: Path) -> set[str]:
     return {f for f in result.stdout.strip().splitlines() if _common.PLAN_PATH_RE.match(f)}
 
 
-def _plan_pr_leg(changed_files: list[str], root: Path, failed: list[str], load_plan: LoadPlanFn | None = None) -> None:
+def _plan_pr_leg(
+    changed_files: list[str], root: Path, failed: list[str], base: str, load_plan: LoadPlanFn | None = None
+) -> None:
     load_plan = load_plan or _common.load_plan
     plan_files = _common.plan_paths_from_changed(changed_files)
     if not plan_files:
         print("  PASS (plan-PR leg): no docs/plans/PLAN-*.yaml in the diff -- no-op.")
         return
 
-    added = _added_plan_paths(root)
+    added = _added_plan_paths(root, base)
     for plan_rel in plan_files:
         plan_path = root / plan_rel
         if not plan_path.exists():
@@ -130,10 +146,16 @@ def _current_registry_entries(root: Path) -> list[dict]:
     return entries if isinstance(entries, list) else []
 
 
-def _default_baseline_registry_entries(root: Path) -> list[dict]:
-    """Registry entries at origin/main. A missing file/ref yields an empty (legitimate) baseline."""
+def _default_baseline_registry_entries(root: Path, base: str = "origin/main") -> list[dict]:
+    """Registry entries at `base`. A missing file/ref yields an empty (legitimate) baseline.
+
+    `base` defaults to "origin/main" for direct callers (e.g. tests exercising this reader in
+    isolation) but is always passed explicitly by `validate_graduation_completeness`, defaulted
+    there from `push_context_base() or "origin/main"` -- never derived here, so a check running
+    against an injected `root` reads its baseline from THAT repository.
+    """
     result = _common.run(
-        ["git", "show", f"origin/main:{_REGISTRY_REL_PATH}"],
+        ["git", "show", f"{base}:{_REGISTRY_REL_PATH}"],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -172,31 +194,25 @@ def _obligation_sources_for_step(doc: object, step_id: int) -> list[str]:
 
 def _implement_pr_leg(
     root: Path,
+    resolved: list[str],
     failed: list[str],
     load_plan: LoadPlanFn | None = None,
     baseline_registry_reader: BaselineRegistryReaderFn | None = None,
 ) -> None:
+    """Assert every graduate-disposition step of a resolved plan produced a matching new-in-diff
+    registry row. `resolved` is the content-keyed resolution from `_common.resolve_declared_plans`
+    -- every path in it already exists on disk.
+    """
     load_plan = load_plan or _common.load_plan
     baseline_registry_reader = baseline_registry_reader or _default_baseline_registry_entries
 
-    if not _common.origin_main_reachable(root):
-        print("  SKIP (implement-PR leg): origin/main unreachable (advisory locally, authoritative in CI).")
-        return
-
-    slugs = _common.feat_commit_slugs(root)
-    if not slugs:
-        print("  PASS (implement-PR leg): no feat({slug}) commit(s) in this diff -- no-op.")
+    if not resolved:
+        print("  PASS (implement-PR leg): no plan(s) with a newly-true implementation_declared in this diff -- no-op.")
         return
 
     added_rows = _new_registry_rows(root, baseline_registry_reader)
 
-    for slug in slugs:
-        plan_rel = f"docs/plans/PLAN-{slug}.yaml"
-        plan_path = root / plan_rel
-        if not plan_path.exists():
-            print(f"  SKIP (implement-PR leg): {plan_rel} not found for feat({slug}) commit -- unresolvable plan, advisory.")
-            continue
-
+    for plan_rel in resolved:
         try:
             doc = load_plan(plan_rel, root)
         except ImportError as exc:
@@ -237,15 +253,33 @@ def validate_graduation_completeness(
     load_plan: LoadPlanFn | None = None,
     baseline_registry_reader: BaselineRegistryReaderFn | None = None,
 ) -> None:
-    """Enforce the plan-declared VF-05 graduation obligation (T3.21) across both PR legs.
+    """Enforce the plan-declared VF-05 graduation obligation (T3.21) across both legs.
 
     changed_files / root / load_plan / baseline_registry_reader are test/dogfood injection
     seams -- default to _common.get_changed_files(), _common.ROOT, _common.load_plan, and a
-    real `git show origin/main:...registry.yaml` reader respectively.
+    real `git show {base}:...registry.yaml` reader respectively.
+
+    Composes exactly ONE terminal Decision 170 declaration (see module docstring).
     """
     print("\n=== Verification graduation completeness (T3.21, VF-05 enforcement) ===")
     root = root if root is not None else _common.ROOT
     changed = changed_files if changed_files is not None else _common.get_changed_files()
+    base = _common.push_context_base() or "origin/main"
 
-    _plan_pr_leg(changed, root, failed, load_plan=load_plan)
-    _implement_pr_leg(root, failed, load_plan=load_plan, baseline_registry_reader=baseline_registry_reader)
+    _plan_pr_leg(changed, root, failed, base, load_plan=load_plan)
+
+    plan_files = _common.plan_paths_from_changed(changed)
+    if not plan_files:
+        print("  PASS (implement-PR leg): no docs/plans/PLAN-*.yaml in the diff -- no-op.")
+        registry.examined(0, unit="declared_plans")
+        return
+
+    if not _common.origin_main_reachable(root):
+        print("  SKIP (implement-PR leg): origin/main unreachable (advisory locally, authoritative in CI).")
+        registry.skipped("diff base unreachable")
+        return
+
+    resolved = _common.resolve_declared_plans(changed, root, base)
+    bound_baseline_reader = baseline_registry_reader or (lambda r: _default_baseline_registry_entries(r, base))
+    _implement_pr_leg(root, resolved, failed, load_plan=load_plan, baseline_registry_reader=bound_baseline_reader)
+    registry.examined(len(resolved), unit="declared_plans")

@@ -121,6 +121,15 @@ def main() -> int:
     if _file_is_in_scope(rel_path, scope):
         return 0
 
+    # Exempt the active plan's own path: the implement flow edits the plan file itself (to set
+    # implementation_declared after the graduation bookkeeping walk), and that edit must not
+    # require every plan to list its own path in its own Scope as boilerplate.
+    active_rel = str(active)
+    if active_rel.startswith(root_str):
+        active_rel = active_rel[len(root_str) :].lstrip("/")
+    if rel_path == active_rel:
+        return 0
+
     sys.stderr.write(
         f"BLOCKED by .claude/hooks/edit_scope_guard.py: "
         f"{file_path!r} is outside the active plan's declared Scope.\n"

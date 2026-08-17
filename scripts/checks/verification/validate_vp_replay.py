@@ -1,21 +1,24 @@
-"""Interactive VP independent re-execution (T3.15 criterion c2, VF-01, Decision 148).
+"""Interactive VP independent re-execution (T3.15 criterion c2, VF-01, Decision 148, re-keyed
+to content resolution by the plan-resolution-content-keyed plan -- see the amendment on
+Decision 132/148 in docs/DECISIONS.md).
 
 Closes the cooperative-self-evaluation gap named in VF-01: a PLAN-*.yaml's Verification Plan
 is currently self-reported by the implementing agent. This check independently re-executes,
 in the --pre PR-gate tier, every ``phase == "pre-deploy"`` AND ``hermetic == True`` VP step of
-a plan resolved by the two-leg model below (mirrors validate_graduation_completeness, Decision
-132/148):
+a plan resolved via ``_common.resolve_declared_plans`` (content-keyed: an edge-triggered
+``implementation_declared`` False->True flip between the diff base and the working tree,
+mirrors validate_graduation_completeness's own implement-PR leg):
 
-  Plan-only-PR leg: a diff-added/modified docs/plans/PLAN-*.yaml with NO co-present
-    feat({slug}) implementation commit on `git log origin/main..HEAD` DEFERS -- the
-    implementation is absent by construction (two-PR plan/implement flow, Decision 76), so
-    replaying feature-verification steps against a plan-only tree would fail every hermetic
-    step regardless of whether the eventual implementation is correct. Prints a DEFER line and
-    replays nothing for that plan.
+  Plan-only leg: a diff-present docs/plans/PLAN-*.yaml whose ``implementation_declared`` did
+    NOT newly flip true in this diff DEFERS -- either the implementation is absent by
+    construction (two-PR plan/implement flow, Decision 76) or the plan simply is not being
+    implemented in this PR, so replaying feature-verification steps against it would fail every
+    hermetic step regardless of whether the eventual implementation is correct. Prints a DEFER
+    line and replays nothing for that plan.
 
-  Implement-PR leg: resolves PLAN-{slug}.yaml from feat({slug}) commit subjects on
-    `git log origin/main..HEAD` (co-present plan+code included), loads each plan from disk, and
-    replays its hermetic pre-deploy steps against the complete (implementation-bearing) tree.
+  Implement leg: for every plan path resolved by ``_common.resolve_declared_plans``, loads the
+    plan from disk and replays its hermetic pre-deploy steps against the complete
+    (implementation-bearing) tree.
 
 Matching rule (mirrored in .claude/skills/planning/SKILL.md's VP Design Rationale note):
   (a) Exit-code, always: the replayed command's returncode must be 0, else the step diverges.
@@ -34,11 +37,15 @@ itself is a distinct, infrastructural failure -- it is NOT downgraded to a skip;
 check directly (mirrors the ImportError/content-error split in ``validate_plan_documents.py``,
 Decision 55 fail-loud).
 
-Advisory SKIP (never a failure), mirroring Decision 132's disclosed residual limitations:
-  (a) origin/main is unreachable (no fetch, detached clone, etc) -- skips the WHOLE
-      implement-PR leg (feat-commit resolution needs it).
-  (b) a feat({slug}) commit subject names a plan whose PLAN-{slug}.yaml is absent (legacy
-      .md-era plan, archived, or a typo'd slug) -- skips just that commit's replay.
+Advisory SKIP (never a failure): no docs/plans/PLAN-*.yaml is present in the diff at all is a
+no-op PASS (an empty domain, not a skip -- see the accounting-declaration composition in
+``validate_vp_replay`` below); origin/main being unreachable (no fetch, detached clone, etc)
+DEFERs every diff-present plan and declares ``skipped`` (content resolution needs a reachable
+base to distinguish a flip from a pre-existing declaration).
+
+One terminal Decision 170 declaration per dispatch (docs/contracts/check-accounting.yaml):
+unreachable base -> ``skipped``; otherwise ``examined(len(resolved), unit="declared_plans")``
+(0 -> vacuous, >0 -> enforced unless a replay diverges, which always wins as failed).
 
 Bounded cost: a per-step timeout (PER_STEP_TIMEOUT_SECONDS) plus an aggregate wall-clock/step-
 count cap (MAX_AGGREGATE_SECONDS / MAX_REPLAYED_STEPS) so a pathological hermetic command cannot
@@ -133,47 +140,30 @@ def _replay_step(plan_rel: str, step, root: Path, failed: list[str]) -> float:
     return elapsed
 
 
-def _plan_only_pr_leg(changed_files: list[str], root: Path) -> None:
-    """Diff-added/modified plans with no co-present feat({slug}) commit DEFER replay.
-
-    The implementation is absent by construction on a plan-only PR (two-PR plan/implement flow,
-    Decision 76) -- replaying feature-verification steps against an implementation-less tree
-    would fail every hermetic step regardless of whether the eventual implementation is correct.
-    A plan whose slug DOES have a co-present feat({slug}) commit in this same diff is left to the
-    implement-PR leg, which replays it against the complete tree.
+def _plan_only_pr_leg(plan_files: list[str], root: Path, resolved: set[str]) -> None:
+    """Print DEFER for every diff-present plan whose `implementation_declared` did not newly
+    flip true in this diff; a resolved plan's replay happens in `_implement_pr_leg`.
     """
-    plan_files = _common.plan_paths_from_changed(changed_files)
-    if not plan_files:
-        print("  PASS: no docs/plans/PLAN-*.yaml in the diff -- no-op.")
-        return
-
-    implemented_slugs = set(_common.feat_commit_slugs(root))
     for plan_rel in plan_files:
         if not (root / plan_rel).exists():
             print(f"  SKIP: {plan_rel} (not present on disk -- deleted in this diff)")
             continue
-        match = _common.PLAN_PATH_RE.match(plan_rel)
-        slug = match.group(1) if match else None
-        if slug is not None and slug in implemented_slugs:
-            print(f"  PASS: {plan_rel} -- co-present feat({slug}) commit in this diff; replayed by the implement-PR leg.")
+        if plan_rel in resolved:
+            print(f"  PASS: {plan_rel} -- implementation_declared newly true in this diff; replayed by the implement leg.")
         else:
             print(
-                f"  DEFER: {plan_rel} -- plan-only PR (no co-present feat({{slug}}) implementation commit in this "
-                "diff); replay deferred to the implement PR, where the plan resolves against a complete tree."
+                f"  DEFER: {plan_rel} -- implementation_declared not newly true in this diff; replay deferred until "
+                "the plan declares its implementation."
             )
 
 
-def _implement_pr_leg(root: Path, failed: list[str]) -> None:
-    """Resolve PLAN-{slug}.yaml from feat({slug}) commit subjects on origin/main..HEAD and replay
-    each plan's hermetic pre-deploy steps against the complete (implementation-bearing) tree.
+def _implement_pr_leg(root: Path, resolved: list[str], failed: list[str]) -> None:
+    """Replay every resolved plan's hermetic pre-deploy steps against the complete
+    (implementation-bearing) tree. `resolved` is the content-keyed resolution from
+    `_common.resolve_declared_plans` -- every path in it already exists on disk.
     """
-    if not _common.origin_main_reachable(root):
-        print("  SKIP: origin/main unreachable (advisory locally, authoritative in CI) -- implement-PR leg skipped.")
-        return
-
-    slugs = _common.feat_commit_slugs(root)
-    if not slugs:
-        print("  PASS: no feat({slug}) commit(s) in this diff -- no-op.")
+    if not resolved:
+        print("  PASS: no plan(s) with a newly-true implementation_declared in this diff -- no-op.")
         return
 
     total_elapsed = 0.0
@@ -181,13 +171,7 @@ def _implement_pr_leg(root: Path, failed: list[str]) -> None:
     budget_hit = False
     plans_resolved = 0
 
-    for slug in slugs:
-        plan_rel = f"docs/plans/PLAN-{slug}.yaml"
-        plan_path = root / plan_rel
-        if not plan_path.exists():
-            print(f"  SKIP: {plan_rel} not found for feat({slug}) commit -- unresolvable plan, advisory.")
-            continue
-
+    for plan_rel in resolved:
         try:
             doc = _common.load_plan(plan_rel, root)
         except ImportError as exc:
@@ -220,20 +204,42 @@ def _implement_pr_leg(root: Path, failed: list[str]) -> None:
     if not any(f.startswith("vp-replay") for f in failed) and replayed_count:
         print(f"  PASS: {replayed_count} hermetic pre-deploy step(s) replayed clean across {plans_resolved} plan(s).")
     elif not replayed_count and not budget_hit and plans_resolved:
-        print(f"  PASS: {plans_resolved} plan(s) resolved via feat({{slug}}) commit(s), no hermetic step(s) to replay.")
+        print(f"  PASS: {plans_resolved} plan(s) resolved via implementation_declared, no hermetic step(s) to replay.")
 
 
 @registry.register("validate_vp_replay", owner="platform")
 def validate_vp_replay(failed: list[str], changed_files: list[str] | None = None, root: Path | None = None) -> None:
-    """Independently re-execute hermetic pre-deploy VP steps, resolved via the two-leg model
-    (plan-only-PR defers, implement-PR replays -- see module docstring).
+    """Independently re-execute hermetic pre-deploy VP steps, resolved via content-keyed
+    resolution (plan-only defers, implement leg replays -- see module docstring).
 
     changed_files / root are test/dogfood injection seams -- default to
     _common.get_changed_files() (vs origin/main) and _common.ROOT respectively.
+
+    Composes exactly ONE terminal Decision 170 declaration (docs/contracts/check-accounting.yaml):
+    no plan present in the diff at all is an empty domain (examined(0), never skipped, since the
+    domain is provably empty without needing the base at all); a diff-present plan set with an
+    unreachable base DEFERs everything and declares skipped (content resolution needs a reachable
+    base to tell a flip from a pre-existing declaration); otherwise examined(len(resolved)).
     """
     print("\n=== Interactive VP replay (T3.15 c2, VF-01) ===")
     root = root if root is not None else _common.ROOT
     changed = changed_files if changed_files is not None else _common.get_changed_files()
 
-    _plan_only_pr_leg(changed, root)
-    _implement_pr_leg(root, failed)
+    plan_files = _common.plan_paths_from_changed(changed)
+    if not plan_files:
+        print("  PASS: no docs/plans/PLAN-*.yaml in the diff -- no-op.")
+        registry.examined(0, unit="declared_plans")
+        return
+
+    if not _common.origin_main_reachable(root):
+        print("  SKIP: origin/main unreachable (advisory locally, authoritative in CI) -- deferring every in-diff plan.")
+        for plan_rel in plan_files:
+            print(f"  DEFER: {plan_rel} -- diff base unreachable.")
+        registry.skipped("diff base unreachable")
+        return
+
+    base = _common.push_context_base() or "origin/main"
+    resolved = _common.resolve_declared_plans(changed, root, base)
+    _plan_only_pr_leg(plan_files, root, set(resolved))
+    _implement_pr_leg(root, resolved, failed)
+    registry.examined(len(resolved), unit="declared_plans")
