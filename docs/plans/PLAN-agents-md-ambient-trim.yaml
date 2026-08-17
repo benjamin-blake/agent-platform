@@ -44,9 +44,10 @@ scope:
   - file: scripts/preflight/ci_rca_gauges.py
     action: Modify
     purpose: >-
-      Comment-only repoint at line 42 ("until Lambda scheduled agents re-enable (AGENTS.md
-      runbook)") onto T4.12. Confirmed live at plan time; the sweep asserted it but could not
-      verify it.
+      DOCSTRING-text repoint at line 42 ("until Lambda scheduled agents re-enable (AGENTS.md
+      runbook)") onto T4.12. The line sits inside _escalate_ci_rca_probe_health's docstring (its
+      first statement, spanning roughly lines 38-47), NOT a '#' comment -- which is why VP step 15
+      verifies it by AST comparison rather than a comment-line filter.
   - file: docs/contracts/inference-provider.yaml
     action: Modify
     purpose: >-
@@ -164,13 +165,13 @@ verification_plan:
       Stale-reference sweep (surface-retiring closure obligation) -- no citation of the deleted
       runbook survives anywhere in the live tree.
     command: >-
-      ! grep -rIn --exclude-dir=.git --exclude-dir=logs --exclude-dir=audits
-      --exclude-dir=plans --exclude-dir=audit-prompts -e 'AGENTS\.md runbook'
-      -e 'AGENTS\.md re-enable runbook' . && echo NO_DANGLING_CITATIONS
+      ! git grep -lI -e 'AGENTS\.md runbook' -e 'AGENTS\.md re-enable runbook' -- .
+      ':!docs/plans' ':!docs/audit-prompts' ':!audits' ':!logs' && echo NO_DANGLING_CITATIONS
     expected: "Prints NO_DANGLING_CITATIONS -- zero matches outside history/plan/audit directories."
     fix_if: >-
       Each match is a dangling pointer to deleted ambient content. Repoint it at T4.12 / Decision 84
-      the same way as the three known sites; do not restore the runbook.
+      the same way as the four known sites; do not restore the runbook. Uses git grep (tracked files
+      only) rather than grep -r, which would descend into .venv and other untracked trees.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -196,10 +197,12 @@ verification_plan:
       Prove the red side -- the same guard fires against the pre-change tree, confirming it is a
       real regression guard and not a vacuous pass.
     command: >-
-      git grep -lI -e 'AGENTS\.md runbook' -e 'AGENTS\.md re-enable runbook' origin/main -- .
-      ':!docs/plans' ':!docs/audit-prompts' ':!audits' ':!logs' | tee /dev/stderr | wc -l
+      test "$(git grep -lI -e 'AGENTS\.md runbook' -e 'AGENTS\.md re-enable runbook' origin/main -- .
+      ':!docs/plans' ':!docs/audit-prompts' ':!audits' ':!logs' | tee /dev/stderr | wc -l)" -eq 4
+      && echo RED_SIDE_PROVEN_4_SITES
     expected: >-
-      Reports exactly 4 files on origin/main -- docs/INTENT-ci-rca-methodology.md,
+      Prints the four filenames then RED_SIDE_PROVEN_4_SITES -- exactly 4 files on origin/main:
+      docs/INTENT-ci-rca-methodology.md,
       docs/contracts/inference-provider.yaml,
       scripts/checks/ops_governance/validate_warehouse_write_sources.py and
       scripts/preflight/ci_rca_gauges.py -- matching the four Scope rows that repoint them.
@@ -239,14 +242,25 @@ verification_plan:
       Confirm the Iceberg resurrection mechanism landed on Decision 84 and the decision-log ceilings
       still hold.
     command: >-
-      grep -q 'Amendment 2026-08-17' docs/DECISIONS.md && grep -q '_prepare_record' docs/DECISIONS.md
-      && bin/venv-python -c "from scripts.checks.decisions.validate_decisions_size import
-      validate_decisions_size as v; f=[]; v(f); assert not f, f; print('DECISIONS_SIZE_OK')"
-    expected: "The dated amendment and the _prepare_record causal link are both present, and the size check prints DECISIONS_SIZE_OK."
+      bin/venv-python -c "import pathlib,re; t=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8');
+      m=re.search(r'^## Decision 84:.*?(?=^## Decision |\Z)', t, re.S|re.M);
+      assert m, 'Decision 84 section not found'; s=m.group(0);
+      assert 'Amendment 2026-08-17, PLAN-agents-md-ambient-trim' in s, 'amendment absent from Decision 84 section';
+      assert '_prepare_record' in s and 'last_updated_timestamp' in s, 'causal half missing from the amendment';
+      print('DECISION_84_AMENDMENT_OK')" && bin/venv-python -c "from
+      scripts.checks.decisions.validate_decisions_size import validate_decisions_size as v; f=[];
+      v(f); assert not f, f; print('DECISIONS_SIZE_OK')"
+    expected: "Prints DECISION_84_AMENDMENT_OK then DECISIONS_SIZE_OK."
     fix_if: >-
-      A missing grep means the causal half of the mechanism was condensed out of AGENTS.md without
-      being rehomed -- and that half exists nowhere else, so the why is lost permanently; add the
-      amendment before proceeding. The check lives at scripts/checks/decisions/ (NOT
+      An assertion failure means the amendment is missing from Decision 84's own section, or landed
+      without the causal half (_prepare_record refreshing last_updated_timestamp) that exists nowhere
+      else. Deliberately section-scoped and plan-slug-anchored: a bare file-wide grep for
+      'Amendment 2026-08-17' or '_prepare_record' is VACUOUS -- both already match on origin/main for
+      unrelated reasons (Decisions 148 and 132 carry same-dated amendments from commit 7fa00f2;
+      Decision 81 line 4836 mentions _prepare_record about a different claim), so a file-wide grep
+      passes with this amendment entirely absent. The literal
+      'PLAN-agents-md-ambient-trim' occurs 0 times in DECISIONS.md today, which is what makes this
+      red-capable. validate_decisions_size lives at scripts/checks/decisions/ (NOT
       scripts.checks.governance, which does not exist) and has no __main__ block, so it must be
       imported and called rather than invoked with python -m.
     hermetic: true
@@ -342,6 +356,7 @@ verification_plan:
       s=lambda src:(lambda t:[setattr(n,'body',n.body[1:]) for n in ast.walk(t) if isinstance(n,(ast.Module,ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))
       and ast.get_docstring(n) is not None] and ast.dump(t) or ast.dump(t))(ast.parse(src));
       b=subprocess.run(['git','show','origin/main:'+p],capture_output=True,text=True).stdout;
+      assert b.strip(), 'BASE_UNREADABLE: git show returned empty -- fetch origin/main, do not read this as a code change';
       assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
     expected: "Prints NO_EXECUTABLE_CHANGE -- the docstring-stripped AST is identical to origin/main."
     fix_if: >-
@@ -365,6 +380,7 @@ verification_plan:
       s=lambda src:(lambda t:[setattr(n,'body',n.body[1:]) for n in ast.walk(t) if isinstance(n,(ast.Module,ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))
       and ast.get_docstring(n) is not None] and ast.dump(t) or ast.dump(t))(ast.parse(src));
       b=subprocess.run(['git','show','origin/main:'+p],capture_output=True,text=True).stdout;
+      assert b.strip(), 'BASE_UNREADABLE: git show returned empty -- fetch origin/main, do not read this as a code change';
       assert s(b)==s(open(p).read()), 'executable code changed'; print('NO_EXECUTABLE_CHANGE')"
     expected: "Prints NO_EXECUTABLE_CHANGE -- the docstring-stripped AST is identical to origin/main."
     fix_if: >-
