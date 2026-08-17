@@ -84,6 +84,11 @@ Trigger condition 2 -- **Surface-retiring plan**: the plan's `scope` includes a 
    - **Thin waiver:** a `waive` disposition whose `graduation_waiver_reason` is generic or non-substantive (e.g. "not needed", "skip", "later") rather than naming a concrete reason the check can't be graduated now.
    If any step trips one of these, recommend REVISE citing the step number and which sub-check failed. Otherwise report "graduation dispositions complete and honest."
 
+12p. **Category-consistency verdict (Decision 167 clause 2 -- fresh Decisions and CD ratifications alike):** This is the reviewer-side control that does not exist anywhere else in this gate -- Phase 2's other checks judge scope, tiers, and dispositions, never whether a drafted numbered Decision's claimed significance row actually matches its body.
+   - **Trigger detection.** Fires when EITHER the plan carries a ratification block (Workflow Step 5b above) OR the plan's `scope` includes a `docs/DECISIONS.md` row AND the plan's drafted text contains a numbered `"## Decision NNN:"` heading. A `docs/DECISIONS.md` scope row that adds ONLY a dated amendment trailer -- no drafted numbered heading -- does NOT fire this check: an amendment carries no significance envelope to adjudicate.
+   - **Verdict.** When the trigger fires, locate the drafted entry's claimed `significance.value` (envelope field or narrative Significance marker) and quote VERBATIM the body sentence that satisfies or fails `docs/contracts/decision-entry.yaml` `significance.routing_rule`'s three questions for the claimed row. A claimed-row/body mismatch is REVISE-worthy on its own -- this is a mandatory category-consistency gate, not a discretionary surface-and-defer check the human can wave through.
+   - **N/A branch.** When the trigger does not fire, the Phase-3 row emits "Category consistency: N/A -- plan drafts no numbered Decision text", so a silent omission is distinguishable from a pass.
+
 ### Phase 2b: Frame Challenge (MANDATORY)
 
 Phase 2 checks the plan's *details* against the existing frame. This phase challenges the *frame itself*. See Decision 75 (Frame-Lock Anti-Pattern in Architectural Planning) for the failure mode this phase is designed to catch.
@@ -145,6 +150,8 @@ Ask the following five questions against the plan's chosen approach. For each, w
 **Tier Fitness (12m):** Compliant / REVISE -- [scope file] requires [tier] but plan declares [lower tier]
 
 **Graduation Dispositions (12o):** Complete and honest / REVISE -- [step number(s) and sub-check failed]
+
+**Category Consistency (12p, Decision 167 clause 2):** N/A -- plan drafts no numbered Decision text / PASS -- "[verbatim body quote]" supports claimed [routing row] / REVISE -- claimed [routing row] but body reads: "[verbatim quote]"
 
 **Finding-Origin Attribution:** mechanical (scripts.roadmap.plan_obligations) / critic judgement -- tag each registration-closure finding
 

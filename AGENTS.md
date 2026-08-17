@@ -191,6 +191,17 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 | `scope({slug}):` | STRATEGIC plan scoping (currently suspended, Decision 67) |
 | `audit({slug}):` | Audit-prompt artifact commits (/audit workflow) |
 
+**Change-record content rule.** What changed, why now, acute state, and measurements belong in
+the squash-commit or PR body -- never in a Decision entry body. Whether content clears the bar
+for a numbered Decision at all, and where it routes when it does not, is governed by
+`docs/contracts/decision-entry.yaml`'s `significance.routing_rule` and its four routing rows
+(Decision 167 clause 4); this file points at that rule rather than restating it.
+
+**DD-B convention.** When a drafted Decision is blocked on routing grounds -- redirected to one
+of `decision-entry.yaml`'s other three routing rows instead of `numbered_decision` -- the
+superseding PR body names the routing row applied in one line (e.g. "Routing: field_semantics ->
+docs/contracts/<file>.yaml").
+
 ### Commit signing (CC-web: SSH-signed via harness signer)
 - CC-web commits ARE SSH-signed (commit.gpgsign=true, gpg.format=ssh, host-held key); GitHub
   reports them Verified.

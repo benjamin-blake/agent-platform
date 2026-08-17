@@ -231,6 +231,27 @@ significance:
 
 **Significance:** clears the Decision 150 significance bar -- a durable architectural commitment (a typed envelope grammar, an enforced Significance routing claim, and a dated WARN-tier size norm, each backed by a `--pre`-registered check) with reversal-relevant consequences; not a CD state-flip, operational fact, or field-semantics change (field shapes and the exact byte value live in `docs/contracts/decision-entry.yaml`, not restated here).
 
+> **Update (2026-08-17):** The f2 routing-consistency lint proposed by
+> audits/contract-first-governance-33c8667.yaml's amendment is REJECTED, not built. Four
+> independent consults found it malformed on construct-validity grounds -- proxy P1 duplicates
+> the already-armed per-entry size cap (clause 3) and adds no discriminating signal beyond it;
+> proxy P2 is anti-directional, since Decision 168 already rewards a `docs/contracts/` reference
+> and the window's top P2 scorer is already correctly classified -- and on Goodhart grounds:
+> proxy P3 would reward an agent author for trimming legitimate enforcement references to clear
+> the warning, degrading the very traceability Decision 168 protects. The deterministic subset
+> already deployed by clauses 1-4 above (the envelope, the required routing claim, and the
+> per-entry size norm) is the permanent control; no lint is added alongside it.
+
+```yaml reversal-conditions
+decision: 167
+review_by: 2026-11-17
+on_trigger: "re-decide via /plan whether the deterministic subset still suffices or the f2 routing-consistency lint should be reconsidered; update or re-arm this stanza"
+conditions:
+  - id: mis-routed-past-both-gates
+    kind: manual
+    description: "A post-167 entry is demonstrated mis-routed past BOTH the decision-entry conformance check and the plan-critique category-consistency verdict (.claude/skills/plan-critique/SKILL.md section 12p) -> the deterministic-subset-only control proved insufficient; re-open the routing-consistency-lint question with the new failure instance as evidence."
+```
+
 **Related:** Decision 150 (the Significance bar enforced machine-readably), Decision 160 (point 11's accrual-rate lever, installed here at WARN tier only), Decision 134 (the two stock size ceilings this norm sits alongside), Decision 145 (the never-raise-to-fit precedent), Decision 149 (the compacted-stub exemption), Decision 84 (warehouse-safety boundary keeping `significance` index-only), Decision 153 (the shared, memoized baseline read). Roadmap refs: audits/contract-first-governance-33c8667.yaml findings CFG-01/CFG-03/CFG-07 (closed), rec-2934 (resolved by `per_entry_size_norm`), tier_item T2.56 (eventual owner of this corpus's shape; closes none of its criteria here).
 
 ---

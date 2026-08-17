@@ -6053,3 +6053,25 @@ entries:
     check_spec:
       node_id: >-
         tests/checks/iam_tf/test_iam_role_reconcile_trust_scope.py::TestIAMRoleReconcileScope::test_resource_set_is_exactly_branch_and_pr
+  - check_id: dec-167-reversal-stanza-monitored
+    primitive_slot: command_output_matches
+    guard_target: docs/DECISIONS.md
+    guard_symbol: null
+    plan_slug: migration-step-4-cfg-audit
+    graduated_at: "2026-08-17"
+    graduated_by: implement-agent
+    # Asserts Decision 167's reversal-conditions stanza is not merely present as prose but
+    # actually parsed and MONITORED by scripts/preflight/decision_conditions.py -- a malformed
+    # or misplaced fence would leave the revisit trigger unwatched (Decision 40's
+    # recorded-then-forgotten failure mode).
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - >-
+          from scripts.preflight.decision_conditions import preflight_bucket; import sys;
+          r=preflight_bucket(); bad=[m for m in (r.get('malformed') or []) if
+          str(m).find('167')>=0]; sys.exit(f'167 not monitored or malformed -- {r}') if (167 not
+          in (r.get('monitored') or []) or bad) else print('OK 167 monitored')
+      expected: OK 167 monitored
+      use_regex: false

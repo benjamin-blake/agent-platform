@@ -376,6 +376,22 @@ architectural commitment with reversal-relevant consequences clears the bar. A C
 operational fact, or field-semantics change routes per that section's four rows instead (the
 batch-wave clause below, a rec/tier_item note, or a contract governance note).
 
+Three property tests gate the draft -- checkable assertions on the drafted text, never an
+open-ended "consider whether" prompt:
+1. **Envelope marker cited.** The drafted entry's fenced ```yaml metadata envelope carries a
+   `significance` field naming one of the four routing keys plus a non-empty justification
+   (`decision-entry.yaml`'s `metadata_envelope.required_fields`, Decision 167 clause 2) -- a
+   Significance claim made only in narrative prose, with no envelope field, fails this test.
+2. **Contract-first justification (rec-3015).** The envelope justification names, in one clause,
+   why not a contract: the specific `docs/contracts/*.yaml` governance-note home (or in-place
+   amendment) considered for this content and the concrete reason it was rejected in favor of a
+   fresh number. A justification that never names a rejected alternative fails this test.
+3. **amendment_forms routing alternative (rec-3016).** Before minting a number to amend exactly
+   one prior entry at a single call site, check whether `decision-entry.yaml`'s `amendment_forms`
+   (a dated in-place annotation on the amended entry) already carries the same commitment at zero
+   header cost -- draft the amendment_forms shape instead unless the content independently clears
+   the significance bar on its own terms.
+
 ## Candidate Decision Ratification (Workflow Step 5b, when the plan realizes/ratifies a CD)
 
 Fires when the plan's scope realizes the work a pending `candidate_decision` (CD.NN) gates, OR the

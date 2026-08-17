@@ -4,12 +4,13 @@
 Carries the BULK of the new coverage this plan introduces: extractor shapes (class-table
 exclusion, comment immunity), the authorization rule (bare-root negative, band positive, no
 body tokenization), composite `dir::step-id` keys, the supersession hop, moved-from, the empty
-grandfather hook, and the cross-registry live-marker invariant + population upper bound. Thin
-binding assertions for each of the five consumer guards live alongside their own tests instead
-(mirror convention, Decision 131)."""
+grandfather hook, and the cross-registry live-marker invariant + an independent-scan population
+cross-check. Thin binding assertions for each of the five consumer guards live alongside their
+own tests instead (mirror convention, Decision 131)."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -182,8 +183,11 @@ class TestSupersessionHop:
 
 class TestLiveMarkerCorpusInvariant:
     """VP step 6: every token-bearing marker across all five REAL registries is
-    authorization-clean, and the install-state population is bounded above (<=3), not pinned to
-    an equality that would red CI on the next legitimate marker addition."""
+    authorization-clean, and the flat registries' extractor-found population is cross-checked
+    against an independent line-based scan of the same files -- never a hardcoded population
+    count, which would red CI on the next legitimate marker addition to a PR that never touched
+    this test file (tests/CLAUDE.md Test-count coupling; the exact rec-2572..2576 failure
+    shape)."""
 
     _SPECS = (
         sloc_module._SPEC,
@@ -210,8 +214,46 @@ class TestLiveMarkerCorpusInvariant:
         for spec, key, marker in self._live_marker_entries():
             assert not authorization_failure(marker, key, bodies, spec.mention_candidates), (spec.rel_path, key, marker)
 
-    def test_install_state_marker_population_upper_bound(self) -> None:
-        assert len(self._live_marker_entries()) <= 3
+    # Whole-file scanning is semantically exact for these four ONLY: each is built by
+    # make_flat_extractor (every non-blank, non-full-line-comment line is a candidate) with
+    # require_reason left at its default False, so a line-based raw scan and the extractor
+    # admit exactly the same markers. composite_module._R3_SPEC is deliberately EXCLUDED --
+    # it is section-scoped (make_section_extractor("r3", ...)) over a baseline file that also
+    # carries r1: and r3_workflows: sections, so a whole-file scan would count a marker in a
+    # non-r3 section that the extractor never sees, reddening this assertion on a PR that
+    # never touched this file (the rec-2572..2576 shape). It also sets require_reason=True, a
+    # second admission asymmetry a token-only regex cannot mirror. That spec stays covered by
+    # the authorization-clean test above, which needs no independent count.
+    _FLAT_SCAN_SPECS = (
+        sloc_module._SPEC,
+        prose_module._SPEC,
+        coverage_module._SPEC,
+        mypy_module._SPEC,
+    )
+
+    def test_flat_registry_marker_population_matches_independent_raw_scan(self) -> None:
+        """Independent cross-check, not a hardcoded count: a line-based raw scan of each
+        flat-extractor registry file (keyed on the same spec.token, but never touching
+        spec.extractor or _ENTRY_RE) must find exactly as many markers as the structured
+        extractors do. Catches an extractor regression in either direction while staying
+        growth-safe -- the population may grow indefinitely by legitimate addition without ever
+        reddening this assertion, since both sides grow together. The scan mirrors the flat
+        extractor's blank/full-line-comment skip so a marker cited inside a file's header prose
+        is not counted on the raw side alone."""
+        extracted = sum(1 for spec, _key, _marker in self._live_marker_entries() if spec in self._FLAT_SCAN_SPECS)
+        independent_count = 0
+        for spec in self._FLAT_SCAN_SPECS:
+            path = _common.ROOT / spec.rel_path
+            if not path.exists():
+                continue
+            marker_re = re.compile(rf"#\s*{re.escape(spec.token)}:\s*dec-\d+")
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if marker_re.search(line):
+                    independent_count += 1
+        assert extracted == independent_count
 
 
 class TestRetroactiveScanWiredIntoAllFourGenericConsumers:
