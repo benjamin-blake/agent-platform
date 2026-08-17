@@ -43,10 +43,14 @@ scope:
   - file: .claude/skills/plan-critique/SKILL.md
     action: Modify
     purpose: >-
-      Add a mandatory category-consistency verdict line to the ratification-block review, requiring a
-      verbatim body quote that satisfies or fails the three-question routing rule. This is the
-      reviewer-side control the repo currently lacks entirely; author-side ambient prose was already
-      measured insufficient (audit finding CFG-03).
+      Author a NEW review section plus a matching row in the Phase-3 structured-output template --
+      this file contains no "ratification" text today, so there is no existing review to amend. The
+      verdict fires whenever a plan drafts numbered "## Decision NNN:" text, covering BOTH branches of
+      the planning skill's Decision Significance Gate (a fresh governance Decision and a CD
+      ratification), and requires a verbatim body quote that satisfies or fails the three-question
+      routing rule. Scoping it to ratification blocks alone would not have fired on DD-B -- the
+      audit's own demonstrated enforcement event, which was a fresh Decision draft. The 106-byte
+      headroom is certainly exceeded, so the dec-75 raise is required, not conditional.
   - file: config/prose_budgets.yaml
     action: Modify
     purpose: >-
@@ -58,10 +62,13 @@ scope:
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
-      Dated in-place amendment trailer on Decision 167 (amendment_forms trailing_bracket or
-      blockquote_update spelling) recording the routing-consistency lint's REJECTION and its
-      rationale, the standing no-advisory-tier policy, and a fenced "```yaml reversal-conditions"
-      stanza so preflight monitors the revisit trigger. No new numbered Decision.
+      Dated in-place amendment on Decision 167 (amendment_forms trailing_bracket or blockquote_update
+      spelling) carrying ONLY the routing-consistency lint's REJECTION and its rationale -- legitimate
+      clause-2 lifecycle, since the lint was that clause's declared forcing partner. The separate
+      no-NEW-permanently-advisory-check rule is a forward-standing repo-wide commitment and routes to
+      docs/contracts/check-accounting.yaml instead. Place the fenced "```yaml reversal-conditions"
+      stanza between the prose "**Reversal conditions:**" section and "**Related:**", matching the
+      placement of the three live stanzas (Decisions 133, 172, 83). No new numbered Decision.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -69,6 +76,22 @@ scope:
       Never insert mid-list: exit_criteria ids are assigned positionally by
       TierItem._normalize_exit_criteria, so inserting silently renumbers c1/c2, which are cited by
       name across DECISIONS.md, the decision-scout skill, the audit, and the roadmap itself.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      One new row per surviving graduate-disposition VP step (steps 3 and 7), each carrying
+      plan_slug "migration-step-4-cfg-audit" and the step's declared graduation_check_id.
+      validate_graduation_completeness's implement-PR leg fails any graduate step without a matching
+      new-in-diff row, and constraint 6 forbids touching files absent from Scope -- so this row is
+      required, not optional.
+  - file: docs/contracts/check-accounting.yaml
+    action: Modify
+    purpose: >-
+      Governance note recording the no-NEW-permanently-advisory-check rule beside the status
+      vocabulary that motivates it, plus an amendment_log entry (the contract is Class D, ratified,
+      and validate_contract_drift requires amendment-on-change). This is a forward-standing
+      enforcement-shape commitment, so it is homed in the owning contract per Decision 86/127 routing
+      rather than buried in another entry's amendment trailer where decision-scout cannot index it.
 bundled_recommendations:
   - rec-3015
   - rec-3016
@@ -84,15 +107,17 @@ acceptance_criteria:
   - .claude/skills/planning/SKILL.md satisfies rec-3015 (contract-first justification) and rec-3016
     (amendment_forms routing), and cites the required significance envelope marker.
   - .claude/skills/plan-critique/SKILL.md requires a category-consistency verdict with a verbatim
-    body quote whenever a plan carries a ratification block.
+    body quote whenever a plan drafts numbered "## Decision NNN:" text -- fresh governance Decision
+    or CD ratification alike, matching both branches of the Decision Significance Gate.
   - Decision 167 carries a dated amendment trailer whose reversal-conditions stanza is parsed and
     surfaced by preflight (decision 167 appears in decision_conditions.monitored).
   - docs/DECISIONS.md gains no new "## Decision NNN:" header -- the live header count and maximum
     decision number are unchanged from origin/main.
   - T1.5 carries exactly one additional exit criterion, appended at position 8, and the roadmap
     passes referential-integrity validation.
-  - config/prose_budgets.yaml has no surface below budget (no prose advisories) and every raised
-    entry carries an authorizing marker.
+  - config/prose_budgets.yaml's S1 root_ambient_load_set entry equals its measured size (the reserved
+    headroom is claimed and closed), and every raised entry carries an authorizing marker. Nine other
+    surfaces sit below budget for unrelated reasons and are explicitly out of this plan's reach.
   - bin/venv-python -m scripts.validate --pre exits 0.
 verification_plan:
   - step: 1
@@ -241,9 +266,14 @@ verification_plan:
     fix_if: >-
       Any new number means the amendment was authored as a fresh entry -- convert it to a dated
       in-place trailer on Decision 167 per decision-entry.yaml amendment_forms.
-    graduation: graduate
-    graduation_check_id: no-new-decision-header-vs-base
-    graduation_waiver_reason: null
+    graduation: waive
+    graduation_waiver_reason: >-
+      Un-graduatable in both directions. Admission: run_differential requires the origin/main revert
+      to FAIL, but on an origin/main worktree this command compares that tree's headers against
+      itself, finds no new Decision, and PASSES -- so validate_verification_registry would reject the
+      row as tautological. Standing-guard value: the assertion encodes a one-PR operator constraint,
+      so as a permanent check it would block every future PR that legitimately mints a numbered
+      Decision. Retained as a session check only.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -255,15 +285,19 @@ verification_plan:
       cur=g(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
       base=g(subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'],capture_output=True,text=True).stdout);
       sys.exit(f'expected 1 new criterion, got {len(cur)-len(base)}') if len(cur)-len(base)!=1 else None;
-      sys.exit('c1/c2 text changed -- positional ids corrupted') if cur[:2]!=base[:2] else
-      print(f'OK: appended c{len(cur)}, c1/c2 intact')"
-    expected: "Prints 'OK: appended c8, c1/c2 intact'; exit 0."
+      sys.exit('existing criteria changed -- positional ids corrupted') if cur[:len(base)]!=base else
+      print(f'OK: appended c{len(cur)}, c1-c{len(base)} intact')"
+    expected: "Prints 'OK: appended c8, c1-c7 intact'; exit 0."
     fix_if: >-
-      A c1/c2 mismatch means the criterion was inserted mid-list, silently renumbering every
-      positional reference. Move it to the end of the list.
-    graduation: graduate
-    graduation_check_id: t15-exit-criteria-append-only
-    graduation_waiver_reason: null
+      A mismatch on the existing prefix means the criterion was inserted mid-list, silently
+      renumbering every positional reference. Move it to the end of the list.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The assertion is diff-relative -- "exactly one more criterion than origin/main" -- which is
+      true only while the append is unmerged. Post-merge origin/main carries the append, cur equals
+      base, and a graduated row would exit non-zero on main-validate and on every subsequent PR: a
+      guaranteed red-main time bomb, the same failure class as the deferred ci-rca recs. The durable
+      guard is tests/test_platform_roadmap.py (VP step 12). Retained as a session check only.
   - step: 10
     phase: pre-deploy
     action: >-
@@ -334,6 +368,30 @@ verification_plan:
       Read the named failing check and fix at its source. Do not add a check to ci.yml without adding
       it to validate.py first.
     graduation: not-applicable
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      Run the FULL validate tier, as handoff_policy.full_validation_required_before_commit declares.
+      validate_handoff_full_tier fails any plan that declares the policy without a step invoking the
+      full tier (Decision 163) -- verified failing on this plan before this step was added.
+    command: bin/venv-python -m scripts.validate
+    expected: "Exit 0. Wait for completion; on timeout the disposition is blocked, not passed."
+    fix_if: >-
+      A failure here that --pre missed is a full-tier-only check; fix at its source and re-run the
+      whole tier from the start rather than resuming mid-run.
+    graduation: not-applicable
+  - step: 16
+    phase: post-deploy
+    action: >-
+      After the squash-merge Resolves trailer fires rec-autoclose, confirm both bundled
+      recommendations actually closed in the warehouse.
+    command: |-
+      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib,sys; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; st={r['id']:r.get('status') for r in rows if r.get('id') in ('rec-3015','rec-3016')}; sys.exit(f'not closed -- {st}') if len(st)!=2 or any(v!='closed' for v in st.values()) else print('OK both recs closed')"
+    expected: "Prints 'OK both recs closed'; exit 0."
+    fix_if: >-
+      A non-closed status means the Resolves trailer was omitted from the squash-merge commit body or
+      rec-autoclose failed. Fall back to the portal directly per Decision 70 -- never edit the local
+      cache, which is a read cache and never a write source.
 test_obligations:
   - source: config/prose_budgets.yaml
     behavior: >-
@@ -380,10 +438,16 @@ constraints:
     enforcement references to clear the warning -- degrading the traceability Decision 168 protects.
     The audit's own CFG-07 proposed_change says enforcement arrives "not a content classifier".
   - >-
-    No advisory-tier check may be introduced. Decision 163 point 1 rules out universal-in-name /
-    discretionary-in-enforcement policies, and docs/contracts/check-accounting.yaml has no "warned"
-    state -- a print-only check declaring examined(n>0) is recorded as "enforced", which is
-    accounting-dishonest. A check blocks or it does not exist.
+    No NEW PERMANENTLY-advisory check may be introduced. This is narrower than "this repo has no
+    advisory tier", which is false: Decision 167 clause 3 installed a WARN-tier size norm, Decision
+    153 is titled "warn, not hard-fail", and validate_prose_limits emits standing advisories. The
+    sanctioned shape is a DATED, staged pre-commitment with a measurable arming event and a reversal
+    condition if it never fires (Decision 167 clause 3 is the worked example); the prohibited shape is
+    an open-ended advisory with no arming trigger, which Decision 163 point 1 rules out as
+    universal-in-name / discretionary-in-enforcement. Decision 170's examined()/skipped() channel is
+    NOT a home for the f2 residual either: its status vocabulary has no "warned" member, so a
+    print-only check declaring examined(n>0) is recorded as "enforced" -- extending that vocabulary
+    would be its own ratified change, not a side effect of this plan.
   - >-
     Point at docs/contracts/decision-entry.yaml significance.routing_rule; never restate the
     three-question rule in ambient prose (Decision 167 clause 4 homed it there deliberately).
@@ -433,6 +497,10 @@ context:
     file, different Decision, different failure category) and defers to that plan, sequenced AFTER
     this one at explicit operator direction so the S1 headroom reserved by
     PLAN-agents-md-ambient-trim is claimed and reseeded here before another session can close it.
+    Named interaction, accepted: the deferred defect sits in validate_graduation_completeness --
+    the same check that adjudicates this plan's graduate dispositions and its bundled-rec closure
+    leg. The recorded failures are fixture-isolation incidents on the full tier, so plan-PR-leg risk
+    is indirect rather than certain, but this plan runs ahead of the fix with that risk open.
   - >-
     Byte-budget landscape at authoring time. PLAN-agents-md-ambient-trim deliberately left
     config/prose_budgets.yaml unreseeded, so S1 has 7,157 bytes of reserved headroom against a
@@ -474,16 +542,34 @@ execution_steps:
     as the routing alternative for single-call-site guard tweaks (rec-3016). Phrase each as a
     property test on the draft, never an open-ended "consider whether" prompt.
   - >-
-    .claude/skills/plan-critique/SKILL.md -- add a mandatory category-consistency verdict to the
-    ratification-block review: state whether the drafted entry's claimed significance row matches its
-    body, quoting verbatim the body sentence that satisfies or fails the three-question routing rule.
+    .claude/skills/plan-critique/SKILL.md -- author a NEW review section (this file has no
+    "ratification" text today, so there is nothing to amend) AND add a matching row to the Phase-3
+    structured-output template so the verdict is emitted, not merely instructed. The verdict fires
+    whenever a plan drafts numbered "## Decision NNN:" text -- fresh governance Decision or CD
+    ratification -- and states whether the drafted entry's claimed significance row matches its body,
+    quoting verbatim the body sentence that satisfies or fails the three-question routing rule.
   - >-
-    docs/DECISIONS.md -- append a dated in-place amendment trailer to Decision 167 recording that the
-    f2 routing-consistency lint is REJECTED (naming the construct-validity and Goodhart grounds), that
-    the deterministic subset already deployed is the permanent control, and that this repo has no
-    advisory tier. Include a fenced "```yaml reversal-conditions" stanza (column-0 fence; keys
-    decision, review_by, on_trigger, conditions) whose condition is a post-167 entry demonstrated
-    mis-routed past both the conformance check and the plan-critique verdict. Mint no new header.
+    docs/DECISIONS.md -- add a dated in-place amendment to Decision 167 recording ONLY that the f2
+    routing-consistency lint is REJECTED (naming the construct-validity and Goodhart grounds) and that
+    the deterministic subset already deployed is the permanent control. Do NOT put the
+    no-advisory-tier rule here; it routes to check-accounting.yaml below. Include a fenced
+    "```yaml reversal-conditions" stanza (column-0 fence; keys decision, review_by, on_trigger,
+    conditions) whose condition is a post-167 entry demonstrated mis-routed past both the conformance
+    check and the plan-critique verdict. Place the fence between the prose "**Reversal conditions:**"
+    section and "**Related:**", matching Decisions 133, 172 and 83. Mint no new header.
+  - >-
+    docs/contracts/check-accounting.yaml -- add a governance note beside status_vocabulary recording
+    the no-NEW-permanently-advisory-check rule: the sanctioned shape is a dated, staged pre-commitment
+    with a measurable arming event and a reversal condition if it never fires (Decision 167 clause 3
+    as the worked example); the prohibited shape is an open-ended advisory with no arming trigger.
+    Note that the vocabulary has no "warned" member, so a print-only check declaring examined(n>0) is
+    recorded as "enforced". Add an amendment_log entry and bump contract_version -- the contract is
+    Class D and ratified, so validate_contract_drift requires amendment-on-change.
+  - >-
+    config/agent/verification_registry/registry.yaml -- add one row per surviving graduate step (VP
+    steps 3 and 7), each with plan_slug "migration-step-4-cfg-audit" and check_id matching the step's
+    declared graduation_check_id (pr-template-commit-prefix-completeness,
+    dec-167-reversal-stanza-monitored). Steps 8 and 9 are waived and owe no row.
   - >-
     docs/ROADMAP-PLATFORM.yaml -- APPEND the retrieval-quality criterion to T1.5's exit_criteria as
     the eighth entry. Cover findability parity complementing c2's recoverability; fresh baseline
@@ -505,7 +591,7 @@ execution_steps:
   - 'Report: what was implemented, verification results, and the final measured S1 size.'
 work_areas: []
 rollback: >-
-  Every change is additive text in seven files with no runtime coupling; git revert of the squash
-  commit restores the prior state exactly. The one ordering caveat: reverting after
+  Every change is additive text or a data row across nine files with no runtime coupling; git revert
+  of the squash commit restores the prior state exactly. The one ordering caveat: reverting after
   PLAN-root-scoped-diff-base has merged would restore the below-budget S1 advisory, so re-run
   validate --pre after any revert and reseed config/prose_budgets.yaml if the advisory reappears.
