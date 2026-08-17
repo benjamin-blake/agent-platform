@@ -1,0 +1,511 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: migration-step-4-cfg-audit
+intent: >-
+  Close migration step 4 of audits/contract-first-governance-33c8667.yaml (finding CFG-08 plus the
+  f2-reclassification amendment) by pointing the decision-authoring path at the homes steps 2-3
+  already built: a change-record content rule, the missing PR-template prefix row, the DD-B
+  routing-ruling convention, a reviewer-side category-consistency check, and the retrieval-quality
+  gate on T1.5. Contributes to the North Star by bounding decision-log growth in SHAPE at the
+  authoring boundary, so the corpus agents must load stays small and navigable.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-migration-step-4-cfg-audit.yaml
+phase: >-
+  Platform: audits/contract-first-governance-33c8667.yaml migration step 4 (finding CFG-08 +
+  f2-reclassification amendment). Roadmap bookkeeping on tier_item T1.5 (appends exit criterion c8;
+  closes none of its criteria). No product-roadmap phase.
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add the change-record content rule to the "### Commit-message conventions" section (what
+      changed / why now / acute state / measurements belong in the squash-commit or PR body, never
+      in a Decision entry body), plus the DD-B convention line. Both POINT AT
+      docs/contracts/decision-entry.yaml significance.routing_rule (Decision 167 clause 4) and never
+      restate the three-question rule.
+  - file: .github/pull_request_template.md
+    action: Modify
+    purpose: >-
+      Add the missing audit({slug}) row to the trailing COMMIT-MESSAGE CONVENTIONS comment (which
+      currently names only feat/plan/roadmap/scope), and add the DD-B prompt to the "## Decisions"
+      section comment.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Decision Significance Gate cites the required significance envelope marker (Decision 167
+      clause 2 -- migration step 4's own first clause, not yet landed), adds the contract-first
+      justification obligation (rec-3015) and the amendment_forms routing alternative (rec-3016).
+      Authored as property tests, never open-ended "consider whether" prompts (Decision 160 point 14
+      lesson).
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a mandatory category-consistency verdict line to the ratification-block review, requiring a
+      verbatim body quote that satisfies or fails the three-question routing rule. This is the
+      reviewer-side control the repo currently lacks entirely; author-side ambient prose was already
+      measured insufficient (audit finding CFG-03).
+  - file: config/prose_budgets.yaml
+    action: Modify
+    purpose: >-
+      Reseed S1 root_ambient_load_set to its true measured size after this plan's AGENTS.md addition
+      (closing the standing below-budget advisory left deliberately by PLAN-agents-md-ambient-trim),
+      and raise the .claude/skills/plan-critique/SKILL.md entry with a
+      "# raise-approved: dec-75 <reason>" marker. Raise the planning entry the same way only if its
+      48-byte headroom proves insufficient -- its existing dec-150 marker already authorizes.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Dated in-place amendment trailer on Decision 167 (amendment_forms trailing_bracket or
+      blockquote_update spelling) recording the routing-consistency lint's REJECTION and its
+      rationale, the standing no-advisory-tier policy, and a fenced "```yaml reversal-conditions"
+      stanza so preflight monitors the revisit trigger. No new numbered Decision.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      APPEND a retrieval-quality exit criterion to tier_item T1.5 (position 8 -> implicit id c8).
+      Never insert mid-list: exit_criteria ids are assigned positionally by
+      TierItem._normalize_exit_criteria, so inserting silently renumbers c1/c2, which are cited by
+      name across DECISIONS.md, the decision-scout skill, the audit, and the roadmap itself.
+bundled_recommendations:
+  - rec-3015
+  - rec-3016
+infrastructure_dependencies: []
+acceptance_criteria:
+  - AGENTS.md's commit-conventions section states the change-record content rule naming all four
+    content classes and points at docs/contracts/decision-entry.yaml rather than restating the
+    three-question routing rule.
+  - AGENTS.md records the DD-B convention -- a Decision draft blocked on routing grounds gets one
+    line in the superseding PR body naming the routing row applied.
+  - .github/pull_request_template.md's conventions comment names all five commit prefixes including
+    audit({slug}), and its Decisions section carries the DD-B prompt.
+  - .claude/skills/planning/SKILL.md satisfies rec-3015 (contract-first justification) and rec-3016
+    (amendment_forms routing), and cites the required significance envelope marker.
+  - .claude/skills/plan-critique/SKILL.md requires a category-consistency verdict with a verbatim
+    body quote whenever a plan carries a ratification block.
+  - Decision 167 carries a dated amendment trailer whose reversal-conditions stanza is parsed and
+    surfaced by preflight (decision 167 appears in decision_conditions.monitored).
+  - docs/DECISIONS.md gains no new "## Decision NNN:" header -- the live header count and maximum
+    decision number are unchanged from origin/main.
+  - T1.5 carries exactly one additional exit criterion, appended at position 8, and the roadmap
+    passes referential-integrity validation.
+  - config/prose_budgets.yaml has no surface below budget (no prose advisories) and every raised
+    entry carries an authorizing marker.
+  - bin/venv-python -m scripts.validate --pre exits 0.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm AGENTS.md states the change-record content rule naming all four content classes and
+      routes them to the commit/PR body.
+    command: >-
+      bin/venv-python -c "import pathlib,sys; t=pathlib.Path('AGENTS.md').read_text();
+      s=t[t.index('### Commit-message conventions'):t.index('### Commit signing')];
+      m=[w for w in ('what changed','why now','acute state','measurements') if w not in s.lower()];
+      sys.exit(f'missing content classes: {m}') if m else print('OK: all four content classes present')"
+    expected: "Prints 'OK: all four content classes present'; exit 0."
+    fix_if: >-
+      Non-zero exit naming missing classes means the rule was written loosely -- name all four
+      explicitly rather than gesturing at 'narrative'.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Prose-presence grep over a section whose wording may legitimately be revised; a standing
+      literal-string guard would fire on any rewording while proving nothing about whether authors
+      follow the rule. The semantic obligation is carried by the plan-critique verdict line this
+      plan installs (step 6) and by the Decision 167 amendment's reversal condition.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm AGENTS.md points at the contract's routing_rule rather than restating the three
+      questions, per the requester's explicit "point at it, never restate it" constraint.
+    command: >-
+      bin/venv-python -c "import pathlib,sys; t=pathlib.Path('AGENTS.md').read_text();
+      s=t[t.index('### Commit-message conventions'):t.index('### Commit signing')];
+      sys.exit('restates the routing rule') if ('reversal-relevant' in s and 'durable architectural
+      commitment' in s) else (print('OK: points, does not restate') if 'decision-entry.yaml' in s
+      else sys.exit('no pointer to decision-entry.yaml'))"
+    expected: "Prints 'OK: points, does not restate'; exit 0."
+    fix_if: >-
+      Exit 'restates the routing rule' means the section duplicated the contract's three questions --
+      replace with a pointer. Exit 'no pointer' means the reference is missing entirely.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Encodes a negative prose condition (absence of restatement) whose literal markers are specific
+      to this session's phrasing; graduating it would freeze one wording of a rule that is expected
+      to be re-edited as the contract evolves.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the DD-B convention is recorded in AGENTS.md and the PR template carries all five
+      commit prefixes plus the DD-B prompt.
+    command: >-
+      bin/venv-python -c "import pathlib,sys; a=pathlib.Path('AGENTS.md').read_text();
+      p=pathlib.Path('.github/pull_request_template.md').read_text();
+      miss=[x for x in ('feat({slug})','plan({slug})','roadmap({ids})','scope({slug})','audit({slug})')
+      if x not in p]; sys.exit(f'PR template missing prefixes: {miss}') if miss else None;
+      sys.exit('DD-B convention absent from AGENTS.md') if 'routing row' not in a else None;
+      sys.exit('DD-B prompt absent from PR template') if 'routing row' not in p else
+      print('OK: five prefixes + DD-B in both surfaces')"
+    expected: "Prints 'OK: five prefixes + DD-B in both surfaces'; exit 0."
+    fix_if: >-
+      A missing-prefix list means the template comment was not updated. A DD-B failure means the
+      convention landed in only one of the two surfaces.
+    graduation: graduate
+    graduation_check_id: pr-template-commit-prefix-completeness
+    graduation_waiver_reason: null
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm rec-3015 and rec-3016 acceptance criteria are satisfied verbatim, as filed.
+    command: >-
+      grep -q 'why not a contract' .claude/skills/planning/SKILL.md && grep -q 'amendment_forms'
+      .claude/skills/planning/SKILL.md && echo 'OK: rec-3015 + rec-3016 acceptance met'
+    expected: "Prints 'OK: rec-3015 + rec-3016 acceptance met'; exit 0."
+    fix_if: >-
+      Non-zero exit means one or both recs' filed acceptance commands still fail; the Resolves
+      trailer would then autoclose a rec whose acceptance was never met.
+    graduation: waive
+    graduation_waiver_reason: >-
+      These are the two recs' own filed acceptance commands, which retire when the recs close on
+      merge; graduating them would install a permanent guard on transient closure criteria rather
+      than on a durable behavior.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm the planning skill's Decision Significance Gate cites the required significance
+      envelope marker (Decision 167 clause 2), closing migration step 4's first clause.
+    command: >-
+      bin/venv-python -c "import pathlib,sys; t=pathlib.Path('.claude/skills/planning/SKILL.md').read_text();
+      i=t.index('## Decision Significance Gate'); s=t[i:i+2500];
+      sys.exit('gate does not cite the significance envelope marker') if 'significance' not in
+      s.lower() or 'envelope' not in s.lower() else print('OK: envelope marker cited at the gate')"
+    expected: "Prints 'OK: envelope marker cited at the gate'; exit 0."
+    fix_if: >-
+      Failure means the gate still references only the four routing rows, leaving migration step 4's
+      first clause open -- the exact gap this plan exists to close.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Section-scoped prose grep on a skill file expected to be re-edited; brittle as a standing
+      guard, and the obligation it encodes is enforced downstream by
+      validate_decision_entry_conformance, which rejects a malformed or absent envelope claim
+      mechanically rather than by inspecting instructions.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm plan-critique now requires a category-consistency verdict with a verbatim body quote --
+      the reviewer-side control that does not exist today.
+    command: >-
+      bin/venv-python -c "import pathlib,sys; t=pathlib.Path('.claude/skills/plan-critique/SKILL.md').read_text().lower();
+      miss=[w for w in ('significance','routing','verbatim') if w not in t];
+      sys.exit(f'plan-critique missing: {miss}') if miss else print('OK: category-consistency verdict installed')"
+    expected: "Prints 'OK: category-consistency verdict installed'; exit 0."
+    fix_if: >-
+      A missing 'verbatim' means the verdict was added without the anti-rubber-stamp quote
+      obligation, which is what stops an agent reviewer pattern-matching a pass.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Presence of three tokens in a skill file proves the instruction was written, not that reviewers
+      apply it; a standing guard would assert the weaker property permanently. Efficacy is measured
+      instead by the Decision 167 amendment's reversal condition (a post-167 entry demonstrated
+      mis-routed past both gates).
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm the Decision 167 amendment's reversal-conditions stanza is well-formed AND actually
+      monitored by preflight -- not merely present as prose.
+    command: |-
+      bin/venv-python -c "from scripts.preflight.decision_conditions import preflight_bucket; import sys; r=preflight_bucket(); sys.exit(f'167 not monitored or malformed -- {r}') if (167 not in (r.get('monitored') or []) or r.get('malformed')) else print('OK 167 monitored')"
+    expected: "Prints 'OK 167 monitored'; exit 0."
+    fix_if: >-
+      '167 not monitored' means the fence opener is not at column 0 or the stanza is outside the
+      entry. 'malformed stanza' means a required key (decision, review_by, on_trigger, conditions) is
+      missing. Red-green: this step fails before the amendment lands and passes after.
+    graduation: graduate
+    graduation_check_id: dec-167-reversal-stanza-monitored
+    graduation_waiver_reason: null
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Confirm no new numbered Decision was minted -- the requester's hard constraint -- by comparing
+      header count and maximum number against origin/main.
+    command: >-
+      bin/venv-python -c "import re,subprocess,pathlib,sys;
+      cur=pathlib.Path('docs/DECISIONS.md').read_text();
+      base=subprocess.run(['git','show','origin/main:docs/DECISIONS.md'],capture_output=True,text=True).stdout;
+      f=lambda t:[int(m.group(1)) for m in re.finditer(r'^## Decision (\\d+):',t,re.M)];
+      a,b=f(cur),f(base); sys.exit(f'new Decision minted: {sorted(set(a)-set(b))}') if set(a)-set(b)
+      else print(f'OK: no new Decision (count {len(a)}, max {max(a)})')"
+    expected: "Prints 'OK: no new Decision (count 125, max 172)'; exit 0."
+    fix_if: >-
+      Any new number means the amendment was authored as a fresh entry -- convert it to a dated
+      in-place trailer on Decision 167 per decision-entry.yaml amendment_forms.
+    graduation: graduate
+    graduation_check_id: no-new-decision-header-vs-base
+    graduation_waiver_reason: null
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm T1.5 gained exactly one exit criterion, appended at position 8, with c1 and c2 text
+      unchanged (their ids are positional and cited by name repo-wide).
+    command: >-
+      bin/venv-python -c "import yaml,subprocess,pathlib,sys;
+      g=lambda t:[i for i in yaml.safe_load(t)['tier_items'] if i['id']=='T1.5'][0]['exit_criteria'];
+      cur=g(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
+      base=g(subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'],capture_output=True,text=True).stdout);
+      sys.exit(f'expected 1 new criterion, got {len(cur)-len(base)}') if len(cur)-len(base)!=1 else None;
+      sys.exit('c1/c2 text changed -- positional ids corrupted') if cur[:2]!=base[:2] else
+      print(f'OK: appended c{len(cur)}, c1/c2 intact')"
+    expected: "Prints 'OK: appended c8, c1/c2 intact'; exit 0."
+    fix_if: >-
+      A c1/c2 mismatch means the criterion was inserted mid-list, silently renumbering every
+      positional reference. Move it to the end of the list.
+    graduation: graduate
+    graduation_check_id: t15-exit-criteria-append-only
+    graduation_waiver_reason: null
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Confirm no prose surface sits below its budget -- the standing S1 advisory deliberately left by
+      PLAN-agents-md-ambient-trim must be closed by this plan's reseed.
+    command: |-
+      bin/venv-python -c "from scripts.preflight.prose_context import measure_prose_context as m; import yaml,pathlib,sys; b=yaml.safe_load(pathlib.Path('config/prose_budgets.yaml').read_text()); cur=m()['S1']['prose_bytes']; bud=b['S1']['root_ambient_load_set']; sys.exit(f'S1 not reseeded -- current {cur} budget {bud}') if cur!=bud else print('OK S1 tight')"
+    expected: "Prints 'OK S1 tight'; exit 0."
+    fix_if: >-
+      A 'S1 not reseeded' failure means config/prose_budgets.yaml still carries the reserved headroom
+      left by PLAN-agents-md-ambient-trim; set root_ambient_load_set to the reported current value.
+      Asserting equality rather than invoking validate_prose_limits is deliberate -- a below-budget
+      surface is only an ADVISORY there and never reaches the failure list, so the registered check
+      cannot detect the condition this step exists to close.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Direct invocation of an already-registered check that runs in both validate tiers; graduating
+      it would add a second registry row asserting exactly what validate_prose_limits already asserts.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Confirm every raised prose-budget entry carries an authorizing marker naming a Decision whose
+      body contains that budget key.
+    command: |-
+      bin/venv-python -c "from scripts.checks.prose.prose_budget_raises import validate_prose_budget_raises as b; import sys; f=[]; b(f); sys.exit(f'raise violations -- {f}') if f else print('OK raises authorized')"
+    expected: "Prints 'OK: raises authorized'; exit 0."
+    fix_if: >-
+      A violation naming the plan-critique entry means its '# raise-approved: dec-75' marker is
+      missing or malformed. Red-green: removing the marker makes this step fail, restoring it passes.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Direct invocation of an already-registered check running in both tiers; a graduated duplicate
+      would assert the same property twice.
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Run the platform-roadmap test suite, which asserts exit-criterion referential integrity after
+      the T1.5 append.
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -q
+    expected: "Exit 0, all tests pass."
+    fix_if: >-
+      A referential-integrity failure means the appended criterion shifted existing positional ids or
+      the roadmap no longer parses; re-check that the criterion was appended, not inserted.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Runs an existing committed test module rather than a kernel-expressible primitive; the durable
+      guard is the test file itself, which is already collected by the full tier.
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Validate the plan document itself against the PlanDocument schema.
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-migration-step-4-cfg-audit.yaml
+    expected: "Exit 0, no schema violations."
+    fix_if: >-
+      Unknown-key errors mean a field name drifted from the schema (extra=forbid); a graduation error
+      means a pre-deploy step is missing its disposition.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Already enforced for every plan by validate_plan_documents in both tiers; a graduated duplicate
+      would add a second registry row asserting the same property.
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Run the authoritative fast-tier gate over the whole change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exit 0."
+    fix_if: >-
+      Read the named failing check and fix at its source. Do not add a check to ci.yml without adding
+      it to validate.py first.
+    graduation: not-applicable
+test_obligations:
+  - source: config/prose_budgets.yaml
+    behavior: >-
+      A raise to the plan-critique entry stays authorized -- the marker must name a Decision whose
+      body contains that budget key as a literal substring.
+    verification_step: 11
+    command: |-
+      bin/venv-python -c "from scripts.checks.prose.prose_budget_raises import validate_prose_budget_raises as b; import sys; f=[]; b(f); sys.exit(f'raise violations -- {f}') if f else print('OK raises authorized')"
+    red_green_expectation: >-
+      Red before: removing the '# raise-approved: dec-75' marker from the plan-critique entry makes
+      the raise guard append a violation and the command exit non-zero. Green after: with the marker
+      present and Decision 75's body naming .claude/skills/plan-critique/SKILL.md, it exits 0.
+  - source: docs/DECISIONS.md
+    behavior: >-
+      The Decision 167 amendment's reversal-conditions stanza remains machine-parseable and monitored
+      by preflight, so the revisit trigger is watched rather than left as unread prose.
+    verification_step: 7
+    command: |-
+      bin/venv-python -c "from scripts.preflight.decision_conditions import preflight_bucket; import sys; r=preflight_bucket(); sys.exit(f'167 not monitored or malformed -- {r}') if (167 not in (r.get('monitored') or []) or r.get('malformed')) else print('OK 167 monitored')"
+    red_green_expectation: >-
+      Red before: exits non-zero on origin/main, where Decision 167 carries no stanza and 167 is
+      absent from the monitored set. Green after: exits 0 with 167 monitored and no malformed entries.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: >-
+      T1.5's exit criteria stay append-only, so the positional ids c1 and c2 that DECISIONS.md, the
+      decision-scout skill and the audit cite by name keep resolving to the same criteria.
+    verification_step: 12
+    test_selector: tests/test_platform_roadmap.py
+    red_green_expectation: >-
+      Red before: inserting the new criterion at position 1 instead of appending shifts every id, and
+      the roadmap referential-integrity assertions fail. Green after: appended at position 8, all
+      existing ids resolve unchanged.
+constraints:
+  - >-
+    NO new numbered Decision (operator constraint). The ruling lands as a dated in-place amendment
+    trailer on Decision 167 per decision-entry.yaml amendment_forms -- legitimate because this is
+    lifecycle evolution of Decision 167's own clause-2 mechanism, not a new commitment housed under
+    an unrelated number.
+  - >-
+    Do NOT build the routing-consistency lint the audit's f2 amendment proposed. Four independent
+    consults concluded it is malformed: proxy P1 is dominated by the already-armed hard cap, P2 is
+    anti-directional (Decision 168 rewards docs/contracts references, and the window's top P2 scorer
+    is correctly classified), and P3 invites a Goodhart response in which agent authors trim
+    enforcement references to clear the warning -- degrading the traceability Decision 168 protects.
+    The audit's own CFG-07 proposed_change says enforcement arrives "not a content classifier".
+  - >-
+    No advisory-tier check may be introduced. Decision 163 point 1 rules out universal-in-name /
+    discretionary-in-enforcement policies, and docs/contracts/check-accounting.yaml has no "warned"
+    state -- a print-only check declaring examined(n>0) is recorded as "enforced", which is
+    accounting-dishonest. A check blocks or it does not exist.
+  - >-
+    Point at docs/contracts/decision-entry.yaml significance.routing_rule; never restate the
+    three-question rule in ambient prose (Decision 167 clause 4 homed it there deliberately).
+  - >-
+    Never split AGENTS.md into @-imported fragments to relieve the byte budget (Decision 110/114
+    anti-fragmentation) -- fragments are still transitively loaded.
+  - >-
+    Only modify files listed in Scope. Out-of-scope issues become recommendations via
+    scripts/ops_data_portal, not inline fixes.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND (125 of 125 triaged).
+    CITE -- Decision 167, Decision 150, Decision 169, Decision 170, Decision 104, Decision 131,
+    Decision 168, Decision 48, Decision 142, Decision 86, Decision 127, Decision 66, Decision 136,
+    Decision 160, Decision 128, Decision 165, Decision 75, Decision 163, Decision 84, Decision 110,
+    Decision 114, Decision 55.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Scout flags and their disposition. CONTRADICT/NOTE on Decision 167 -- proxy P1 duplicates the
+    armed hard cap: resolved by dropping the lint entirely. SPIRIT/WARN on Decision 163 -- a
+    permanently advisory tier is universal-in-name/discretionary-in-enforcement: resolved by
+    introducing no check at all and recording the standing no-advisory-tier policy in the amendment.
+    SPIRIT/WARN on Decision 150 -- suppressing the ruling would leave the mechanism with no reversal
+    record: resolved by the Decision 167 amendment carrying a preflight-monitored stanza.
+    NOTE on Decision 170 -- no "warned" state exists: resolved, since no check is added.
+  - >-
+    Derivation. Three abstracted industry-practice consults (detector validity; rationale homing and
+    enforcement tier; migration acceptance) were run without repository context, then three
+    lens-scoped applicability consults re-derived them against this repo, with a fourth holistic
+    assessment retained as a comparison baseline. The lens-scoped round overturned three holistic
+    conclusions: the reviewer-side control was assumed to exist and does not; the prevalence bound
+    was computed over 23 entries when only 6 carry declarations (rule-of-three upper bound ~39%, not
+    ~13%); and the T1.5 criterion must be appended, not merged into c2.
+  - >-
+    The case for dropping the lint rests on the detector being INVALID, not on the problem being
+    absent -- six declared entries over ten days bounds nothing. The residual risk is therefore
+    unmeasured and live, which is why the plan-critique verdict line (a working detector), the DD-B
+    PR-body convention (the label collector) and the monitored reversal stanza (the revisit trigger)
+    are load-bearing rather than incidental.
+  - >-
+    Deferral rationale for the open ci-rca block. Three open Critical ci-rca recs (rec-3166,
+    rec-3169, rec-3175) share one fingerprint -- validate_graduation_completeness leaking outer-repo
+    push context into injected fixture roots -- and are owned by the approved, merged
+    docs/plans/PLAN-root-scoped-diff-base.yaml (bundles rec-3166; the other two are later recurrences
+    of the same root cause). This plan satisfies none of the three Related-Work conditions (different
+    file, different Decision, different failure category) and defers to that plan, sequenced AFTER
+    this one at explicit operator direction so the S1 headroom reserved by
+    PLAN-agents-md-ambient-trim is claimed and reseeded here before another session can close it.
+  - >-
+    Byte-budget landscape at authoring time. PLAN-agents-md-ambient-trim deliberately left
+    config/prose_budgets.yaml unreseeded, so S1 has 7,157 bytes of reserved headroom against a
+    ~600-byte addition; this plan reseeds S1 to its true size, closing the standing advisory.
+    .claude/skills/planning/SKILL.md has 48 bytes headroom and an existing dec-150 marker that
+    already authorizes any raise (Decision 150's body names the path; marker authorization matches
+    the entry KEY, not its value). .claude/skills/plan-critique/SKILL.md has 106 bytes headroom and
+    no marker -- Decision 75 clause 1 mandates adding a mandatory phase to exactly that file, so
+    dec-75 is a substantively honest authorization, not a technicality.
+  - >-
+    Migration step 4's blockers are cleared: step 2 landed as Decision 167 (2026-08-07), step 3 as
+    commit eaff804 (2026-08-13), which armed the per-entry cap to hard-fail. Decision 169 (10,499
+    bytes) landed 2026-08-11, before that arming, so it is grandfathered by the forward-only baseline
+    rule and is not a live violation.
+  - >-
+    Known gap, accepted. This plan installs no mechanical detector for mis-declared significance
+    routing. Detection is human/agent judgement at the plan-critique gate. The Decision 167
+    amendment's reversal condition is what converts that from a permanent gap into a monitored one.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - Only the plan-cited decision sections read (167, 150, 163, 168, 170, 75, 86) -- not the full log
+  - docs/contracts/decision-entry.yaml amendment_forms and significance sections read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    AGENTS.md -- in "### Commit-message conventions", add the change-record content rule naming what
+    changed / why now / acute state / measurements as belonging in the squash-commit or PR body and
+    never an entry body, with a pointer to docs/contracts/decision-entry.yaml
+    significance.routing_rule. Add the DD-B convention line. Do not restate the three questions.
+  - >-
+    .github/pull_request_template.md -- add audit({slug}) to the trailing COMMIT-MESSAGE CONVENTIONS
+    comment so all five prefixes are named; add the DD-B prompt to the "## Decisions" section comment.
+  - >-
+    .claude/skills/planning/SKILL.md -- extend the Decision Significance Gate to cite the required
+    significance envelope marker (Decision 167 clause 2), require the author to state why a contract
+    or in-place amendment was rejected before minting a number (rec-3015), and name amendment_forms
+    as the routing alternative for single-call-site guard tweaks (rec-3016). Phrase each as a
+    property test on the draft, never an open-ended "consider whether" prompt.
+  - >-
+    .claude/skills/plan-critique/SKILL.md -- add a mandatory category-consistency verdict to the
+    ratification-block review: state whether the drafted entry's claimed significance row matches its
+    body, quoting verbatim the body sentence that satisfies or fails the three-question routing rule.
+  - >-
+    docs/DECISIONS.md -- append a dated in-place amendment trailer to Decision 167 recording that the
+    f2 routing-consistency lint is REJECTED (naming the construct-validity and Goodhart grounds), that
+    the deterministic subset already deployed is the permanent control, and that this repo has no
+    advisory tier. Include a fenced "```yaml reversal-conditions" stanza (column-0 fence; keys
+    decision, review_by, on_trigger, conditions) whose condition is a post-167 entry demonstrated
+    mis-routed past both the conformance check and the plan-critique verdict. Mint no new header.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml -- APPEND the retrieval-quality criterion to T1.5's exit_criteria as
+    the eighth entry. Cover findability parity complementing c2's recoverability; fresh baseline
+    capture at cutover with committed fixtures rather than gitignored logs; probe set including at
+    least one BLOCK-severity CONTRADICT brief and one null brief; per-probe pass rule with
+    single-run-exact for category_tags-shortlisted entries and majority-of-3 for judgment-lane
+    entries; named adjudication rather than a tolerance percentage; the successor clause bound to the
+    same probe protocol and baseline; and repointing tests/test_decision_scout_retrieval.py.
+  - >-
+    config/prose_budgets.yaml -- reseed S1 root_ambient_load_set to the measured post-change size, and
+    add "# raise-approved: dec-75 <reason>" to the plan-critique entry raised to its new size. Raise
+    the planning entry only if its 48-byte headroom is exceeded; its dec-150 marker already authorizes.
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until every step passes. On an
+    unrecoverable failure, stop and run RCA rather than working around it (Decision 55).
+  - >-
+    Include "Resolves: rec-3015, rec-3016" in the squash-merge commit body so rec-autoclose closes
+    both via the ops portal.
+  - 'Report: what was implemented, verification results, and the final measured S1 size.'
+work_areas: []
+rollback: >-
+  Every change is additive text in seven files with no runtime coupling; git revert of the squash
+  commit restores the prior state exactly. The one ordering caveat: reverting after
+  PLAN-root-scoped-diff-base has merged would restore the below-budget S1 advisory, so re-run
+  validate --pre after any revert and reseed config/prose_budgets.yaml if the advisory reappears.
