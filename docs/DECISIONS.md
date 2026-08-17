@@ -249,7 +249,7 @@ on_trigger: "re-decide via /plan whether the deterministic subset still suffices
 conditions:
   - id: mis-routed-past-both-gates
     kind: manual
-    description: "A post-167 entry is demonstrated mis-routed past BOTH the decision-entry conformance check and the plan-critique category-consistency verdict (PLAN-migration-step-4-cfg-audit Step 12p) -> the deterministic-subset-only control proved insufficient; re-open the routing-consistency-lint question with the new failure instance as evidence."
+    description: "A post-167 entry is demonstrated mis-routed past BOTH the decision-entry conformance check and the plan-critique category-consistency verdict (.claude/skills/plan-critique/SKILL.md section 12p) -> the deterministic-subset-only control proved insufficient; re-open the routing-consistency-lint question with the new failure instance as evidence."
 ```
 
 **Related:** Decision 150 (the Significance bar enforced machine-readably), Decision 160 (point 11's accrual-rate lever, installed here at WARN tier only), Decision 134 (the two stock size ceilings this norm sits alongside), Decision 145 (the never-raise-to-fit precedent), Decision 149 (the compacted-stub exemption), Decision 84 (warehouse-safety boundary keeping `significance` index-only), Decision 153 (the shared, memoized baseline read). Roadmap refs: audits/contract-first-governance-33c8667.yaml findings CFG-01/CFG-03/CFG-07 (closed), rec-2934 (resolved by `per_entry_size_norm`), tier_item T2.56 (eventual owner of this corpus's shape; closes none of its criteria here).
