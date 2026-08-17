@@ -1,0 +1,599 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "agents-md-ambient-trim"
+intent: >-
+  Reduce the root ambient-context load every agent session pays by trimming ~7,650 bytes (~23%)
+  from AGENTS.md -- deleting dead content, condensing rationale into the Decision entries that own
+  it, and replacing restatement with pointers to the owning surface -- without weakening any
+  load-bearing rule. Lower ambient cost per session is a direct multiplier on the platform's
+  agent-efficiency North Star.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-agents-md-ambient-trim.yaml
+phase: >-
+  Prose-surface governance maintenance (Decision 43/110/127 prose taxonomy; Decision 147 Path A
+  compact-in-place). Names no tier_item deliberately: this is a human-directed ad hoc trim plus
+  rec-3098, so the Tier Item Freshness Gate is skipped under the user_explicit_out_of_scope /
+  ad_hoc_rec soft-warn exception (soft warning issued at planning time, not a tier_item claim).
+  T3.14 measures prose surfaces but is deferred_post_mvp and is NOT advanced by this plan.
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Apply the 17 adjudicated edits (8 deletes, 9 condenses) totalling ~7,650 bytes. Never split
+      into @-imported fragments (Decision 110/114). The "### Commit-message conventions" section
+      and both Safety-section deploy bullets are OUT of scope and must not be touched.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append a dated amendment to Decision 84 carrying the Iceberg-DELETE-resurrection mechanism
+      being condensed out of AGENTS.md -- verified recorded nowhere else in the repo, so without
+      this the why is lost permanently.
+  - file: scripts/checks/ops_governance/validate_warehouse_write_sources.py
+    action: Modify
+    purpose: >-
+      Comment-only repoint at line 53 ("see the AGENTS.md re-enable runbook caveat") onto
+      T4.12 / Decision 84, so the reference does not dangle once the runbook is deleted.
+  - file: scripts/preflight/ci_rca_gauges.py
+    action: Modify
+    purpose: >-
+      Comment-only repoint at line 42 ("until Lambda scheduled agents re-enable (AGENTS.md
+      runbook)") onto T4.12. Confirmed live at plan time; the sweep asserted it but could not
+      verify it.
+  - file: docs/contracts/inference-provider.yaml
+    action: Modify
+    purpose: >-
+      Repoint operative_state.scheduled_agents.ref (line 90, 'AGENTS.md runbook') onto T4.12, and
+      add the amendment_log[] entry that check_amendment_log_for_class_d requires for any parsed
+      content change to a Class D contract.
+  - file: tests/test_agents_md_citations.py
+    action: Create
+    purpose: >-
+      Standing guard that no tracked file cites a deleted AGENTS.md runbook. Red today (3 live
+      citations), green after -- and discharges the surface-retiring closure obligation.
+bundled_recommendations:
+  - rec-3098
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "AGENTS.md is at most 26,000 bytes (from 33,150), i.e. a reduction of at least 7,000 bytes."
+  - "config/prose_budgets.yaml is byte-identical to origin/main; S1 root_ambient_load_set remains 33161."
+  - "The '### Commit-message conventions' section of AGENTS.md is byte-identical to origin/main."
+  - "AGENTS.md still contains at least one literal occurrence of the string 'deploy-paths.yaml'."
+  - >-
+    No tracked file outside docs/plans/, docs/audit-prompts/, audits/ and logs/ cites an AGENTS.md
+    runbook (the strings 'AGENTS.md runbook' and 'AGENTS.md re-enable runbook' are absent).
+  - >-
+    docs/contracts/inference-provider.yaml carries a new amendment_log[] entry
+    (change_class: prose_improvement, semantic_break: false) and validate_contract_drift passes.
+  - >-
+    Decision 84 carries a dated amendment recording the Iceberg-DELETE-resurrection mechanism, and
+    validate_decisions_size still passes on both surviving ceilings.
+  - >-
+    rec-3098 is closed with an explicit resolution string via ops_data_portal --update-rec, NOT via
+    the Resolves: squash trailer (Decision 103 forbids direct-closing a semantic verdict).
+  - >-
+    Every named load-bearing rule survives in substance: the STRATEGIC suspension and its CD.17/T4.2
+    reversal condition, the per-Lambda (not blanket) gating rule stated operatively in AGENTS.md,
+    the send_later/trigger-out-of-scope rule, the auto-merge-does-not-subsume-conflict-wake rule,
+    the get_rec_write_guidance()-before-file_rec() rule, the read-cache-is-never-a-write-source hard
+    rule, the Windows-subprocess bullet, and the PowerShell prohibition.
+  - "bin/venv-python -m scripts.validate --pre exits 0."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Measure the trimmed surface and confirm the reduction target is met without breaching budget.
+    command: >-
+      bin/venv-python -c "import pathlib; a=len(pathlib.Path('AGENTS.md').read_bytes());
+      c=len(pathlib.Path('CLAUDE.md').read_bytes()); print('AGENTS.md',a,'S1',a+c);
+      assert a<=26000, f'AGENTS.md {a} > 26000'; assert a+c<=33161, f'S1 {a+c} over budget'"
+    expected: "AGENTS.md at most 26000 bytes and S1 at most 33161; prints both figures."
+    fix_if: >-
+      Over 26000 means fewer edits landed than adjudicated -- re-check the 17 edits against the plan
+      rather than deleting extra content. Over 33161 is impossible unless content was added.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A standing byte-threshold check on AGENTS.md would duplicate validate_prose_limits, which
+      already governs S1 against config/prose_budgets.yaml as the sole ratchet. A second guard on
+      one surface is the redundancy that registry explicitly warns against.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the budget file was not reseeded or otherwise modified (deliberate reservation).
+    command: "git diff --exit-code origin/main -- config/prose_budgets.yaml && echo UNCHANGED"
+    expected: "Exit 0 and prints UNCHANGED -- no diff against origin/main."
+    fix_if: >-
+      Any diff means the S1 advisory was acted on. Revert the file entirely: the freed headroom is
+      reserved for the named successor plan (see Context).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserting a config file never changes is a plan-scoped boundary for this one PR, not a durable
+      invariant -- the successor plan must be free to reseed it. Graduating this would block that.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the scope boundary held -- the Commit-message conventions section is untouched.
+    command: >-
+      git diff origin/main -- AGENTS.md | grep -E '^[-+].*(feat\(\{slug\}\)|plan\(\{slug\}\)|roadmap\(\{ids\}\)|scope\(\{slug\}\)|audit\(\{slug\}\))'
+      && echo BOUNDARY_VIOLATION && exit 1 || echo BOUNDARY_OK
+    expected: "Prints BOUNDARY_OK -- no added or removed line touches the conventions table rows."
+    fix_if: >-
+      BOUNDARY_VIOLATION means an edit strayed into the section reserved for the successor plan.
+      Restore those lines exactly as they are on origin/main.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is a one-time merge-conflict-avoidance boundary agreed with the operator for this PR
+      only; as a standing check it would permanently freeze a section that is expected to change.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the deploy-paths.yaml Class D evaluator still resolves against AGENTS.md.
+    command: "test \"$(grep -c 'deploy-paths.yaml' AGENTS.md)\" -ge 1 && echo EVALUATOR_LITERAL_PRESENT"
+    expected: "Prints EVALUATOR_LITERAL_PRESENT (currently 2 occurrences, at the two Safety deploy bullets)."
+    fix_if: >-
+      Zero occurrences breaks docs/contracts/deploy-paths.yaml's {agent_surface: AGENTS.md}
+      evaluator, failing validate_contract_drift Pass 1 on every PR. Restore the Safety bullets.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Verified at plan time that validate_contract_drift resolves every Class D evaluator in Pass 1
+      repo-wide on every run (not diff-scoped), so this invariant already has a standing guard;
+      graduating a grep would double-guard it.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep (surface-retiring closure obligation) -- no citation of the deleted
+      runbook survives anywhere in the live tree.
+    command: >-
+      ! grep -rIn --exclude-dir=.git --exclude-dir=logs --exclude-dir=audits
+      --exclude-dir=plans --exclude-dir=audit-prompts -e 'AGENTS\.md runbook'
+      -e 'AGENTS\.md re-enable runbook' . && echo NO_DANGLING_CITATIONS
+    expected: "Prints NO_DANGLING_CITATIONS -- zero matches outside history/plan/audit directories."
+    fix_if: >-
+      Each match is a dangling pointer to deleted ambient content. Repoint it at T4.12 / Decision 84
+      the same way as the three known sites; do not restore the runbook.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This exact invariant ships as tests/test_agents_md_citations.py in this same PR, so graduating
+      a registry check would create two guards for one invariant on the same commit.
+  - step: 6
+    phase: pre-deploy
+    action: Run the new dangling-citation guard test (green side of the red/green pair).
+    command: "bin/venv-python -m pytest tests/test_agents_md_citations.py -v"
+    expected: "All tests pass."
+    fix_if: >-
+      A failure names the surviving citation -- repoint it. If the test errors on collection, the
+      exclusion globs are wrong; scope them to the live tree only.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The step runs the very test being added, so graduating it into the verification registry would
+      register a check whose entire body is "run this one pytest file" -- pytest already runs it in
+      both validate tiers.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Prove the red side -- the same guard fires against the pre-change tree, confirming it is a
+      real regression guard and not a vacuous pass.
+    command: >-
+      git grep -c -e 'AGENTS\.md runbook' -e 'AGENTS\.md re-enable runbook' origin/main --
+      scripts/ docs/contracts/ | tee /dev/stderr | wc -l
+    expected: "Reports 3 matching files on origin/main (validate_warehouse_write_sources.py, ci_rca_gauges.py, inference-provider.yaml)."
+    fix_if: >-
+      Zero matches on origin/main means the guard is vacuous -- it would pass on any tree. Rewrite
+      the test to assert the invariant that actually changed.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time red/green demonstration against a specific base commit; it is meaningless as a
+      standing check because origin/main advances past the pre-change state immediately on merge.
+  - step: 8
+    phase: pre-deploy
+    action: Confirm the Class D contract edit carries its required amendment_log entry.
+    command: "bin/venv-python -m scripts.checks.contracts.validate_contract_drift"
+    expected: "Exits 0 -- no 'Contract drift (amendment)' failure for inference-provider.yaml."
+    fix_if: >-
+      "parsed content changed but no new amendment_log[] entry was added" means the entry is missing
+      or duplicates an existing one. Add a distinct entry: date, semantic_break: false,
+      change_class: prose_improvement, summary naming the ref repoint. Do not bump contract_version
+      (deploy-paths.yaml's 2026-08-13 prose_improvement precedent did not).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_contract_drift is itself the registered standing check for this invariant; this step
+      simply invokes it, so there is nothing left to graduate.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Confirm the Iceberg resurrection mechanism landed on Decision 84 and the decision-log ceilings
+      still hold.
+    command: >-
+      grep -q 'Amendment 2026-08-17' docs/DECISIONS.md && grep -qi 'resurrection' docs/DECISIONS.md
+      && bin/venv-python -m scripts.checks.governance.validate_decisions_size
+    expected: "The amendment and the mechanism text are both present, and the size check exits 0."
+    fix_if: >-
+      A missing grep means the mechanism was condensed out of AGENTS.md without being rehomed -- the
+      why is then lost permanently; add the amendment before proceeding. If the module path differs,
+      locate it via bin/venv-python -m scripts.validate --list-checks.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The ceilings are already enforced by the registered validate_decisions_size check, and the
+      amendment-presence half is a one-time landing assertion for this specific dated entry.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Confirm every load-bearing rule promised to survive is still present in AGENTS.md after the
+      trim (the anti-over-deletion check).
+    command: >-
+      bin/venv-python -c "import pathlib,sys; t=pathlib.Path('AGENTS.md').read_text(encoding='utf-8');
+      req=['STRATEGIC','CD.17','get_rec_write_guidance','send_later','auto-merge','sys.executable',
+      \"encoding='utf-8'\",'PowerShell','read cache is never a write source','manifest.yaml','never_on_main'];
+      missing=[r for r in req if r not in t]; print('MISSING:',missing) or sys.exit(1 if missing else 0)"
+    expected: "Prints MISSING: [] and exits 0 -- every load-bearing anchor survived."
+    fix_if: >-
+      Any listed anchor missing means a condense went too far and removed a rule rather than its
+      rationale. Restore the operative sentence for that rule; do not restore the surrounding prose.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      These anchors are deliberately reworded by the very next plan (successor migration step 4), so
+      a standing substring guard on AGENTS.md prose would fail on legitimate future edits -- a
+      brittle-by-construction check.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Close rec-3098 through the portal with an explicit resolution and verify the closure landed
+      (Decision 103: a semantic verdict is never a direct autoclose).
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-3098 --status closed --resolution
+      "Defect removed by deletion: the AGENTS.md re-enable runbook and its mis-attributed
+      rec-curator caveat were deleted wholesale by PLAN-agents-md-ambient-trim, so no stale T2.26
+      attribution remains in ambient context. The correct T4.3-then-T4.12 chain is already carried
+      by docs/PROJECT_CONTEXT.md. The rec's literal acceptance grep is not satisfiable post-deletion
+      (its first conjunct expects the caveat to exist and name T4.3); closed on removal-of-defect
+      evidence per Decision 103, not via the Resolves trailer."
+    expected: "Portal write succeeds; rec-3098 status is closed with the resolution recorded."
+    fix_if: >-
+      A portal failure fails loudly with no offline outbox (Decision 84 I-4) -- confirm the chain
+      with aws sts get-caller-identity --profile agent_platform and re-run. Never hand-edit
+      logs/.recommendations-log.jsonl.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-shot operational write against live warehouse state for a single rec id; it is not
+      expressible as a repeatable regression guard and requires credentials.
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Verify rec-3098 reads closed from the warehouse-backed cache (bundled-rec closure obligation).
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c "import json,pathlib;
+      r=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines()
+      if l.strip()]; m=[x for x in r if x.get('id')=='rec-3098']; print(m[0]['status'], '|',
+      (m[0].get('resolution') or '')[:60]); assert m and m[0]['status']=='closed'"
+    expected: "Prints 'closed | Defect removed by deletion: ...' and the assert passes."
+    fix_if: >-
+      Still open means the step-11 write did not commit. Re-run step 11 and re-pull; do not edit the
+      read cache, which is never a write source.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a single rec id's terminal lifecycle state at one moment in time -- inherently
+      non-repeatable and credential-bound, so it cannot serve as a standing regression guard.
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      Run the authoritative fast presubmit and confirm the expected S1 under-budget advisory appears
+      and is correctly non-blocking.
+    command: "bin/venv-python -m scripts.validate --pre 2>&1 | tee /tmp/pre.log; grep -i 'below budget' /tmp/pre.log || true"
+    expected: >-
+      validate --pre exits 0. The S1 'bytes below budget 33161; reseed config/prose_budgets.yaml to
+      ratchet down' advisory is present and does NOT fail the run.
+    fix_if: >-
+      A non-zero exit is a real failure -- diagnose it. If the advisory is absent, the trim did not
+      land. Do NOT reseed the budget in response to the advisory under any circumstances.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Marking a step that invokes scripts/validate.py as graduated would register a check that runs
+      validate.py from inside validate.py -- the recursion the hermetic-authoring rule forbids.
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Confirm the validate_warehouse_write_sources.py citation repoint touched comment lines only,
+      leaving the check's logic byte-identical.
+    command: >-
+      ! (git diff origin/main -- scripts/checks/ops_governance/validate_warehouse_write_sources.py |
+      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
+    expected: "Prints COMMENT_ONLY -- every changed line in the diff is a comment line."
+    fix_if: >-
+      A non-comment line changed, so this is no longer a comment-only edit and the waiver in
+      test_obligations is void. Either revert the logic change or add a real red/green test for it.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a property of this PR's own diff against a specific base commit; it is meaningless as a
+      standing check because the diff disappears the moment the change merges.
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      Confirm the ci_rca_gauges.py citation repoint touched comment lines only, leaving the gauge's
+      logic byte-identical.
+    command: >-
+      ! (git diff origin/main -- scripts/preflight/ci_rca_gauges.py |
+      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
+    expected: "Prints COMMENT_ONLY -- every changed line in the diff is a comment line."
+    fix_if: >-
+      A non-comment line changed, so this is no longer a comment-only edit and the waiver in
+      test_obligations is void. Either revert the logic change or add a real red/green test for it.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a property of this PR's own diff against a specific base commit; it is meaningless as a
+      standing check because the diff disappears the moment the change merges.
+test_obligations:
+  - source: AGENTS.md
+    behavior: >-
+      Deleting the ambient re-enable runbook leaves no dangling citation to it anywhere in the live
+      tree -- the failure mode this change could plausibly introduce.
+    verification_step: 6
+    test_selector: "tests/test_agents_md_citations.py::test_no_dangling_agents_md_runbook_citations"
+    red_green_expectation: >-
+      Red before (3 live citations: validate_warehouse_write_sources.py:53, ci_rca_gauges.py:42,
+      inference-provider.yaml:90), green after all three are repointed.
+  - source: scripts/checks/ops_governance/validate_warehouse_write_sources.py
+    behavior: "The check's logic is unchanged; only the comment's pointer target moves to T4.12 / Decision 84."
+    verification_step: 14
+    command: >-
+      ! (git diff origin/main -- scripts/checks/ops_governance/validate_warehouse_write_sources.py |
+      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
+    waiver_reason: >-
+      Comment-only edit with no behavior change, so no test can go red-then-green on it; the
+      companion command proves the diff touches comment lines exclusively, and the repointed target
+      is guarded by the new dangling-citation test.
+  - source: scripts/preflight/ci_rca_gauges.py
+    behavior: "The gauge's logic is unchanged; only the comment's pointer target moves to T4.12."
+    verification_step: 15
+    command: >-
+      ! (git diff origin/main -- scripts/preflight/ci_rca_gauges.py |
+      grep -E '^[-+]' | grep -vE '^[-+]{3}' | grep -vE '^[-+][[:space:]]*#' | grep -q .) && echo COMMENT_ONLY
+    waiver_reason: >-
+      Comment-only edit with no behavior change, identical rationale to the sibling check module
+      above; the repointed target is guarded by the new dangling-citation test.
+  - source: docs/contracts/inference-provider.yaml
+    behavior: >-
+      The scheduled_agents ref points at a live owner (T4.12) and the Class D amendment_log
+      discipline is satisfied; the provider-tier body and its Decision 116 note are untouched.
+    verification_step: 8
+    command: "bin/venv-python -m scripts.checks.contracts.validate_contract_drift"
+    waiver_reason: >-
+      The invariant already has a registered standing owner in validate_contract_drift
+      (check_amendment_log_for_class_d); adding a mirror test would duplicate an enforced gate
+      rather than close an unguarded behavior.
+constraints:
+  - "No rescue agents or workaround loops (Decision 55)."
+  - >-
+    NEVER split AGENTS.md into additional @-imported fragments (Decision 110/114 anti-fragmentation):
+    fragments stay transitively loaded, so the bytes move without reducing ambient load. This is the
+    one place the prose registry deliberately diverges from SLOC decompose-by-default.
+  - >-
+    Do NOT modify config/prose_budgets.yaml in any way. S1 root_ambient_load_set stays at 33161. The
+    'below budget ... reseed to ratchet down' advisory is EXPECTED, correct, and must not be acted
+    on, reported as a defect, or left as follow-up work.
+  - >-
+    Do NOT edit the '### Commit-message conventions' section -- reserved for the successor plan
+    (audits/contract-first-governance-33c8667.yaml migration step 4) to avoid a merge conflict.
+  - >-
+    AGENTS.md must retain at least one literal occurrence of 'deploy-paths.yaml'. Both Safety-section
+    deploy bullets (Decision 125/126) are OUT of scope: deleting them would break
+    docs/contracts/deploy-paths.yaml's {agent_surface: AGENTS.md} Class D evaluator, which
+    validate_contract_drift resolves repo-wide in Pass 1 on every run.
+  - >-
+    Relocate content ONLY to docs/DECISIONS.md. Every prose surface is zero-headroom: moving content
+    into any **/CLAUDE.md (S2), .claude/skills/*/SKILL.md (S4) or docs/PROJECT_CONTEXT.md (S8) moves
+    the breach instead of resolving it and would force that target into its own authorized raise.
+    docs/DECISIONS.md is deliberately outside the prose-budget registry (governed by
+    validate_decisions_size instead), which is why it is the one legal target.
+  - >-
+    No new standing prose-architecture doc under docs/ (Decision 86) and no new docs/contracts/ file:
+    Decision 168 would require a declared subject and a demonstrably-resolving evaluator, which this
+    change cannot honestly supply.
+  - >-
+    Windows hedges are LIVE RULES, not dead content (T5.1 deferred_post_mvp; Decision 109 keeps the
+    VM opportunistically usable). The Windows-subprocess bullet (encoding='utf-8', sys.executable)
+    and the PowerShell prohibition must survive verbatim; only the em-dash rationale clause is safe.
+  - >-
+    Do NOT strip the two 'This exists because...' clauses from the live CI-green-wake and
+    merge-conflict-wake bullets (423 B). That rationale is what stops agents reintroducing a
+    sleep/poll loop against explicit harness suggestions to poll. Deliberately declined.
+  - >-
+    Close rec-3098 via ops_data_portal --update-rec with an explicit resolution, NOT via the
+    'Resolves: rec-3098' squash trailer. Decision 103 permits a direct close only for deterministic
+    acceptance-probe satisfaction; this is a semantic removal-of-defect verdict, and rec-autoclose.yml
+    would execute the trailer as a direct close. Omit rec-3098 from the trailer entirely.
+  - >-
+    Keep the per-Lambda gating rule stated OPERATIVELY in AGENTS.md (one line) and point at the
+    planning skill for method only. Decision 139: AGENTS.md is the realized harness-portability
+    hedge, and .claude/skills/ is Layer 4 whose only consumer is claude_code_interactive -- a foreign
+    harness reading AGENTS.md would otherwise lose the rule entirely.
+  - >-
+    Only modify files listed in the Scope table. Out-of-scope bugs become recommendations via
+    scripts/ops_data_portal.py, not inline fixes.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND (125 of 125 triaged).
+    CITE -- Decision 147 (Path A compact-terminal-content-in-place, the shape authority for this
+    whole approach, over Path C split and Path D bare ceiling raise), Decision 151 (amendment FORM:
+    dated, source-cited, appended, never rewriting original text), Decision 121 (precedent for
+    deleting a dead doc outright rather than converting it), Decision 86 (routes rationale to
+    DECISIONS.md; its delete_pointer obligation is discharged because T4.12/T4.3 carry the live
+    watch-signal), Decision 168 (Class D evaluator obligation), Decision 160 (NOT Decision 145 --
+    the live-byte ceiling was retired; the surviving ceilings are 132 live headers and 780,000
+    combined bytes), Decision 118 (CD.25 contract-ratification ritual governing the amendment_log
+    entry), Decision 84 (the amendment target; I-4 is the invariant the relocated mechanism
+    explains), Decision 114 (keep the 'One file is better than two files' bullet intact -- its
+    Decision clause cites this very section by name), Decision 116 (do not disturb the
+    scheduled_agents note being repointed), Decision 112 (ratifies CD.21, the already-ratified home
+    of the CI-runner fact being deleted), Decision 103, Decision 139, Decision 127, Decision 43,
+    Decision 93.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    BUDGET RESERVATION (deliberate, operator-directed -- not an oversight). config/prose_budgets.yaml
+    is intentionally NOT reseeded and NOT touched; S1 root_ambient_load_set stays at 33161 while the
+    measured surface drops to roughly 25,500 bytes. The freed headroom is reserved for a named
+    successor: migration step 4 of audits/contract-first-governance-33c8667.yaml, which adds a
+    change-record content rule to AGENTS.md's Commit-message conventions section (~600 bytes) and
+    will ratchet S1 down to its true measured size at that point. Reseeding now would force that
+    successor to take an authorized raise for bytes this change just freed. Leaving current < budget
+    is mechanically legal: scripts/checks/prose/prose_limits.py errors only when current > budget and
+    emits a non-blocking advisory when current < budget.
+  - >-
+    Decision-scout Decision 43 [WARN] on that reservation is ACCEPTED WITH DEFERRAL by explicit
+    operator direction ("no reseed"). The scout's observation stands on the record: the reserved
+    headroom is ~7,650 bytes against a ~600-byte stated successor need, so the review moment the
+    ratchet normally provides is deferred, not merely delayed, until the successor lands. The
+    operator was presented with this gap and chose to proceed.
+  - >-
+    Decision-scout Decision 127 [NOTE] -- the deleted re-enable runbook's operator procedure is
+    rehomed nowhere. ACCEPTED (loss taken) by explicit operator direction, on three grounds: (a) the
+    procedure instructs 'terraform plan then terraform apply' and a local build_lambda --deploy,
+    both of which Decision 125/126 now forbid as routine agent actions, so rehoming it into a
+    contract would propagate a governance violation; (b) Decision 127's own Problem statement names
+    an operator procedure sitting ambiently in a Layer-1 surface as exactly the failure mode it
+    exists to fix; (c) the steps remain recoverable from git history and terraform/scheduled_agents.tf,
+    and when T4.12 (deferred_post_mvp, reactivatable per Decision 93) is picked up the procedure must
+    be re-authored against the current deploy model regardless.
+  - >-
+    Decision-scout Decision 139 [WARN] on harness portability is PARTIALLY ADOPTED. The Lambda
+    per-Lambda gating rule stays stated operatively in AGENTS.md (constraint above) because it is a
+    harness-neutral engineering rule. The flag is REJECTED for the /overseer condense: /overseer is a
+    Claude Code slash command that no foreign harness can invoke, so relocating its gate names and
+    model assignments to the overseer skill strands no harness-neutral content.
+  - >-
+    CI-RCA HARD BLOCK deferral (planning skill Related-Work check). rec-3166
+    ("validate_graduation_completeness leaks outer push_context_base into injected root",
+    scripts/checks/verification/validate_graduation_completeness.py) was open and unresolved at
+    planning time. This plan satisfies NONE of the three Related-Work conditions -- different file,
+    different Decision Record, and a different failure category (this is prose-surface governance;
+    rec-3166 is a check-module scoping defect). Deferral rationale: rec-3166 is ALREADY BEING
+    HANDLED by another agent in a concurrent session (operator-confirmed at planning time), so it is
+    neither unowned nor blocked by this deferral. Independently, the two changes share no file and no
+    surface, so sequencing them buys nothing, and this trim is a prerequisite for a queued successor
+    plan whose byte budget depends on it. Implementers should expect rec-3166 to close outside this
+    plan and must not patch scripts/checks/verification/validate_graduation_completeness.py here.
+  - >-
+    Measured byte arithmetic (re-measured at planning time; sweep figures independently confirmed
+    within 0.5%). Deletes 3,658 B: runbook 1,957, T2.12 security-gate bullet 654, CI-runner section
+    464, stale REVERSAL html comment 177, duplicate validate.py sentence 139, INTENT-grandfather
+    sentence 120, venv-wrapper clause 104, em-dash rationale clause 43. Condenses 4,114 B net:
+    git-ops step-4 bullets 1,662->427 (1,235), instruction-architecture table 859->212 (647),
+    STRATEGIC bullet 976->476 (500), Lambda-gating bullet 711->290 (421, revised up to preserve the
+    operative line per Decision 139), OAuth section 754->372 (382), Iceberg mechanism 787->408 (379),
+    Precision Context Injection 453->180 (273), /overseer paragraph 564->351 (213), SLOC rationale
+    clause 182->118 (64). Total ~7,650 B; AGENTS.md 33,150 -> ~25,500.
+  - >-
+    The Iceberg-resurrection mechanism is verified recorded NOWHERE else: grep for
+    resurrect/restage/re-inject across docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md returns no
+    match. _prepare_record is live at scripts/ops_writer.py:199, so the mechanism text is accurate
+    and current, not stale. The Decision 84 amendment is therefore load-bearing, not bookkeeping.
+  - >-
+    docs/DECISIONS.md headroom at planning time: 125 of 132 live '## Decision' headers, 734,356 of
+    780,000 combined bytes (45,644 free). The amendment appends to the existing Decision 84 entry, so
+    it adds no header and is exempt from the Decision 167 per-entry authoring cap, which measures
+    only NEW entries absent from the baseline.
+  - >-
+    rec-3098 substance check: docs/PROJECT_CONTEXT.md already carries the correct dependency chain
+    ("T2.26 migrated ops queue substrate -> T4.3 priority-queue producer repoint to DuckLake" and
+    "T4.3 first repoints rec-curator/priority-queue writes ... T4.12 then re-enables"), so deleting
+    the mis-attributed caveat loses no substance -- it removes a second, wrong copy.
+  - >-
+    Branch was 0 commits behind origin/main at planning time with no overlapping scope files, so the
+    Main Divergence Assessment is a no-op. Preflight: venv ok, creds ok, no uncommitted changes.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Re-read AGENTS.md in full before editing -- line numbers in this plan are from the planning-time
+    tree and shift as edits land; anchor every edit on its section heading and quoted text, never on
+    a line number.
+execution_steps:
+  - >-
+    AGENTS.md -- apply the 8 deletes: the entire "### Re-enable Lambda scheduled agents" runbook
+    (heading through the Verify block); the stale "<!-- REVERSAL: ... -->" html comment at the top of
+    Temporary Operational Constraints; the T2.12 security-gate bullet; the entire "### CI runner
+    (GitHub-hosted)" section; the duplicate "never add a check to ci.yml without adding it to
+    validate.py first" sentence in Merge protocol (the Git-ops copy is canonical and the section
+    already defers to it); the INTENT-grandfather sentence; the venv-wrapper platform-detection
+    clause (keep the rule); the em-dash rationale clause (keep the rule). Keep the "## Operational
+    runbooks" heading -- the OAuth subsection still lives under it.
+  - >-
+    AGENTS.md -- apply the 9 condenses, dropping rationale and restatement while keeping every
+    operative rule: git-ops step-4 harness-provenance / send_later-retired / durable-successor
+    bullets (keep: send_later and trigger calls for CI-wait or merge-conflict-wait are out of scope;
+    auto-merge retires the CI-green wake but does NOT subsume the merge-conflict wake, so
+    pr-conflict-signal.yml stays necessary) -- leave the CC-web permission-gotcha bullet fully
+    intact; instruction-architecture section to a pointer at docs/contracts/instruction-architecture.yaml
+    (drop the 5-row table it restates and the dead "Claude Code is the 4th consumer" claim -- the
+    contract declares only two consumers -- while keeping the live note that .github/prompts/scheduled/
+    and .github/agents/schedule.yaml are retained); STRATEGIC bullet (keep the suspension, the
+    IMPLEMENTATION-only rule, the suspended >5-files/>8-steps heuristic, and the CD.17/T4.2 reversal
+    condition; drop the executor-queue derivation and the list of enforcing surfaces); Lambda-gating
+    bullet (keep one operative line -- gating is per-Lambda not blanket, active artifacts need
+    build+deploy+smoke-test, stubs do not, config/agent/ is not packaged -- then point at the
+    planning skill for method); OAuth section (keep setup command, secret name, do-not-share; drop
+    the rotation procedure and the duplicated 2027-05-31 expiry, both carried by
+    .github/workflows/ghas-probe.yml's header); Iceberg mechanism (keep the hard rule "a read cache
+    is never a write source"; move the mechanism to Decision 84); Precision Context Injection (keep
+    the get_rec_write_guidance()-before-file_rec() rule; drop rationale owned by Decision 66);
+    /overseer paragraph (keep not-a-fifth-tier, never bypasses the four-tier workflow or the Decision
+    67 freeze, IMPLEMENTATION-only, does not consume the rec queue; drop G0/G1/G3 names and the
+    Fable/Opus/Sonnet assignments); SLOC rationale clause (drop the model-portability sentence,
+    verbatim in Decision 128 at docs/DECISIONS.md:2395).
+  - >-
+    docs/DECISIONS.md -- append a dated amendment to the existing Decision 84 entry in Decision 151
+    form ("> **[Amendment 2026-08-17, PLAN-agents-md-ambient-trim]:** ..."), carrying the
+    Iceberg-DELETE-resurrection mechanism verbatim in substance: an Iceberg DELETE removes only a
+    snapshot, so a row re-staged from a stale local cache on any clone, runner or worktree is
+    re-injected as a new append and wins the SCD2 dedupe because _prepare_record refreshes
+    last_updated_timestamp = now, producing an infinite resurrection loop in which deletes never
+    stick; note it is scoped to the still-Iceberg tables and that the never-re-stage-from-a-read-cache
+    rule applies to DuckLake tables regardless. Append only -- never rewrite Decision 84's existing
+    text or its 2026-07-03 amendment.
+  - >-
+    scripts/checks/ops_governance/validate_warehouse_write_sources.py -- repoint the line-53 comment
+    from "see the AGENTS.md re-enable runbook caveat" to T4.12 / Decision 84. Comment text only; do
+    not touch the check's logic.
+  - >-
+    scripts/preflight/ci_rca_gauges.py -- repoint the line-42 comment from "(AGENTS.md runbook)" to
+    T4.12. Comment text only; do not touch the gauge's logic.
+  - >-
+    docs/contracts/inference-provider.yaml -- change operative_state.scheduled_agents.ref from
+    "AGENTS.md runbook" to a T4.12 reference, and prepend an amendment_log[] entry (date 2026-08-17,
+    semantic_break: false, change_class: prose_improvement, summary naming the ref repoint off the
+    deleted ambient runbook). Do not bump contract_version and do not disturb the adjacent Decision
+    116 note.
+  - >-
+    tests/test_agents_md_citations.py -- create the guard: walk tracked files excluding .git, logs/,
+    audits/, docs/plans/ and docs/audit-prompts/, and assert no file contains "AGENTS.md runbook" or
+    "AGENTS.md re-enable runbook". Include a docstring naming this plan and T4.12 so a future reader
+    knows why the guard exists.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55). Do NOT reseed config/prose_budgets.yaml in response to the step-13 advisory.
+  - >-
+    Commit and hand off. Omit rec-3098 from the "Resolves:" trailer (Decision 103 -- it is closed
+    explicitly in VP step 11 instead). Use the feat({slug}): prefix.
+  - "Report: what was implemented, verification results, and the final measured AGENTS.md byte size."
+work_areas: []
+rollback: >-
+  Single-commit revert restores AGENTS.md, the three repointed citations, the Decision 84 amendment
+  and the new test together. config/prose_budgets.yaml is untouched by this change, so a revert
+  cannot breach S1 (the surface returns to its pre-change 33,150 bytes, still at budget). rec-3098's
+  portal closure is NOT reverted by a git revert -- if the change is rolled back, re-open rec-3098
+  via ops_data_portal --update-rec with a resolution noting the revert.
