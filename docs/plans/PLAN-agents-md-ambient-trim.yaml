@@ -401,6 +401,27 @@ verification_plan:
     graduation_waiver_reason: >-
       Asserts a property of this PR's own diff against a specific base commit; it is meaningless as a
       standing check because the diff disappears the moment the change merges.
+  - step: 16
+    phase: pre-deploy
+    action: >-
+      Run the FULL validation tier before handoff, as handoff_policy.full_validation_required_before_commit
+      declares. This is the pre-handoff gate the fast tier does not substitute for.
+    command: >-
+      bin/venv-python -m scripts.validate > /tmp/full.log 2>&1; rc=$?; tail -60 /tmp/full.log;
+      test $rc -eq 0 && echo FULL_TIER_GREEN
+    expected: "Prints FULL_TIER_GREEN -- the full tier exits 0."
+    fix_if: >-
+      A non-zero exit is a real failure -- diagnose and forward-fix, never auto-revert. The full tier
+      can take up to ~30 minutes (rec-3120): let it finish rather than killing it early and assuming
+      it hung. As with step 13 the exit code is captured from a redirect, not a pipeline, so a RED
+      run cannot report 0. Do NOT reseed config/prose_budgets.yaml in response to the S1 advisory
+      this run also prints.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating a step whose command is `-m scripts.validate` would register a verification-registry
+      check that runs the entire validate suite from inside the validate suite -- unbounded recursion,
+      the same bar that applies to the fast-tier step.
 test_obligations:
   - source: AGENTS.md
     behavior: >-
