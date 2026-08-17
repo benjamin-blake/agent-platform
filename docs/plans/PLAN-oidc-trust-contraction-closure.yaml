@@ -259,11 +259,13 @@ verification_plan:
       assert 'rec-3132' not in t, 'stale rec-3132 time-box marker survives';
       assert 'DEP-05 (a dedicated trust-boundary control) is' not in t,
       'stale DEP-05-is-open premise survives (T2.50 completed 2026-07-24)';
-      import pathlib as _pl;
-      stale=[f for f in ['terraform/personal/oidc.tf','terraform/bootstrap/github_ci_apply.tf',
-      'tests/checks/iam_tf/test_oidc_trust_slug_invariants.py']
-      if 'PR-3' in _pl.Path(f).read_text()];
-      assert not stale, f'stale PR-3 pointers survive in {stale}';
+      import pathlib as _pl, re as _re;
+      _files=['terraform/personal/oidc.tf','terraform/bootstrap/github_ci_apply.tf',
+      'terraform/bootstrap/github_ci_apply_policy.tf',
+      'tests/checks/iam_tf/test_oidc_trust_slug_invariants.py'];
+      stale=[f for f in _files if 'PR-3' in _pl.Path(f).read_text()
+      or _re.search(r'VP steps? [0-9]', _pl.Path(f).read_text())];
+      assert not stale, f'dangling PR-3 / VP-step pointers survive in {stale}';
       print('reconcile-narrow-ok')"
     expected: "reconcile-narrow-ok"
     fix_if: >-
@@ -500,7 +502,8 @@ verification_plan:
       Deliberately NOT called "the acknowledge-and-retry path": in terraform/CLAUDE.md that names the
       red-unlatch form with acknowledge_red_commit SET, and supplying an unlatch input here would
       clear a red record nobody reviewed. If the record is already red this dispatch is REFUSED --
-      that is a separate incident (step 9's fix_if), not this step. Proves the ref:refs/heads/main
+      that is a separate incident -- a red record predating this dispatch, whose own remedy is the
+      reviewed acknowledge-and-retry unlatch (terraform/CLAUDE.md), not anything in this plan. Proves the ref:refs/heads/main
       form post-contraction.
     command: >-
       echo "DISPATCH FIRST: mcp__github__actions_run_trigger(method='run_workflow',
@@ -514,12 +517,24 @@ verification_plan:
       b=dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']); assert t>b,
       f'no advance: {t} <= {b}'; print('apply-liveness-ok', raw)" &&
       aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --region eu-west-2
-      --profile agent_platform_admin | bin/venv-python -c "import json,sys; d=json.load(sys.stdin);
-      assert d['status']=='green', d['status']; print('convergence-green-ok', d['status'])"
+      --profile agent_platform_admin | bin/venv-python -c "import json,sys,os,datetime as dt; d=json.load(sys.stdin);
+      assert d['status']=='green', d['status'];
+      assert dt.datetime.fromisoformat(d['timestamp'].replace('Z','+00:00')) >
+      dt.datetime.fromisoformat(os.environ['BOOTSTRAP_APPLY_TS']),
+      f\"convergence record NOT REWRITTEN by this dispatch (ts={d['timestamp']}) -- a guard-BLOCK
+      routes, skips the apply AND the record write, and the run still exits SUCCESS, so 'green' here
+      is the stale record from the merge apply\";
+      print('convergence-green-and-fresh-ok', d['timestamp'])"
     expected: >-
-      "apply-liveness-ok <timestamp>" later than BOOTSTRAP_APPLY_TS, then "convergence-green-ok
-      green" -- both asserted, neither merely printed.
+      "apply-liveness-ok <timestamp>" later than BOOTSTRAP_APPLY_TS, then
+      "convergence-green-and-fresh-ok <timestamp>" -- the record must be BOTH green AND rewritten by
+      this dispatch. Green alone is insufficient: a guard-BLOCK dispatch routes, applies nothing,
+      skips the record write, and still exits SUCCESS.
     fix_if: >-
+      A record that is green but NOT rewritten means the dispatch guard-BLOCKED and routed: it applied
+      nothing, so the apply role's liveness is still proven (the assume happens at the credentials step
+      regardless) but the convergence claim is not. Investigate the routed diff -- rec-2755's spurious
+      DuckLake layer replace is the known cause -- and do not read the SUCCESS conclusion as an apply.
       An ABSENT RoleLastUsed is the signature of a REPLACED role -- exactly the destroy/replace case
       step 10's fix_if calls catastrophic -- so treat it as that incident, never as reporting lag. A
       failed assume with a present timestamp is not the sub-form distinction: step 12 already proved
@@ -548,8 +563,12 @@ verification_plan:
     fix_if: >-
       A role that has not advanced after its named exerciser has DEMONSTRABLY run (check that run's
       assume-role step in its job log) is a real regression -- follow the rollback field's remedy
-      (correct the immutable literal in BOTH roots, never re-add the unmintable name-only entries) and
-      re-apply the personal root via the gated path, then RCA. Do not declare failure on a role whose exerciser has not yet fired;
+      (correct the immutable literal in BOTH roots, never re-add the unmintable name-only entries).
+      ORDERING DIFFERS BY ROLE HERE: branch and pr keep their ARNs in the narrowed IAMRoleReconcile
+      Sid, so a gated personal-root re-apply works for them directly. PLANNER DOES NOT -- step 10
+      removed its ARN, so a gated trust re-apply on planner AccessDenies (the PR-1 failure, run
+      31879737554). For planner, take rollback's post-step-10 order: a second operator bootstrap apply
+      restoring the planner ARN first, then the personal re-apply. Then RCA. Do not declare failure on a role whose exerciser has not yet fired;
       that is an unmet precondition, not evidence.
   - step: 16
     phase: post-deploy
@@ -720,8 +739,11 @@ context:
   - >-
     WHY THE CONTRACTION CANNOT CHANGE AN ASSUME OUTCOME. It removes only entries that are provably
     unmintable, so the surviving entry -- and therefore every assume decision -- is textually unchanged.
-    The residual risk is a typo in the surviving entry, which steps 9 and 12's document proofs catch
-    exactly. Steps 13-15 add live post-contraction re-assume for all five roles anyway, per the
+    The residual risk is a typo in the surviving entry. Step 9 does NOT catch that -- its regex is a
+    FORM check (OWNER@digits/REPO@digits), so a wrong owner or repo id still matches and reports OK.
+    The exact-literal catches are VP4 and the existing test_both_roots_declare_the_immutable_entry
+    (both pre-merge, both asserting the exact expected ids), plus VP12 post-apply, which is the only
+    live-IAM exact-literal proof and covers github_ci_apply alone. Steps 13-15 add live post-contraction re-assume for all five roles anyway, per the
     "prove it, do not argue it" standard.
   - >-
     LEDGER CORRECTION (2026-08-16, this planning session's own error). rec-3142 was closed by
@@ -763,7 +785,7 @@ context:
     as current-minus-origin/main, so once PR-1 merges the graduated rows are in the
     baseline and a later feat({slug}) PR would fail the check with "no matching new-in-diff registry
     row" -- and it is pre=True, so that is an authoritative gate, not advisory. The escapes (a
-    non-feat commit subject, or flipping step 6 to waive) are the workarounds rec-3139 records as
+    non-feat commit subject, or flipping the affected steps to hermetic:false) are the workarounds rec-3139 records as
     rejected. So the discharge is REHOMED to its own recommendation, precisely as Decision 172 point
     4 rehomed this very contraction onto rec-3142. That is this repository's established pattern for
     an evidence-gated governance edit, not a novel dodge.
@@ -857,7 +879,12 @@ execution_steps:
     pointers, all naming PLAN-repo-rename-relicense's PR-3 whose non-existence is this plan's own
     premise: line 3 (a "PR-3 contraction" reference), line 15 (a dangling verification-step pointer
     into that plan's numbering), and line 33 (another one). Their line numbers are given rather than
-    their literal text so this instruction does not itself read as a live cross-reference. Leaving dangling pointers in the very file this plan modifies would reproduce the
+    their literal text so this instruction does not itself read as a live cross-reference. The same
+    sweep applies to the two .tf comment re-groundings and to github_ci_apply_policy.tf's deleted
+    block: VP step 5 asserts that NO edited file retains a "PR-3" string or a dangling "VP step N"
+    pointer. Naming PLAN-repo-rename-relicense or Decision 171 as PROVENANCE is fine and is NOT
+    swept -- what must go is a pointer into a numbering that no longer exists.
+    Leaving dangling pointers in the very file this plan modifies would reproduce the
     comment-outlives-its-referent defect this plan exists to close; VP step 5 now asserts their
     absence. Confirm the new test FAILS before editing the .tf.
   - >-
@@ -911,8 +938,10 @@ rollback: >-
   The real failure mode is a WRONG IMMUTABLE ENTRY (a typo, or the wrong owner/repo id), and the real
   remedy is to correct that literal -- restoring it to
   benjamin-blake@217728084/theseus@1252427466 in BOTH roots in one commit -- and re-apply the personal
-  root through tf-gated-apply. That is caught by design before it can bite: VP9 and VP12 are document
-  proofs read from live IAM for exactly this. Before step 10 (bootstrap apply) the widening is still
+  root through tf-gated-apply. A wrong literal is caught pre-merge by VP4 and by the existing
+  test_both_roots_declare_the_immutable_entry, which assert the exact expected ids -- NOT by VP9,
+  whose regex is a form check that a typo'd id still satisfies. VP12 is the only live-IAM
+  exact-literal proof, and it covers github_ci_apply alone. Before step 10 (bootstrap apply) the widening is still
   live, so the apply role retains the trust-rewrite grant that re-apply needs.
   After step 10 the widening is gone, so any personal-root trust re-apply on planner or deploy would
   AccessDeny; recovery is a second operator bootstrap apply restoring those two ARNs FIRST, then the
@@ -921,7 +950,11 @@ rollback: >-
   forbids, BY DESIGN (a re-widening must be a reviewed edit, not a quiet one). The out-of-band apply
   runs from a working tree and is not machine-blocked, but the commit persisting it is unmergeable
   unless it carries a same-commit edit to that pin test. Budget for that edit; do not discover it
-  under time pressure. Note the immutable entry is never
+  under time pressure. Two further costs of that emergency PR, both under time pressure: it touches
+  /terraform/bootstrap/, so it hits the SAME CODEOWNERS require_code_owner_review gate this plan
+  flags for the main PR -- a reviewer must be reachable; and until it merges, the out-of-band applied
+  state is drift NO monitor detects, because terraform-drift.yml and reconcile.yml both run with
+  WORKDIR terraform/personal and neither covers terraform/bootstrap. Note the immutable entry is never
   removed at any stage, so no rollback path can reproduce the 2026-08-15 total outage; the worst case
   is a return to the current over-wide steady state, not an outage. The test and registry
   changes are independently revertible and carry no infrastructure effect.
