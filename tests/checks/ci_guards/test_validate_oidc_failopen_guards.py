@@ -137,6 +137,119 @@ jobs:
 """
 
 
+_MALFORMED_YAML_WORKFLOW = """
+name: fixture
+on: push
+jobs:
+  drift:
+    steps: [unclosed
+"""
+
+_NON_DICT_DOCUMENT_WORKFLOW = """
+- not
+- a
+- mapping
+"""
+
+_NON_DICT_JOBS_WORKFLOW = """
+name: fixture
+on: push
+jobs: not-a-mapping
+"""
+
+_NON_DICT_JOB_WORKFLOW = """
+name: fixture
+on: push
+jobs:
+  drift: not-a-mapping
+"""
+
+_NON_LIST_STEPS_WORKFLOW = """
+name: fixture
+on: push
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps: not-a-list
+"""
+
+# A non-dict step element must be skipped identically by BOTH loops that walk the steps list --
+# _job_search_text's corpus-building loop (line 75) and _scan_job's candidate loop (line 101) --
+# so the fixture threads a proper compliant step alongside the malformed one to prove the scan
+# still classifies the job correctly rather than merely not crashing.
+_NON_DICT_STEP_ELEMENT_WORKFLOW = """
+name: fixture
+on: push
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - just-a-string-not-a-mapping
+      - name: Configure AWS credentials
+        id: oidc_drift
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::123:role/x
+      - name: Fail loudly on assume failure
+        if: steps.oidc_drift.outcome != 'success'
+        run: exit 1
+"""
+
+# Mixes a str env value (the classifier itself) with a non-str value so the isinstance filter on
+# line 84 is genuinely exercised -- a str-only env dict would leave the filter's non-str branch
+# untested even though the line executes.
+_MIXED_ENV_TYPES_WORKFLOW = """
+name: fixture
+on: push
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        id: oidc_drift
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::123:role/x
+      - name: Classifier lives in env, mixed with a non-str value
+        env:
+          NEGATIVE_CHECK: "steps.oidc_drift.outcome != 'success'"
+          RETRY_COUNT: 3
+        run: echo hi
+"""
+
+
+class TestDefensiveBranchesOnMalformedInput:
+    def test_skips_file_that_fails_to_parse(self, tmp_path: Path) -> None:
+        failed = _run(tmp_path, "malformed.yml", _MALFORMED_YAML_WORKFLOW)
+        assert failed == []
+
+    def test_skips_non_dict_top_level_document(self, tmp_path: Path) -> None:
+        failed = _run(tmp_path, "non_dict_doc.yml", _NON_DICT_DOCUMENT_WORKFLOW)
+        assert failed == []
+
+    def test_skips_non_dict_jobs_mapping(self, tmp_path: Path) -> None:
+        failed = _run(tmp_path, "non_dict_jobs.yml", _NON_DICT_JOBS_WORKFLOW)
+        assert failed == []
+
+    def test_skips_non_dict_job(self, tmp_path: Path) -> None:
+        failed = _run(tmp_path, "non_dict_job.yml", _NON_DICT_JOB_WORKFLOW)
+        assert failed == []
+
+    def test_skips_non_list_steps_value(self, tmp_path: Path) -> None:
+        failed = _run(tmp_path, "non_list_steps.yml", _NON_LIST_STEPS_WORKFLOW)
+        assert failed == []
+
+    def test_skips_non_dict_step_element_and_still_finds_negative_branch(self, tmp_path: Path) -> None:
+        failed = _run(tmp_path, "non_dict_step.yml", _NON_DICT_STEP_ELEMENT_WORKFLOW)
+        assert failed == []
+
+    def test_env_filter_tolerates_non_str_values_and_still_matches_str_classifier(self, tmp_path: Path) -> None:
+        failed = _run(tmp_path, "mixed_env.yml", _MIXED_ENV_TYPES_WORKFLOW)
+        assert failed == []
+
+
 class TestFiresOnMaskingShapes:
     def test_fires_on_missing_id(self, tmp_path: Path) -> None:
         failed = _run(tmp_path, "no_id.yml", _NO_ID_WORKFLOW)
