@@ -227,6 +227,15 @@ verification_plan:
       Each match is a dangling pointer to deleted ambient content. Repoint it at T4.12 / Decision 84
       the same way as the four known sites; do not restore the runbook. Uses git grep (tracked files
       only) rather than grep -r, which would descend into .venv and other untracked trees.
+      TRACKED-STATE TRAP (hit for real on this plan, PR #928 CI): because git grep and git ls-files
+      see ONLY TRACKED files, running this step while tests/test_agents_md_citations.py is still
+      untracked yields a FALSE PASS -- the guard file is invisible to its own sweep. Both this step
+      and step 6 went green locally that way and then failed in CI the moment the file was
+      committed, because the assertion message on its last line carried a raw
+      "AGENTS.md" + " runbook" literal that the split-literal discipline had been applied to
+      _PATTERNS but not to the message. RUN BOTH STEPS AFTER `git add` OF THE GUARD, never before.
+      The guard now self-verifies (it asserts its own path appears in the scanned set), so this
+      false-pass mode fails loudly instead of passing vacuously.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -497,7 +506,12 @@ test_obligations:
       ci_rca_gauges.py:42, inference-provider.yaml:90 and docs/INTENT-ci-rca-methodology.md:523
       (the fourth was missed by the planning sweep and found at the critique gate) -- green after
       all four are repointed. VP step 7 proves the red side unscoped so the count cannot be
-      self-confirming.
+      self-confirming. Re-proven with the FIXED guard in a detached worktree at origin/main after
+      the PR #928 self-match defect: it still names exactly those four paths, so removing the raw
+      literal from the assertion message did not weaken detection. The guard additionally asserts
+      its own path is in the scanned set -- verified live, not assumed, by neutralizing the four
+      citations inside that worktree (where the copied guard is untracked): `offenders` went empty
+      and the self-assertion fired, which is the false pass it exists to convert into a failure.
   - source: scripts/checks/ops_governance/validate_warehouse_write_sources.py
     behavior: >-
       The check declares its examined() accounting outcome (adopted under the touch-it-fix-it
