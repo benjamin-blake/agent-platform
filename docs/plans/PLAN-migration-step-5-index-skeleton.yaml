@@ -15,9 +15,11 @@ phase: >-
   Platform governance -- migration step 5 of audits/contract-first-governance-33c8667.yaml
   ("Land rec-3012 (skeleton index rows for live:false entries) so archival relieves the index
   term too; then re-derive the pin DOWN per its own never-a-floor note"). Blocks migration
-  step 6 (the Decision 146 archival wave), whose stated blocker is "Steps 1 and 5". Adjacent
-  to platform tier_item T2.56, which eventually retires both the header ceiling and this pin;
-  this plan lowers the pin in the meantime and does not touch T2.56's scope.
+  step 6 (the Decision 146 archival wave), whose stated blocker is "Steps 1 and 5"; step 1 is
+  confirmed landed (scripts/checks/decisions/validate_decisions_size.py:35-36 carry the
+  bridge's 132 / 780,000), so this plan is the last blocker. Adjacent to platform tier_item
+  T2.56, which eventually retires both the header ceiling and this pin; this plan lowers the
+  pin in the meantime and does not touch T2.56's scope.
 
 scope:
   - file: scripts/decisions_index.py
@@ -27,8 +29,8 @@ scope:
       live:false rows emit a skeleton (number/title/status/decided_date/supersedes/
       superseded_by/amends/live) and never derive or carry triage_excerpt,
       triage_excerpt_source, triage_excerpt_truncated or category_tags. Update the module
-      docstring's triage_excerpt/category_tags derivation paragraphs to state the live-only
-      scope.
+      docstring's triage_excerpt/category_tags/currency derivation paragraphs to state the
+      live-only scope, and its line-32 "131,000-byte index pin" reference to the new figure.
   - file: docs/decisions-index.json
     action: Modify
     purpose: >-
@@ -37,25 +39,40 @@ scope:
   - file: tests/test_decisions_index.py
     action: Modify
     purpose: >-
-      Add the skeleton-shape branch and the archive-row thinness assertion; narrow the two
-      category_tags integration tests that iterate every row to live rows; re-derive
+      Add TestSkeletonArchiveRows; narrow the nine live-assuming assertions across
+      TestTriageExcerptIntegration, TestCategoryTagsIntegration and TestDeterminism; re-derive
       _COMMITTED_INDEX_MAX_BYTES 131,000 -> 112,000 and rewrite TestCommittedIndexSizePin's
       derivation docstring, reconciling both passages PLAN-decision-ceiling-bridge left
-      deliberately stale for this work.
+      deliberately stale for this work. Must land at or under 500 SLOC -- see the SLOC BUDGET
+      context entry for the line-by-line arithmetic.
   - file: tests/test_decision_scout_retrieval.py
     action: Modify
     purpose: >-
       Narrow _score()/the probe scans to live rows. Today they read entry["triage_excerpt"]
-      for EVERY index row and will KeyError on skeleton archive rows; live-only is also the
+      for EVERY index row and KeyError on skeleton archive rows; live-only is also the
       semantically correct scope, since decision-scout triages live entries exclusively.
+  - file: tests/checks/decisions/test_validate_decisions_index_freshness.py
+    action: Modify
+    purpose: >-
+      Home the contract-to-constant pin test (VP step 3's guard) here rather than in
+      tests/test_decisions_index.py. It covers docs/contracts/decision-entry.yaml, not
+      scripts/decisions_index.py, so it has no tie to the module's coverage mapping, and this
+      file has ample headroom (62 SLOC) where the other has 13.
   - file: docs/contracts/decision-entry.yaml
     action: Modify
     purpose: >-
-      Retire the now-satisfied rec-3012 forward reference in the currency: block, and home the
-      third corpus ceiling next to its two siblings: add size_governance.index_max_bytes plus a
-      lever_by_ceiling_matrix row naming archival and skeletonization as its levers, and record
-      the operator's standing never-raise position (Decision 86 routing; the scout's SPIRIT
-      flag).
+      Retire the now-satisfied rec-3012 forward reference in the currency: block; home the
+      third corpus ceiling next to its two siblings (size_governance.index_max_bytes plus a
+      lever_by_ceiling_matrix row) with the operator's standing never-raise position; and
+      correct the line-538 comment header that misattributes the bridge's 132 / 780,000 to
+      Decision 134.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Register the three graduate-disposition VP steps as new rows keyed on
+      (check_id, plan_slug). Decision 132 / validate_graduation_completeness's implement-PR leg
+      hard-fails any graduate step without a matching new-in-diff row, so this write is
+      mandatory, not optional.
 
 bundled_recommendations:
   - rec-3012
@@ -81,12 +98,19 @@ acceptance_criteria:
     derive-at-120-while-132-is-enforced divergence, and the never-raise position.
   - >-
     docs/contracts/decision-entry.yaml's size_governance block carries index_max_bytes equal to
-    that test constant, plus a lever_by_ceiling_matrix row for it, and a test pins the two
-    together so they cannot drift.
+    that test constant, plus a lever_by_ceiling_matrix row for it, and
+    tests/checks/decisions/test_validate_decisions_index_freshness.py pins the two together so
+    they cannot drift.
   - >-
-    tests/test_decisions_index.py measures at or under 500 SLOC (non-blank, non-comment lines),
-    or has been decomposed per Decision 131's mirror rule. A config/sloc_budgets.yaml raise is
-    NOT an acceptable outcome.
+    tests/test_decisions_index.py measures at or under 500 SLOC (non-blank, non-comment lines)
+    with the edits landed as budgeted in the SLOC BUDGET context entry. Neither a
+    config/sloc_budgets.yaml raise nor a Decision 131 mirror split is an acceptable outcome --
+    both are structurally unavailable for this file (see constraint 5).
+  - >-
+    config/agent/verification_registry/registry.yaml carries three new rows whose check_ids are
+    decisions-index-archive-rows-are-skeletons, decisions-index-pin-112000-fresh-and-under and
+    decision-entry-index-ceiling-homed, each with plan_slug migration-step-5-index-skeleton,
+    and each clears the differential admission gate (fails on origin/main, passes on HEAD).
   - >-
     Full bin/venv-python -m scripts.validate exits 0, and rec-3012 is closed by the
     "Resolves: rec-3012" squash-commit trailer.
@@ -183,21 +207,24 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Run both affected test modules to prove no consumer regressed -- in particular
-      tests/test_decision_scout_retrieval.py, whose _score() helper reads triage_excerpt for
-      every row today and is the one real KeyError this change would otherwise cause.
-    command: bin/venv-python -m pytest tests/test_decisions_index.py tests/test_decision_scout_retrieval.py -q
-    expected: "Exit 0, all tests pass, zero errors (baseline before this change: 68 passed)"
+      Run all three affected test modules to prove every live-assuming consumer was narrowed.
+      A simulated run of this change against the pre-change tree failed exactly 10 tests
+      (enumerated in the CONSUMER SWEEP context entry); this step must return zero failures.
+    command: >-
+      bin/venv-python -m pytest tests/test_decisions_index.py tests/test_decision_scout_retrieval.py
+      tests/checks/decisions/test_validate_decisions_index_freshness.py -q
+    expected: "Exit 0, all tests pass, zero errors"
     fix_if: >-
-      A KeyError on triage_excerpt or category_tags names a consumer still assuming those keys
-      exist on every row; narrow it to live rows rather than restoring the fields.
+      A KeyError on triage_excerpt, triage_excerpt_source or category_tags names a consumer
+      still assuming those keys exist on every row; narrow it to live rows rather than
+      restoring the fields. An equality/coverage AssertionError means only one side of a
+      cross-check was narrowed -- see execution step 5.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      A pytest selector over these two whole modules passes on origin/main, so it cannot clear
-      the differential admission gate. The genuinely new behaviour these modules assert is
-      already graduated as steps 1-3 via the artifact-level commands, which do fail on
-      origin/main.
+      A pytest selector over these whole modules passes on origin/main, so it cannot clear the
+      differential admission gate. The genuinely new behaviour these modules assert is already
+      graduated as steps 1-3 via the artifact-level commands, which do fail on origin/main.
   - step: 6
     phase: pre-deploy
     action: >-
@@ -210,26 +237,30 @@ verification_plan:
       l.strip().startswith('#')]); assert n<=500, n; print('SLOC ok', n, 'of 500')"
     expected: "Exit 0, prints `SLOC ok` with a count at or under 500"
     fix_if: >-
-      Over 500: trim the derivation docstring further (the Decision 166 acute-landing narrative
-      is preserved verbatim in docs/DECISIONS.md and does not need restating here), or
-      decompose per Decision 131's mirror rule. Never register a budget raise -- see the
-      constraints below.
+      Over 500: trim the TestCommittedIndexSizePin docstring further toward the 22-line budget
+      (the Decision 166 acute-landing narrative is preserved verbatim in docs/DECISIONS.md and
+      must not be restated here), and confirm the contract-to-constant pin test went into
+      tests/checks/decisions/ rather than this file. Neither a budget raise nor a mirror split
+      is available -- see constraint 5.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
       validate_sloc_limits already enforces the 500 limit repo-wide on origin/main, so this
       command passes there and cannot clear the differential admission gate. It is kept as a
-      VP step because this specific file has only 13 SLOC of headroom and the change rewrites
-      a 52-line docstring, making the crossing plausible enough to check explicitly.
+      VP step because this file has only 13 SLOC of headroom against a budgeted +9, making the
+      crossing plausible enough to check explicitly rather than discover at validate time.
   - step: 7
     phase: pre-deploy
     action: >-
-      Run the full validation tier before handoff, per handoff_policy above.
+      Run the full validation tier before handoff, per handoff_policy above. This is also the
+      only tier that exercises validate_graduation_completeness's implement-PR leg, which fails
+      if any of the three registry rows is missing or mis-keyed.
     command: bin/venv-python -m scripts.validate
     expected: "Exit 0 with no failed checks"
     fix_if: >-
+      A graduation-completeness failure names the missing (check_id, plan_slug) row.
       validate_decisions_index_freshness failing means the committed index was not regenerated.
-      Any structural-size or SLOC failure routes to decomposition, never a budget raise.
+      Any structural-size or SLOC failure routes to the budgeted trims above, never a raise.
     hermetic: false
     graduation: not-applicable
   - step: 8
@@ -260,7 +291,9 @@ test_obligations:
     test_selector: tests/test_decisions_index.py::TestSkeletonArchiveRows
     red_green_expectation: >-
       Red before (archive rows carry all four fields today, so the skeleton key-set assertion
-      fails), green after.
+      fails), green after. Linked to step 5 because the schema requires the linked step's
+      command to host the pytest node id; VP step 1 is the stronger artifact-level
+      discriminator for the same behaviour and is the graduated guard.
 
 constraints:
   - >-
@@ -285,7 +318,10 @@ constraints:
     of a decision-scout BLOCK verdict, and no numbered Decision ratifies it. Attribute 132 to
     scripts/checks/decisions/validate_decisions_size.py's _DECISIONS_LIVE_MAX_H2,
     docs/contracts/decision-entry.yaml's size_governance.live_max_h2_headers, and that bridge
-    plan's recorded override.
+    plan's recorded override. This applies to the contract's own line-538 comment header, which
+    commits exactly this misattribution today and is corrected by execution step 8 -- inserting
+    index_max_bytes under an uncorrected header would reproduce the defect this constraint
+    exists to prevent.
   - >-
     THE PIN IS NEVER RAISED. This is the operator's standing position, recorded here and in the
     contract. When the pin binds, the response is archival under Decision 146, collapsing
@@ -294,14 +330,21 @@ constraints:
     decreases unrestricted and raises reviewable; this constraint goes further and forecloses
     the raise entirely for this surface.
   - >-
-    SLOC: decompose, never raise (Decision 128). tests/test_decisions_index.py measures 487/500
-    and is unregistered in config/sloc_budgets.yaml. A budget raise is structurally unavailable
-    anyway -- Decision 165 requires the `# raise-approved: dec-NNN` marker to name a Decision
-    whose body authorizes that specific entry, no live Decision names this file, and this plan
-    mints none. If the edit crosses 500, decompose per Decision 131's mirror rule (respecting
-    the file's own coverage-mapping note in TestCheckIndexFreshnessDirect's docstring).
+    SLOC: land the budget, do not defer it. tests/test_decisions_index.py measures 487/500 and
+    is unregistered in config/sloc_budgets.yaml. BOTH conventional escapes are structurally
+    unavailable for this file, so neither may be reached for: (a) a config/sloc_budgets.yaml
+    raise is foreclosed by the constraint above and independently by Decision 165, which
+    requires a `# raise-approved: dec-NNN` marker naming a Decision whose body authorizes that
+    specific entry -- no live Decision names this file and this plan mints none; (b) a Decision
+    131 mirror split cannot fire, because scripts.test_coverage_checker's
+    _ALL_MIRROR_TARGET_HOMES is a fixed 24-basename roster that does not contain
+    test_decisions_index.py ("a source path with no grandfathered home never joins the
+    roster"), so a split would strand the extracted tests outside the
+    scripts/decisions_index.py -> tests/test_decisions_index.py coverage mapping that
+    TestCheckIndexFreshnessDirect's own docstring depends on. The sanctioned path is the
+    budgeted +9 in the SLOC BUDGET context entry.
   - >-
-    Only the five files in the Scope table may be modified. In particular
+    Only the seven files in the Scope table may be modified. In particular
     .claude/skills/decision-scout/SKILL.md stays untouched: its Phase 1/2 triage is already
     live-only and its clause text is asserted by validate_decision_currency invariant I5, so an
     edit risks breaking a passing guard for no gain.
@@ -309,8 +352,16 @@ constraints:
     Do NOT retro-edit the historical artefacts PLAN-decision-ceiling-bridge's handoff list
     names alongside this one (docs/audit-prompts/AUDIT-*.md, docs/plans/PLAN-esb-routing-
     rationale.yaml, docs/ROADMAP-PLATFORM.yaml's T2.56 runway figures). Those are point-in-time
-    records; the bridge plan itself considered and declined the equivalent edits. Only the two
-    passages inside tests/test_decisions_index.py are this plan's to reconcile.
+    records; the bridge plan itself considered and declined the equivalent edits. The passages
+    this plan DOES reconcile are the two inside tests/test_decisions_index.py, the line-32
+    docstring reference in scripts/decisions_index.py, and the line-538 comment header in
+    docs/contracts/decision-entry.yaml -- all four in files already in scope.
+  - >-
+    Do NOT edit docs/DECISIONS.md to amend Decision 166 point 9's now-stale "131,000 bytes"
+    figure. Touching the corpus perturbs the very index and byte arithmetic this plan measures
+    and verifies, and D166's reversal condition (g) already anticipates rec-3012 landing and
+    the pin falling. The figure is superseded by the test constant and the contract key, both
+    of which this plan makes authoritative and cross-pinned.
   - No rescue agents or workaround loops (Decision 55).
 
 context:
@@ -318,8 +369,14 @@ context:
     "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND, 125 of 125
     triaged. CITE: Decision 166, Decision 160, Decision 146, Decision 134 clause 2, Decision
     152, Decision 128, Decision 150, Decision 167, Decision 48, Decision 132. RELATED: Decision
-    149, Decision 131, Decision 165, Decision 127, Decision 105, Decision 168.
-  - "gates: decision-scout=FLAGS_FOUND (4 flags, all resolved below); plan-critique=<verdict> after <N> round(s)"
+    149, Decision 131, Decision 165, Decision 127, Decision 105, Decision 168. Decision 168
+    (Class D contracts) is load-bearing rather than merely related: it makes
+    docs/contracts/decision-entry.yaml a Class D mechanism contract with declared evaluator
+    validate_decision_entry_conformance, whose clause-2 obligation is file-level evidence of
+    reading rather than per-key, so adding index_max_bytes does not breach it -- and VP step
+    3's contract-to-constant pin exceeds the incumbent "the validator constants are the SoT,
+    the contract documents" precedent the two sibling ceilings settle for.
+  - "gates: decision-scout=FLAGS_FOUND (4 flags, all resolved); plan-critique=<verdict> after <N> round(s)"
   - >-
     MEASURED ARITHMETIC (this tree, indent=2 pretty-printed bytes, 152 rows = 125 live + 27
     archive). Committed index today 119,189 B. Live rows cost 99,485 B = 795.88 B/row; archive
@@ -335,13 +392,14 @@ context:
     up to 112,000 for measurement variance (the same round-up-to-a-clean-thousand step Decision
     166 point 9 applied to 130,884 -> 131,000). Deriving at 132 would have yielded 120,678 ->
     121,000. The operator chose 120 knowing the consequence: at 112,000 the pin binds after
-    about 5 more live entries while the header ceiling permits 7, so for a one-entry window the
-    byte pin -- not the header ceiling -- is the first guard to fire. That is intended. The 132
-    raise was instrumental (it bought room to author the governance entries that stop unbounded
-    growth), the operator is steering back to 120, and a pin derived at 120 encodes the target
-    state rather than the transitional allowance: once the corpus is back at 120 live it has
-    about 9 entries of slack and stops binding. Deriving at 132 would bank the bridge's
-    temporary raise permanently into the pin, which the operator declined.
+    about 5 more live entries (4,633 B headroom / 796 B per row = 5.8) while the header ceiling
+    permits 7, so for a one-entry window the byte pin -- not the header ceiling -- is the first
+    guard to fire. That is intended. The 132 raise was instrumental (it bought room to author
+    the governance entries that stop unbounded growth), the operator is steering back to 120,
+    and a pin derived at 120 encodes the target state rather than the transitional allowance:
+    once the corpus is back at 120 live it has about 9 entries of slack and stops binding.
+    Deriving at 132 would bank the bridge's temporary raise permanently into the pin, which the
+    operator declined.
   - >-
     OPERATOR FORWARD INTENT (the reason the tight pin is safe). The plan of record for
     reclaiming headroom is to collapse existing Decisions and their h2 headers into
@@ -363,26 +421,71 @@ context:
     120 breaks that derivation... A future archival wave taking the archive past roughly 40 rows
     will need the pin re-derived alongside rec-3012." Its HANDOFF section names
     tests/test_decisions_index.py's derivation as "left deliberately stale by this plan, for
-    that audit to reconcile". Two passages must therefore be reconciled, not one: the live term
-    of 120 x 764 and its 130,884 total (now arithmetically false), AND the separate note that
-    the header ceiling is "binding within ONE more live entry" at 119/120 (now 125 of 132).
+    that audit to reconcile". Two passages must therefore be reconciled there, not one: the
+    live term of 120 x 764 and its 130,884 total (now arithmetically false), AND the separate
+    note that the header ceiling is "binding within ONE more live entry" at 119/120 (now 125 of
+    132). The same handoff list names docs/contracts/decision-entry.yaml's Decision 134
+    attribution, which execution step 8 corrects.
   - >-
     CONSUMER SWEEP (the audit's own step-5 abort criterion, "Abort if skeletonization breaks a
-    scout consumer that reads archived excerpts... verify at build"). Verified clean.
+    scout consumer that reads archived excerpts... verify at build"). The change was SIMULATED
+    against the pre-change tree by monkeypatching build_index() and rewriting the committed
+    artifact in a throwaway run: exactly 10 tests fail, 58 pass. Six in
+    TestTriageExcerptIntegration (test_every_entry_carries_the_three_fields,
+    test_no_excerpt_exceeds_320_chars, test_non_empty_excerpt_always_names_a_source,
+    test_empty_excerpt_set_matches_independent_rederivation, test_excerpt_coverage_is_high,
+    test_truncated_flag_matches_source_text_length); two in TestCategoryTagsIntegration
+    (test_category_tags_is_sorted_and_deduped_for_every_entry,
+    test_every_entry_carries_a_list_of_strings); TestDeterminism::
+    test_entry_shape_is_the_stable_projection_only; and TestCuratedRetrievalProbes::
+    test_each_probe_discriminates_to_its_expected_entry. No PRODUCTION consumer breaks:
     .claude/skills/decision-scout/SKILL.md triages live entries only (Phase 1 derives M from
     live:true; Phase 2 shortlists live entries) and already treats archived rows as out of
-    scope by currency-key absence. A repo-wide sweep of scripts/, tests/, .claude/ and .github/
-    found exactly two code consumers of the four dropped fields, both in this plan's Scope.
-    tests/esb_text_fix/test_persona_routing_rationale.py reads them for Decision 164, which is
-    live, so it is unaffected.
+    scope by currency-key absence, and tests/esb_text_fix/test_persona_routing_rationale.py
+    reads the dropped fields only for Decision 164, which is live.
   - >-
-    NON-BLOCKERS CONFIRMED. Two config/agent/verification_registry/registry.yaml rows read this
-    index -- dec-164-index-triage-discoverable (Decision 164 is live, so its assertions hold)
-    and decision-index-blast-radius-bounded (which asserts the old-vs-new index diff is exactly
-    {160} and would fail against 27 changed rows). Neither is re-executed by CI:
-    scripts/checks/verification/validate_verification_registry.py runs the differential
-    admission gate only over entries newly ADDED in the diff (_added_entries, matched by
-    check_id against origin/main). No registry edit is needed or in scope.
+    SLOC BUDGET for tests/test_decisions_index.py (487/500 today; the file is the plan's
+    tightest constraint and the budget is the plan, not a fallback). Add a module-level
+    _live_rows(idx) helper (+2) and route the nine live-assuming assertions through it (+0 each,
+    since they are single-line `for entry in idx["decisions"]:` heads). Two need more than the
+    helper: test_empty_excerpt_set_matches_independent_rederivation must also intersect
+    rederived_empty with the live number set, since narrowing only indexed_empty breaks the
+    equality (+1); test_excerpt_coverage_is_high must narrow its `total` denominator, or the
+    `total - 4` floor silently loosens by 27 (+0). The three-way key-set branch in
+    test_entry_shape_is_the_stable_projection_only costs +2. TestSkeletonArchiveRows costs
+    about +18. The TestCommittedIndexSizePin docstring is 39 non-blank lines today and is
+    budgeted to 22 or fewer (-17). Net about +6, landing near 493. The contract-to-constant pin
+    test is deliberately homed in tests/checks/decisions/ and costs this file nothing.
+  - >-
+    COVERAGE-FLOOR NOTE for test_excerpt_coverage_is_high. All four no-marker entries (63, 64,
+    65, 67) are LIVE, so narrowing the denominator to live rows preserves the `total - 4` floor
+    exactly (121 >= 121) rather than weakening it -- the 27 archive rows were silently padding
+    the floor before. It now sits exactly at the boundary, which is the intended behaviour of a
+    coverage floor: a fifth no-marker live entry should trip it and be looked at.
+  - >-
+    REGISTRY OBLIGATION AND HEADROOM. Three graduate-disposition steps mean three new
+    config/agent/verification_registry/registry.yaml rows are MANDATORY:
+    scripts/checks/verification/validate_graduation_completeness.py's implement-PR leg matches
+    each graduate step's (check_id, plan_slug) against rows new in the diff and appends a
+    failure when none is found. Separately, the two EXISTING registry rows that read this index
+    -- dec-164-index-triage-discoverable (Decision 164 is live, so its assertions hold) and
+    decision-index-blast-radius-bounded (which asserts the old-vs-new index diff is exactly
+    {160} and would fail against 27 changed rows) -- are NOT re-executed:
+    validate_verification_registry's _added_entries matches by check_id against origin/main and
+    runs the differential admission gate only over newly-added rows. Neither existing row needs
+    editing. HEADROOM: registry.yaml measures 5,836 effective lines against its 6,000 ceiling
+    (164 left); three rows carrying commands longer than the ~18-line dec-164 exemplar will
+    consume roughly 35-45% of that. Decision 166 point 6 pre-commits that when the 6,000
+    ceiling fires the response is the CD.29 archival lifecycle, NEVER a second raise, and its
+    reversal condition (f) re-audits the registry's design on a second raise. This plan spends
+    that runway knowingly.
+  - >-
+    ALTERNATIVE CONSIDERED AND DECLINED (frame check). Splitting docs/decisions-index.json into
+    separate live and archive artifacts would reclaim the whole archive term (a further 7,239 B)
+    rather than the 61% skeletonization reclaims, but it costs the single-artifact freshness
+    check, the `live` flag's provenance role, and every consumer's one-file read. Not worth it
+    against a surface with a dated successor in T1.5 c1; recorded so a later reader does not
+    mistake the partial reclaim for an oversight.
   - >-
     WHAT THE PROMPT THAT COMMISSIONED THIS PLAN GOT WRONG, so the implementing agent does not
     reintroduce it. (a) It asked to "RETAIN the currency field" on archived rows. Archive rows
@@ -403,12 +506,12 @@ pre_implementation_checklist:
   - docs/PROJECT_CONTEXT.md read
   - >-
     Only the plan-cited decision sections read -- Decision 166 point 9 and its reversal
-    condition (g), Decision 160 points 9 and 13, Decision 146, Decision 134 clause 2, Decision
-    128, Decision 165
+    conditions (f) and (g), Decision 160 points 9 and 13, Decision 146, Decision 134 clause 2,
+    Decision 132, Decision 131, Decision 128, Decision 165, Decision 168
   - >-
     audits/contract-first-governance-33c8667.yaml migration_sequence step 5 read (the abort
     criterion and derived_surface_effects this plan discharges)
-  - All five files in scope located and readable
+  - All seven files in scope located and readable
   - Acceptance criteria understood and verifiable
 
 execution_steps:
@@ -419,11 +522,12 @@ execution_steps:
     keys alone. Keep `live` on every row. Do not change either derivation helper -- their unit
     tests are pure and must keep passing.
   - >-
-    scripts/decisions_index.py -- update the module docstring: the `triage_excerpt`,
-    `category_tags` and `currency` derivation paragraphs state that all five projected keys are
-    live-only, and one sentence records why (decision-scout never reads them for archived rows;
-    the index pin grows with every projected field on every row -- the same rationale the
-    docstring already gives for excluding `significance`).
+    scripts/decisions_index.py -- update the module docstring in two places: the
+    `triage_excerpt`, `category_tags` and `currency` derivation paragraphs state that all five
+    projected keys are live-only, with one sentence on why (decision-scout never reads them for
+    archived rows; the pin grows with every projected field on every row -- the same rationale
+    the docstring already gives for excluding `significance`); and line 32's "the 131,000-byte
+    index pin (Decision 166 point 9)" becomes the new figure with its corrected attribution.
   - >-
     Regenerate the artifact: `bin/venv-python -m scripts.decisions_index --write`. Expect
     docs/decisions-index.json to fall from 119,189 to about 107,367 bytes. Never hand-edit it.
@@ -432,58 +536,84 @@ execution_steps:
     test_obligations) asserting the archive key set, the absence of all four dropped keys plus
     currency, and the per-row thinness ratio from VP step 1. Extend
     test_entry_shape_is_the_stable_projection_only to a three-way branch (skeleton keys for
-    archive, skeleton|four|currency for live). Narrow
-    test_category_tags_is_sorted_and_deduped_for_every_entry and
-    test_every_entry_carries_a_list_of_strings to live rows -- both iterate every row today and
-    would KeyError.
+    archive; skeleton | the four retrieval-aid keys | currency for live).
+  - >-
+    tests/test_decisions_index.py -- add the _live_rows(idx) helper and route every
+    live-assuming assertion through it: all six TestTriageExcerptIntegration tests and both
+    TestCategoryTagsIntegration tests named in the CONSUMER SWEEP entry. Two need more than a
+    filter -- in test_empty_excerpt_set_matches_independent_rederivation, `rederived_empty` is
+    built from parse_decisions_md() over BOTH files, so it must also be intersected with the
+    live number set or the equality assertion breaks; in test_excerpt_coverage_is_high, `total`
+    must become the live count or the `total - 4` floor silently loosens by 27. Re-run the
+    simulation figures: 121 of 125 live entries carry an excerpt, so the floor holds exactly.
   - >-
     tests/test_decisions_index.py -- set _COMMITTED_INDEX_MAX_BYTES = 112_000 and rewrite
-    TestCommittedIndexSizePin's docstring. It must record: the new arithmetic (120 x 796 + 54 x
-    289 = 111,126, rounded up to 112,000) with its measured inputs; that 120 is the TARGET while
-    132 is the enforced ceiling, that this is deliberate, and the one-entry consequence; that
-    the pin is never raised and the response to binding is archival or collapsing entries into
-    contracts; and the corrected attributions per the constraints above. Budget it at or under
-    the ~52 lines it replaces -- the Decision 166 acute-landing narrative is preserved verbatim
-    in docs/DECISIONS.md and must not be restated. Delete the stale "binding within ONE more
-    live entry ... at 119/120" note and replace it with the current 125-of-132 measurement.
+    TestCommittedIndexSizePin's docstring to 22 non-blank lines or fewer (it is 39 today). It
+    must record: the new arithmetic (120 x 796 + 54 x 289 = 111,126, rounded up to 112,000)
+    with its measured inputs; that 120 is the TARGET while 132 is the enforced ceiling, that
+    this is deliberate, and the one-entry consequence; that the pin is never raised and the
+    response to binding is archival or collapsing entries into contracts; and the corrected
+    attributions per constraints 2 and 3. The Decision 166 acute-landing narrative is preserved
+    verbatim in docs/DECISIONS.md and must not be restated. Delete the stale "binding within
+    ONE more live entry ... at 119/120" note and replace it with the current 125-of-132
+    measurement.
   - >-
     tests/test_decision_scout_retrieval.py -- narrow _load_index()/_score() to live rows (the
-    scout's actual triage population). All five probe targets -- Decisions 100, 114, 55, 88 and
-    152 -- are live, and archive rows can only ever have lowered a probe's max score, so the
-    discrimination assertions are unaffected. Update the module docstring to say the probes
-    score the live projection.
+    scout's actual triage population). Only test_each_probe_discriminates_to_its_expected_entry
+    actually fails today, but the whole-module narrowing is the correct scope. All five probe
+    targets -- Decisions 100, 114, 55, 88 and 152 -- are live, and archive rows could only ever
+    have lowered a probe's max score, so the discrimination assertions are unaffected. Update
+    the module docstring to say the probes score the live projection.
   - >-
-    docs/contracts/decision-entry.yaml -- in the currency: block, replace the parenthetical
-    "rec-3012 tracks eventual archive skeletonization; this plan does not thicken archive rows
-    ahead of it" with a statement that skeletonization has landed and archive rows carry the
-    eight stable keys only.
+    docs/contracts/decision-entry.yaml -- three edits. (a) In the currency: block, replace the
+    parenthetical "rec-3012 tracks eventual archive skeletonization; this plan does not thicken
+    archive rows ahead of it" with a statement that skeletonization has landed and archive rows
+    carry the eight stable keys only. (b) Correct the line-538 comment header
+    "# Decision 134 / Decision-114 parity ceilings", which misattributes the bridge's
+    live_max_h2_headers: 132 and combined_max_bytes: 780000 to Decision 134 (which ratified 120
+    and 700,000) -- re-attribute per constraint 3, and reconcile the adjacent never-raise
+    sentence with the fact that both values were in fact raised by the bridge. (c) Add
+    `index_max_bytes: 112000` beside its two siblings, with a comment carrying the derivation
+    inputs, the derive-at-120-while-132-is-enforced note, and the never-raise position.
   - >-
-    docs/contracts/decision-entry.yaml -- in size_governance:, add `index_max_bytes: 112000`
-    beside live_max_h2_headers and combined_max_bytes, with a comment carrying the derivation
-    inputs, the derive-at-120-while-132-is-enforced note, and the never-raise position. Add a
-    lever_by_ceiling_matrix row for index_max_bytes naming its two levers: archival (Decision
-    146), now worth about 507 bytes per entry moved rather than the 69 it was worth before this
-    change, and archive-row skeletonization itself (this plan, a one-time structural reclaim).
-    Note that compaction (Decision 149) does NOT bend this ceiling, since a compacted stub stays
-    a live row. Keep the block's existing "the validator constants are the SoT" convention --
-    the contract documents, the test enforces.
+    docs/contracts/decision-entry.yaml -- add a lever_by_ceiling_matrix row for index_max_bytes
+    naming its two levers: archival (Decision 146), now worth about 507 bytes per entry moved
+    rather than the 69 it was worth before this change, and archive-row skeletonization itself
+    (this plan, a one-time structural reclaim). Note that compaction (Decision 149) does NOT
+    bend this ceiling, since a compacted stub stays a live row. Keep the block's existing "the
+    validator constants are the SoT" convention -- the contract documents, the test enforces.
   - >-
-    tests/test_decisions_index.py -- add the contract-to-constant pin test backing VP step 3, so
-    docs/contracts/decision-entry.yaml's index_max_bytes and _COMMITTED_INDEX_MAX_BYTES cannot
-    drift apart. Count it against the SLOC budget in VP step 6.
+    tests/checks/decisions/test_validate_decisions_index_freshness.py -- add the
+    contract-to-constant pin test backing VP step 3, asserting
+    docs/contracts/decision-entry.yaml's size_governance.index_max_bytes equals
+    tests/test_decisions_index.py's _COMMITTED_INDEX_MAX_BYTES and that
+    lever_by_ceiling_matrix carries the index_max_bytes row. It is homed here, not in
+    tests/test_decisions_index.py, because it covers the contract rather than
+    scripts/decisions_index.py and this file has headroom (62 SLOC) where the other has 13.
   - >-
-    Execute the Verification Plan -- run each step in order; loop until pass. Steps 1-3 must FAIL
-    on origin/main and PASS on HEAD (they are the graduation candidates); confirm that before
-    registering them.
+    Execute Verification Plan steps 1-6; loop until pass. Confirm steps 1-3 FAIL on origin/main
+    and PASS on HEAD before registering them -- all three were dry-run at planning time and
+    fail for the right reason (archive rows carry 12 keys; the pin regexes to 131_000;
+    size_governance has no index_max_bytes key).
   - >-
-    Register the three graduated checks in config/agent/verification_registry/registry.yaml
-    under the check_ids named in the plan, then commit with a "Resolves: rec-3012" trailer in
-    the squash-merge body and run VP step 8 after merge.
-  - 'Report: what was implemented, the before/after index byte counts, the final SLOC figure for tests/test_decisions_index.py, and verification results.'
+    config/agent/verification_registry/registry.yaml -- add three rows with plan_slug
+    migration-step-5-index-skeleton and the check_ids named in the plan, each
+    primitive_slot: command_exit_zero (or command_output_matches where the printed sentinel is
+    the evidence), guard_target set to the artifact each guards
+    (docs/decisions-index.json for steps 1 and 2, docs/contracts/decision-entry.yaml for step
+    3). Then run VP step 7 (full validate), which is the only tier that exercises
+    validate_graduation_completeness's implement-PR leg.
+  - >-
+    Commit with a "Resolves: rec-3012" trailer in the squash-merge body, and name the routing
+    row in the PR body per constraint 1's DD-B convention. Run VP step 8 after merge.
+  - >-
+    'Report: what was implemented, the before/after index byte counts, the final SLOC figure for
+    tests/test_decisions_index.py, the three registered check_ids, and verification results.'
 
 rollback: >-
   Fully reversible in one commit: revert the generator branch, re-run
-  `bin/venv-python -m scripts.decisions_index --write` to restore the full-weight rows, and
-  restore _COMMITTED_INDEX_MAX_BYTES to 131_000. Nothing outside the repo changes -- no
-  warehouse write, no infrastructure, no deploy. The only irreversible side effect is closing
-  rec-3012, which is reopened by filing a follow-up rec if the change is reverted.
+  `bin/venv-python -m scripts.decisions_index --write` to restore the full-weight rows, restore
+  _COMMITTED_INDEX_MAX_BYTES to 131_000, and drop the three registry rows. Nothing outside the
+  repo changes -- no warehouse write, no infrastructure, no deploy. The only irreversible side
+  effect is closing rec-3012, which is reopened by filing a follow-up rec if the change is
+  reverted.
