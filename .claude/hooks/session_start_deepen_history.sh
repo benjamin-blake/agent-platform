@@ -40,8 +40,9 @@
 # Claude Code runs every hook in a SessionStart matcher block IN PARALLEL,
 # not in sequence, so placement in .claude/settings.json next to
 # session_start_sync_main.sh is a readability grouping only -- it does not
-# sequence the two hooks. Three of the seven SessionStart hooks touch
-# repo-scoped git: session_start_sync_main.sh (plain `git fetch origin main`
+# sequence the two hooks. With this hook registered the block holds eight
+# hooks, four of which touch repo-scoped git: this one, plus these three --
+# session_start_sync_main.sh (plain `git fetch origin main`
 # + `git branch -f`), session_start_github_readiness.sh (via
 # scripts/session/github_readiness.py: `git branch --show-current`,
 # `git fetch --dry-run origin main`, `git push --dry-run`), and
