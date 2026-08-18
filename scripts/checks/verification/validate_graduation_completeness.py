@@ -36,9 +36,11 @@ diff-present plan set with an unreachable base declares `skipped`; otherwise
 
 Both of this check's own diff baselines -- `_default_baseline_registry_entries` and
 `_added_plan_paths` -- take their base as an injected parameter, defaulted at this module's call
-site from `push_context_base() or "origin/main"`, so neither silently computes an empty
-added-row/added-plan set on the post-merge main run (where a hardcoded `origin/main` literal
-equals HEAD).
+site from `push_context_base(root) or "origin/main"` -- paired with the SAME `root` the base is
+then evaluated against -- so neither silently computes an empty added-row/added-plan set on the
+post-merge main run (where a hardcoded `origin/main` literal equals HEAD) NOR reads the real
+repository's push-context base while operating on an injected (e.g. fixture) `root` (rec-3166:
+the root seam had no paired base seam).
 
 Injection seams (changed_files, root, load_plan, baseline_registry_reader) mirror the
 validate_vp_replay / validate_sloc_budget_raises precedents for testability without real git
@@ -83,15 +85,11 @@ def _added_plan_paths(root: Path, base: str) -> set[str]:
     return {f for f in result.stdout.strip().splitlines() if _common.PLAN_PATH_RE.match(f)}
 
 
-def _plan_pr_leg(
-    changed_files: list[str], root: Path, failed: list[str], base: str, load_plan: LoadPlanFn | None = None
-) -> None:
+def _plan_pr_leg(plan_files: list[str], root: Path, failed: list[str], base: str, load_plan: LoadPlanFn | None = None) -> None:
+    """Enforce the plan-PR leg over `plan_files` -- the diff-present PLAN-*.yaml set. The
+    caller guarantees `plan_files` is non-empty (the empty-domain case is the outer function's
+    own early return, before `base` is even derived); this leg has no empty-set case of its own."""
     load_plan = load_plan or _common.load_plan
-    plan_files = _common.plan_paths_from_changed(changed_files)
-    if not plan_files:
-        print("  PASS (plan-PR leg): no docs/plans/PLAN-*.yaml in the diff -- no-op.")
-        return
-
     added = _added_plan_paths(root, base)
     for plan_rel in plan_files:
         plan_path = root / plan_rel
@@ -259,20 +257,24 @@ def validate_graduation_completeness(
     seams -- default to _common.get_changed_files(), _common.ROOT, _common.load_plan, and a
     real `git show {base}:...registry.yaml` reader respectively.
 
-    Composes exactly ONE terminal Decision 170 declaration (see module docstring).
+    Composes exactly ONE terminal Decision 170 declaration (see module docstring). The
+    empty-domain early return (no docs/plans/PLAN-*.yaml in the diff) fires BEFORE any base
+    derivation, so a nonexistent injected `root` is never used as a subprocess cwd when
+    there is nothing to enforce.
     """
     print("\n=== Verification graduation completeness (T3.21, VF-05 enforcement) ===")
     root = root if root is not None else _common.ROOT
-    changed = changed_files if changed_files is not None else _common.get_changed_files()
-    base = _common.push_context_base() or "origin/main"
-
-    _plan_pr_leg(changed, root, failed, base, load_plan=load_plan)
+    changed = changed_files if changed_files is not None else _common.get_changed_files(root)
 
     plan_files = _common.plan_paths_from_changed(changed)
     if not plan_files:
+        print("  PASS (plan-PR leg): no docs/plans/PLAN-*.yaml in the diff -- no-op.")
         print("  PASS (implement-PR leg): no docs/plans/PLAN-*.yaml in the diff -- no-op.")
         registry.examined(0, unit="declared_plans")
         return
+
+    base = _common.push_context_base(root) or "origin/main"
+    _plan_pr_leg(plan_files, root, failed, base, load_plan=load_plan)
 
     if not _common.origin_main_reachable(root):
         print("  SKIP (implement-PR leg): origin/main unreachable (advisory locally, authoritative in CI).")

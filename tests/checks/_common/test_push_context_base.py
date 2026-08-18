@@ -178,3 +178,72 @@ class TestPushContextBase:
             _common.get_status_aware_diff()
         diff_call = next(c for c in mock_run.call_args_list if c.args[0][:2] == ["git", "diff"])
         assert diff_call.args[0] == ["git", "diff", "--name-status", "--no-renames", "deadbeef"]
+
+
+class TestRootScopedProbes:
+    """rec-3166: push_context_base(root=...) must resolve the INJECTED root's git state, never
+    the real repository's -- for BOTH push-context triggers (GITHUB_EVENT_NAME=push, and the
+    on-main branch + merge-base==HEAD git-state path). `_common.ROOT` is patched to a DECOY repo
+    in every test here to prove the probe never falls back to reading it.
+    """
+
+    def _git(self, repo: Path, args: list[str]) -> str:
+        result = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
+        assert result.returncode == 0, f"git {args} failed: {result.stderr}"
+        return result.stdout.strip()
+
+    def _commit(self, repo: Path, name: str, message: str) -> str:
+        (repo / name).write_text(name, encoding="utf-8")
+        self._git(repo, ["add", "-A"])
+        self._git(repo, ["commit", "-q", "-m", message])
+        return self._git(repo, ["rev-parse", "HEAD"])
+
+    def _init_repo(self, repo: Path, branch: str) -> None:
+        repo.mkdir(parents=True, exist_ok=True)
+        self._git(repo, ["init", "-q", "-b", branch])
+        self._git(repo, ["config", "user.email", "test@example.com"])
+        self._git(repo, ["config", "user.name", "Test"])
+
+    def test_push_event_root_scopes_to_injected_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        decoy = tmp_path / "decoy"
+        self._init_repo(decoy, "main")
+        self._commit(decoy, "decoy-only.txt", "decoy first")
+        self._commit(decoy, "decoy-second.txt", "decoy second")
+
+        fixture = tmp_path / "fixture"
+        self._init_repo(fixture, "feature/not-main")
+        fixture_first = self._commit(fixture, "a.txt", "first")
+        self._commit(fixture, "b.txt", "second")
+
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+        with patch("scripts.checks._common.ROOT", decoy):
+            base = _common.push_context_base(root=fixture)
+        assert base == fixture_first
+
+    def test_on_main_root_scopes_to_injected_repo(self, tmp_path: Path) -> None:
+        decoy = tmp_path / "decoy"
+        self._init_repo(decoy, "main")
+        decoy_head = self._commit(decoy, "decoy.txt", "decoy only commit")
+        self._git(decoy, ["update-ref", "refs/remotes/origin/main", decoy_head])
+
+        fixture = tmp_path / "fixture"
+        self._init_repo(fixture, "main")
+        fixture_first = self._commit(fixture, "a.txt", "first")
+        fixture_second = self._commit(fixture, "b.txt", "second")
+        self._git(fixture, ["update-ref", "refs/remotes/origin/main", fixture_second])
+
+        with patch("scripts.checks._common.ROOT", decoy):
+            base = _common.push_context_base(root=fixture)
+        assert base == fixture_first
+
+    def test_root_none_default_still_reads_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Byte-identical-for-existing-callers guardrail: omitting root keeps reading ROOT."""
+        repo = tmp_path / "repo"
+        self._init_repo(repo, "feature/not-main")
+        first = self._commit(repo, "a.txt", "first")
+        self._commit(repo, "b.txt", "second")
+
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+        with patch("scripts.checks._common.ROOT", repo):
+            base = _common.push_context_base()
+        assert base == first

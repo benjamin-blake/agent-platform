@@ -15,11 +15,13 @@ migration step 3)."""
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.checks import registry
 from scripts.checks.decisions.validate_decisions_size import (
     _DECISIONS_COMBINED_MAX_BYTES,
     _DECISIONS_LIVE_MAX_H2,
     _PER_ENTRY_CAP_BYTES,
     _decisions_size_issues,
+    _new_entries_examined_count,
     _per_entry_cap_failures,
     validate_decisions_size,
 )
@@ -375,3 +377,85 @@ class TestPerEntryCapThroughRegisteredCheck:
         out = capsys.readouterr().out
         assert "combined" in out
         assert "Decision 5" in out
+
+
+class TestDeclarationAdoption:
+    """Decision 170 touch-it-fix-it: this check was baselined (no declaration) before this
+    plan; editing it now obligates a registry.examined()/skipped() declaration on ALL FIVE of
+    its reachable exit paths."""
+
+    def test_missing_live_file_skips(self, tmp_path: Path) -> None:
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "DECISIONS_ARCHIVE.md").write_text("", encoding="utf-8")
+        failed: list[str] = []
+        registry.pop_declaration()
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_decisions_size(failed)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "skipped"
+        assert "DECISIONS.md" in declaration.reason
+
+    def test_missing_archive_file_skips(self, tmp_path: Path) -> None:
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "DECISIONS.md").write_text("## Decision 1: X\n", encoding="utf-8")
+        failed: list[str] = []
+        registry.pop_declaration()
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_decisions_size(failed)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "skipped"
+        assert "DECISIONS_ARCHIVE.md" in declaration.reason
+
+    def test_cost_gated_early_return_examines_zero(self, tmp_path: Path) -> None:
+        """using_default_root AND neither DECISIONS file changed (an empty-.git-less tmp_path
+        naturally yields get_changed_files() == []) -- definitively zero new entries to check,
+        not an unmet precondition, so this declares examined(0), never skipped()."""
+        _write_docs(tmp_path, "## Decision 1: Small entry\n\nBody.\n\n---\n\n", "Archive body.\n")
+        failed: list[str] = []
+        registry.pop_declaration()
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_decisions_size(failed)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 0
+        assert declaration.unit == "new_decision_entries"
+
+    def test_unreachable_baseline_skips(self, tmp_path: Path) -> None:
+        _write_docs(tmp_path, "## Decision 1: X\n\nBody.\n\n---\n\n")
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_decisions_size(failed, root=tmp_path, baseline_reader=lambda r: None)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "skipped"
+        assert "origin/main" in declaration.reason
+        assert failed == []
+
+    def test_fallthrough_examines_new_entry_count(self, tmp_path: Path) -> None:
+        _write_docs(tmp_path, _make_block(5, 200))
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_decisions_size(failed, root=tmp_path, baseline_reader=lambda r: set())
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 1
+        assert declaration.unit == "new_decision_entries"
+
+    def test_fallthrough_excludes_baselined_historical_entries(self, tmp_path: Path) -> None:
+        _write_docs(tmp_path, _make_block(5, 200))
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_decisions_size(failed, root=tmp_path, baseline_reader=lambda r: {5})
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 0
+
+    def test_new_entries_examined_count_missing_files_is_zero(self, tmp_path: Path) -> None:
+        """Neither docs/DECISIONS.md nor docs/DECISIONS_ARCHIVE.md exists under tmp_path --
+        mirrors _per_entry_cap_failures's own missing-files tolerance."""
+        assert _new_entries_examined_count(tmp_path, baseline_numbers=set()) == 0

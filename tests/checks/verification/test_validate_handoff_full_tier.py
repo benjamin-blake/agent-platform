@@ -118,6 +118,36 @@ class TestHandoffFullTier:
         assert name in full
 
 
+class TestDeclarationAdoption:
+    """Decision 170 touch-it-fix-it: this check was baselined (no declaration) before this
+    plan; editing it now obligates a registry.examined() declaration on BOTH of its reachable
+    exit paths -- the empty diff-present-plan-set early return, and the loop fall-through."""
+
+    def test_declaration_examined_zero_when_no_plan_in_diff(self, tmp_path: Path) -> None:
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_handoff_full_tier(failed, changed_files=["scripts/unrelated.py"], root=tmp_path)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 0
+        assert declaration.unit == "declared_plans"
+
+    def test_declaration_examined_counts_fallthrough_plans(self, tmp_path: Path) -> None:
+        rel_a = _touch_plan(tmp_path, "hft-decl-a")
+        rel_b = _touch_plan(tmp_path, "hft-decl-b")
+        doc = _fake_doc(handoff=True, commands=["bin/venv-python -m scripts.validate"])
+        failed: list[str] = []
+        registry.pop_declaration()
+        validate_handoff_full_tier(failed, changed_files=[rel_a, rel_b], root=tmp_path, load_plan=lambda r, root: doc)
+        declaration = registry.pop_declaration()
+        assert declaration is not None
+        assert declaration.kind == "examined"
+        assert declaration.count == 2
+        assert declaration.unit == "declared_plans"
+        assert failed == []
+
+
 class TestFullTierMatcher:
     def test_plan_esb_fallback_spec_carrier_is_non_compliant(self) -> None:
         doc = load_plan_doc(_common.ROOT / "docs" / "plans" / "PLAN-esb-fallback-spec-carrier.yaml")

@@ -759,6 +759,18 @@ after 3 rounds with all blocking items applied. Roadmap/queue refs (not DECISION
 > authorization mechanism, upgrading its marker check from existence to authorization. This body
 > is otherwise unedited; see Decision 165 for the full derivation.
 
+> **Amendment (2026-08-18, PLAN-root-scoped-diff-base / rec-3166, forward reference -- mints no new
+> Decision number):** clause 1's `push_context_base()` gains an optional `root: Path | None = None`
+> parameter, threaded through `get_changed_files()` and `get_status_aware_diff()` as well -- every
+> git probe and path-existence filter inside all three now runs against `root` (defaulting to
+> `_common.ROOT` when omitted, so this widening is contract-unchanged for every existing caller,
+> per Decision 135 pt 3). The `GITHUB_EVENT_NAME` / `GITHUB_EVENT_BEFORE` env signal stays
+> job-global regardless of `root` -- only the git probes and existence filters became root-scoped.
+> This closes rec-3166: a check evaluating an injected root (e.g. a fixture repository in a test)
+> had a `root` seam with no paired `base` seam, so in push context it silently read the REAL
+> repository's push-context base instead of the injected one. This body is otherwise unedited; see
+> PLAN-root-scoped-diff-base for the full derivation.
+
 **Problem:** `get_status_aware_diff()` and `test_coverage_checker.get_changed_source_files()` resolve their base via `merge-base(origin/main, HEAD)`, which equals HEAD on a clean post-merge main checkout; `get_changed_files()` diffs `origin/main` directly, also HEAD on main. Same result either way: every diff-aware full-tier check silently no-ops post-merge. A MEASUREMENT CORRECTION (Decision 82 framing), not a relaxation.
 
 **Decision:**

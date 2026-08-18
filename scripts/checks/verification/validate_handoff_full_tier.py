@@ -67,16 +67,22 @@ def validate_handoff_full_tier(
     """Diff-added/modified plans declaring handoff_policy must carry a full-tier VP step.
 
     changed_files / root / load_plan are test/dogfood injection seams -- default to
-    _common.get_changed_files(), _common.ROOT, and _common.load_plan respectively.
+    _common.get_changed_files(root), _common.ROOT, and _common.load_plan respectively.
+
+    Composes exactly ONE terminal Decision 170 declaration on each of its two reachable exit
+    paths: an empty diff-present plan set declares `examined(0, unit="declared_plans")`
+    (empty domain, never skipped -- this check has no git-log-dependent leg to defer); the
+    loop fall-through declares `examined(len(plan_files), unit="declared_plans")`.
     """
     print("\n=== Handoff full-tier verification-plan obligation (rec-2965 / Decision 163) ===")
     root = root if root is not None else _common.ROOT
     load_plan_fn = load_plan or _common.load_plan
-    changed = changed_files if changed_files is not None else _common.get_changed_files()
+    changed = changed_files if changed_files is not None else _common.get_changed_files(root)
 
     plan_files = _common.plan_paths_from_changed(changed)
     if not plan_files:
         print("  PASS: no docs/plans/PLAN-*.yaml in the diff -- no-op.")
+        registry.examined(0, unit="declared_plans")
         return
 
     for plan_rel in plan_files:
@@ -107,3 +113,5 @@ def validate_handoff_full_tier(
             )
             print(f"  FAIL: {message}")
             failed.append(message)
+
+    registry.examined(len(plan_files), unit="declared_plans")
