@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from scripts.checks import registry
+from scripts.checks import _common, registry
 from scripts.checks.verification.validate_graduation_completeness import (
     _current_registry_entries,
     _default_baseline_registry_entries,
@@ -583,8 +583,6 @@ class TestContentKeyedResolution:
         # De-vacuum (rec-3166 second defect): assert on the DERIVED base itself, not only on
         # failed == [] -- a wrong (real-repo) base would make every git show/diff fail inside
         # the fixture repo, which also happens to yield failed == [] for the wrong reason.
-        from scripts.checks import _common
-
         assert _common.push_context_base(root=repo) == before_sha
 
         failed: list[str] = []

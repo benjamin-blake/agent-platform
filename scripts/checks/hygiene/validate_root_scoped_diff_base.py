@@ -26,6 +26,7 @@ follow-on, not this check's job.
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 from scripts.checks import _common, registry
@@ -65,7 +66,7 @@ def _call_has_waiver(lines: list[str], node: ast.Call) -> bool:
     return any(_WAIVER_MARKER in lines[lineno - 1] for lineno in range(start, end + 1) if 1 <= lineno <= len(lines))
 
 
-def _iter_scope_nodes(stmts: list[ast.stmt]):
+def _iter_scope_nodes(stmts: list[ast.stmt]) -> Iterator[ast.AST]:
     """Yield every node reachable from `stmts` without descending into a nested
     function/class body -- those are separate scopes, walked independently (mirrors
     validate_test_count_coupling.py's precedent)."""
@@ -108,7 +109,7 @@ def _scan_file(path: Path) -> tuple[list[str], int]:
                 continue
             violations.append(
                 f"{rel}:{call.lineno}: {node.name} takes a `root` parameter but calls "
-                f"{target}() without forwarding it -- pass root={target}(root) (or root positionally), "
+                f"{target}() without forwarding it -- pass {target}(root=root) (or root positionally), "
                 f"or mark the line `{_WAIVER_MARKER} <reason>` if the bare call is deliberate"
             )
     return violations, scanned

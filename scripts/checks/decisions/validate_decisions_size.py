@@ -26,6 +26,7 @@ read both files on every --pre run regardless.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from scripts.checks import _common, registry
 from scripts.checks.decisions._baseline import BaselineReaderFn, baseline_decision_numbers
@@ -81,7 +82,7 @@ _PER_ENTRY_CAP_HARD_FAIL_CITATION = (
 )
 
 
-def _new_entries_examined_count(root, baseline_numbers: set[int]) -> int:
+def _new_entries_examined_count(root: Path, baseline_numbers: set[int]) -> int:
     """Count of NEW (non-baseline) decision entries the per-entry cap sub-check evaluated --
     mirrors `_per_entry_cap_failures`'s own new-vs-baseline scope, for the Decision 170
     declaration on the fall-through exit path."""
