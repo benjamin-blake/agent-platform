@@ -1,0 +1,440 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "convergence-health-prod-drift-red"
+intent: >-
+  Restore the convergence-health sensor to green and convert the prod-class Lambda code-drift
+  alarm from a permanently-failing step into a working true-positive alarm, then close the
+  observability gap that let a dead sensor look healthy for 22 hours.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-convergence-health-prod-drift-red.yaml
+phase: >-
+  T2.43 (prod-class code-drift sensor, Decision 125/126) with T2.38 (ducklake sensor) touched
+  symmetrically; monitor-lane observability per Decision 62.
+scope:
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      Register the prod_code_drift canonical_id (description + signal_interpretation +
+      added_date) mirroring the ducklake_code_drift entry. Defect A -- its absence makes
+      file_rec raise and reds the workflow.
+  - file: scripts/convergence_health/code_drift.py
+    action: Modify
+    purpose: >-
+      Defect B. Replace the equality freshness test with a reachability test in BOTH
+      detect_prod_code_drift and detect_ducklake_code_drift; add an empty-latest_sha guard;
+      re-express _build_drift_acceptance and both context builders against the new predicate
+      so the filed rec's own acceptance oracle is satisfiable.
+  - file: scripts/checks/ops_governance/check_source_registry.py
+    action: Modify
+    purpose: >-
+      Defect C. Widen the hardcoded-source-literal scan beyond the portal files to the
+      source-producing modules, and add registry.examined() so the check reports an outcome
+      (Decision 170 touch-it-fix-it).
+  - file: scripts/checks/ops_governance/_manifest.py
+    action: Modify
+    purpose: >-
+      Add pre=True with narrow pre_globs to the check_source_registry Entry so an unregistered
+      source is blocked pre-merge rather than detected post-merge (Decision 73 clause 2).
+  - file: config/check_accounting_baseline.yaml
+    action: Modify
+    purpose: >-
+      Remove the check_source_registry row now that the check declares an examined() outcome.
+      Removal is a permitted shrink under the Decision 170 adoption ratchet; re-adding is not.
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      Add a deploy_record field-semantics stanza defining freshness as reachability (not
+      equality) and stating that a null source_git_sha from a break-glass local deploy is
+      deliberately treated as stale. Decision 86 routing -- field semantics belong in a
+      contract, not only inside two Python functions.
+  - file: .github/workflows/convergence-health.yml
+    action: Modify
+    purpose: >-
+      Add a final-step sensor heartbeat write to S3, ordered last so it is stamped only when
+      every prior step succeeded. A failing step leaves the heartbeat stale, which is the
+      liveness signal preflight consumes.
+  - file: scripts/convergence_health/record.py
+    action: Modify
+    purpose: Add heartbeat write/read helpers and a heartbeat-age accessor.
+  - file: scripts/preflight/ci_rca_signals.py
+    action: Modify
+    purpose: >-
+      Extend _check_convergence_rca_gap so sensor liveness (stale heartbeat) is a trigger
+      alongside the existing record-is-red trigger. The existing hook returns None when the
+      record is green, which is exactly why 22h of sensor death was invisible at session start.
+  - file: tests/convergence_health/test_code_drift.py
+    action: Modify
+    purpose: >-
+      Decompose to stay under the 500-SLOC gate (currently 478; tests/ is gated by
+      iter_gated_py_files). Retain the ducklake-side cases here and add reachability cases.
+      Decision 128 -- decompose by default, never raise the budget.
+  - file: tests/convergence_health/test_code_drift_prod.py
+    action: Create
+    purpose: >-
+      Decomposition target -- prod-side drift cases including the reachability predicate,
+      the workflow_dispatch (deploy-sha-newer-than-source) case that caused this incident,
+      fail-closed on null sha, and fail-closed on an unresolvable sha.
+  - file: tests/checks/ops_governance/test_check_source_registry.py
+    action: Modify
+    purpose: >-
+      Cover the widened scan (an unregistered source literal in a producer module fails the
+      guard) and the examined() outcome declaration.
+  - file: tests/convergence_health/test_record.py
+    action: Modify
+    purpose: Cover heartbeat write/read/age helpers including the absent-heartbeat case.
+  - file: tests/session/preflight/test_ci_rca_signals.py
+    action: Modify
+    purpose: >-
+      Cover the liveness trigger: green record plus stale heartbeat must alert, green record
+      plus fresh heartbeat must not, and any error path must still degrade to None so preflight
+      never crashes (rec-2027 pattern).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - prod_code_drift is a registered canonical_id and validate_source('prod_code_drift') returns without raising.
+  - >-
+    Deployed-code freshness is evaluated by reachability, so a deploy whose recorded
+    source_git_sha is a descendant of the latest source-touching commit is reported fresh, and
+    a deploy whose recorded sha predates it is reported stale.
+  - A null or unresolvable recorded source_git_sha is treated as stale (fail closed), never as fresh.
+  - The filed drift rec's acceptance command is satisfiable by a correct redeploy under the new predicate.
+  - check_source_registry fails when a source-producing module hardcodes an unregistered source literal.
+  - check_source_registry runs in the fast tier (pre=True) so an unregistered source is blocked pre-merge.
+  - check_source_registry declares an examined() outcome and is absent from config/check_accounting_baseline.yaml.
+  - tests/convergence_health/test_code_drift.py is under 500 SLOC after decomposition, with no sloc_budgets.yaml entry added.
+  - The convergence-health workflow writes a heartbeat only when every step of the run succeeded.
+  - Preflight surfaces a stale sensor heartbeat even when the convergence record status is green.
+  - A scheduled convergence-health run completes successfully after merge and files no prod_code_drift rec.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: prod_code_drift is registered and accepted by the write-time source validator
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import validate_source; validate_source('prod_code_drift'); print('REGISTERED')"
+    expected: prints REGISTERED and exits 0
+    fix_if: >-
+      Raises ValueError "Unknown source 'prod_code_drift'" -- the canonical_id entry is missing
+      or misspelled in config/agent/data_quality/source_registry.yaml.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: prod-code-drift-source-registered
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Reachability predicate holds for both sensors, including the dispatch-deploy case that
+      caused this incident and both fail-closed cases
+    command: bin/venv-python -m pytest tests/convergence_health/test_code_drift.py tests/convergence_health/test_code_drift_prod.py -q
+    expected: all tests pass, including a case where the recorded sha is a descendant of the latest source commit and is reported FRESH
+    fix_if: >-
+      A descendant recorded sha still reports stale -- the comparison is still equality, not
+      reachability. A null or unresolvable sha reports fresh -- the fail-closed default is inverted.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: convergence-drift-reachability-tests
+  - step: 3
+    phase: pre-deploy
+    action: The registry guard rejects an unregistered source literal in a source-producing module
+    command: bin/venv-python -m pytest tests/checks/ops_governance/test_check_source_registry.py -q
+    expected: passes, including a case asserting a producer-module literal outside the portal files is flagged
+    fix_if: The producer-module fixture passes the guard -- the scan file list was not widened, only the regex was reviewed.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: source-registry-guard-producer-scan
+  - step: 4
+    phase: pre-deploy
+    action: The registry guard is wired into the fast tier so it blocks pre-merge
+    command: bin/venv-python -c "from scripts.checks.ops_governance._manifest import ENTRIES; e=[x for x in ENTRIES if x.name=='check_source_registry'][0]; assert e.pre is True, e; assert e.pre_globs, e; print('PRE_TIER_OK')"
+    expected: prints PRE_TIER_OK and exits 0
+    fix_if: >-
+      AssertionError -- the Entry still declares only full_segment, so the guard remains
+      post-merge detection and the plan's prevention claim is unmet.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: source-registry-guard-pre-tier
+  - step: 5
+    phase: pre-deploy
+    action: check_accounting is satisfied by the examined() declaration and the baseline shrink
+    command: bin/venv-python -c "from scripts.checks.hygiene.validate_check_accounting import validate_check_accounting; f=[]; validate_check_accounting(f); assert not f, f; print('ACCOUNTING_OK')"
+    expected: prints ACCOUNTING_OK and exits 0
+    fix_if: >-
+      Failure naming check_source_registry -- either examined() was not added, or the name was
+      not removed from config/check_accounting_baseline.yaml, or both.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: check-accounting-source-registry-clean
+  - step: 6
+    phase: pre-deploy
+    action: The decomposed test module is under the SLOC gate with no budget raise
+    command: bin/venv-python -c "from pathlib import Path; p=Path('tests/convergence_health/test_code_drift.py'); s=len([l for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#')]); assert s<500, s; import yaml; b=yaml.safe_load(Path('config/sloc_budgets.yaml').read_text()) or {}; assert 'tests/convergence_health/test_code_drift.py' not in (b.get('budgets') or {}); print('SLOC_OK', s)"
+    expected: prints SLOC_OK with a value under 500 and exits 0
+    fix_if: >-
+      AssertionError on the SLOC value means the file was extended rather than decomposed;
+      AssertionError on the budgets key means a budget raise was taken instead (Decision 128).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: test-code-drift-sloc-under-gate
+  - step: 7
+    phase: pre-deploy
+    action: Heartbeat helpers and the preflight liveness trigger behave correctly
+    command: bin/venv-python -m pytest tests/convergence_health/test_record.py tests/session/preflight/test_ci_rca_signals.py -q
+    expected: >-
+      passes, including a green-record-plus-stale-heartbeat case that alerts and a
+      green-record-plus-fresh-heartbeat case that does not
+    fix_if: >-
+      The green-record-plus-stale-heartbeat case returns None -- the liveness trigger is still
+      gated behind the record-is-red early return.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: convergence-sensor-liveness-signal
+  - step: 8
+    phase: pre-deploy
+    action: The heartbeat write is the last step of the workflow job so a failing step leaves it stale
+    command: bin/venv-python -c "import yaml,io; d=yaml.safe_load(open('.github/workflows/convergence-health.yml')); s=d['jobs']['health-check']['steps']; assert 'heartbeat' in (s[-1].get('name','')+s[-1].get('run','')).lower(), s[-1]; print('HEARTBEAT_LAST')"
+    expected: prints HEARTBEAT_LAST and exits 0
+    fix_if: >-
+      AssertionError -- the heartbeat step is not last, so a later failing step would still
+      leave a fresh heartbeat and the liveness signal would report a dead sensor as alive.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: convergence-heartbeat-step-last
+  - step: 9
+    phase: pre-deploy
+    action: Fast-tier presubmit is green across the whole change
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0
+    fix_if: Any failing check -- fix at source, never by narrowing the check or waiving the budget.
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: post-deploy
+    action: >-
+      After merge, a full scheduled convergence-health run succeeds end to end, evidenced by a
+      fresh heartbeat (written only on full success)
+    command: AWS_PROFILE=agent_platform aws s3 cp s3://agent-platform-data-lake/convergence/personal/sensor-heartbeat.json - | bin/venv-python -c "import sys,json,datetime as dt; r=json.load(sys.stdin); age=(dt.datetime.now(dt.timezone.utc)-dt.datetime.fromisoformat(r['timestamp'].replace('Z','+00:00'))).total_seconds()/3600.0; assert age < 3.0, age; print('SENSOR_ALIVE', round(age,2))"
+    expected: prints SENSOR_ALIVE with an age under 3 hours
+    fix_if: >-
+      NoSuchKey means no successful run has completed since merge -- read the failing step's log
+      and RCA it; do not backfill the heartbeat by hand (Decision 55 anti-masking).
+    graduation: not-applicable
+  - step: 11
+    phase: post-deploy
+    action: The corrected sensor reports no drift for the current deploy state and files no false-positive rec
+    command: git fetch --unshallow origin main || git fetch origin main; bin/venv-python -m scripts.convergence_health --prod-drift
+    expected: exits 0 and prints a prod_code_drift result whose action is "none"
+    fix_if: >-
+      action is "file" or "update" -- verify against the deploy records whether the drift is
+      genuine; if the recorded sha is a descendant of the latest prod-source commit the
+      predicate is still wrong. A non-zero exit means the source is still unregistered.
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: No false-positive prod_code_drift rec was created by the corrected sensor
+    command: bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; open_prod=[r for r in rows if r.get('source')=='prod_code_drift' and r.get('status')=='open']; assert not open_prod, open_prod; print('NO_FALSE_POSITIVE')"
+    expected: prints NO_FALSE_POSITIVE and exits 0
+    fix_if: >-
+      An open prod_code_drift rec exists -- confirm against the deploy records whether the drift
+      is real. If it is not, the reachability predicate is still misreporting and step 11's
+      diagnosis applies; close the false rec through the portal, never by hand-editing the cache.
+    graduation: not-applicable
+test_obligations:
+  - source: scripts/convergence_health/code_drift.py
+    behavior: >-
+      Freshness is reachability, not equality: a recorded sha descended from the latest
+      source-touching commit is fresh; an older one is stale; null or unresolvable is stale.
+    verification_step: 2
+    test_selector: tests/convergence_health/test_code_drift_prod.py
+    red_green_expectation: >-
+      red before, green after -- the dispatch-deploy case (recorded sha newer than the latest
+      prod-source commit) reports drift under the current equality comparison and reports fresh
+      after the change.
+  - source: config/agent/data_quality/source_registry.yaml
+    behavior: prod_code_drift remains a registered canonical_id accepted by validate_source.
+    verification_step: 1
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import validate_source; validate_source('prod_code_drift'); print('REGISTERED')"
+    red_green_expectation: >-
+      red before, green after -- validate_source('prod_code_drift') raises ValueError today and
+      returns cleanly once the entry is registered.
+  - source: scripts/checks/ops_governance/check_source_registry.py
+    behavior: >-
+      An unregistered source literal in a source-producing module (not just the portal files)
+      fails the guard, and the check declares an examined() outcome.
+    verification_step: 3
+    test_selector: tests/checks/ops_governance/test_check_source_registry.py
+    red_green_expectation: >-
+      red before, green after -- a producer-module fixture carrying an unregistered literal
+      passes the guard today and fails it after the scan is widened.
+  - source: scripts/checks/ops_governance/_manifest.py
+    behavior: check_source_registry declares pre=True with narrow pre_globs so it runs in the fast tier.
+    verification_step: 4
+    command: bin/venv-python -c "from scripts.checks.ops_governance._manifest import ENTRIES; e=[x for x in ENTRIES if x.name=='check_source_registry'][0]; assert e.pre is True, e; assert e.pre_globs, e; print('PRE_TIER_OK')"
+    red_green_expectation: >-
+      red before, green after -- the Entry declares only full_segment today, so the pre-tier
+      assertion fails before the change and passes after.
+  - source: scripts/convergence_health/record.py
+    behavior: Heartbeat write/read/age helpers round-trip, and an absent heartbeat reads as stale rather than raising.
+    verification_step: 7
+    test_selector: tests/convergence_health/test_record.py
+    red_green_expectation: red before, green after -- the helpers do not exist yet, so the tests fail to import before the change.
+  - source: scripts/preflight/ci_rca_signals.py
+    behavior: >-
+      A stale sensor heartbeat alerts even when the convergence record status is green, and any
+      error path still degrades to None so preflight never crashes.
+    verification_step: 7
+    test_selector: tests/session/preflight/test_ci_rca_signals.py
+    red_green_expectation: >-
+      red before, green after -- _check_convergence_rca_gap returns None for a green record
+      today regardless of sensor liveness.
+  - source: .github/workflows/convergence-health.yml
+    behavior: The heartbeat write is the final step, so any earlier failure leaves the heartbeat stale.
+    verification_step: 8
+    command: bin/venv-python -c "import yaml,io; d=yaml.safe_load(open('.github/workflows/convergence-health.yml')); s=d['jobs']['health-check']['steps']; assert 'heartbeat' in (s[-1].get('name','')+s[-1].get('run','')).lower(), s[-1]; print('HEARTBEAT_LAST')"
+    waiver_reason: >-
+      Workflow step ORDERING is asserted structurally by verification step 8 parsing the YAML,
+      because a GitHub Actions job cannot be executed in-process by pytest; the heartbeat
+      payload behavior it invokes is separately covered by tests/convergence_health/test_record.py.
+constraints:
+  - >-
+    Decision 55 anti-masking. Do NOT fix the red by swallowing validate_source's raise, by adding
+    continue-on-error to the prod-drift step, or by removing the step. The alarm must keep failing
+    loud on a genuine inability to file.
+  - >-
+    Fail closed on uncertainty: a null source_git_sha (break-glass local deploy, which sets no
+    GITHUB_SHA) or a sha unresolvable in history is STALE, never fresh. Absence of proof of
+    freshness is not proof of freshness.
+  - >-
+    Do NOT change write_deploy_record's GITHUB_SHA semantics. The record is an honest statement of
+    which commit was deployed; the sensor's comparison was the defect. Changing the writer would
+    invalidate deploy-prod-lambdas.yml's and deploy-ducklake-lambdas.yml's smoke preconditions,
+    which assert source_git_sha == github.sha.
+  - >-
+    Do NOT add convergence-health to ci-rca.yml's workflow_run filter. config/ci_rca_taxonomy.yaml
+    marks it ci_rca:excluded because a standing environmental red would mint a critical rec per
+    push -- a rec storm plus a planning-queue wedge. Decision 62's alarm-not-gate monitor lane is
+    the sanctioned treatment.
+  - >-
+    Do NOT add a live-state or network probe to scripts/validate.py. It validates the working tree
+    deterministically; sensor run-health is runtime state. A probe there would be non-deterministic
+    in the fast tier (Decision 153 budget) and would red CI itself -- a required check -- turning a
+    deliberately non-wedging alarm into a merge blocker (Decision 83 non-wedging).
+  - >-
+    Decision 128: the test-module SLOC crossing is resolved by decomposition, never by a
+    config/sloc_budgets.yaml raise and never by a --update-sloc-budgets re-seed.
+  - >-
+    The reachability test requires full git history. convergence-health.yml already checks out with
+    fetch-depth 0; do not reduce it. Guard the shallow case explicitly so a future regression fails
+    loud rather than silently reporting false drift.
+  - >-
+    PROD_SOURCE_PATHSPECS must stay in sync with deploy-prod-lambdas.yml's on.push.paths
+    (rec-2686, single conceptual source). This plan changes the comparison, not the pathspecs.
+  - Only files listed in Scope may be modified. Out-of-scope findings become recs, not inline fixes.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 66,
+    Decision 61, Decision 55, Decision 169. Flagged and resolved in scope: Decision 170 (examined()
+    + baseline shrink), Decision 103 (acceptance oracle re-expressed), Decision 73 (pre=True fast
+    tier), Decision 86 (deploy_record contract stanza). RELATED: Decision 84, Decision 131,
+    Decision 79, Decision 48, Decision 155, Decision 166, Decision 125, Decision 126."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Incident record. convergence-health failed on ~20 consecutive scheduled runs from 2026-08-17
+    10:59Z, one notification email each. The convergence RECORD was green throughout -- only the
+    sensor workflow was red -- which is why preflight reported convergence_health green.
+  - >-
+    Three compounding defects. (A) prod_code_drift was never registered, so file_rec raised and the
+    step exited 1; latent since T2.43 because a no-drift tick never reaches the portal. (B) The
+    freshness test compared GITHUB_SHA (HEAD at deploy time) for equality against the last
+    source-touching commit; these coincide only for push-triggered deploys. (C) The registry guard
+    scans only schedule.yaml and the portal files, so a producer module could ship an unregistered
+    source undetected.
+  - >-
+    Why it fired when it did. The repository was renamed agent-platform -> theseus, which broke
+    OIDC trust subjects and made the normal push-triggered apply/deploy path unavailable
+    (corroborated by the 2026-08-15 OIDC outage cited in scripts/ci/convergence_advisory.py, the
+    oidc-trust-contraction-closure and oidc-immutable-subject-recovery branches, and
+    terraform-apply-sandbox push failures on 2026-08-15 followed by workflow_dispatch successes).
+    Recovery therefore ran through workflow_dispatch, which stamped a HEAD sha unrelated to prod
+    source (7fa00f2 at 10:37Z, then 149c36b at 15:09Z) and exposed defect B. Both recovery deploys
+    ran IN GitHub Actions, not on the admin container -- a true break-glass local deploy sets no
+    GITHUB_SHA and would have written source_git_sha null.
+  - >-
+    There is no real drift today. The deployed sha 149c36b is a descendant of d024e63f, the latest
+    prod-source commit, so the corrected predicate reports fresh and files nothing. Verification
+    step 11 is the live confirmation.
+  - >-
+    Verification tier note. No scope file appears in any src/lambdas/*/manifest.yaml, so Decision
+    79's manifest-derived V3 trigger does not fire and the deterministic tier is V2. V3 is a
+    voluntary over-declaration because the only honest proof that the red is fixed is a live
+    sensor run against S3 and the ops portal. Steps 10-12 are that proof; there is no Lambda
+    build/deploy/smoke obligation and none is missing.
+  - >-
+    Follow-on filed as rec-3189: the convergence record is written only by the
+    write-convergence-record composite action, so an operator-run admin-container terraform apply
+    writes nothing and the record silently retains the last CI value. The preferred fix is an
+    out_of_band marker mirroring pending_gated and infra_error, plus a step in
+    deploy-paths.yaml admin_out_of_band.procedure. Deliberately NOT in this plan: granting an
+    out-of-band writer is IAM-sensitive (validate_convergence_writer_isolation.py governs
+    s3:PutObject on convergence/personal/*) and routes through the human-gated tf-gated-apply
+    Environment, which would stall this pure code/config fix behind a gated apply.
+  - >-
+    rec-2684, rec-2685 and rec-2691 were re-targeted this session from the retired
+    scripts/convergence_health.py path to scripts/convergence_health/code_drift.py. They are NOT
+    bundled here. rec-2685 (no empty-latest_sha guard) overlaps this plan's empty-sha guard, so
+    re-check it for closure after merge.
+  - >-
+    Planning-session caveat: this container's clone is shallow (is-shallow-repository true, 50
+    commits), so local pathspec and ancestry queries are unreliable. All history-dependent claims
+    in this plan were verified against CI logs and deploy records, not local git. The implementing
+    session must unshallow before running verification step 11.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirm the clone is unshallowed before any history-dependent verification step
+execution_steps:
+  - >-
+    config/agent/data_quality/source_registry.yaml -- add the prod_code_drift entry with
+    canonical_id, description, signal_interpretation and added_date, mirroring the
+    ducklake_code_drift entry's shape and its alarm-not-gate framing.
+  - >-
+    scripts/convergence_health/code_drift.py -- replace the equality freshness test in
+    detect_prod_code_drift and detect_ducklake_code_drift with a reachability test: resolve the
+    latest watched-source commit reachable from the recorded sha and compare it to the latest on
+    HEAD. Reuse the existing stdout-only git_runner seam. Treat empty, null and unresolvable
+    results as stale. Add an explicit shallow-repository guard that fails loud.
+  - >-
+    scripts/convergence_health/code_drift.py -- re-express _build_drift_acceptance and both
+    context builders against the reachability predicate so a correct redeploy can satisfy the
+    filed rec's acceptance oracle (Decision 103).
+  - >-
+    scripts/checks/ops_governance/check_source_registry.py -- widen the literal scan to the
+    source-producing modules and add a registry.examined() outcome declaration.
+  - >-
+    scripts/checks/ops_governance/_manifest.py and config/check_accounting_baseline.yaml -- add
+    pre=True with narrow pre_globs to the check_source_registry Entry, and remove its baseline row.
+  - >-
+    docs/contracts/build-lambda.yaml -- add the deploy_record field-semantics stanza (freshness is
+    reachability; null source_git_sha is deliberately stale).
+  - >-
+    scripts/convergence_health/record.py and .github/workflows/convergence-health.yml -- add
+    heartbeat helpers and a final-step heartbeat write ordered last in the health-check job.
+  - >-
+    scripts/preflight/ci_rca_signals.py -- extend _check_convergence_rca_gap so a stale heartbeat
+    alerts independently of the record's colour, preserving the degrade-to-None error handling.
+  - >-
+    Decompose tests/convergence_health/test_code_drift.py into itself plus
+    tests/convergence_health/test_code_drift_prod.py, keeping both under 500 SLOC, then add the new
+    cases. Update the remaining test modules per the Scope table.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop
+    and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Every change is code or config on a feature branch with no infrastructure mutation, so reverting
+  the merge commit fully restores prior behavior. The only external artifact created is the S3
+  heartbeat object, which is inert once nothing reads it. Note that reverting restores the red
+  workflow, so prefer a forward fix (Decision 55).
