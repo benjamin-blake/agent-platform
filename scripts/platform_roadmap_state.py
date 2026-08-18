@@ -100,8 +100,17 @@ def compute_followon_state(doc: RoadmapDocument, plans_dir: Path) -> dict[str, d
     if plans_dir.is_dir():
         for plan_file in sorted(plans_dir.glob("PLAN-*.yaml")):
             try:
-                with plan_file.open(encoding="utf-8") as fh:
-                    plan_data = yaml.safe_load(fh)
+                text = plan_file.read_text(encoding="utf-8")
+                # Only `closes_criteria` is read below, so a document whose text never mentions
+                # the key cannot contribute one -- skip parsing it. A YAML mapping key must
+                # appear literally in its own document (quoting keeps the substring; a merge
+                # key can only pull in an anchor defined in that same file, whose own text
+                # would carry it), so this is equivalent to parsing and finding nothing.
+                # Matters because this loop scans every plan on every call: full-parsing all
+                # ~350 of them to read one optional key dominated compute_state_dict's runtime.
+                if "closes_criteria" not in text:
+                    continue
+                plan_data = yaml.safe_load(text)
                 if not isinstance(plan_data, dict):
                     continue
                 closes = plan_data.get("closes_criteria") or []
