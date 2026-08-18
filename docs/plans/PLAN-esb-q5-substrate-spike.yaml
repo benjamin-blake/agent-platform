@@ -470,64 +470,80 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      The exclusion is recorded as a CLASS over the audit's whole Q5 arm set, not as two names someone
-      remembered. Require findings.yaml to partition that set into arms[] and excluded_arms{}, assert both
-      directions (nothing in both, nothing in neither), and require every excluded arm to carry all three
-      recorded reasons as non-empty entries.
+      findings.yaml is the spike's evidence record and this step is its reader. The exclusion is recorded as a
+      CLASS over the audit's whole Q5 arm set, not as two names someone remembered: require the partition into
+      arms[] and excluded_arms{}, assert both directions (nothing in both, nothing in neither), and require
+      every excluded arm to carry all three recorded reasons. Require the measurement_subject block -- the
+      mocked-LLM disclaimer, the one wall-clock term the spike IS entitled to, and the condition that reopens
+      the timeout-headroom bar. And require the GOVERNANCE-COST result: this run measured, without setting out
+      to, that standing up either substrate here is dominated by IAM governance cost rather than by
+      resume-machinery code. That is real data about BOTH arms, already paid for, and it is recorded as a
+      result rather than a footnote -- including the condition under which it makes the adoption decision
+      insensitive to what the spike measures.
     command: >-
-      bin/venv-python -c "import pathlib,yaml; p=pathlib.Path('docs/plans/reports/esb-q5-spike-findings.yaml');
-      assert p.exists(), 'findings.yaml absent'; f=yaml.safe_load(p.read_text(encoding='utf-8'));
-      full=set(f['audit_q5_arm_set']); arms=set(f['arms']); exc=f['excluded_arms']; both=sorted(arms &
-      set(exc)); assert not both, f'arm declared as both built and excluded: {both}'; missing=sorted(full - arms
-      - set(exc)); assert not missing, f'audit arm(s) neither built nor excluded: {missing}';
-      extra=sorted((arms | set(exc)) - full); assert not extra, f'arm(s) outside the audit Q5 set: {extra}';
-      need=('standing_cost','operability','re_arm_conditions'); bad=sorted((a,k) for a,v in exc.items() for k in
-      need if not str(v.get(k,'')).strip()); assert not bad, f'excluded arm(s) missing a recorded reason:
-      {bad}'; ms=f.get('measurement_subject') or {}; assert str(ms.get('mocked_llm_disclaimer','')).strip(),
-      'findings.yaml records no measurement_subject.mocked_llm_disclaimer -- the LLM steps are mocked, so a
-      wall-clock or timeout-headroom claim would have an unrepresentative subject (Decision 82)'; assert
-      str(ms.get('entitled_wall_clock_term','')).strip(), 'findings.yaml does not name the ONE wall-clock term
-      the spike is entitled to (workspace re-materialization), so the disclaimer would read as barring the W5
-      term it must not bar'; print('OK partition covers', len(full), 'audit arms;', len(arms), 'built,',
-      len(exc), 'excluded, all with 3 recorded reasons; measurement subject disclosed; both directions
-      clean')"
+      bin/venv-python -c "import pathlib,yaml; p=pathlib.Path('docs/plans/reports/esb-q5-spike-findings.yaml'); assert
+      p.exists(), 'findings.yaml absent'; f=yaml.safe_load(p.read_text(encoding='utf-8'));
+      full=set(f['audit_q5_arm_set']); arms=set(f['arms']); exc=f['excluded_arms']; both=sorted(arms & set(exc));
+      assert not both, f'arm declared as both built and excluded: {both}'; missing=sorted(full - arms - set(exc));
+      assert not missing, f'audit arm(s) neither built nor excluded: {missing}'; extra=sorted((arms | set(exc)) -
+      full); assert not extra, f'arm(s) outside the audit Q5 set: {extra}';
+      need=('standing_cost','operability','re_arm_conditions'); bad=sorted((a,k) for a,v in exc.items() for k in need
+      if not str(v.get(k,'')).strip()); assert not bad, f'excluded arm(s) missing a recorded reason: {bad}';
+      ms=f.get('measurement_subject') or {}; assert str(ms.get('mocked_llm_disclaimer','')).strip(), 'findings.yaml
+      records no measurement_subject.mocked_llm_disclaimer -- the LLM steps are mocked, so a wall-clock or
+      timeout-headroom claim would have an unrepresentative subject (Decision 82)'; assert
+      str(ms.get('entitled_wall_clock_term','')).strip(), 'findings.yaml does not name the ONE wall-clock term the
+      spike is entitled to (workspace re-materialization), so the disclaimer would read as barring the W5 term it must
+      not bar'; gc=f.get('governance_cost') or {}; need=('fixed_cost_observed','insensitivity_condition');
+      gaps=sorted(k for k in need if not str(gc.get(k,'')).strip()); assert not gaps, f'findings.yaml records no
+      governance_cost {gaps} -- this run measured that standing up EITHER substrate is dominated by IAM governance
+      cost rather than resume-machinery code, which is a RESULT about both arms and belongs in the record'; assert
+      str(ms.get('reopen_condition','')).strip(), 'findings.yaml names no reopen_condition for the timeout-headroom
+      bar -- the disclaimer gates the axis on which the arms most plausibly differ, so the condition that reopens it
+      must be recorded'; print('OK partition covers', len(full), 'audit arms;', len(arms), 'built,', len(exc),
+      'excluded, all with 3 recorded reasons; measurement subject and reopen condition disclosed; governance cost
+      recorded; both directions clean')"
     expected: >-
-      Exit 0 with a line beginning `OK partition covers` and containing `measurement subject disclosed`, ending
-      `both directions clean`. Proved in both directions this session: on the f3e4e6d tree the same command
-      exits 1 with a "findings.yaml absent" assertion, and against a findings file carrying the arm partition
-      but no measurement_subject block it exits 1 naming that omission; on the scratch post-change tree it
-      prints the OK line.
+      Exit 0 with a line beginning `OK partition covers`, containing `measurement subject and reopen condition
+      disclosed` and `governance cost recorded`, ending `both directions clean`. Proved in both directions: on
+      f3e4e6d it exits 1 with a "findings.yaml absent" assertion, and against a findings file missing the
+      governance_cost block, or missing measurement_subject.reopen_condition, it exits 1 naming that specific
+      omission; on the scratch post-change tree it prints the OK line.
     fix_if: >-
       `audit arm(s) neither built nor excluded` names an arm dropped without a record -- write it into
       excluded_arms with its three reasons, or build it. Do NOT satisfy this by shrinking audit_q5_arm_set: that
       set is the audit's, and editing it to match what was built is exactly the unwritten-premise defect ESB-04
-      exists to remove. `excluded arm(s) missing a recorded reason` names the arm and the field -- write the
-      missing standing_cost, operability or re_arm_conditions entry for that arm. `records no
+      exists to remove. `excluded arm(s) missing a recorded reason` names the arm and the field. `records no
       measurement_subject.mocked_llm_disclaimer` means the Decision 82 discipline was skipped -- write the
       disclaimer barring persona-loop wall-clock, per-iteration duration and timeout-headroom claims, and write
       entitled_wall_clock_term naming workspace re-materialization, whose subject (bytes and objects moved) is
-      real and unmocked. Do NOT discharge this by deleting the W5 wall-clock term: the disclaimer is scoped to
-      the LOOP, not to the workspace measurement.
+      real and unmocked. Do NOT discharge that by deleting the W5 wall-clock term: the disclaimer is scoped to
+      the LOOP. `names no reopen_condition` means the bar was recorded without the condition that lifts it.
+      `records no governance_cost` means the run's own most transferable measurement was dropped -- write
+      fixed_cost_observed and insensitivity_condition. Do NOT resolve it by softening the finding: if the
+      plumbing differential is small against the fixed governance cost, saying so IS the result.
     hermetic: true
     graduation: graduate
     graduation_check_id: "esb-q5-exclusion-partitions-audit-arm-set"
   - step: 2
     phase: pre-deploy
     action: >-
-      The exclusion is enforced STRUCTURALLY over every terraform file in the repo, and the same sweep carries
-      every invariant the spike stack must satisfy to be applicable at all. Swept as a FAMILY
-      (terraform/personal/esb_q5_spike*.tf), not one file, because the stack is pre-decomposed by resource
-      family. Assert: zero networked resources and zero vpc_config anywhere under terraform/; the family exists
-      and declares a state machine; the flag is declared default-false and gates every spike resource; every
-      spike IAM role is boundary-carrying; every spike name is inside the agent-platform-esb-q5-* prefix;
-      nothing is written to PlatformDev; no EventBridge target carries a role_arn; no spike Lambda carries
-      ignore_changes while the file points at the typed conformance.spike_class record; and every file in the
-      family is under the 500-effective-line terraform-class budget, with the measured sizes PRINTED. Comments
-      are stripped before every structural scan -- proved necessary, since the exception pointer names the very
-      construct the ignore_changes assertion forbids.
+      The exclusion is enforced STRUCTURALLY over every terraform file in the repo, swept as a FAMILY
+      (terraform/personal/esb_q5_spike*.tf) because the stack is pre-decomposed by resource family. Assert: zero
+      networked resources and zero vpc_config anywhere under terraform/; the family exists and declares a state
+      machine; the flag is declared default-false and gates every spike resource; every spike IAM role is
+      boundary-carrying; every spike name is inside the agent-platform-esb-q5-* prefix; nothing is written to
+      PlatformDev; no EventBridge target carries a role_arn; and every family file is under the
+      500-effective-line terraform-class budget with the measured sizes PRINTED. This step is ALSO the reader
+      for the typed conformance.spike_class record -- it derives the actual coupling state from the terraform it
+      has already parsed and asserts the contract agrees, failing closed on DISAGREEMENT and equally on ABSENCE.
+      That reuse is deliberate: giving the field a reader inside an existing enforced step is what keeps it from
+      being a declared-but-unread surface, and a reader that passed on absence would be the same fail-open shape
+      deleted from step 7 this round. Comments are stripped before every structural scan -- proved necessary,
+      since the exception pointer names the very construct the ignore_changes assertion forbids.
     command: >-
-      bin/venv-python -c "import pathlib,re; files=sorted(pathlib.Path('terraform').rglob('*.tf')); assert files, 'no
-      terraform files found'; strip=lambda s: chr(10).join(l for l in s.splitlines() if not
+      bin/venv-python -c "import pathlib,re,yaml; files=sorted(pathlib.Path('terraform').rglob('*.tf')); assert files,
+      'no terraform files found'; strip=lambda s: chr(10).join(l for l in s.splitlines() if not
       l.lstrip().startswith('#'));
       fam=r'aws_vpc|aws_subnet|aws_nat_gateway|aws_vpc_endpoint|aws_ecs_[a-z_]+|aws_efs_[a-z_]+';
       hits={str(p):sorted(set(re.findall(r'resource\s+\"('+fam+r')\"', strip(p.read_text(encoding='utf-8'))))) for p
@@ -551,33 +567,41 @@ verification_plan:
       m.startswith('agent-platform-esb-q5-')}); assert not offprefix, f'spike names a resource outside the
       agent-platform-esb-q5-* prefix, so it falls outside the IAMRoleWriteBounded budget: {offprefix}'; assert
       'PlatformDev' not in code and 'platform_dev' not in code, 'the spike writes to PlatformDev, which is outside
-      github_ci_apply IAMRoleWriteBounded role/agent-platform-* budget -- approve-then-AccessDeny'; assert not
-      re.search(r'ignore_changes\s*=\s*\[[^\]]*source_code_hash', code), 'a spike Lambda carries
-      ignore_changes=[source_code_hash] -- this stack is deliberately COUPLED (Decision 125 scoped exception)'; assert
+      github_ci_apply IAMRoleWriteBounded role/agent-platform-* budget -- approve-then-AccessDeny'; actual='DECOUPLED'
+      if re.search(r'ignore_changes\s*=\s*\[[^\]]*source_code_hash', code) else 'COUPLED';
+      tax=pathlib.Path('docs/contracts/environment-taxonomy.yaml'); assert tax.exists(),
+      'docs/contracts/environment-taxonomy.yaml is missing -- the conformance class has no sole SoT to read';
+      conf=(yaml.safe_load(tax.read_text(encoding='utf-8')) or {}).get('conformance') or {};
+      declared=conf.get('spike_class'); assert declared, 'conformance.spike_class is ABSENT from
+      docs/contracts/environment-taxonomy.yaml -- fail-closed on absence, because a reader that passes when the field
+      is missing is the same fail-open shape this round deleted from step 7'; assert declared==actual,
+      f'conformance.spike_class declares {declared!r} but the spike terraform is actually {actual!r} -- the contract
+      and the code disagree'; assert actual=='COUPLED', 'a spike Lambda carries ignore_changes=[source_code_hash] --
+      this stack is deliberately COUPLED (Decision 125 scoped exception)'; assert
       re.search(r'environment-taxonomy\.yaml', body), 'the spike terraform does not point at the typed
-      conformance.spike_class field -- an HCL-comment-only exception is a second surface the contract evaluator cannot
-      see'; targets=re.findall(r'resource\s+\"aws_cloudwatch_event_target\"[^{]*\{(.*?)\n\}', code, re.S); withrole=[t
-      for t in targets if 'role_arn' in t]; assert not withrole, 'an EventBridge target carries role_arn, which would
-      need an events.amazonaws.com iam:PassRole grant and a fourth enumerated role -- use aws_lambda_permission
-      instead (precedent: terraform/scheduled_agents.tf)'; from scripts.checks.structural._classify import
-      effective_lines; over=[(str(p), effective_lines(p.read_text(encoding='utf-8'))) for p in spike if
-      effective_lines(p.read_text(encoding='utf-8')) > 500]; assert not over, f'spike terraform file(s) over the
-      500-effective-line terraform-class budget -- Decision 128 says decompose by resource family, never raise:
-      {over}'; sizes={p.name: effective_lines(p.read_text(encoding='utf-8')) for p in spike};
+      conformance.spike_class record';
+      targets=re.findall(r'resource\s+\"aws_cloudwatch_event_target\"[^{]*\{(.*?)\n\}', code, re.S); withrole=[t for t
+      in targets if 'role_arn' in t]; assert not withrole, 'an EventBridge target carries role_arn, which would need
+      an events.amazonaws.com iam:PassRole grant and another enumerated role -- use aws_lambda_permission instead
+      (precedent: terraform/scheduled_agents.tf)'; from scripts.checks.structural._classify import effective_lines;
+      sizes={p.name: effective_lines(p.read_text(encoding='utf-8')) for p in spike}; over={k:v for k,v in
+      sizes.items() if v>500}; assert not over, f'spike terraform file(s) over the 500-effective-line terraform-class
+      budget -- Decision 128 says decompose by resource family, never raise: {over}';
       v=pathlib.Path('terraform/personal/variables.tf').read_text(encoding='utf-8'); assert
       re.search(r'variable\s+\"esb_q5_spike_enabled\"[^}]*default\s*=\s*false', v, re.S), 'esb_q5_spike_enabled is not
       declared with default false in terraform/personal/variables.tf'; print('OK', len(files), 'terraform files swept;
       0 networked resources; 0 vpc_config;', len(blocks), 'spike resources all count-gated;', len(roles), 'roles all
-      boundary-carrying; 0 PlatformDev writes; 0 role-carrying event targets; sizes', sizes, 'all under 500; flag
-      default false')"
+      boundary-carrying; 0 PlatformDev writes; 0 role-carrying event targets; conformance.spike_class', declared,
+      'agrees with the code; sizes', sizes, 'all under 500; flag default false')"
     expected: >-
       Exit 0 with a line beginning `OK` and ending `flag default false`, reporting the terraform-file count, the
-      count-gated spike-resource count, the boundary-carrying role count and the per-file `sizes` map. Proved in
-      both directions this session: on f3e4e6d it exits 1 with a "no terraform/personal/esb_q5_spike*.tf"
-      assertion; against a synthetic split stack it printed the OK line with 3 roles and both files well under
-      500. Each new clause was additionally proved negatively in isolation -- stripping permissions_boundary,
-      adding a PlatformDev reference, adding ignore_changes, adding an event target WITH role_arn, and deleting
-      the environment-taxonomy pointer each produce their own named assertion.
+      count-gated spike-resource count, the boundary-carrying role count, the agreed `conformance.spike_class`
+      value and the per-file `sizes` map. Proved in both directions: on f3e4e6d it exits 1 with a "no
+      terraform/personal/esb_q5_spike*.tf" assertion; against a synthetic split stack it printed the OK line
+      with 3 roles. Each clause was proved negatively in isolation -- stripping permissions_boundary, adding a
+      PlatformDev reference, adding ignore_changes, adding an event target WITH role_arn, deleting the taxonomy
+      pointer, DELETING conformance.spike_class, and setting it to DECOUPLED against COUPLED code each produce
+      their own named assertion.
     fix_if: >-
       A named file and family means a networked resource was introduced -- delete it. The container and
       shared-filesystem arms are EXCLUDED by operator decision; re-introducing one is a reversal, and a reversal
@@ -586,14 +610,14 @@ verification_plan:
       DEP-02 shape) -- add the boundary, which is also what puts the role's inline policies inside the apply
       role's budget. `outside the agent-platform-esb-q5-* prefix` or `writes to PlatformDev` means the diff has
       left the IAMRoleWriteBounded budget -- rename into the prefix; do NOT ask for an out-of-band admin apply.
-      `an EventBridge target carries role_arn` means a fourth role and an events.amazonaws.com PassRole grant
-      have been silently introduced -- use aws_lambda_permission instead. `carries
-      ignore_changes=[source_code_hash]` means the DuckLake/prod decoupling shape was applied to a stack with no
-      CD channel -- remove it. `does not point at the typed conformance.spike_class field` means the exception
-      exists only as a comment -- record it in docs/contracts/environment-taxonomy.yaml, which clause 2 makes
-      the sole SoT, and leave a pointer here. `over the 500-effective-line terraform-class budget` means the
-      family needs a further split by resource family -- Decision 128 makes that the default and a raise the
-      Decision-cited exception this wave has no grounds to write.
+      `an EventBridge target carries role_arn` means another role and an events.amazonaws.com PassRole grant
+      have been silently introduced -- use aws_lambda_permission instead. `conformance.spike_class is ABSENT`
+      means the typed record was never written -- write it in docs/contracts/environment-taxonomy.yaml, which
+      clause 2 makes the sole SoT; do NOT relax this reader to tolerate absence. `declares X but the spike
+      terraform is actually Y` means contract and code have diverged -- fix whichever is wrong, and note that
+      the terraform is the fact and the contract is the record. `over the 500-effective-line terraform-class
+      budget` means the family needs a further split by resource family -- Decision 128 makes that the default
+      and a raise the Decision-cited exception this wave has no grounds to write.
     hermetic: true
     graduation: graduate
     graduation_check_id: "esb-q5-no-networked-terraform-resources"
@@ -730,13 +754,19 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: >-
-      The full Step Functions IAM obligation, asserted as four classes rather than four sites: the three
-      classification maps; the Decision 156 read/write HOME split over the four policy surfaces; the grants that
-      no pre-merge gate covers (the states: tag/untag pair, and an iam:PassRole conditioned on
-      states.amazonaws.com); and -- DERIVED FROM THE TERRAFORM, never from a list written here -- literal ARN
-      enumeration of EVERY spike IAM role in BOTH plan-capable read policies. The derivation is the point: a
-      fourth role added later cannot skip enumeration, which is exactly how round 2 reintroduced the defect it
-      was fixing.
+      The Step Functions IAM obligation, asserted as three classes: the three classification maps; the Decision
+      156 read/write HOME split over the four policy surfaces; and the grants no pre-merge gate covers (the
+      states: tag/untag pair, and an iam:PassRole conditioned on states.amazonaws.com). LITERAL ARN ENUMERATION
+      OF THE SPIKE ROLES IS **NOT** ASSERTED HERE, AND THAT IS THE POINT: this step's final leg invokes
+      `validate_ci_refresh_read_coverage`, the SHIPPED gate that already closes that class -- discovery-driven
+      over terraform/personal, brace-balanced via `_vir._extract_block`, literal-only on `aws_iam_role`,
+      fail-CLOSED, and running in `--pre` and full. The bespoke rolenames derivation this step carried at round
+      3 was DELETED: measured this session, its regex cannot cross a closing brace, so a role whose `name`
+      follows an `assume_role_policy = jsonencode({...})` block silently drops out -- 1 of 2 derived with no
+      failure raised, because `assert rolenames` only catches the all-zero case. It was a FAIL-OPEN duplicate of
+      a fail-closed gate. The class-closure claim was right in substance and wrong in attribution; the credit
+      belongs to the shipped gate. This step also PRINTS the inline document's minified size (observational
+      only, never asserted -- the binding assertion is the terraform lifecycle precondition).
     command: >-
       bin/venv-python -c "import pathlib,re; from scripts.checks.iam_tf._read_coverage import CHECKED_TYPES,
       ENUMERATED_IAM_TYPES, TRANSITIVE_TYPES, NON_AWS_TYPES, NO_GRANT_TYPES; from
@@ -761,39 +791,32 @@ verification_plan:
       WRITE-authority document, against Decision 156 clause 1: {stray}'; assert 'states:TagResource' in inline and
       'states:UntagResource' in inline, 'states:TagResource / states:UntagResource are not both granted --
       terraform/personal/main.tf sets default_tags, so create tags the state machine and the tag-untag symmetry rule
-      requires the pair at an overlapping scope'; assert 'states:' in boot and 'states:' in
+      requires the pair at an overlapping scope'; assert 'states:' in
       pathlib.Path('terraform/bootstrap/github_ci_apply_boundary.tf').read_text(encoding='utf-8'), 'the boundary
       DataPlaneAllow carries no states: entry -- it is the ceiling for github_ci_apply AND for the boundary-carrying
       spike roles'; assert re.search(rd, planner), 'no states: refresh-read verb in terraform/personal/oidc.tf --
       github_ci_planner is the second plan-capable role the coverage gate requires'; assert
-      re.search(r'iam:PassedToService[^}]*states\.amazonaws\.com', boot, re.S) or re.search(r'states\.amazonaws\.com',
-      boot), 'no iam:PassRole grant conditioned on states.amazonaws.com -- creating an aws_sfn_state_machine passes a
-      role to Step Functions, and IAMPassRoleForLambda is conditioned to lambda.amazonaws.com only; _write_coverage
-      has no PassRole term so this AccessDenies inside the apply window instead of failing here';
-      spike=sorted(pathlib.Path('terraform/personal').glob('esb_q5_spike*.tf')); assert spike, 'no spike terraform --
-      the enumeration sweep would pass vacuously'; scode=chr(10).join(chr(10).join(l for l in
-      p.read_text(encoding='utf-8').splitlines() if not l.lstrip().startswith('#')) for p in spike);
-      rolenames=sorted(set(re.findall(r'resource\s+\"aws_iam_role\"\s+\"[a-z0-9_]+\"\s*\{[^}]*?name\s*=\s*\"([^\"]+)\"',
-      scode, re.S))); assert rolenames, 'no spike role names resolved -- the enumeration sweep would pass vacuously';
-      unenum={'github_ci_apply_reads.tf': sorted(n for n in rolenames if 'role/'+n+chr(34) not in reads), 'oidc.tf':
-      sorted(n for n in rolenames if 'role/'+n+chr(34) not in planner)}; unenum={k:v for k,v in unenum.items() if v};
-      assert not unenum, f'spike role(s) not enumerated as LITERAL ARNs in a plan-capable read policy (Decision 35/98
-      -- the agent-platform-* prefix never counts for iam: role reads): {unenum}'; failed=[];
-      validate_ci_refresh_read_coverage(failed); assert not failed, f'refresh-read/write coverage findings: {failed}';
-      print('OK', T, 'classified read+write with all 3 lifecycle phases; reads Sid in the reads policy, writes inline,
-      0 stray reads inline; tag/untag pair granted; states PassRole conditioned; boundary ceiling carries states:;',
-      len(rolenames), 'spike roles enumerated literally in BOTH plan-capable policies; coverage gate clean over',
-      len(WRITE_COVERAGE), 'write-managed types')"
+      re.search(r'states\.amazonaws\.com', boot), 'no iam:PassRole grant conditioned on states.amazonaws.com --
+      creating an aws_sfn_state_machine passes a role to Step Functions, and IAMPassRoleForLambda is conditioned to
+      lambda.amazonaws.com only; _write_coverage has no PassRole term so this AccessDenies inside the apply window
+      instead of failing here'; i=inline.index('github_ci_apply_policy_json'); j=inline.index(chr(10)+'}'+chr(10), i);
+      doc=re.sub(r'\$\{[^}]*\}', '123456789012', re.sub(r'(?m)^\s*#.*$', '', inline[i:j])); mini=len(re.sub(r'\s+',
+      '', doc)); failed=[]; validate_ci_refresh_read_coverage(failed); assert not failed, f'refresh-read/write
+      coverage findings: {failed}'; print('OK', T, 'classified read+write with all 3 lifecycle phases; reads Sid in
+      the reads policy, writes inline, 0 stray reads inline; tag/untag pair granted; states PassRole conditioned;
+      boundary ceiling carries states:; refresh-read coverage clean over', len(WRITE_COVERAGE), 'write-managed
+      types'); print('INLINE-DOC SIZE (observational, Decision 156 founding problem): github_ci_apply inline policy
+      minifies to approximately', mini, 'bytes of its 10240 AWS hard limit --', 10240-mini, 'bytes of headroom; the
+      binding assertion is the terraform lifecycle precondition, evaluated in the admin plan window')"
     expected: >-
       Exit 0 with a line beginning `OK aws_sfn_state_machine classified read+write with all 3 lifecycle phases`
-      and ending `write-managed types`, reporting the count of spike roles enumerated in both policies. Proved
-      failing on f3e4e6d with an "aws_sfn_state_machine has no read classification" assertion, and the live tree
-      independently confirms all four grant surfaces are empty of states:. The home-split matchers were proved
-      in both directions against synthetic policy text including the Decision 156 breach case; the enumeration
-      clause was proved in THREE states against the synthetic split stack -- unenumerated (all three roles
-      reported, in both policies), prefix-only (still all three reported, which is Decision 35's literal-only
-      rule holding), and literally enumerated (clean). The final coverage-gate leg's passing direction is not
-      reachable before implementation, since it needs the maps and the terraform to exist together.
+      and containing `write-managed types`, followed by an `INLINE-DOC SIZE` line reporting the minified byte
+      count and its headroom of 10,240. Proved failing on f3e4e6d with an "aws_sfn_state_machine has no read
+      classification" assertion; the live tree independently confirms all four grant surfaces are empty of
+      states:; the home-split matchers were proved in both directions including the Decision 156 breach case;
+      and the size print was proved against the live document, reproducing the 8,491-byte figure measured
+      independently earlier this session. The coverage-gate leg's passing direction is not reachable before
+      implementation, since it needs the maps and the terraform to exist together.
     fix_if: >-
       `has no read classification` / `has no write classification` / `declares no lifecycle-companion row` means
       a classification map was left unedited -- add the entry; do NOT reach for TRANSITIVE_TYPES, which would
@@ -803,11 +826,14 @@ verification_plan:
       `states:TagResource / states:UntagResource are not both granted` means a tags diff will AccessDeny on the
       first apply that REMOVES a tag -- grant the pair at an overlapping scope. `no iam:PassRole grant
       conditioned on states.amazonaws.com` is the invisible one: no pre-merge gate covers PassRole, so leaving
-      it AccessDenies inside the admin apply window -- add the Sid next to the states: write verbs. `spike
-      role(s) not enumerated as LITERAL ARNs` names the roles and the policy -- add each full ARN to
-      IAMRolesRead and IAMPlatformRolesRead; adding the agent-platform-* prefix instead does NOT satisfy it and
-      is measured not to. `the boundary DataPlaneAllow carries no states: entry` means the ceiling was skipped,
-      which silently denies both the apply role's grants and the spike roles' own -- extend it first.
+      it AccessDenies inside the admin apply window -- add the Sid next to the states: write verbs.
+      `refresh-read/write coverage findings` is the SHIPPED gate speaking and is where an unenumerated spike
+      role surfaces: read its message, which names the resource and the role policy that does not cover it, and
+      add each full literal ARN to IAMRolesRead and IAMPlatformRolesRead -- the agent-platform-* prefix does not
+      satisfy the literal-only rule. Do NOT re-add a local derivation of the role set to make that failure
+      arrive sooner; a fail-open duplicate of a fail-closed gate is how this plan reached round 3. An
+      `INLINE-DOC SIZE` headroom approaching zero is a warning, not a failure here -- relocate a Sid to the
+      reads policy per Decision 156 before the admin plan window rejects it.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -815,9 +841,9 @@ verification_plan:
       validate_ci_refresh_read_coverage is the standing enforced guard for the coverage half and runs in both
       tiers already, and a graduated duplicate would be reverted alongside the spike terraform, so on origin/main
       both the resource and its classification are absent, the gate passes, and the row fails admission as
-      tautological. The step is retained because it asserts four things the shipped gate does not: the Decision
-      156 home split, the tag/untag pair, the states.amazonaws.com PassRole (which no gate covers at all), and
-      terraform-derived literal enumeration.
+      tautological. The step is retained because it asserts three things the shipped gate does not -- the
+      Decision 156 home split, the tag/untag pair, and the states.amazonaws.com PassRole, which no gate covers
+      at all -- plus one observational print.
   - step: 8
     phase: pre-deploy
     action: >-
@@ -1108,9 +1134,12 @@ verification_plan:
     phase: post-deploy
     action: >-
       Teardown, verified on the two halves this session's identity can and cannot reach, stated separately
-      rather than blurred. AGENT-EXECUTABLE half: the flag reads false on main, the spike terraform family is
-      gone or fully gated, and the gated-apply DESTROY run completed rather than sitting unapproved.
-      OPERATOR half: the residual AWS resource sweep. The agent SURFACES the sweep commands and does not run
+      rather than blurred. AGENT-EXECUTABLE half: the flag reads default-false on origin/main, the spike
+      terraform family REMAINS IN THE TREE fully count-gated to zero, and the gated-apply DESTROY run completed
+      rather than sitting unapproved. The family is deliberately NOT deleted -- step 2 is graduated and
+      hard-asserts that terraform/personal/esb_q5_spike*.tf exists, so removing it would red main permanently.
+      Teardown is a flag flip, never a file removal, and this action says so rather than leaving "gone or fully
+      gated" open. OPERATOR half: the residual AWS resource sweep. The agent SURFACES the sweep commands and does not run
       them -- PlatformDev holds no states: verb and no lambda:List*, and adding either is refused by this plan's
       own constraint, so a sweep the agent executes would AccessDeny by construction. The round-2 version of
       this step called those APIs directly and could never have passed.
@@ -1621,6 +1650,45 @@ context:
     resource, so a throwaway spike would have to edit a production Lambda-trigger surface. The operator is being
     shown the cheap path and the expensive one it replaces, not just the choice.
   - >-
+    ROUND-3 REMEDIATION, UNDER A DELETE-OR-REUSE CONSTRAINT -- and the constraint is the finding, not the fixes.
+    All three prior failed fixes were ADDITIVE: round 1 added a grant to the wrong document, round 2 added five
+    roles, round 3 added a bespoke derivation AND a new schema field. "Is this fix mechanical?" was the
+    classifier each time, and it was wrong each time. So this round could only DELETE or REUSE an existing
+    enforced mechanism, and the four fixes are: (1) DELETED the rolenames derivation from VP step 7 -- verified
+    fail-open by measurement, its regex cannot cross a closing brace, so a role whose `name` follows an
+    `assume_role_policy = jsonencode({...})` block drops out silently (1 of 2 derived, no failure raised,
+    because `assert rolenames` only catches the all-zero case) -- and RE-CREDITED the class closure to
+    validate_ci_refresh_read_coverage, which the step already invoked: discovery-driven, brace-balanced via
+    _vir._extract_block, literal-only on aws_iam_role, fail-closed, in --pre. The claim was right in substance
+    and wrong in attribution, and keeping a fail-open duplicate of a fail-closed gate is how this plan reached
+    round 3. (2) REUSED VP step 2 as the reader for conformance.spike_class rather than adding a check --
+    roughly three lines over data it already parses, failing closed on DISAGREEMENT and equally on ABSENCE.
+    (3) ADDED one observational print of the inline document's minified size (inert, asserts nothing).
+    (4) DELETED VP step 16's "gone or fully gated" prose. Nothing new was introduced, which is what structurally
+    excludes a round 5.
+  - >-
+    THE conformance.spike_class SELF-CORRECTION, recorded because the reasoning error is more instructive than
+    the fix. Round 2 rejected the HCL-comment home on the stated ground that it "would be a second surface the
+    contract's own evaluator cannot see, which is the phantom-control shape" -- and then chose a home with THE
+    SAME PROPERTY: validate_deploy_channel_conformance hardcodes ducklake_class/prod_class, and the declared
+    evaluator validate_environment_taxonomy never reads `conformance` at all. The field was correct; its
+    READERLESSNESS was the defect, and it is exactly what Decision 168's evaluator obligation and Decision 170's
+    examined()/skipped() channel exist to prevent -- a vacuous pass and an enforced pass must not look
+    identical. The resolution reuses an existing enforced step as the reader rather than minting a checker,
+    and it fails closed on absence, because a reader that passes when the field is missing would reproduce the
+    very fail-open shape deleted from step 7 in the same round.
+  - >-
+    GOVERNANCE-COST META-FINDING -- a RESULT this run produced without setting out to, recorded in
+    findings.yaml as a first-class entry rather than a footnote. On this platform, standing up EITHER
+    orchestration substrate is dominated by IAM governance cost, not by resume-machinery code: 30 plan scope
+    rows, three decision-scout gate rounds, and out-of-band bootstrap applies, against two arms whose loop code
+    is shared verbatim and differs only in substrate. The consequence is stated as a condition rather than a
+    conclusion, because the spike has not run yet: IF the measured plumbing differential between the arms is
+    small relative to that fixed governance cost, THEN the adoption decision is INSENSITIVE to what this spike
+    measures, and the comparative record should say so rather than resolving a difference that does not drive
+    the choice. That is data about BOTH arms, it is already paid for, and it transfers to any future substrate
+    question on this platform. VP step 1 asserts both halves so the finding cannot be quietly dropped.
+  - >-
     ROUND-2 REMEDIATION, AND THE PATTERN IT INSTANTIATED -- worth stating plainly because it is this run's most
     expensive recurring failure. Round 1's BLOCK was that the `states:` grant sat on PlatformDev. The round-2
     fix moved it off PlatformDev onto a self-driving design that minted FIVE NEW ROLES -- and PlatformDev is
@@ -1938,10 +2006,15 @@ pre_implementation_checklist:
   - Acceptance criteria understood and verifiable
 execution_steps:
   - >-
-    Write docs/plans/reports/esb-q5-spike-findings.yaml FIRST, with audit_q5_arm_set enumerating the audit's full
-    Q5 arm set, arms[] naming the two Lambda arms, and excluded_arms{} naming the container and
-    shared-filesystem arms with all three recorded reasons each. This artifact is the exclusion's record and it
-    exists before any code or terraform, so the exclusion cannot become an unwritten premise.
+    Write docs/plans/reports/esb-q5-spike-findings.yaml FIRST, with audit_q5_arm_set enumerating the audit's
+    full Q5 arm set, arms[] naming the two Lambda arms, excluded_arms{} naming the container and
+    shared-filesystem arms with all three recorded reasons each, a measurement_subject block carrying the
+    mocked-LLM disclaimer, the one wall-clock term the spike IS entitled to and the reopen condition, and a
+    governance_cost block carrying this run's own measured finding -- that standing up either substrate here is
+    dominated by IAM governance cost rather than resume-machinery code -- with the condition under which that
+    makes the adoption decision insensitive to the spike. This artifact is the exclusion's record, the
+    measurement's honesty record, AND a result in its own right; it exists before any code or terraform, so
+    none of the three can become an unwritten premise.
   - >-
     Write the shared spike loop and its supports: scripts/esb_q5_spike/loop.py (one loop with an explicit resume
     cursor, used verbatim by both arms), mock_llm.py (the sole LLM surface, with the append-only call ledger that
@@ -2021,7 +2094,8 @@ execution_steps:
     concurrent PR claimed it). Content: the ruling (substrate + store), the EXCLUSION with its three recorded
     reasons, the reversal conditions INCLUDING the Decision 82 measurement-subject clause (no persona-loop
     wall-clock, per-iteration duration or timeout-headroom claim is sourced from this spike; workspace
-    re-materialization is the one entitled term), the two boundary statements (EFS would eliminate
+    re-materialization is the one entitled term, and the named condition that reopens the timeout-headroom bar
+    -- re-measurement against a live LiteLLM profile), the two boundary statements (EFS would eliminate
     hosted_cli_runner under W2; the exclusion does NOT retire CD.27's ECS Run Task escape hatch), the ESB-06
     residual with its follow-on rec id, and the explicit entry-versus-evidence split addressed to CFG-07. Everything else -- the comparative
     record, the measurements, the per-arm and per-option detail -- is CITED to findings.yaml, not restated.
@@ -2048,8 +2122,11 @@ execution_steps:
     verifying each row's command runs green from the committed YAML and fails on revert (VF-05), then run VP step
     11 to confirm the registry is still inside its 6,000-line budget.
   - >-
-    TEARDOWN. Flip the flag false through the infra channel, let the destroy route to tf-gated-apply, and run VP
-    step 16's residual sweep. No spike resource survives the plan.
+    TEARDOWN. Flip the flag false through the infra channel and let the destroy route to tf-gated-apply, then
+    run VP step 16: the agent-executable half (flag default-false on origin/main, family still present and fully
+    gated, destroy run completed) and the SURFACED operator sweep, whose result the operator reports. No spike
+    AWS RESOURCE survives the plan -- but the spike TERRAFORM FAMILY stays in the tree, count-gated to zero,
+    because the graduated step-2 row asserts it exists and deleting it would red main permanently.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA
     (Decision 55).
@@ -2060,10 +2137,14 @@ work_areas: []
 rollback: >-
   Every spike resource is count-gated behind one default-false flag, so infrastructure rollback is flipping the
   flag false and letting the destroy route through tf-gated-apply -- the same path teardown uses, with no bespoke
-  teardown to write. The three IAM classification-map edits and the three grant edits are additive and safe to
-  leave in place after teardown (they classify and permit a resource type that no longer exists, which the
-  discovery-driven gate simply stops asserting); reverting them is optional and, if done, must be done together
-  with the terraform or the coverage gate goes red. Rollback of the governance edits is a revert of the
+  teardown to write -- a flag flip, NEVER a deletion of the spike terraform family, which the graduated step-2
+  row asserts exists. The IAM classification-map edits and the grant edits are safe to leave in place across
+  teardown (they classify and permit a resource type that no longer exists, which the discovery-driven gate
+  simply stops asserting), so nothing here is time-critical -- but reverting the BOOTSTRAP-TIER privilege
+  widening is NOT optional. The operator has directed that revert and it is tracked as rec-3192, which lands
+  AFTER the spike is destroyed and OWNS that work; this plan deliberately does not widen its scope to include
+  it. If any revert is performed, the map edits and the terraform must move together or the coverage gate goes
+  red. Rollback of the governance edits is a revert of the
   DECISIONS.md and roadmap hunks plus an index regeneration and a revert of the re-grounded pytest -- those three
   are coupled and must revert together, since the tests read the live roadmap. The ops portal Decision write, the
   backfill and the ESB-06 rec filing are the non-revertible steps, which is why they are sequenced last, behind
