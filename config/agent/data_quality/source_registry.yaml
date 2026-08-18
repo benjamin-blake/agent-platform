@@ -194,3 +194,13 @@ entries:
     description: "Decision 162 / rec-2664: filed by reconcile.yml's file-reconcile-starved-rec job when the reconcile.yml subagent plan reviewer STARVED (max-turns/no-verdict/API-exhausted after the same-budget retry) while re-applying a previously red sandbox commit -- the observability gap the STARVED-skips-the-write anti-masking path (Decision 55, T2.39 c3) would otherwise leave silent on the Reconcile heal-button path."
     signal_interpretation: "Durable observability record, not a gate -- the job that files it carries no terraform apply and is no part of reconcile.yml's terminal route set (Decision 158). One rec per starved Reconcile episode; volume tracks how often the heal-button path itself hits reviewer starvation, distinct from the routine sandbox push path's own STARVED rate (see the review.sh STARVED marker, mirrored to $GITHUB_STEP_SUMMARY). Priority High, not source=ci_rca -- does NOT hard-block the /plan queue."
     added_date: '2026-08-02'
+
+  - canonical_id: prod_code_drift
+    description: "Prod-class Lambda code-drift sensor (T2.43 / Decision 125/126): runs on the convergence-health cron and compares each deploy-records/prod/<function>.json's recorded source_git_sha against the latest main commit touching prod source paths, for the three prod-class functions (scheduled-agent-dispatcher, findings-processor, ops-compaction)."
+    signal_interpretation: "Alarm-not-gate (Decision 55) -- one deduped rec per drift episode (update_rec on persistence; no duplicate filing), mirroring the ducklake_code_drift pattern. Volume tracks how often the governed deploy channel's live code falls behind main (e.g. a bootstrap-window no-op deploy, a failed governed run, or a workflow_dispatch recovery deploy stamping a sha that postdates the latest source change). The rec closes automatically once every function's deploy record reaches the latest prod-source commit under the reachability oracle (next sensor tick runs update_rec --status closed). Priority High, not source=ci_rca -- does NOT hard-block the /plan queue."
+    added_date: '2026-08-18'
+
+  - canonical_id: executor-hotfix
+    description: "Filed by scripts.executor.branch_lifecycle.file_hotfix_rec() when the autonomous executor applies a mid-flight hotfix to a rec's own working branch during execution."
+    signal_interpretation: "Tracks a fix applied outside the rec's original plan, referencing the parent rec_id so the hotfix can be reviewed to determine root-cause vs symptom. Dormant while the executor is frozen (Decision 67) -- no new recs expected from this source until the executor resumes; volume then tracks mid-flight-correction frequency."
+    added_date: '2026-08-18'

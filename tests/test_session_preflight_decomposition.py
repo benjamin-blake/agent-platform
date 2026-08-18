@@ -117,6 +117,7 @@ FROZEN_REPORT_KEYS = frozenset(
         "decision_conditions",
         "non_automatable_softcap_breached",
         "ci_rca_liveness_alert",
+        "convergence_sensor_liveness_alert",
         "convergence_rca_gap_alert",
         "forward_fix_recursion_alert",
         "budget_bypass_alert",
@@ -125,7 +126,7 @@ FROZEN_REPORT_KEYS = frozenset(
         "prose_context",
     }
 )
-assert len(FROZEN_REPORT_KEYS) == 49, "frozen report key list itself drifted -- fix the constant, not the assertion"
+assert len(FROZEN_REPORT_KEYS) == 50, "frozen report key list itself drifted -- fix the constant, not the assertion"
 
 # Frozen export list: every public function + every test-referenced private symbol from the
 # pre-refactor module (facade-resident + all 9 domain modules + _common + the two back-compat
@@ -243,7 +244,6 @@ FROZEN_EXPORTS = frozenset(
 _MOVED_SYMBOLS = FROZEN_EXPORTS - {
     "main",
     "_slim_roadmap_state",
-    "_format_preflight_summary",
     "open_telemetry_session",
     "PREFLIGHT_REPORT",
     "TELEMETRY_ACTIVE_SESSION_FILE",
@@ -378,7 +378,7 @@ class TestReportSchemaFreeze:
     def test_report_key_set_matches_frozen_49(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         _, report, _ = _run_stubbed_main(tmp_path, capsys)
         assert set(report.keys()) == FROZEN_REPORT_KEYS
-        assert len(report.keys()) == 49
+        assert len(report.keys()) == 50
 
 
 class TestFacadeCompleteness:

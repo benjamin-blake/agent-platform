@@ -79,6 +79,7 @@ class TestStdoutDoesNotDumpFullJson:
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
             patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_convergence_sensor_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
         ):
             _preflight.main()
@@ -128,6 +129,7 @@ class TestJsonOutputSchema:
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
             patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_convergence_sensor_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):

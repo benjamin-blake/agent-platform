@@ -44,6 +44,7 @@ ENTRIES: tuple[Entry, ...] = (
         name="check_source_registry",
         module="scripts.checks.ops_governance.check_source_registry",
         attr="check_source_registry",
+        pre=True,
         full_segment="full_after_lint",
     ),
     Entry(

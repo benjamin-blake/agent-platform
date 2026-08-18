@@ -6174,3 +6174,72 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/hooks/test_session_start_deepen_history.py
+  - check_id: convergence-drift-reachability-tests
+    primitive_slot: command_exit_zero
+    guard_target: scripts/convergence_health/code_drift.py
+    guard_symbol: _is_fresh
+    plan_slug: convergence-health-prod-drift-red
+    graduated_at: "2026-08-18"
+    graduated_by: implement-agent
+    # Deliberately NOT a test_selector into the TestReachabilityOracle class that covers this in
+    # the suite: those tests drive detect_prod_code_drift, so their module imports boto3 at module
+    # scope (a heavy dep excluded from requirements-fast.txt, which pr-validate installs). The fast
+    # tier's pytest_diff defers such a file gracefully, but this differential gate shells a raw
+    # pytest with no deferral logic, so a node_id row there can never pass in CI. code_drift.py
+    # itself pulls in zero heavy deps, so exercising the oracle directly is both CI-safe and a
+    # tighter guard on the actual symbol. Mirrors the pre-existing
+    # outbox-retirement-prod-pathspec-synced row's shape for this same source file.
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - >-
+        from scripts.convergence_health.code_drift import _is_fresh;
+        SRC = 'd024e63f'; DISPATCH = '149c36b';
+        reach = lambda argv: SRC if argv[4] == DISPATCH else '';
+        assert _is_fresh({'source_git_sha': DISPATCH}, SRC, reach, ('x',)) is True, 'incident case:
+        a dispatch deploy postdating the latest source commit must read FRESH';
+        assert _is_fresh({'source_git_sha': None}, SRC, reach, ('x',)) is False, 'null sha fails closed';
+        assert _is_fresh({'source_git_sha': 'deadbeef'}, SRC, lambda a: '', ('x',)) is False,
+        'unresolvable sha fails closed';
+        assert _is_fresh(None, SRC, reach, ('x',)) is False, 'absent record fails closed';
+        assert _is_fresh({'source_git_sha': DISPATCH}, '', reach, ('x',)) is False,
+        'empty latest_sha fails closed';
+        print('REACHABILITY_ORACLE ok')
+  - check_id: source-registry-guard-producer-scan
+    primitive_slot: test_selector
+    guard_target: scripts/checks/ops_governance/check_source_registry.py
+    guard_symbol: SCANNED_PATHS
+    plan_slug: convergence-health-prod-drift-red
+    graduated_at: "2026-08-18"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: >-
+        tests/checks/ops_governance/test_check_source_registry.py::TestCheckSourceRegistry::test_rejects_unregistered_literal_in_producer_module
+  - check_id: convergence-sensor-liveness-signal
+    primitive_slot: test_selector
+    guard_target: scripts/preflight/ci_rca_signals.py
+    guard_symbol: _check_convergence_sensor_liveness
+    plan_slug: convergence-health-prod-drift-red
+    graduated_at: "2026-08-18"
+    graduated_by: implement-agent
+    check_spec:
+      node_id: >-
+        tests/session/preflight/test_ci_rca_signals.py::TestConvergenceSensorLivenessAlert::test_alert_set_when_latest_run_failed
+  - check_id: retired-test-module-sweep-clean
+    primitive_slot: command_exit_zero
+    guard_target: tests/convergence_health/code_drift
+    guard_symbol: null
+    plan_slug: convergence-health-prod-drift-red
+    graduated_at: "2026-08-18"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bash
+        - -c
+        - >-
+          test ! -e tests/convergence_health/test_code_drift.py &&
+          ! grep -rn "test_code_drift\.py\|tests\.convergence_health\.test_code_drift"
+          --include="*.py" --include="*.yaml" --include="*.yml" --include="*.md"
+          --exclude="registry.yaml" . --exclude-dir=.venv --exclude-dir=.git --exclude-dir=docs
+          && echo SWEEP_CLEAN

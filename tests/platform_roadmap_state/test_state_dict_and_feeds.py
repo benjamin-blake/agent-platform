@@ -529,3 +529,53 @@ class TestComputeFollowonStateMalformedPlanShapes:
         (tmp_path / "PLAN-bad-entries.yaml").write_text("closes_criteria:\n  - 123\n  - malformed-ref-without-colon\n")
         result = compute_followon_state(doc, tmp_path)
         assert result["A"]["needs_followon_plan"] is True
+
+
+class TestKeylessPlanSkipsYamlParse:
+    """The scan reads only `closes_criteria`, so a plan whose text never mentions the key is
+    skipped without a YAML parse.
+
+    This is a load-bearing performance property, not an incidental one: the scan runs on every
+    compute_state_dict() call, and full-parsing every plan in docs/plans/ to read one optional
+    key dominated that function's runtime (~350 documents parsed per call). These tests pin the
+    mechanism so the N+1 cannot silently return, and pin the complement so the skip can never
+    swallow a plan that does carry the key.
+    """
+
+    def _doc_with_one_open_criterion(self) -> RoadmapDocument:
+        d = copy.deepcopy(_BASE_DOC)
+        item = _item("A", status="in_progress")
+        item["exit_criteria"] = [{"id": "c1", "text": "x", "status": "open"}]
+        d["tier_items"] = [item]
+        return RoadmapDocument.model_validate(d)
+
+    def test_plan_without_the_key_is_never_yaml_parsed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        import scripts.platform_roadmap_state as prs
+
+        (tmp_path / "PLAN-unrelated.yaml").write_text("slug: unrelated\nintent: no criteria refs here\n")
+        parsed: list[str] = []
+        real_safe_load = prs.yaml.safe_load
+
+        def _spy(stream: object) -> object:
+            parsed.append(str(stream)[:40])
+            return real_safe_load(stream)
+
+        monkeypatch.setattr(prs.yaml, "safe_load", _spy)
+        compute_followon_state(self._doc_with_one_open_criterion(), tmp_path)
+        assert parsed == [], f"keyless plan must not be YAML-parsed; parsed: {parsed}"
+
+    def test_plan_carrying_the_key_is_still_parsed_and_honoured(self, tmp_path: Path) -> None:
+        """Complement of the skip: the optimisation must not over-skip. A plan that does declare
+        closes_criteria still suppresses the follow-on, alongside a keyless sibling."""
+        (tmp_path / "PLAN-unrelated.yaml").write_text("slug: unrelated\nintent: no criteria refs here\n")
+        (tmp_path / "PLAN-covers.yaml").write_text('closes_criteria: ["A:c1"]\n')
+        result = compute_followon_state(self._doc_with_one_open_criterion(), tmp_path)
+        assert result["A"]["all_plans_actioned"] is False
+        assert result["A"]["needs_followon_plan"] is False
+
+    def test_quoted_key_form_is_not_skipped(self, tmp_path: Path) -> None:
+        """The skip keys off the raw substring, so a quoted mapping key -- which still contains
+        it -- must be parsed and honoured like the bare form."""
+        (tmp_path / "PLAN-quoted.yaml").write_text('"closes_criteria": ["A:c1"]\n')
+        result = compute_followon_state(self._doc_with_one_open_criterion(), tmp_path)
+        assert result["A"]["needs_followon_plan"] is False

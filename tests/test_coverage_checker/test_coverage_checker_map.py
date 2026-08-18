@@ -307,12 +307,14 @@ class TestMapSourceToTest:
             ("approvals", "test_approvals.py"),
             ("assess", "test_assess.py"),
             ("escalate", "test_escalate.py"),
-            ("code_drift", "test_code_drift.py"),
             ("__main__", "test___main__.py"),
         ],
     )
     def test_maps_convergence_health_submodules_to_their_own_mirror(self, stem: str, expected_test_name: str) -> None:
         # rec-2709 Wave 6 PACKAGE-MIRROR: each submodule maps 1:1 to its own mirror file.
+        # code_drift.py is EXCLUDED from this parametrize set -- it is now a direct
+        # _CONCERN_SPLIT_TEST_PACKAGES entry (PLAN-convergence-health-prod-drift-red) and maps to
+        # a test PACKAGE DIRECTORY instead; see TestCodeDriftConcernSplitRegistration below.
         source = ROOT / "scripts" / "convergence_health" / f"{stem}.py"
         result = map_source_to_test(source)
         assert result is not None
@@ -369,3 +371,20 @@ class TestContractDriftConcernSplitRegistration:
 
     def test_contract_drift_pre_decomposition_single_file_module_is_gone(self) -> None:
         assert not (ROOT / "tests" / "checks" / "contracts" / "test_validate_contract_drift.py").exists()
+
+
+class TestCodeDriftConcernSplitRegistration:
+    """scripts/convergence_health/code_drift.py (PLAN-convergence-health-prod-drift-red) is
+    registered directly in _CONCERN_SPLIT_TEST_PACKAGES so the concern-split test decomposition
+    (tests/convergence_health/code_drift/) keeps measuring 100% coverage of the source module --
+    without this registration map_source_to_test would resolve the single retired flat mirror
+    file that no longer exists post-split, dropping the module out of the coverage roster
+    entirely (see the plan's coverage-measurement note). The retired file's non-existence is
+    swept authoritatively by the plan's own VP step 10 (a repo-wide grep for dangling
+    references), not re-asserted here."""
+
+    def test_maps_code_drift_to_concern_split_package_directory(self) -> None:
+        source = ROOT / "scripts" / "convergence_health" / "code_drift.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "convergence_health" / "code_drift"
