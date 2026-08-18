@@ -165,9 +165,14 @@ constraints:
   - >-
     SessionStart hooks in one matcher block run in PARALLEL, not in sequence (Claude Code hooks docs,
     "All matching hooks run in parallel"). The hook must therefore not assume session_start_sync_main.sh
-    has finished. It needs no lock-contention machinery: measured on git 2.43.0, --unshallow is the sole
-    shallow.lock acquirer in the whole block, and a plain `git fetch origin main` both succeeds with
-    shallow.lock held (rc=0) and never rewrites .git/shallow. Single attempt, then fail open.
+    has finished. It needs no lock-contention machinery. Three of the seven SessionStart hooks touch
+    repo-scoped git - session_start_sync_main.sh (plain `git fetch origin main` + `git branch -f`),
+    session_start_github_readiness.sh (via scripts/session/github_readiness.py: `git branch
+    --show-current`, `git fetch --dry-run origin main`, `git push --dry-run`), and
+    session_start_precommit.sh (`pre-commit install`). None acquires .git/shallow.lock: measured on git
+    2.43.0, both plain and --dry-run fetch return rc=0 with shallow.lock held and neither rewrites
+    .git/shallow. --unshallow is therefore the sole shallow.lock acquirer in the block, and a single
+    attempt is safe. Single attempt, then fail open.
   - >-
     No CI workflow fetch-depth changes. SessionStart hooks do not run in GitHub Actions, so ci.yml and
     main-canary.yml stay pinned at fetch-depth 2 (Decision 159 clause 1) and ci-rca.yml keeps its own
@@ -198,8 +203,9 @@ constraints:
     Reference the hook path literally in the test module so the --pre affected-set data-edge channel
     selects it off a .sh-only edit (Decision 135; affected_tests.py _data_edge_reference_candidates keys
     on any changed non-.py file). The basename must appear as ONE whole quoted token -
-    _quoted_token_pattern will not match a path split across concatenated string segments, which is how
-    the test_session_start_commit_signing.py precedent builds its paths.
+    _quoted_token_pattern (affected_tests.py:207) matches ['\"]([^'\"]*/)?basename['\"], so splitting the
+    DIRECTORY across concatenated segments is fine (the commit-signing precedent does exactly that and
+    still matches) but splitting the BASENAME is not.
   - >-
     Do not fix scripts/convergence_health/record.py or scripts/roadmap/plan_audit.py inline - they are
     out of scope; file a recommendation instead (AGENTS.md out-of-scope rule, Decision 55).
@@ -241,12 +247,18 @@ context:
     convention only - it does NOT sequence the two hooks, and any rationale claiming it avoids delaying
     the main sync is unfounded. Consequence two was investigated and CLEARED by measurement on git 2.43.0,
     after an earlier draft of this plan asserted a contention mechanism that does not exist. Measured -
-    a held .git/shallow.lock does kill --unshallow (rc=128), but a plain `git fetch origin main` succeeds
-    with that lock held (rc=0) and does not rewrite .git/shallow at all; a held FETCH_HEAD.lock blocks
-    neither flavour; and of the seven SessionStart hooks only session_start_sync_main.sh runs repo-scoped
-    git, using plain fetch plus `git branch -f` (refs/heads/main.lock), which --unshallow never needs.
-    So --unshallow is the sole shallow.lock acquirer in the block and there is no in-block contention
-    path. A single attempt is correct; retry machinery would be speculative complexity against an
+    a held .git/shallow.lock does kill --unshallow (rc=128), but both a plain `git fetch origin main`
+    and a `git fetch --dry-run origin main` succeed with that lock held (rc=0) and neither rewrites
+    .git/shallow at all; a held FETCH_HEAD.lock blocks neither flavour; and a true 3-way race
+    (--unshallow || plain fetch || dry-run fetch on one clone) left all three at rc=0 with the clone
+    fully deepened. Three of the seven SessionStart hooks touch repo-scoped git -
+    session_start_sync_main.sh (plain fetch + `git branch -f`, refs/heads/main.lock, which --unshallow
+    never needs), session_start_github_readiness.sh (via scripts/session/github_readiness.py: `git branch
+    --show-current`, `git fetch --dry-run origin main`, `git push --dry-run`), and
+    session_start_precommit.sh (`pre-commit install`). None acquires shallow.lock, so --unshallow is the
+    sole shallow.lock acquirer in the block and there is no in-block contention path. Note the earlier
+    draft claimed only sync_main ran repo-scoped git - that enumeration came from grepping the .sh files
+    alone and missed github_readiness.sh's delegation to Python. A single attempt is correct; retry machinery would be speculative complexity against an
     unobservable hypothetical, and a lost deepen self-heals on the next session for 2.9s.
   - >-
     Hook timeout headroom - the harness default for `command` hooks is 600s (the hooks docs lower it only
@@ -298,7 +310,7 @@ context:
     settings.json/SessionStart and is incidental, so hook registration, SessionStart ordering and
     advisory fail-open behaviour are Decision-ungoverned - AGENTS.md plus the session_start_sync_main.sh
     precedent govern instead, and no citation is manufactured for them."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE rounds 1-2, re-dispatched after each revision"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 rounds (REVISE rounds 1-2; round 3 PROCEED with two in-flight text corrections, both applied at plan time rather than deferred)"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -318,8 +330,11 @@ execution_steps:
     Write the hook header to document, in this order - the confidently-wrong-answer mechanism with the
     b89c9a4 vs a3393db worked example; the three consumers and the depth each needs; why full unshallow
     over bounded deepen, carrying the 2.9s / 13MB -> 21MB / 902-commit measurement; that SessionStart
-    hooks run in parallel but that --unshallow is the sole shallow.lock acquirer among them, so a single
-    attempt is safe; the DEGRADED MODE paragraph stating that a failed fetch leaves every wrong answer
+    hooks run in parallel and that three of them touch repo-scoped git (sync_main's plain fetch +
+    `git branch -f`, github_readiness's `git branch --show-current` / `git fetch --dry-run` /
+    `git push --dry-run` via scripts/session/github_readiness.py, and precommit's `pre-commit install`)
+    but that none acquires shallow.lock, leaving --unshallow the sole acquirer, so a single attempt is
+    safe; the DEGRADED MODE paragraph stating that a failed fetch leaves every wrong answer
     live for the session, that .git/shallow absence is the machine-detectable signal a consumer can
     check, and that the next session retries; and that CI is unaffected because SessionStart hooks do not
     run in GitHub Actions.
@@ -346,8 +361,12 @@ execution_steps:
     check_spec.node_id tests/hooks/test_session_start_deepen_history.py.
   - >-
     File the follow-on recommendation for scripts/convergence_health/record.py's silent return-0 via
-    file_rec, calling get_rec_write_guidance() first per the Precision Context Injection rule. Do not fix
-    it inline.
+    file_rec, calling get_rec_write_guidance() first per the Precision Context Injection rule. The rec
+    MUST carry the literal strings `scripts/convergence_health/record.py` in its file field and
+    `count_unapplied_tf_commits` in its context field - VP step 5 greps the read cache for that second
+    token, so a differently-worded rec would make step 5 report "the portal write did not land" when the
+    write in fact landed, reproducing this plan's own wrong-answer class inside its verification. Do not
+    fix the function inline.
   - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
   - 'Report: what was implemented, verification results'
 rollback: >-
