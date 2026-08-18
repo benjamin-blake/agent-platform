@@ -1,0 +1,1552 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "esb-q5-substrate-spike"
+intent: >-
+  Run the audit's Q5 stub-persona spike at the two VPC-free arms the operator scoped -- the same minimal
+  decision_scout loop as a Lambda DURABLE FUNCTION driven by Step Functions, and as HAND-ROLLED stateless
+  Lambdas driven by Step Functions per iteration, each forced-killed mid-loop -- then discharge ESB-04 with a
+  THIN numbered Decision that states the ruling and its reversal conditions and CITES the comparative record,
+  the measurements and the per-arm detail to docs/plans/reports/esb-q5-spike-findings.yaml.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-esb-q5-substrate-spike.yaml
+phase: >-
+  Platform T4.1 / T4.2 (executor substrate) -- the CD.27 layer-2 substrate spike and the CD.43 workspace-store
+  selection it feeds. Wave 5, the final wave, of the remediation run against
+  audits/executor-substrate-and-billing-shape-ad02653.yaml; waves 1-4 (PLAN-esb-text-fix-bundle,
+  PLAN-esb-workspace-store-criteria, PLAN-esb-fallback-spec-carrier, PLAN-esb-routing-rationale) are merged at
+  f3e4e6d. Remediates ESB-04 (audits/executor-substrate-and-billing-shape-ad02653.yaml:887-907) against the Q5
+  spike specification (same file, :315-337). First wave in the run that provisions real AWS infrastructure.
+fallback_reevaluation:
+  reevaluated_on: "2026-08-18"
+  substrate_status: >-
+    No Lambda Durable Functions API-semantics regression observed or reported at plan-filing time; the
+    incumbent substrate's semantics are unchanged since CD.27's fallback_spec was written in wave 3.
+  verdict: continue_on_current_substrate
+  basis: >-
+    Reviewed against CD.27 fallback_spec.trigger (an API-semantics regression inside the first 12 months after
+    CD.27 ratifies). CD.27 is still state pending, so the trigger's live window has not opened and no
+    regression evidence exists to evaluate. Recorded at FILING time deliberately -- recording an anticipated
+    spike outcome here would be the after-the-fact assertion ESB-02 exists to remove. Sharpened for this wave's
+    narrowed scope: fallback_spec.lapse_condition fires only if the spike pins a substrate carrying no
+    Lambda-checkpoint-replay dependency (its own text names long_running_container and hosted_cli_runner). Both
+    arms this plan measures are replay-based by CD.27's own classification
+    (docs/ROADMAP-PLATFORM.yaml:947), so the lapse_condition CANNOT fire this wave. That is a disclosed
+    consequence of the operator's exclusion, recorded here rather than discovered later.
+scope:
+  - file: scripts/esb_q5_spike/__init__.py
+    action: Create
+    purpose: >-
+      Package marker so the spike modules are importable via bin/venv-python -m. A scripts/ SUBPACKAGE and
+      deliberately NOT under src/ -- re-measured this session at f3e4e6d, compute_affected_artifacts returns {}
+      for every scripts/esb_q5_spike/ path but returns {'data-pipeline': [...], 'ops-compaction': [...]} for
+      'src/lambdas/esb_q5_durable/handler.py', because src/ is an include pattern on BOTH active manifests.
+      Placing the spike under src/ would drag two unrelated production artifacts into CD.16 per-Lambda
+      build/deploy/smoke-test scope. See the PLACEMENT context entry.
+  - file: scripts/esb_q5_spike/loop.py
+    action: Create
+    purpose: >-
+      The single minimal persona loop, written once and shared verbatim by BOTH compute arms so the arms differ
+      only in substrate, never in business logic. read-workspace -> mocked-LLM-step -> tool-call ->
+      write-artefact, N iterations, with an explicit resume cursor. decision_scout's loop shape, per CD.27's own
+      ESB-04 precondition text naming decision_scout as the spike vehicle.
+  - file: scripts/esb_q5_spike/mock_llm.py
+    action: Create
+    purpose: >-
+      The only LLM surface in the spike. Deterministic, offline, and side-effect-recording: every call appends a
+      (run_id, iteration, step) row to an append-only call ledger in the spike's own S3 prefix, so a resumed run
+      that re-issues an already-completed step is DETECTABLE as a duplicate ledger row rather than inferred from
+      logs. This ledger IS the resume-without-reissue measurement.
+  - file: scripts/esb_q5_spike/workspace.py
+    action: Create
+    purpose: >-
+      Workspace persistence strategies behind one registry (STRATEGIES) so the measurement harness enumerates
+      them rather than naming them. Exactly two entries, both mandatory: s3_per_object and s3_tarball. With EFS
+      and container-local both excluded, S3-sync is the backing store under test and the audit itself calls it
+      "the only backing store portable across the full candidate set"; its per-object and tarball shapes have
+      materially different cost and latency profiles and CD.43 criterion W5 demands BOTH a byte term and an
+      object-count term, so the re-materialization metric is meaningless with one.
+  - file: scripts/esb_q5_spike/handlers.py
+    action: Create
+    purpose: >-
+      The two Lambda entry points, both wrapping loop.py: the durable-function arm (checkpoint/replay inside one
+      invocation) and the stateless per-iteration arm (one invocation per loop iteration, state carried in the
+      Step Functions execution plus an S3 workspace pointer). Kept in one module so the hand-roll residue
+      measurement compares two implementations of the same contract side by side.
+  - file: scripts/esb_q5_spike/measure.py
+    action: Create
+    purpose: >-
+      The measurement harness: drives one arm, issues the forced kill mid-loop, resumes, and emits the three
+      audit metrics (resume-without-reissue, hand-roll residue, workspace re-materialization cost) into
+      findings.yaml. Derives strategy coverage from workspace.STRATEGIES rather than a hard-coded list, so a
+      strategy added without a measurement fails the class check instead of passing silently.
+  - file: tests/esb_q5_spike/__init__.py
+    action: Create
+    purpose: Test package marker mirroring scripts/esb_q5_spike/ (tests/checks/ precedent).
+  - file: tests/esb_q5_spike/test_loop.py
+    action: Create
+    purpose: >-
+      Unit coverage for what must be right BEFORE anything is provisioned: the loop's resume cursor, and BOTH
+      DIRECTIONS of the mock's duplicate-detection ledger (a resumed run that re-issues a completed step is
+      flagged; one that does not is NOT flagged). Re-measured this session, map_source_to_test returns None for
+      every scripts/esb_q5_spike/ path (a NEW scripts/ subpackage is outside the six whitelisted families), so
+      validate_test_coverage imposes no home -- these tests exist because AGENTS.md requires them, not because a
+      checker demands the path.
+  - file: tests/esb_q5_spike/test_workspace.py
+    action: Create
+    purpose: >-
+      Round-trip coverage for both S3 strategies (materialize -> mutate -> re-materialize) against a local fake,
+      plus the registry-completeness invariant measure.py depends on. Exercises real code paths.
+  - file: tests/esb_q5_spike/test_arms.py
+    action: Create
+    purpose: >-
+      Coverage for the two arm entry points and the harness: that both arms delegate to the SAME shared loop
+      (the arms differ only in substrate), and that measure.measured_strategies() derives from
+      workspace.STRATEGIES rather than a hard-coded list.
+  - file: scripts/checks/iam_tf/_read_coverage.py
+    action: Modify
+    purpose: >-
+      MEASURED THIS SESSION, AND THE FINDING BOTH PRIOR DRAFTS MISSED: aws_sfn_state_machine appears in NONE of
+      CHECKED_TYPES / ENUMERATED_IAM_TYPES / TRANSITIVE_TYPES / NON_AWS_TYPES / NO_GRANT_TYPES, and
+      _check_resource('aws_sfn_state_machine', ...) returns "unmapped resource type ... add a coverage rule",
+      which validate_ci_refresh_read_coverage turns into a hard failure. The spike CANNOT introduce a Step
+      Functions state machine under terraform/personal without a read classification. Adds the CHECKED_TYPES
+      entry (states: refresh-read actions + the name attribute), nothing else.
+  - file: scripts/checks/iam_tf/_write_coverage.py
+    action: Modify
+    purpose: >-
+      The write half of the same gate, and equally load-bearing: this module is DISCOVERY-DRIVEN -- "every
+      DISCOVERED terraform/personal resource type must be either WRITE_COVERAGE-mapped or WRITE_EXEMPT_TYPES-
+      exempt ... A type that is neither FAILS LOUD" (module docstring). Adds the WRITE_COVERAGE entry for
+      aws_sfn_state_machine with its resource marker on the agent-platform-esb-q5-* state-machine ARN family.
+  - file: scripts/checks/iam_tf/_write_companions.py
+    action: Modify
+    purpose: >-
+      LIFECYCLE_COMPANIONS is MANDATORY-DECLARATION over exactly WRITE_COVERAGE's key set -- a type with no
+      create/update/delete row FAILS LOUD, and an empty companion tuple is legal only with a collocated
+      justification. Adds the three phase rows for aws_sfn_state_machine, answering "what else does its delete
+      phase call?" at review time rather than at the first live gated destroy.
+  - file: tests/checks/iam_tf/test__read_coverage.py
+    action: Modify
+    purpose: >-
+      Coverage for the new classification, both directions: aws_sfn_state_machine resolves to a read spec, and a
+      still-unmapped type continues to produce the "unmapped resource type" finding (the guard must not have been
+      widened into a catch-all).
+  - file: tests/checks/iam_tf/test__write_coverage.py
+    action: Modify
+    purpose: >-
+      Coverage for the WRITE_COVERAGE entry and, in the other direction, that a discovered-but-unmapped type
+      still fails loud.
+  - file: tests/checks/iam_tf/test__write_companions.py
+    action: Modify
+    purpose: >-
+      Coverage that all three lifecycle phases are declared for aws_sfn_state_machine and that removing any one
+      of them still fails the mandatory-declaration rule.
+  - file: terraform/personal/esb_q5_spike.tf
+    action: Create
+    purpose: >-
+      The whole spike stack, count-gated behind ONE default-false flag: two Lambda functions packaged from
+      scripts/esb_q5_spike/ (named agent-platform-esb-q5-* so the EXISTING DailyOps log-read grant on
+      /aws/lambda/agent-platform-* covers them without a second policy change), one Step Functions state machine
+      per arm, the spike S3 prefix, the execution roles, AND the DailyOps `states:` grant as its OWN
+      aws_iam_role_policy on the existing PlatformDev role. The grant lives HERE, not in platform_roles.tf,
+      because that file measures exactly 587 effective lines against its exactly-587 structural budget -- any
+      added line breaches it and would force a budget raise, where Decision 128 says decompose and the terraform
+      class's own relief valve is "decompose by resource family (native .tf multi-file)". NO VPC, subnet, NAT
+      gateway, VPC endpoint, ECS or EFS resource, and no Lambda vpc_config -- the exclusion is enforced
+      structurally by absence and swept repo-wide by VP step 2, not asserted in prose.
+  - file: terraform/personal/variables.tf
+    action: Modify
+    purpose: >-
+      One new bool variable, esb_q5_spike_enabled, default false. No second flag: there is no EFS arm to gate,
+      and adding a flag for an excluded arm would leave a provisioning path for something the operator excluded.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      github_ci_planner's refresh-read grants live here (measured: this file holds the lambda:Get*/events:*/
+      logs:*/cloudwatch:* read statements; 245 effective lines, so the terraform-class 500 ceiling has headroom).
+      Adds the `states:` refresh-read statement so the new state machines are refresh-read-covered in the
+      planner half of the two plan-capable role policies the coverage gate requires.
+  - file: terraform/bootstrap/github_ci_apply_policy.tf
+    action: Modify
+    purpose: >-
+      The apply half of the same requirement: github_ci_apply's identity policy gains the `states:` refresh-read
+      and write grants for the agent-platform-esb-q5-* state-machine family. ADMIN-ONLY ROOT -- Axis A bootstrap
+      is "admin-only (agent_platform_admin), NEVER auto-apply, out-of-band from CD pipeline". This edit lands in
+      the PR but its apply is an out-of-band operator action that must precede the personal-root apply.
+  - file: terraform/bootstrap/github_ci_apply_boundary.tf
+    action: Modify
+    purpose: >-
+      A boundary is a CEILING: measured this session, DataPlaneAllow's service list carries s3/athena/glue/
+      dynamodb/lambda/logs/events/sns/cloudwatch/secretsmanager/ssm and NO states:. Without the ceiling
+      extension, BOTH the apply-role grant above and the DailyOps grant in the spike .tf are silently denied by
+      the identity/boundary intersection -- PlatformDev carries this same boundary. Same admin-only root, same
+      out-of-band apply ordering.
+  - file: docs/plans/reports/esb-q5-spike-findings.yaml
+    action: Create
+    purpose: >-
+      THE CITED EVIDENCE RECORD, and the load-bearing half of this wave's re-shaped deliverable. Machine-parseable:
+      audit_q5_arm_set, arms[], excluded_arms{} with all three recorded reasons each, the per-arm measured
+      metrics, the per-strategy re-materialization records, the W6 scale basis with its measurement command and
+      date, the derived comparative table over CD.27's five pinned candidates, and the per-option W1-W8
+      disposition of CD.43's seven-member option_set. A data artifact in the home docs/CLAUDE.md's class->home
+      map names for spike notes (live sibling precedent: docs/plans/reports/ducklake-spike-findings.md) -- NOT a
+      standing prose-architecture doc, so Decision 86's intent-doc freeze is not engaged. Classified
+      workflow_outputs by the structural engine (measured), so it carries no size ceiling.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      ONE new entry, `## Decision 173:` (re-check the max header at execution time per the numbering-race note;
+      172 is the current max, measured). THIN by construction: the ruling, the exclusion with its three recorded
+      reasons, the reversal conditions, the ESB-06 residual, and the explicit entry-versus-evidence split -- with
+      the comparative record, measurements and per-arm detail CITED to the findings file. NO COMPACTION PASS:
+      re-measured at f3e4e6d the ceilings have headroom (see the CEILINGS context entry), and Decision 37 in
+      particular is NOT compacted -- 14 live files cite its Secrets-Manager runtime-fetch precedent, its
+      superseder restates none of it, and its eligibility is an open human adjudication.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerated projection of the new entry. Measured this session by splice-and-regenerate with the SHIPPED
+      generator: the entry costs 925 index bytes, taking the index from 119,189 to 120,114 against the
+      131,000-byte pin -- 10,886 bytes of headroom after. Not a binding constraint this wave.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      FIVE sites move as one set, not one site at a time (see the CLASS-VERSUS-SITE SWEEP context entry): (i)
+      CD.43 workspace_store_selection.selected_store replaces TBD_at_CD.43_ratification with the measured
+      selection and status leaves criteria_only (:1497-1498); (ii) CD.43's `detail` prose asserting they stay
+      that way until ratification is compacted per Decision 147's ratified-CD norm (:1477-1487); (iii) CD.43's
+      "Criteria-only discipline" discipline point, which asserts "no field on this CD names a chosen backing
+      store", is re-grounded (:1564-1569); (iv) CD.43 flips to the canonical ratified shape (state /
+      ratified_as / filed_via, same dec-NNN in both id fields); (v) cost_projection.nat_contingency.applies_to
+      (:343), whose "IF selected at wave 2 (ESB-01)" conditional is stale twice over, is re-grounded to name the
+      exclusion and retained as the priced basis for re-arm condition (i). CD.27 does NOT flip.
+  - file: tests/esb_text_fix/test_workspace_store_criteria.py
+    action: Modify
+    purpose: >-
+      THE SECOND MISSED SITE, found by this session's class-versus-site sweep and present in neither prior
+      draft: this suite reads the LIVE roadmap and pins the deferral --
+      test_cd43_is_pending_and_r2_shaped asserts state=="pending" / ratified_as is None /
+      filed_via=="pending_log_decision_lambda" (:56-60), and test_store_choice_deferred_and_evaluation_floors_hold
+      asserts status=="criteria_only" and selected_store=="TBD_at_CD.43_ratification" (:82-92). Both go red the
+      moment CD.43 ratifies. Re-ground them to assert the RATIFIED shape (state ratified, ratified_as and
+      filed_via naming the same dec-NNN, selected_store a member of option_set) while preserving every floor that
+      survives -- option_set/coverage_cases completeness, the rejected-option record, and W1-W8 well-formedness.
+      test_t41_names_the_criteria_and_leaves_the_choice_open (:103-116) and
+      test_decision_scope_notes.py::test_cd27_stays_pending_with_expected_filed_via SURVIVE unchanged and are
+      deliberately not touched -- T4.1's text does not change and CD.27 stays pending.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      FOUR graduated rows, and the count is set by MEASUREMENT, not preference: the registry is 5,836 effective
+      lines against its 6,000 structural budget (config class), so 164 lines of headroom exist and a
+      command_exit_zero row of the shape this repo already uses costs roughly 25-37 lines. Four rows fit with
+      margin; eight (the prior draft's count) would breach the budget and force exactly the raise Decision 128
+      forbids as the default. VP step 11 asserts the post-graduation figure rather than assuming it.
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal (the sandbox environment on Axis A) is the ONLY auto-applying root -- measured:
+    terraform-apply-sandbox.yml's paths filter and WORKDIR are terraform/personal/** exclusively, and the legacy
+    terraform/ root has no apply pipeline. That is why the spike stack must live in terraform/personal and why
+    the Step Functions IAM-coverage work below is unavoidable rather than a design choice. Deployment follows
+    Decision 126's infra intent: a PR touching terraform/** is the sole trigger; CI plans and applies. This
+    plan's agent NEVER runs terraform apply. The speculative-plan pipeline (CD.35 Wave 2 / T2.21) applies -- a
+    PR-time plan is reviewed and saved, then re-applied at merge with no re-plan (Decision 77 no-TOCTOU).
+    docs/contracts/environment-taxonomy.yaml is the sole SoT for guard classification, saved-plan persistence and
+    the convergence-record shape; this plan names the required checks and does not restate the mechanics.
+  - >-
+    TWO ROOTS, TWO GATES, IN ORDER. terraform/bootstrap is Axis A `bootstrap`: "admin-only
+    (agent_platform_admin), NEVER auto-apply, out-of-band from CD pipeline". The boundary DataPlaneAllow
+    extension and the github_ci_apply `states:` grants live there and must be applied out-of-band by the operator
+    BEFORE the personal-root apply, or every states: grant downstream is denied by the identity/boundary
+    intersection and the spike cannot start an execution. This is a disclosed cost, surfaced at plan time: this
+    plan costs at least one operator bootstrap apply plus two tf-gated-apply approvals (stack up, stack down).
+  - >-
+    New IAM roles (two Lambda execution roles and one Step Functions execution role) carry trust policies, the
+    DailyOps states: grant is an inline-policy ADD on a managed boundary-carrying role, and the teardown is a
+    destroy. Trust and destroy route to the human-gated tf-gated-apply Environment rather than auto-applying;
+    the in-budget inline-policy diff routes per the taxonomy contract's guard classification, which is that
+    file's call and not this plan's.
+  - >-
+    Local terraform is NOT installed in this container and terraform/personal's third-party kislerdm/neon
+    provider cannot init from a stock CC-web session (Decision 119, terraform/CLAUDE.md). All local terraform
+    verification is grep-only; the AUTHORITATIVE verifiers are CI's `terraform-validate` check and the
+    speculative-plan job in the terraform-apply-sandbox workflow, with the gated legs in the
+    tf-gated-apply-prototype workflow. No local terraform init/validate/plan appears in any VP step.
+  - >-
+    The account has NO VPC-based infrastructure and this plan adds none. Re-measured at f3e4e6d: a sweep of all
+    38 terraform/**/*.tf files for aws_vpc, aws_subnet, aws_nat_gateway, aws_vpc_endpoint, aws_ecs_* and aws_efs_*
+    resources returns ZERO matches, and zero Lambda vpc_config blocks. That measured zero is the factual basis of
+    the exclusion's standing-cost reason AND the invariant VP step 2 defends repo-wide.
+  - >-
+    Region is pinned eu-west-2 (terraform/personal/variables.tf aws_region default). CD.43 criterion W3 requires
+    costs be RECOMPUTED at decision time against that pin, not carried from the audit. The corpus already holds a
+    recomputed eu-west-2 NAT figure at docs/ROADMAP-PLATFORM.yaml:342-347 (nat_contingency,
+    standing_usd_per_month "33-35", confidence medium, rate_basis stated) -- re-verify it at implement time
+    rather than re-deriving it, and see the W4 EGRESS-CLAIM context entry for the term it is and is not allowed
+    to be.
+acceptance_criteria:
+  - >-
+    docs/plans/reports/esb-q5-spike-findings.yaml partitions the audit's full Q5 arm set into `arms` and
+    `excluded_arms` with no member missing from both and none in both, and every excluded arm carries all three
+    recorded reasons (standing cost, operability, re-arm conditions) as non-empty entries.
+  - >-
+    A repo-wide sweep of terraform/**/*.tf finds ZERO aws_vpc, aws_subnet, aws_nat_gateway, VPC endpoint,
+    aws_ecs_* and aws_efs_* resources and zero Lambda vpc_config blocks, while terraform/personal/esb_q5_spike.tf
+    exists, declares at least one aws_sfn_state_machine, count-gates every spike resource on
+    var.esb_q5_spike_enabled, and that variable is declared with default false. The exclusion is enforced by
+    absence, class-wide.
+  - >-
+    Every strategy registered in scripts/esb_q5_spike/workspace.py STRATEGIES has a measured re-materialization
+    record in findings.yaml for every arm that ran -- including BOTH s3_per_object and s3_tarball, each carrying
+    a wall-clock term, a request/object-count term and a byte term (CD.43 W5). A registered-but-unmeasured
+    strategy, or a measured-but-unregistered one, fails the check.
+  - >-
+    No module under scripts/esb_q5_spike/ imports a production write surface (scripts.ops_data_portal,
+    scripts.ops_writer, scripts.s3_log_store, src.common.ducklake_writes, ducklake_writer) and no live LLM client
+    surface is referenced outside scripts/esb_q5_spike/mock_llm.py.
+  - >-
+    aws_sfn_state_machine is classified in the read map, the write-coverage map, and all three
+    LIFECYCLE_COMPANIONS phases, and validate_ci_refresh_read_coverage passes clean over terraform/personal with
+    the spike stack present -- i.e. the state machines are refresh-read-covered in BOTH plan-capable role
+    policies and write-covered by github_ci_apply.
+  - >-
+    The deterministic V-tier floor computed over this plan's own scope is V3 AND is forced by the .tf rows alone
+    -- recomputing the floor with the .tf rows removed yields a tier below V3, proving no scope file matches
+    active-manifest Lambda code -- and no new src/lambdas/*/manifest.yaml exists.
+  - >-
+    Each of the two arms was forced-killed mid-loop and resumed, and findings.yaml records per arm: the
+    duplicate-ledger-row count (resume-without-reissue), the hand-roll residue on the audit's XS/S/M scale with
+    the residue's constituent parts NAMED, and per-strategy re-materialization cost.
+  - >-
+    docs/DECISIONS.md gains exactly one new `## Decision NNN:` entry, that entry is at or under the 6,144-byte
+    per-entry authoring cap, and the printed headroom figures for the per-entry cap, the 132-header ceiling, the
+    780,000-byte combined ceiling and the 131,000-byte index pin are all non-negative. No compaction pass is
+    performed and Decision 37 is untouched.
+  - >-
+    The comparative record over CD.27's five pinned candidates, the per-arm measurements, and the per-option
+    W1-W8 disposition of CD.43's seven-member option_set live in findings.yaml, and the numbered Decision CITES
+    that file rather than restating it -- while the Decision itself carries the ruling, the exclusion, the
+    reversal conditions and the ESB-06 residual.
+  - >-
+    CD.43 is fully flipped and every coupled site moves with it: selected_store no longer reads
+    TBD_at_CD.43_ratification, status no longer reads criteria_only, state/ratified_as/filed_via carry the
+    canonical ratified shape with the same dec-NNN in both id fields, the "Criteria-only discipline" point no
+    longer asserts that no field names a chosen store, nat_contingency.applies_to names the exclusion, the
+    live-roadmap pytest suite is re-grounded, and the literal TBD_at_CD.43_ratification survives at EXACTLY ONE
+    site in docs/ROADMAP-PLATFORM.yaml -- CD.27's ESB-01 precondition, where it correctly describes the act.
+  - >-
+    CD.27 reads state pending and the new Decision names ESB-06's determinism-rules-plus-static-check obligation
+    as the sole remaining layer-2 blocker, with a follow-on rec id recorded. The two are checked as one
+    conditional assertion in both directions: if CD.27 were flipped to ratified it would instead have to carry a
+    non-empty precondition_discharge entry for each of ESB-01, ESB-04 and ESB-06.
+  - >-
+    config/agent/verification_registry/registry.yaml carries exactly four new esb-q5-* rows and remains at or
+    under its 6,000-effective-line structural budget, with the measured headroom printed.
+  - >-
+    After teardown the spike flag reads false on main and a resource sweep of the spike's own name prefix returns
+    zero live state machines and zero live Lambdas.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      The exclusion is recorded as a CLASS over the audit's whole Q5 arm set, not as two names someone
+      remembered. Require findings.yaml to partition that set into arms[] and excluded_arms{}, assert both
+      directions (nothing in both, nothing in neither), and require every excluded arm to carry all three
+      recorded reasons as non-empty entries.
+    command: >-
+      bin/venv-python -c "import pathlib,yaml; p=pathlib.Path('docs/plans/reports/esb-q5-spike-findings.yaml');
+      assert p.exists(), 'findings.yaml absent'; f=yaml.safe_load(p.read_text(encoding='utf-8'));
+      full=set(f['audit_q5_arm_set']); arms=set(f['arms']); exc=f['excluded_arms']; both=sorted(arms &
+      set(exc)); assert not both, f'arm declared as both built and excluded: {both}'; missing=sorted(full - arms
+      - set(exc)); assert not missing, f'audit arm(s) neither built nor excluded: {missing}';
+      extra=sorted((arms | set(exc)) - full); assert not extra, f'arm(s) outside the audit Q5 set: {extra}';
+      need=('standing_cost','operability','re_arm_conditions'); bad=sorted((a,k) for a,v in exc.items() for k in
+      need if not str(v.get(k,'')).strip()); assert not bad, f'excluded arm(s) missing a recorded reason:
+      {bad}'; print('OK partition covers', len(full), 'audit arms;', len(arms), 'built,', len(exc), 'excluded,
+      all with 3 recorded reasons; both directions clean')"
+    expected: >-
+      Exit 0 with a line beginning `OK partition covers` and ending `both directions clean`. Proved in both
+      directions this session: on the f3e4e6d tree the same command exits 1 with an "findings.yaml absent"
+      assertion; on the scratch post-change tree it printed "OK partition covers 5 audit arms; 2 built, 3
+      excluded, all with 3 recorded reasons; both directions clean".
+    fix_if: >-
+      `audit arm(s) neither built nor excluded` names an arm dropped without a record -- write it into
+      excluded_arms with its three reasons, or build it. Do NOT satisfy this by shrinking audit_q5_arm_set: that
+      set is the audit's, and editing it to match what was built is exactly the unwritten-premise defect ESB-04
+      exists to remove. `excluded arm(s) missing a recorded reason` names the arm and the field -- write the
+      missing standing_cost, operability or re_arm_conditions entry for that arm.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "esb-q5-exclusion-partitions-audit-arm-set"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      The exclusion is enforced STRUCTURALLY, swept as a class over every terraform file in the repo rather than
+      over the spike file alone. Assert zero networked resources of any excluded family and zero Lambda
+      vpc_config anywhere under terraform/, assert the spike file exists and declares a Step Functions state
+      machine so the sweep cannot pass by the spike simply not existing, and assert the single default-false
+      flag is declared and gates every spike resource.
+    command: >-
+      bin/venv-python -c "import pathlib,re; files=sorted(pathlib.Path('terraform').rglob('*.tf')); assert files,
+      'no terraform files found';
+      fam=r'aws_vpc|aws_subnet|aws_nat_gateway|aws_vpc_endpoint|aws_ecs_[a-z_]+|aws_efs_[a-z_]+';
+      hits={str(p):sorted(set(re.findall(r'resource\s+\"('+fam+r')\"', p.read_text(encoding='utf-8')))) for p in
+      files}; hits={k:v for k,v in hits.items() if v}; assert not hits, f'networked/excluded-family resource(s)
+      present: {hits}'; vpc=[str(p) for p in files if re.search(r'\n\s*vpc_config\s*\{',
+      p.read_text(encoding='utf-8'))]; assert not vpc, f'Lambda vpc_config block(s) present: {vpc}';
+      tf=pathlib.Path('terraform/personal/esb_q5_spike.tf'); assert tf.exists(), 'spike terraform absent -- the
+      sweep would pass vacuously'; body=tf.read_text(encoding='utf-8'); assert
+      re.search(r'resource\s+\"aws_sfn_state_machine\"', body), 'spike declares no Step Functions state machine
+      -- there is no arm to drive'; blocks=re.findall(r'resource\s+\"[a-z0-9_]+\"\s+\"[a-z0-9_]+\"\s*\{',
+      body); assert len(blocks)==body.count('var.esb_q5_spike_enabled ?')+body.count('count ='), 'a spike
+      resource is not count-gated on var.esb_q5_spike_enabled';
+      v=pathlib.Path('terraform/personal/variables.tf').read_text(encoding='utf-8'); assert
+      re.search(r'variable\s+\"esb_q5_spike_enabled\"[^}]*default\s*=\s*false', v, re.S), 'esb_q5_spike_enabled
+      is not declared with default false in terraform/personal/variables.tf'; print('OK', len(files), 'terraform
+      files swept; 0 networked resources; 0 vpc_config;', len(blocks), 'spike resources all count-gated; flag
+      default false')"
+    expected: >-
+      Exit 0 with a line beginning `OK` and ending `flag default false`, reporting the count of terraform files
+      swept and the count of count-gated spike resources. Proved failing this session on f3e4e6d: the same
+      command exits 1 with a "spike terraform absent -- the sweep would pass vacuously" assertion, having already
+      passed the zero-networked-resource and zero-vpc_config assertions over all 38 files.
+    fix_if: >-
+      A named file and family means a networked resource was introduced -- delete it. The container and
+      shared-filesystem arms are EXCLUDED by operator decision for recorded standing-cost and operability
+      reasons; re-introducing one is not a fix, it is a reversal, and a reversal goes through the re-arm
+      conditions the Decision records, not through a terraform edit. `a spike resource is not count-gated` means
+      a resource would provision unconditionally -- add the count gate, because the flag is also this plan's
+      rollback and teardown mechanism. `esb_q5_spike_enabled is not declared with default false` means the flag
+      is missing or defaults true -- declare it false in terraform/personal/variables.tf.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "esb-q5-no-networked-terraform-resources"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Both S3 sync strategies are measured, expressed as a class assertion over the strategy registry rather than
+      as two named-strategy assertions. Every entry in workspace.STRATEGIES must be exercised by the measurement
+      harness and vice versa, and the registry must contain both mandated S3 shapes.
+    command: >-
+      bin/venv-python -c "from scripts.esb_q5_spike import workspace, measure; reg=set(workspace.STRATEGIES);
+      assert {'s3_per_object','s3_tarball'} <= reg, f'registry is missing a mandated S3 strategy: {sorted(reg)}';
+      covered=set(measure.measured_strategies()); missing=sorted(reg-covered); assert not missing, f'registered
+      but never measured: {missing}'; extra=sorted(covered-reg); assert not extra, f'harness measures a strategy
+      that is not registered: {extra}'; print('OK', len(reg), 'registered strategies,', len(covered), 'measured;
+      both directions clean')"
+    expected: >-
+      Exit 0 with a line beginning `OK` and the registered and measured counts equal, ending `both directions
+      clean`. Failing direction proved this session by construction: scripts.esb_q5_spike does not exist at
+      f3e4e6d, so the import raises ModuleNotFoundError and the command exits non-zero.
+    fix_if: >-
+      `registered but never measured` means the harness enumerates a stale hard-coded list -- change
+      measure.measured_strategies() to derive from workspace.STRATEGIES rather than adding the missing name by
+      hand, or the same defect recurs on the next strategy. `registry is missing a mandated S3 strategy` means
+      one of the two shapes was never implemented -- implement it in workspace.py; dropping it is not available,
+      because CD.43 criterion W5 demands both a byte term and an object-count term and the re-materialization
+      metric is meaningless with one shape.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Non-admissible under VF-05 differential admission rather than merely inconvenient: the row's own subject
+      (scripts/esb_q5_spike/) is created by this plan, so a graduated row here duplicates the coverage step 4's
+      graduated row already gives the same module set, and the registry has a measured 164 effective lines of
+      headroom that four rows consume with margin and five do not. The property is additionally guarded by
+      tests/esb_q5_spike/test_arms.py::test_measured_strategies_derives_from_the_registry, which IS run by the
+      graduated step-6 row.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Mocked LLM and no production writes, swept over every spike module rather than the one that looked risky.
+      Assert no module under scripts/esb_q5_spike/ names a production write surface, and that no module other
+      than mock_llm.py names a live LLM client surface.
+    command: >-
+      bin/venv-python -c "import pathlib; mods=sorted(pathlib.Path('scripts/esb_q5_spike').rglob('*.py')); assert
+      mods, 'no spike modules found';
+      banned=('scripts.ops_data_portal','scripts.ops_writer','scripts.s3_log_store','src.common.ducklake_writes','ducklake_writer');
+      hits={str(p):[b for b in banned if b in p.read_text(encoding='utf-8')] for p in mods};
+      hits={k:v for k,v in hits.items() if v}; assert not hits, f'spike module names a production write surface:
+      {hits}'; live=('litellm','anthropic','openai','scripts.llm'); llm={str(p):[t for t in live if t in
+      p.read_text(encoding='utf-8')] for p in mods if p.name!='mock_llm.py'};
+      llm={k:v for k,v in llm.items() if v}; assert not llm, f'live LLM surface outside the mock: {llm}';
+      print('OK', len(mods), 'spike modules; 0 production write surfaces; 0 live LLM paths outside
+      mock_llm.py')"
+    expected: >-
+      Exit 0 with a line beginning `OK` and ending `0 live LLM paths outside mock_llm.py`. Proved failing this
+      session on f3e4e6d: exits 1 with a "no spike modules found" assertion.
+    fix_if: >-
+      A named module and surface means the spike would write to a production table or call a real provider --
+      remove that name from the named module and route the behaviour through mock_llm.py or the spike's own S3
+      prefix. Do not add the module to an exemption list; no-production-writes is the whole basis on which this
+      spike is safe to run.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "esb-q5-mocked-llm-and-no-ops-writes"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      The CD.16 / Decision 79 adjudication is made mechanical rather than asserted, and it is checked against the
+      LIVE TREE as well as the plan's scope list so a later relocation cannot slip past it. Assert every on-disk
+      spike module has an empty compute_affected_artifacts set, assert no spike Lambda manifest was minted, and
+      prove the V-tier floor in both directions over the plan's own scope -- V3 with the .tf rows, below V3
+      without them, which is what proves no scope file matches active-manifest Lambda code.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; from scripts.lambda_manifest import compute_affected_artifacts;
+      from scripts.checks.roadmap.validate_tier_floor import _compute_floor, _lambda_code_files;
+      mods=sorted(pathlib.Path('scripts/esb_q5_spike').rglob('*.py')); assert mods, 'no spike modules found --
+      the tree check would pass vacuously'; aff={str(p):compute_affected_artifacts([str(p)]) for p in mods};
+      bad={k:sorted(v) for k,v in aff.items() if v}; assert not bad, f'spike module(s) pull existing Lambda
+      artifacts into per-Lambda deploy scope: {bad}'; mans=sorted(str(p) for p in
+      pathlib.Path('src/lambdas').glob('*/manifest.yaml')); assert all('esb_q5' not in m for m in mans), f'a
+      spike Lambda manifest was minted, dragging the per-artifact deploy lane in: {mans}';
+      d=yaml.safe_load(open('docs/plans/PLAN-esb-q5-substrate-spike.yaml',encoding='utf-8'));
+      files=[r['file'] for r in d['scope']]; code=_lambda_code_files(); full=_compute_floor(files,code); assert
+      full=='V3', f'floor over full scope is {full}, expected V3'; notf=[f for f in files if not
+      f.endswith('.tf')]; without=_compute_floor(notf,code); assert without!='V3', f'floor is still V3 with the
+      .tf rows removed ({without}) -- a scope file matches active Lambda code, so CD.16 per-Lambda
+      build/deploy/smoke-test steps are required'; print('OK', len(mods), 'spike modules affect 0 existing
+      artifacts; floor', full, 'with .tf,', without, 'without;', len(mans), 'manifests, none esb_q5')"
+    expected: >-
+      Exit 0 with a line beginning `OK` reporting the spike-module count, then `spike modules affect 0 existing
+      artifacts; floor V3 with .tf,` a non-V3 tier for the without-.tf leg, and ending `manifests, none esb_q5`.
+      The floor arithmetic was proved directly this session against the shipped helpers: V3 with the .tf rows,
+      V2 without them.
+    fix_if: >-
+      `spike module(s) pull existing Lambda artifacts into per-Lambda deploy scope` names the module and the
+      artifacts -- relocate that module out from under an include pattern (the measured near-miss is src/, which
+      is an include on BOTH active manifests, so a spike file there returns data-pipeline AND ops-compaction)
+      rather than accepting the per-Lambda lane for two unrelated production artifacts. `floor is still V3 with
+      the .tf rows removed` is the same defect seen from the plan's scope list. `a spike Lambda manifest was
+      minted` means the spike created a new artifact -- delete the manifest and package the spike Lambdas from
+      terraform instead.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step reads THIS PLAN's own scope list from docs/plans/PLAN-esb-q5-substrate-spike.yaml. A graduated
+      registry row is a standing repo-wide guard, and one that parses a single plan document goes stale the
+      moment that plan is superseded or its scope list is edited -- it would assert a transient fact forever.
+      The durable half of the property (no spike module affects an existing artifact) is covered by the
+      graduated step-4 row's module sweep over the same directory.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Unit coverage for the pre-provisioning logic and the re-grounded governance pins: the loop's resume cursor,
+      BOTH DIRECTIONS of the mock's duplicate-row ledger (a re-issued step MUST be flagged, a non-re-issued step
+      MUST NOT be), both S3 strategies' materialize/re-materialize round trip against a local fake, that both
+      arms delegate to the SAME shared loop, that measured_strategies() derives from the registry, the three new
+      aws_sfn_state_machine classification cases in both directions, and the re-grounded CD.43 ratified-shape
+      assertions.
+    command: bin/venv-python -m pytest tests/esb_q5_spike tests/checks/iam_tf tests/esb_text_fix/test_workspace_store_criteria.py -q
+    expected: >-
+      All tests pass, exit 0. The suite must include at least one case per direction of the duplicate detector
+      and per direction of the unmapped-resource-type guard.
+    fix_if: >-
+      A failing resume-cursor case means the loop resumes from the wrong iteration -- fix the cursor read in
+      loop.py. A failing duplicate-detector case means the ledger cannot distinguish a re-issue from a
+      legitimate first issue, which would make BOTH arms' headline metric uninterpretable -- fix mock_llm.py's
+      ledger key before anything is provisioned. A failing test__read_coverage/_write_coverage/_write_companions
+      case means the aws_sfn_state_machine classification is incomplete or was widened into a catch-all. A
+      failing test_workspace_store_criteria case means the re-grounding and the roadmap edit disagree -- fix
+      whichever is wrong; do not delete the assertion.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "esb-q5-loop-arms-and-classification-unit-tests"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      The Step Functions IAM-coverage obligation, asserted as a class over all three classification maps AND by
+      running the shipped gate itself, plus a presence assertion on each of the three policy files the grants
+      must land in. Measured this session: aws_sfn_state_machine is in NONE of the five read sets today, and
+      _check_resource returns the "unmapped resource type" finding for it, so the spike cannot land without this
+      work.
+    command: >-
+      bin/venv-python -c "import pathlib; from scripts.checks.iam_tf._read_coverage import CHECKED_TYPES,
+      ENUMERATED_IAM_TYPES, TRANSITIVE_TYPES, NON_AWS_TYPES, NO_GRANT_TYPES; from
+      scripts.checks.iam_tf._write_coverage import WRITE_COVERAGE, WRITE_EXEMPT_TYPES; from
+      scripts.checks.iam_tf._write_companions import LIFECYCLE_COMPANIONS; from
+      scripts.checks.iam_tf.validate_ci_refresh_read_coverage import validate_ci_refresh_read_coverage;
+      T='aws_sfn_state_machine'; assert T in CHECKED_TYPES or T in ENUMERATED_IAM_TYPES or T in TRANSITIVE_TYPES
+      or T in NON_AWS_TYPES or T in NO_GRANT_TYPES, f'{T} has no read classification -- the coverage gate fails
+      loud on an unmapped resource type'; assert T in WRITE_COVERAGE or T in WRITE_EXEMPT_TYPES, f'{T} has no
+      write classification'; rows=LIFECYCLE_COMPANIONS.get(T) or {}; missing=sorted({'create','update','delete'}
+      - set(rows)) if T in WRITE_COVERAGE else []; assert not missing, f'{T} declares no lifecycle-companion row
+      for phase(s): {missing}'; grants=[p for p in ('terraform/personal/oidc.tf',
+      'terraform/bootstrap/github_ci_apply_policy.tf', 'terraform/bootstrap/github_ci_apply_boundary.tf') if
+      'states:' not in pathlib.Path(p).read_text(encoding='utf-8')]; assert not grants, f'policy file(s) carry no
+      states: grant at all: {grants}'; failed=[]; validate_ci_refresh_read_coverage(failed); assert not failed,
+      f'refresh-read/write coverage findings: {failed}'; print('OK', T, 'classified read+write with all 3
+      lifecycle phases; 3 policy files carry states: grants; coverage gate clean over', len(WRITE_COVERAGE),
+      'write-managed types')"
+    expected: >-
+      Exit 0 with a line beginning `OK aws_sfn_state_machine classified read+write with all 3 lifecycle phases`
+      and ending `write-managed types`. Proved failing this session on f3e4e6d: exits 1 with an
+      "aws_sfn_state_machine has no read classification -- the coverage gate fails loud on an unmapped resource
+      type" assertion.
+    fix_if: >-
+      `has no read classification` means the CHECKED_TYPES entry was not added -- add it with the states:
+      refresh-read actions and the name attribute; do NOT reach for TRANSITIVE_TYPES, which would claim a parent
+      resource's grant covers it and there is no such parent. `has no write classification` or `declares no
+      lifecycle-companion row` means the discovery-driven write half was left unanswered -- add the
+      WRITE_COVERAGE entry and all three phase rows (an empty companion tuple is legal only with a collocated
+      justification). `policy file(s) carry no states: grant at all` names the file the grant is missing from --
+      remember the bootstrap root is admin-only and its apply is out-of-band and must precede the personal apply.
+      `refresh-read/write coverage findings` is the shipped gate speaking; read its message, which names the
+      resource and the role policy that does not cover it.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Non-admissible under VF-05 differential admission, and that is a measured property rather than a
+      preference: validate_ci_refresh_read_coverage IS the standing enforced guard for this and already runs in
+      both the --pre and full tiers. A graduated duplicate would be reverted alongside the spike terraform, so on
+      origin/main BOTH the state-machine resource and its classification are absent, the gate passes, and the
+      row fails admission as tautological. The step is retained for its explicit three-map plus three-file
+      assertion, which localises the failure far faster than the gate's own message.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      CD.43 ratification coherence swept over ALL FOUR of its coupled sites plus the option_set disposition,
+      rather than at the value site alone. Require the canonical ratified shape, both markers gone, the
+      "Criteria-only discipline" point re-grounded, the literal TBD_at_CD.43_ratification surviving at EXACTLY
+      ONE site (CD.27's ESB-01 precondition, where it correctly describes the act), and every option_set member
+      disposed by name in either the Decision text or the findings record the Decision cites.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib;
+      raw=pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text(encoding='utf-8');
+      n=raw.count('TBD_at_CD.43_ratification'); assert n==1, f'the deferral marker survives at {n} site(s),
+      expected exactly 1 (CD.27 ESB-01 only)'; d=yaml.safe_load(raw); c43=[c for c in d['candidate_decisions'] if
+      c['id']=='CD.43'][0]; ra=c43.get('ratified_as'); fv=c43.get('filed_via'); assert
+      c43.get('state')=='ratified', 'CD.43 must ratify with the store selection'; assert ra and
+      fv=='ops_decisions:'+str(ra), f'CD.43 not in the canonical ratified shape: ratified_as={ra!r}
+      filed_via={fv!r}'; ws=[p['workspace_store_selection'] for p in c43['discipline_points'] if
+      isinstance(p,dict) and 'workspace_store_selection' in p][0]; sel=ws['selected_store']; assert
+      sel!='TBD_at_CD.43_ratification', 'ESB-01 undischarged: selected_store still carries the deferral marker';
+      assert ws['status']!='criteria_only', 'CD.43 status still reads criteria_only'; stale=[p for p in
+      c43['discipline_points'] if isinstance(p,str) and 'no field on this CD names a chosen backing store' in
+      p]; assert not stale, 'the Criteria-only discipline point still asserts that no field names a chosen store
+      -- re-ground it'; opts=set(ws['option_set']); assert sel in opts, f'selected_store {sel!r} is not a member
+      of option_set';
+      cited=pathlib.Path('docs/plans/reports/esb-q5-spike-findings.yaml').read_text(encoding='utf-8');
+      entry=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8').split(chr(10)+'## Decision ')[1];
+      undisposed=sorted(o for o in opts if o not in entry and o not in cited); assert not undisposed,
+      f'option_set member(s) disposed in neither the Decision nor the cited findings record: {undisposed}';
+      print('OK CD.43 ratified as', ra, '; store', sel, ';', len(opts), 'option_set members all disposed;
+      deferral marker at exactly 1 site')"
+    expected: >-
+      Exit 0 with a line beginning `OK CD.43 ratified as` and ending `deferral marker at exactly 1 site`. Proved
+      in both directions this session: on f3e4e6d it exits 1 with a "the deferral marker survives at 3 site(s),
+      expected exactly 1 (CD.27 ESB-01 only)" assertion; on the scratch post-change tree it printed "OK CD.43
+      ratified as dec-173 ; store s3_sync ; 7 option_set members all disposed; deferral marker at exactly 1
+      site".
+    fix_if: >-
+      `survives at N site(s)` names a miscount: 3 means only the value moved and CD.43's detail prose still
+      asserts the marker stays -- compact that prose per Decision 147's ratified-CD norm; 0 means CD.27's ESB-01
+      precondition was edited, and it should not be, because it accurately describes what the ratifying plan
+      does. `not in the canonical ratified shape` means ratified_as and filed_via disagree or one is missing --
+      set both to the same dec-NNN. `still asserts that no field names a chosen store` is the fourth coupled
+      site -- re-ground that discipline point. `option_set member(s) disposed in neither` names options nothing
+      accounted for: W7 is coverage-case completeness, so dispose every member with a reason -- efs_mount and
+      container_local_disk on the exclusion, and the four with no arm on criteria -- in the findings record
+      rather than narrowing the option_set to what was measured.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The durable half of this property is being written into the live-roadmap pytest suite this plan already
+      re-grounds (tests/esb_text_fix/test_workspace_store_criteria.py), which the graduated step-6 row runs, and
+      the existing graduated row cd43-selection-criteria-well-formed already guards the block's W1-W8 shape and
+      coverage_cases. A fifth registry row would also spend headroom the measured 164-line budget does not have
+      once the four planned rows land.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      The ESB-06 residual is recorded rather than skipped, asserted as ONE conditional in both directions so
+      neither branch can drift: either CD.27 is still pending AND the new Decision names ESB-06 as the remaining
+      blocker with a follow-on rec id, or CD.27 is ratified AND carries a non-empty precondition_discharge entry
+      for every precondition id its own text declares.
+    command: >-
+      bin/venv-python -c "import re,yaml,pathlib;
+      d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml',encoding='utf-8')); cd=[c for c in
+      d['candidate_decisions'] if c['id']=='CD.27'][0]; decl=sorted({m for p in cd['discipline_points'] if
+      isinstance(p,str) for m in re.findall(r'Layer-2 ratification precondition \((ESB-\d+)\)',p)}); assert
+      decl, 'CD.27 declares no ratification preconditions -- the parser seam or the text changed';
+      entry=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8').split(chr(10)+'## Decision ')[1];
+      state=cd.get('state'); ratified=(state=='ratified'); dis=[p['precondition_discharge'] for p in
+      cd['discipline_points'] if isinstance(p,dict) and 'precondition_discharge' in p]; assert (not ratified) or
+      (len(dis)==1 and all(str(dis[0].get(x,'')).strip() for x in decl)), f'CD.27 reads ratified but its
+      precondition_discharge is missing or incomplete for {decl}'; assert ratified or ('ESB-06' in entry and
+      re.search(r'rec-\d+',entry)), 'CD.27 is pending but the newest Decision does not name ESB-06 as the
+      remaining blocker with a follow-on rec id'; assert ratified or not dis, 'CD.27 is pending yet carries a
+      precondition_discharge block -- discharge is a ratified-only shape'; print('OK CD.27 state', state, ';
+      declared preconditions', decl, '; ratified-branch', ratified)"
+    expected: >-
+      Exit 0 with a line beginning `OK CD.27 state pending`, listing `['ESB-01', 'ESB-04', 'ESB-06']` and ending
+      `ratified-branch False`. Proved in both directions this session: on f3e4e6d it exits 1 with a "CD.27 is
+      pending but the newest Decision does not name ESB-06 as the remaining blocker with a follow-on rec id"
+      assertion; on the scratch post-change tree it printed exactly the expected line.
+    fix_if: >-
+      `pending but the newest Decision does not name ESB-06` means the residual was left implicit -- write the
+      ESB-06 clause into the Decision and file the follow-on rec through the ops portal, then record its id.
+      `reads ratified but its precondition_discharge is missing or incomplete` means someone flipped CD.27
+      without discharging rule R4 -- either write a non-empty entry for every declared id (an in-band lapse is a
+      valid entry; an absent one is not) or put the state back to pending. Do NOT flip CD.27 to clear this step:
+      with both measurable arms replay-based, ESB-06's obligation is live under every outcome and its
+      determinism-rules-plus-static-check work is out of this plan's scope.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Half of this property is already a standing guard --
+      tests/esb_text_fix/test_decision_scope_notes.py::test_cd27_stays_pending_with_expected_filed_via pins CD.27
+      pending, and the graduated cd27-layer2-preconditions-cover-esb01 row pins the three declared precondition
+      ids. The remaining half asserts that THIS plan's newest entry names ESB-06 and a rec id, which is
+      transient entry content: once a later Decision becomes the newest, a graduated row reading "the newest
+      entry" would assert the wrong entry forever.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Per-entry authoring cap and corpus-ceiling governance, PRINTED rather than assumed. Confirm the new entry
+      is at or under the 6,144-byte cap the hard-fail gate measures, confirm no corpus ceiling is breached after
+      the regeneration, and print every headroom figure so this wave's own budget claim is on the record.
+    command: >-
+      bin/venv-python -c "import pathlib,re; from scripts.decisions_md import iter_decision_sections; from
+      scripts.checks.decisions.validate_decisions_size import _PER_ENTRY_CAP_BYTES, _DECISIONS_LIVE_MAX_H2,
+      _DECISIONS_COMBINED_MAX_BYTES; live=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8');
+      arch=pathlib.Path('docs/DECISIONS_ARCHIVE.md'); secs={int(m.group(1)):b for m,b in
+      iter_decision_sections(live)}; new=max(secs); assert new==173, f'expected the new entry to be Decision 173,
+      newest header is {new} -- re-check the numbering race'; size=len(secs[new].encode('utf-8')); assert
+      size<=_PER_ENTRY_CAP_BYTES, f'Decision {new} is {size} bytes, over the {_PER_ENTRY_CAP_BYTES}-byte
+      per-entry authoring cap'; h=len(re.findall(r'(?m)^## Decision \d+:',live));
+      comb=len(live.encode('utf-8'))+len(arch.read_bytes());
+      idx=len(pathlib.Path('docs/decisions-index.json').read_bytes()); assert h<=_DECISIONS_LIVE_MAX_H2 and
+      comb<=_DECISIONS_COMBINED_MAX_BYTES and idx<=131000, f'a corpus ceiling is breached: headers {h}, combined
+      {comb}, index {idx}'; print('OK entry', new, 'is', size, 'bytes, cap headroom', _PER_ENTRY_CAP_BYTES-size,
+      '; headers', h, 'headroom', _DECISIONS_LIVE_MAX_H2-h, '; combined headroom',
+      _DECISIONS_COMBINED_MAX_BYTES-comb, '; index headroom', 131000-idx)"
+    expected: >-
+      Exit 0 with a line containing `cap headroom`, `headers`, `combined headroom` and `index headroom`, every
+      figure non-negative. Proved in both directions this session: on f3e4e6d it exits 1 with an "expected the
+      new entry to be Decision 173, newest header is 172 -- re-check the numbering race" assertion; on the
+      scratch post-change tree it printed "OK entry 173 is 5183 bytes, cap headroom 961 ; headers 126 headroom 6
+      ; combined headroom 37183 ; index headroom 10886".
+    fix_if: >-
+      `over the 6,144-byte per-entry authoring cap` means the entry drifted back toward the wave-4 shape --
+      the repair is to MOVE content to docs/plans/reports/esb-q5-spike-findings.yaml and cite it, never to
+      trim the ruling or the reversal conditions, and never to plan a compaction pass (the ceilings have
+      headroom; the cap is a per-entry authoring norm, not a corpus-size symptom). `expected the new entry to be
+      Decision 173` means a concurrent PR claimed the number -- shift to the next free number here and in every
+      coupled site (ratified_as, filed_via, the findings record). `a corpus ceiling is breached` prints all
+      three figures; read which one, and note that archival relieves only the header count while compaction is
+      the only lever on combined bytes.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_decisions_size IS the standing enforced guard for the per-entry cap and both corpus ceilings, and
+      it runs in the --pre and full tiers already. A graduated duplicate is non-admissible for the same measured
+      reason as step 7: reverting removes the entry, the cap check passes on origin/main, and the row fails VF-05
+      differential admission as tautological. The step is retained for its PRINTED headroom figures, which are
+      the evidence for this plan's no-compaction-pass claim.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Registry growth is budgeted, not assumed. Assert exactly the four planned esb-q5 rows landed, that check_id
+      values stay unique, and that the registry is still at or under its measured structural budget -- printing
+      the remaining headroom so the next wave inherits a number rather than a guess.
+    command: >-
+      bin/venv-python -c "import pathlib,yaml; from scripts.checks.structural._classify import effective_lines;
+      p=pathlib.Path('config/agent/verification_registry/registry.yaml'); text=p.read_text(encoding='utf-8');
+      rows=yaml.safe_load(text)['entries']; ids=[r['check_id'] for r in rows]; mine=sorted(i for i in ids if
+      i.startswith('esb-q5-')); assert len(mine)==4, f'expected exactly 4 graduated esb-q5 rows, found
+      {len(mine)}: {mine}'; assert len(ids)==len(set(ids)), 'duplicate check_id in the registry';
+      budget=yaml.safe_load(pathlib.Path('config/structural_size_budgets.yaml').read_text(encoding='utf-8'))['budgets'][p.as_posix()];
+      eff=effective_lines(text); assert eff<=budget, f'registry is {eff} effective lines, over its {budget}
+      budget -- Decision 128 says decompose or retire rows, never raise'; print('OK', len(rows), 'registry
+      rows,', len(mine), 'esb-q5 rows;', eff, 'effective lines of', budget, ', headroom', budget-eff)"
+    expected: >-
+      Exit 0 with a line beginning `OK` and ending with a non-negative `headroom` figure. Proved failing this
+      session on f3e4e6d: exits 1 with an "expected exactly 4 graduated esb-q5 rows, found 0: []" assertion, and
+      the same command's budget leg passes today at 5,836 effective lines of 6,000.
+    fix_if: >-
+      `expected exactly 4 graduated esb-q5 rows` means a plan-declared graduation was skipped or an extra one was
+      added -- the four are fixed at plan time by graduation_check_id and the count is the registry budget's
+      constraint, not a preference. `over its budget` means the four rows were authored too verbosely -- tighten
+      the check_spec commands; do NOT raise the budget, which Decision 128 makes a reviewable exception requiring
+      an authorizing Decision marker (Decision 165) that this wave has no grounds to write.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A registry row that asserts how many rows the registry has is self-referential -- it would have to be
+      amended by every subsequent graduating plan, and it asserts a count fixed by THIS plan rather than a
+      durable property. The durable half (schema validity, unique ids, differential admission of added rows) is
+      already validate_verification_registry's job in the --pre tier, and the size half is
+      validate_structural_size_limits'.
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Discharge this plan's declared handoff_policy. Run the FULL presubmit tier to completion IN THE FOREGROUND
+      and block on its result before any commit or PR; the full tier exceeds a single Bash invocation, so do not
+      background it and do not substitute --pre.
+    command: bin/venv-python -m scripts.validate
+    expected: "All checks passed, exit 0, including every HARD_GATE verifier."
+    fix_if: >-
+      Any failure means the declared full_validation_required_before_commit obligation is not discharged -- fix
+      the named check and rerun the full tier from the start. A timeout is timeout_disposition blocked: resume
+      later and rerun full from the start, never commit on a partial run.
+    hermetic: false
+    graduation: not-applicable
+  - step: 13
+    phase: post-deploy
+    action: >-
+      Provision through the Decision 126 infra channel only, in the two-root order the boundary requires. First
+      the operator applies terraform/bootstrap out-of-band (admin-only, never CI); then the PR touching
+      terraform/personal/** plans and applies, with the trust/destroy legs routed to tf-gated-apply. The agent
+      runs no terraform apply in either root.
+    command: >-
+      bin/venv-python -c "print('confirm via mcp__github__pull_request_read get_check_runs that
+      terraform-validate and the terraform-apply-sandbox speculative-plan job are green, that the operator has
+      applied terraform/bootstrap out-of-band, and that the gated-apply run for the new IAM roles completed after
+      human approval')" && aws stepfunctions list-state-machines --profile agent_platform --region eu-west-2
+      --query "stateMachines[?contains(name, 'esb-q5')].name" --output text
+    expected: >-
+      The named CI checks are green, the bootstrap apply is confirmed, the gated-apply run shows a completed
+      human approval, and the stepfunctions query lists both spike state machines.
+    fix_if: >-
+      An empty stepfunctions result with green checks means the flag is still false -- set esb_q5_spike_enabled
+      true in the sandbox tfvars path and re-run the channel. An AccessDenied on the stepfunctions call means the
+      boundary DataPlaneAllow extension or the DailyOps states: grant did not land -- check the BOOTSTRAP root
+      first, because a boundary that does not permit states: silently denies an identity grant that is present
+      and looks correct. A red terraform-validate is a real defect: fix the terraform on the branch, never work
+      around it with a local apply, which Decision 126 forecloses outside the human-gated break-glass tier.
+    hermetic: false
+    graduation: not-applicable
+  - step: 14
+    phase: post-deploy
+    action: >-
+      Run each arm end-to-end, force-kill it mid-loop, and resume it. Assert the measurement actually
+      DISCRIMINATES: the call ledger must show the completed-step count and any duplicate rows, per arm, and the
+      hand-roll residue must be recorded with its constituent parts named rather than as a bare XS/S/M letter.
+    command: >-
+      bin/venv-python -m scripts.esb_q5_spike.measure --arm all --forced-kill mid-loop --emit
+      docs/plans/reports/esb-q5-spike-findings.yaml && bin/venv-python -c "import yaml;
+      f=yaml.safe_load(open('docs/plans/reports/esb-q5-spike-findings.yaml',encoding='utf-8')); m=f['measured'];
+      missing=[a for a in f['arms'] if a not in m]; assert not missing, f'arm(s) never measured: {missing}';
+      bad=[a for a,v in m.items() if v.get('duplicate_ledger_rows') is None or v.get('completed_steps') is None
+      or not v.get('residue',{}).get('scale') or not v.get('residue',{}).get('parts')]; assert not bad, f'arm(s)
+      with an incomplete metric record: {bad}'; print('OK', len(m), 'arms measured;',
+      {a:v['duplicate_ledger_rows'] for a,v in m.items()}, ';residue', {a:v['residue']['scale'] for a,v in
+      m.items()})"
+    expected: >-
+      Exit 0 with a line beginning `OK` reporting per-arm duplicate-row counts and per-arm residue scales. A
+      duplicate-row count that differs between the arms, or a residue scale that differs, is the discriminating
+      outcome the spike exists to produce.
+    fix_if: >-
+      Identical numbers on both arms mean either the forced kill did not land mid-loop (it fired before the first
+      checkpoint or after the last -- move the kill point into the middle of the iteration range and re-run) or
+      the arms genuinely do not discriminate. The second case is NOT a harness bug to retry around: it is re-arm
+      condition (ii) firing, and the correct response is to record the non-discrimination in findings.yaml,
+      decline the substrate selection, and hand back per the GATE 2 constraint. An arm that never resumes is
+      likewise a recordable finding carried into the comparative record.
+    hermetic: false
+    graduation: not-applicable
+  - step: 15
+    phase: post-deploy
+    action: >-
+      Measure workspace re-materialization for every registered strategy on every arm that ran, at the W6 scale
+      basis, recording wall-clock, request/object count and bytes for each pair -- and record the W6 basis itself
+      with the measurement command and the date it was run.
+    command: >-
+      bin/venv-python -m scripts.esb_q5_spike.measure --rematerialization-only --emit
+      docs/plans/reports/esb-q5-spike-findings.yaml && bin/venv-python -c "import yaml;
+      f=yaml.safe_load(open('docs/plans/reports/esb-q5-spike-findings.yaml',encoding='utf-8'));
+      r=f['rematerialization']; pairs=[(a,s) for a in f['arms'] for s in f['strategies']]; missing=[p for p in
+      pairs if p[1] not in r.get(p[0],{})]; assert not missing, f'unmeasured arm/strategy pairs: {missing}';
+      thin=[(a,s) for a,s in pairs if not all(k in r[a][s] for k in ('wall_clock_s','object_count','bytes'))];
+      assert not thin, f'pair(s) missing a W5 term: {thin}'; w6=f['scale_basis']; assert w6.get('command') and
+      w6.get('measured_on') and w6.get('bytes'), f'W6 scale basis incomplete: {w6}'; print('OK', len(pairs),
+      'arm x strategy pairs all measured with all three W5 terms; W6 basis', w6['bytes'], 'bytes measured',
+      w6['measured_on'])"
+    expected: >-
+      Exit 0 with a line beginning `OK` reporting the pair count and the W6 basis bytes and date, with each pair
+      carrying wall_clock_s, object_count and bytes.
+    fix_if: >-
+      An unmeasured pair means an arm/strategy combination was skipped -- run it rather than dropping the pair.
+      `missing a W5 term` means one of the byte or object-count terms was omitted, and CD.43 W5 requires both
+      because per-request pricing can dominate for a many-small-files tree even when the byte term looks small.
+      `W6 scale basis incomplete` means the dependency-environment size was quoted rather than measured -- run
+      the sizing command, record it verbatim with the date, and never copy a stale figure.
+    hermetic: false
+    graduation: not-applicable
+  - step: 16
+    phase: post-deploy
+    action: >-
+      Teardown. Flip the flag false through the same infra channel, let the destroy route to tf-gated-apply, and
+      sweep for residual spike resources by name prefix so no cost floor survives the spike.
+    command: >-
+      aws stepfunctions list-state-machines --profile agent_platform --region eu-west-2 --query
+      "stateMachines[?contains(name,'esb-q5')].name" --output text && aws lambda list-functions --profile
+      agent_platform --region eu-west-2 --query "Functions[?contains(FunctionName,'esb-q5')].FunctionName"
+      --output text
+    expected: "Both queries return empty -- no state machine and no Lambda carrying the esb-q5 prefix."
+    fix_if: >-
+      A non-empty result means the destroy did not fully land -- re-check that the flag reads false on main and
+      that the gated-apply destroy run completed rather than being left awaiting approval. Do not delete the
+      residue with a console or CLI delete: that puts state out of band with terraform and the next apply
+      resurrects or errors on it.
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: scripts/esb_q5_spike/__init__.py
+    behavior: >-
+      The spike is importable as a package so both arms and the harness resolve the SAME shared loop module.
+    verification_step: 6
+    command: bin/venv-python -m pytest tests/esb_q5_spike
+    waiver_reason: >-
+      A package marker declares no behavior of its own; its only property (importability) is exercised
+      transitively by every test in tests/esb_q5_spike, each of which fails at collection if the package is
+      missing. A dedicated test would assert that pytest can import a package pytest just imported.
+  - source: scripts/esb_q5_spike/loop.py
+    behavior: >-
+      The resume cursor restarts at the first INCOMPLETE iteration -- never at zero (which re-does work) and
+      never past the interruption point (which loses it).
+    verification_step: 6
+    test_selector: tests/esb_q5_spike/test_loop.py::test_resume_cursor_restarts_at_the_first_incomplete_iteration
+    red_green_expectation: >-
+      Red before loop.py exists (collection error); green once the cursor reads the last completed iteration
+      rather than the last attempted one.
+  - source: scripts/esb_q5_spike/mock_llm.py
+    behavior: >-
+      The append-only call ledger distinguishes a re-issued step from a legitimate first issue, in BOTH
+      directions -- this is the resume-without-reissue metric itself.
+    verification_step: 6
+    test_selector: tests/esb_q5_spike/test_loop.py::test_ledger_flags_a_reissue_and_not_a_first_issue
+    red_green_expectation: >-
+      Red before the ledger key includes (run_id, iteration, step); green when a replayed step appends a
+      duplicate row and a fresh step does not.
+  - source: scripts/esb_q5_spike/workspace.py
+    behavior: >-
+      Both registered S3 strategies round-trip a workspace (materialize -> mutate -> re-materialize) and the
+      STRATEGIES registry is the single source of the strategy set.
+    verification_step: 6
+    test_selector: tests/esb_q5_spike/test_workspace.py::test_both_s3_strategies_round_trip
+    red_green_expectation: >-
+      Red before both s3_per_object and s3_tarball exist; green when each reconstructs byte-identical workspace
+      content against the local fake.
+  - source: scripts/esb_q5_spike/handlers.py
+    behavior: >-
+      Both arms delegate to the SAME shared loop, so the measured difference is substrate and never business
+      logic.
+    verification_step: 6
+    test_selector: tests/esb_q5_spike/test_arms.py::test_both_arms_delegate_to_the_shared_loop
+    red_green_expectation: >-
+      Red before the second arm exists or while an arm inlines its own loop body; green when both handlers call
+      loop.run with the same step sequence.
+  - source: scripts/esb_q5_spike/measure.py
+    behavior: >-
+      measured_strategies() derives from workspace.STRATEGIES rather than a hard-coded list, so a strategy added
+      without a measurement fails loudly instead of passing silently.
+    verification_step: 6
+    test_selector: tests/esb_q5_spike/test_arms.py::test_measured_strategies_derives_from_the_registry
+    red_green_expectation: >-
+      Red while the harness hard-codes the two names; green when adding a third registry entry makes the
+      coverage assertion fail rather than pass.
+  - source: scripts/checks/iam_tf/_read_coverage.py
+    behavior: >-
+      aws_sfn_state_machine resolves to a read classification, AND a genuinely unmapped type still produces the
+      "unmapped resource type" finding -- the guard is extended, not widened into a catch-all.
+    verification_step: 6
+    test_selector: tests/checks/iam_tf/test__read_coverage.py::TestSfnStateMachineClassification
+    red_green_expectation: >-
+      Red at f3e4e6d, where _check_resource('aws_sfn_state_machine', ...) returns the unmapped finding (measured
+      this session); green once the CHECKED_TYPES entry lands, with the negative case still failing loud.
+  - source: scripts/checks/iam_tf/_write_coverage.py
+    behavior: >-
+      aws_sfn_state_machine is WRITE_COVERAGE-mapped with its resource marker, and a discovered-but-unmapped type
+      still FAILS LOUD (the discovery-driven branch stays live).
+    verification_step: 6
+    test_selector: tests/checks/iam_tf/test__write_coverage.py::TestSfnStateMachineWriteCoverage
+    red_green_expectation: >-
+      Red before the WRITE_COVERAGE entry exists; green with the entry present and the unmapped-type branch still
+      producing a failure.
+  - source: scripts/checks/iam_tf/_write_companions.py
+    behavior: >-
+      All three lifecycle phases are declared for aws_sfn_state_machine, and removing any one still trips the
+      mandatory-declaration rule.
+    verification_step: 6
+    test_selector: tests/checks/iam_tf/test__write_companions.py::TestSfnStateMachineLifecyclePhases
+    red_green_expectation: >-
+      Red before the three phase rows land; green with all three present, and the deletion case still failing.
+  - source: terraform/personal/esb_q5_spike.tf
+    behavior: >-
+      The spike stack declares a Step Functions state machine, count-gates every resource on the single
+      default-false flag, and introduces no networked resource or Lambda vpc_config anywhere in the repo.
+    verification_step: 2
+    command: terraform/personal/esb_q5_spike.tf
+    red_green_expectation: >-
+      Red at f3e4e6d with `spike terraform absent -- the sweep would pass vacuously` (proved this session); green
+      once the stack exists with its SFN and count gates and the repo-wide networked sweep still finds zero.
+  - source: terraform/personal/variables.tf
+    behavior: >-
+      esb_q5_spike_enabled is declared with default false, so nothing provisions until the flag is deliberately
+      set and teardown is a flag flip rather than a bespoke destroy script.
+    verification_step: 2
+    command: terraform/personal/variables.tf
+    red_green_expectation: >-
+      Red while the variable is absent or defaults true (`esb_q5_spike_enabled is not declared with default
+      false`); green once declared false.
+  - source: terraform/personal/oidc.tf
+    behavior: >-
+      github_ci_planner's grant surface refresh-read-covers the spike state machines, which is half of what the
+      coverage gate requires of the two plan-capable role policies.
+    verification_step: 7
+    command: terraform/personal/oidc.tf
+    red_green_expectation: >-
+      Red while validate_ci_refresh_read_coverage reports the state machines uncovered in the planner half; green
+      once the states: read statement lands.
+  - source: terraform/bootstrap/github_ci_apply_policy.tf
+    behavior: >-
+      github_ci_apply's identity policy refresh-read- and write-covers the spike state machines, which is the
+      other half of the coverage gate's requirement.
+    verification_step: 7
+    command: terraform/bootstrap/github_ci_apply_policy.tf
+    red_green_expectation: >-
+      Red while the apply half is uncovered; green once the states: read and write grants land on the
+      agent-platform-esb-q5-* family.
+  - source: terraform/bootstrap/github_ci_apply_boundary.tf
+    behavior: >-
+      The permissions-boundary ceiling permits states:, without which every states: identity grant on
+      github_ci_apply AND on the boundary-carrying PlatformDev role is silently denied by the intersection.
+    verification_step: 7
+    command: terraform/bootstrap/github_ci_apply_boundary.tf
+    red_green_expectation: >-
+      Red while DataPlaneAllow carries no states: entry (measured absent this session); green once the ceiling is
+      extended.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The committed index stays a faithful, in-budget projection of the corpus after the new entry lands.
+    verification_step: 10
+    command: docs/decisions-index.json
+    waiver_reason: >-
+      A generated projection with no hand-authored behavior: its freshness is already guarded by
+      validate_decisions_index_freshness and its size by tests/test_decisions_index.py's committed-index pin, both
+      standing checks. A bespoke test would assert the generator against itself.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: >-
+      CD.43 carries the canonical ratified shape with a real selected_store, and every coupled site moves with it
+      rather than one at a time.
+    verification_step: 6
+    test_selector: tests/esb_text_fix/test_workspace_store_criteria.py::test_store_selected_and_cd43_ratified
+    red_green_expectation: >-
+      Red at f3e4e6d, where the existing test_cd43_is_pending_and_r2_shaped and
+      test_store_choice_deferred_and_evaluation_floors_hold pin the deferral (measured this session); green once
+      both are re-grounded to the ratified shape and the roadmap edit lands.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Exactly the four planned graduated rows land, check_ids stay unique, and the registry stays inside its
+      structural budget.
+    verification_step: 11
+    command: config/agent/verification_registry/registry.yaml
+    waiver_reason: >-
+      The registry's own standing guards already own every durable half of this: validate_verification_registry
+      checks schema, uniqueness and VF-06 c2 differential admission of added rows in the --pre tier, and
+      validate_structural_size_limits enforces the 6,000-line budget. A bespoke test would pin THIS plan's row
+      count into the permanent suite, which the next graduating plan would have to amend.
+constraints:
+  - >-
+    THE EXCLUSION IS A RECORDED OPERATOR DECISION, NOT A DEFERRAL, AND IT IS NOT RE-OPENABLE MID-IMPLEMENTATION.
+    The container arm (ECS/Fargate) and the shared-filesystem arm (EFS) are OUT OF SCOPE for three reasons the
+    Decision must state: (1) STANDING COST -- both require a private network this AWS account has never had
+    (measured: zero aws_vpc, aws_subnet, aws_nat_gateway, aws_vpc_endpoint, aws_ecs_* or aws_efs_* resources
+    across all 38 terraform files), which is greenfield network infrastructure, and NAT bills hourly, unlike
+    every other component here which is pay-per-use. (2) OPERABILITY -- network engineering is outside the
+    operator's expertise; network failure modes are quiet and its costs standing, a bad combination to own while
+    learning the domain. (3) RE-ARM CONDITIONS, which make this reversible rather than a dead end: revisit if
+    (i) the platform matures to where standing network cost is justifiable, or (ii) these two arms fail to
+    discriminate -- if durable and SFN come out close, or both show heavy workspace re-materialization, that IS
+    the signal the Lambda framing is wrong and the container class earns its network build.
+  - >-
+    THE EXCLUSION DOES NOT RETIRE CD.27's ECS RUN TASK ESCAPE HATCH. CD.27's ratified discipline point keeps ECS
+    Run Task as the only remaining Fargate path, and T4.1 carries a live exit criterion requiring a synthetic
+    20-minute runTask.sync integration. What is excluded is the container class as a LAYER-2 PERSONA SUBSTRATE
+    ARM IN THIS SPIKE. Writing the exclusion as though it retired the escape hatch would be a frame-lock of
+    exactly the kind Decision 75 names -- state the boundary explicitly in the Decision.
+  - >-
+    EFS's ELIMINATION OF hosted_cli_runner IS RECORDED, NOT ASSUMED AWAY. CD.43 criterion W2 requires that a
+    store which silently eliminates a CD.27 candidate be recorded as an explicit decision. EFS is structurally
+    unreachable from GitHub-hosted runners, so selecting it would eliminate hosted_cli_runner outright. EFS is
+    excluded here rather than selected, so the elimination does not occur -- and the Decision says so, together
+    with the condition under which it would have to be recorded (if that reachability ever changes and EFS is
+    re-armed).
+  - >-
+    THE DELIVERABLE IS SPLIT, AND THE SPLIT IS PART OF THE DESIGN. The numbered Decision states the RULING, the
+    exclusion, the reversal conditions and the ESB-06 residual, and CITES docs/plans/reports/esb-q5-spike-findings.yaml
+    for the comparative record, the per-arm measurements, the per-strategy costs and the W1-W8 option
+    dispositions. This is NOT a size workaround: ESB-04's acceptance is that the ratifying decision "cites the
+    comparison and the spike outcome" -- CITES, not contains. The 6,144-byte per-entry cap forces the reading
+    that was always correct. Do not resolve any size pressure by trimming the ruling or the reversal conditions;
+    resolve it by moving evidence to the cited file.
+  - >-
+    GATE 2 -- THE NON-DISCRIMINATION GATE, an explicit STOP and not a note. If the two arms do not discriminate
+    (residue within one scale step, or both arms showing workspace re-materialization dominating their failure
+    handling), re-arm condition (ii) has FIRED. Do NOT pick a winner on a tiebreak. Record the non-discrimination
+    in findings.yaml, land the Decision as the comparative record plus the fired re-arm condition, leave CD.43
+    unratified and selected_store at its deferral marker, and hand back in the Bounded Hand-Back shape for the
+    container-class network-build decision. VP step 8 only runs on the branch where a selection was actually
+    made.
+  - >-
+    BOTH S3 STRATEGIES ARE MEASURED -- per-object AND tarball. Their cost and latency profiles differ materially,
+    CD.43 W5 demands both a byte term and an object-count term, and with EFS and container-local excluded S3-sync
+    IS the backing store under test. Enforced as a registry-completeness assertion (VP step 3) rather than as two
+    named-strategy assertions, so a third strategy cannot be added unmeasured.
+  - >-
+    MOCKED LLM STEPS, NO PRODUCTION WRITES, and no writes to any ops table. The spike writes only to its own S3
+    prefix and to findings.yaml. No file_rec, no update_rec, no OpsWriter, no ducklake writer. Enforced as a
+    module-class sweep by VP step 4. The one portal write this plan makes is the Decision itself, at /implement
+    time, behind the execution-time human confirmation gate (Decision 105).
+  - >-
+    NO COMPACTION PASS, AND DECISION 37 IS NOT TOUCHED. The ceilings were raised by Decision 166 plus the
+    decision-ceiling-bridge, and re-measurement at f3e4e6d confirms headroom on every one (see the CEILINGS
+    context entry). Decision 37 is specifically OUT OF BOUNDS: 14 live files cite its Secrets-Manager
+    runtime-fetch precedent, its superseder restates none of it, and its compaction eligibility is an open human
+    adjudication. If a size figure ever looks tight, the lever is the per-entry authoring norm this plan already
+    applies to itself, never an unadjudicated compaction.
+  - >-
+    THE AGENT NEVER RUNS terraform apply, IN EITHER ROOT. Decision 126: infra intent = open a PR touching
+    terraform/**, CI plans and applies. terraform/bootstrap is admin-only and out-of-band -- surface it to the
+    operator and wait; do not seek a local permission grant. When a production action is auto-denied, check
+    docs/contracts/deploy-paths.yaml and then the workflows first.
+  - >-
+    PUBLIC repository: no AWS account ids, ARNs, IAM ExternalIds, credentials or internal hostnames in any new
+    file. IAM resource markers are ARN SHAPES with wildcards, never rendered ARNs. Cost figures are recomputed
+    against the eu-west-2 pin at decision time and published as bases, not as trading-relevant numbers.
+  - >-
+    decision_scout is the spike vehicle, per CD.27's own ESB-04 precondition text and the audit's Q5 prose -- its
+    loop is the minimal one. The `claude -p` arm stays PRUNED (routing ratified by dec-122 and explicitly by
+    Decision 164; re-arm only if ESB-03's reopen fires), and the escape-hatch-reachability probe stays OPTIONAL.
+    Neither absence is an omission to be quietly repaired mid-implementation.
+  - >-
+    DECOMPOSE, NEVER RAISE (Decision 128 / Decision 165). Two measured budgets bind this wave:
+    terraform/personal/platform_roles.tf sits at exactly its 587-line structural budget, which is why the DailyOps
+    states: grant lands as its own aws_iam_role_policy in the spike .tf; and
+    config/agent/verification_registry/registry.yaml has 164 effective lines of headroom, which is why exactly
+    four rows graduate. Neither budget is raised, and no `# raise-approved:` marker is written.
+  - >-
+    PyYAML safe_dump doubles backslashes in a multi-line string containing an indented line, and two graduated
+    commands here carry backslash regexes. Write the graduated rows into
+    config/agent/verification_registry/registry.yaml by hand or verify the round trip, and re-run each graduated
+    command FROM THE COMMITTED REGISTRY ROW -- not from this plan's text -- before declaring it green.
+  - "No rescue agents or workaround loops (Decision 55). An arm that will not resume is a finding to record, not a failure to retry around."
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": PENDING -- this plan was authored by a
+    subagent, which per the planning skill's subagent-dispatch mode does not run the gate inline. The gate is
+    requested by a GATE_REQUEST hand-back (gate: decision-scout, round 1) and the verdict plus the verbatim CITE
+    list are recorded here on return. Decisions this plan already cites and expects the scout to confirm or
+    extend: Decision 39 (the layer-1 comparative-record standard ESB-04 holds layer 2 to, and the
+    managed-orchestration ratification a non-managed selection would have to supersede -- both measured arms are
+    managed, so no supersession is authored), Decision 75 (the frame-lock anti-pattern the exclusion record
+    exists to prevent), Decision 133 (the in-corpus precedent for converting a cited-as-given premise into a
+    conscious, reversal-conditioned choice), Decision 164 (wave 4's instance of that shape, and the 7,257-byte
+    entry that motivates this wave's thin form), Decision 100 (managed-primitive preference -- CD.43 W8), Decision
+    86 and Decision 127 (the prose routing that forecloses a standing doc as the comparative record's home),
+    Decision 147 (the in-place ratified-CD prose-compaction norm the CD.43 detail edit follows), Decision 149
+    (compaction lifecycle -- cited to say this plan does NOT exercise it), Decision 150 (clause 1's significance
+    bar; clause 2's batch-wave form, adjudicated unavailable below), Decision 166 and Decision 167 (the raised
+    ceilings and the per-entry cap this entry is sized against), Decision 165 (raise-marker authorization),
+    Decision 128 (SLOC/structural decompose-by-default), Decision 126 (the deployment model and the
+    never-self-apply rule), Decision 119 (terraform CI delegation), Decision 129 (the refresh-read coverage
+    verifier's fail-loud-on-unmapped-type rule, clause 4), Decision 144 (the boundary-as-ceiling rule and the
+    two plan-capable role identities), Decision 79 / CD.16 (per-Lambda deploy gating, adjudicated below),
+    Decision 132 and Decision 148 (graduation and hermetic replay), Decision 105 (ratification execution is
+    /implement's, behind a human gate), Decision 55 (RCA-first, no workaround loops), Decision 77 (the no-TOCTOU
+    saved-plan apply model) and Decision 92 point 5 / Decision 94 (the IAM guard classification the DailyOps
+    policy row routes through).
+  - >-
+    "gates: decision-scout=<verdict>; plan-critique=<verdict> after <N> round(s)" -- both verdicts are recorded
+    here on return from the trampoline; neither gate was run by the authoring subagent.
+  - >-
+    THE DELIVERABLE SHAPE CHANGED, AND THE ENTRY WAS MEASURED, NOT ESTIMATED. scripts/checks/decisions/
+    validate_decisions_size.py now carries `_PER_ENTRY_CAP_BYTES = 6_144`, HARD-FAIL for new-in-diff entries
+    (Decision 167 clause 3, fired by migration step 3). Measured this session: wave 4's comparable Decision 164 is
+    7,257 bytes and would fail it; Decisions 170 and 172 are 5,757 and 5,775. A full draft of THIS wave's entry
+    was written and spliced into a copy of the live corpus, then measured through the SHIPPED span
+    (scripts.decisions_md.iter_decision_sections, the same span the checker measures): 5,183 bytes with the
+    placeholders filled and 5,201 with them unresolved -- roughly 950 bytes of headroom under the cap. The draft
+    also PASSES validate_decision_entry_conformance (metadata envelope with number + significance, the three
+    required markers, block separator) and validate_decisions_size, both run against the scratch tree with a
+    baseline reader excluding 173. The drafted content is: the ruling, the exclusion with three reasons, three
+    reversal conditions, the two boundary statements (EFS/hosted_cli_runner, ECS escape hatch), the ESB-06
+    residual, the explicit entry-versus-evidence split, and a Related list.
+  - >-
+    THE WITHIN-ENTRY SPLIT, MADE EXPLICIT BECAUSE CFG-07 IS OPEN. audits/contract-first-governance-33c8667.yaml
+    CFG-07 records that "the routing rule is silent on the standing-commitment class and on the within-entry
+    split", and its ideal_behavior proposes the rule this plan adopts in advance: "a standing commitment with an
+    evaluator IS specification ... and only its reversal-relevant WHY is Decision content." This deliverable is
+    exactly a standing commitment, and the per-entry cap has just forced the split. So the split is STATED in the
+    entry rather than left implicit: what lives IN the entry is the ruling, the exclusion, the reversal
+    conditions and the reasons a future reader needs in order to decide whether to reverse; what is CITED to
+    findings.yaml is everything a reader would consult only to RE-DERIVE the ruling -- per-arm metrics,
+    per-strategy costs, W1-W8 dispositions, the comparative table. A future CFG-07 ruling therefore either
+    confirms this split or has a stated position to overrule, rather than silence to interpret. The entry's own
+    significance envelope carries the contract-first justification (rec-3015): the alternative home considered was
+    a governance note in docs/contracts/environment-taxonomy.yaml, rejected because that contract owns apply-model
+    field semantics and has no subject for a substrate CHOICE or its re-arm conditions.
+  - >-
+    CEILINGS, RE-MEASURED AT f3e4e6d, AND WHY NO COMPACTION PASS IS PLANNED. Max live header 172, so the new
+    entry is 173 (re-check at execution time for the numbering race). Live headers 125 of 132; combined
+    live+archive 737,634 of 780,000; index 119,189 of the 131,000 pin in tests/test_decisions_index.py. Measured
+    post-change by splice-and-regenerate with the shipped generator (the regenerated baseline reproduced the
+    committed 119,189 byte-for-byte, which is what makes the delta trustworthy): headers 126 (6 free), combined
+    742,835 (37,165 free), index 120,114 (10,886 free). Every ceiling has room and the entry costs 925 index
+    bytes. The prior wave-5 drafts planned a MANDATORY three-entry compaction pass because the index pin was then
+    110,000 with 236 bytes of headroom; Decision 166 plus the decision-ceiling-bridge (#863) moved the pin to
+    131,000 and the ceilings with it, so that pass is now unnecessary AND is explicitly not planned. Decision 37
+    is out of bounds regardless -- see the constraint.
+  - >-
+    THE ESB-06 FORECLOSURE -- WHY CD.27's FLIP IS SETTLED AT PLAN TIME RATHER THAN LEFT AS AN IMPLEMENT-TIME
+    BRANCH, and a disclosed cost of the exclusion. CD.27's ESB-06 precondition (docs/ROADMAP-PLATFORM.yaml:947)
+    says the determinism-rules-plus-static-check obligation is LIVE if the spike selects a replay-based
+    substrate, and LAPSES only on a non-replay one -- naming self_checkpointed_lambda_dynamodb,
+    long_running_container and hosted_cli_runner as the non-replay set. That same text classifies BOTH substrates
+    this plan can measure -- durable_functions and sfn_over_stateless_workers -- as replay-based. With the
+    container and hosted-CLI classes excluded from measurement, every selectable outcome is replay-based, so
+    ESB-06's obligation is live under EVERY branch and CD.27 cannot ratify this wave. The plan therefore lands
+    the Decision (which discharges ESB-04, whose acceptance is that the ratifying decision cites the comparison
+    and the spike outcome -- not that CD.27 flip), ratifies CD.43 alone, records ESB-06 as the sole remaining
+    layer-2 blocker with a follow-on rec filed through the portal, and hands back. VP step 9 asserts this in both
+    directions so a later session cannot flip CD.27 without discharging rule R4.
+  - >-
+    CLASS-VERSUS-SITE SWEEP, run before scope was fixed, and it caught TWO REAL FAMILIES neither prior draft had.
+    (a) The prior finding SURVIVES and was re-verified at f3e4e6d: the literal TBD_at_CD.43_ratification appears
+    at THREE sites in docs/ROADMAP-PLATFORM.yaml (the value :1498, CD.43's detail prose :1479, and CD.27's ESB-01
+    precondition :948); only the value changes, :1479 is compacted per Decision 147, and :948 stays because it
+    accurately describes what the ratifying plan does -- post-change count exactly ONE, which VP step 8 asserts as
+    a NUMBER rather than as an absence. CD.43 itself also ratifies, which that draft caught, and its
+    "Criteria-only discipline" discipline_point (:1564-1569) and cost_projection.nat_contingency.applies_to
+    (:343) are the fourth and fifth coupled sites. (b) NEW THIS WAVE, FAMILY ONE: the deferral is ALSO pinned by
+    a live pytest suite, not just by the roadmap -- tests/esb_text_fix/test_workspace_store_criteria.py asserts
+    state=="pending"/ratified_as is None/filed_via=="pending_log_decision_lambda" (:56-60) and
+    status=="criteria_only"/selected_store=="TBD_at_CD.43_ratification" (:85-86). Both go red on ratification.
+    The prior draft swept the verification REGISTRY for this literal (correctly finding no row) and stopped
+    there; the tests/ tree was the sibling it never swept. The registry rows were independently re-checked this
+    session and none of them pins the deferral. (c) NEW THIS WAVE, FAMILY TWO: introducing an
+    aws_sfn_state_machine into terraform/personal touches a THREE-MAP classification family, not one map --
+    _read_coverage.CHECKED_TYPES, _write_coverage.WRITE_COVERAGE, and _write_companions.LIFECYCLE_COMPANIONS
+    (mandatory-declaration over exactly WRITE_COVERAGE's key set) -- plus grant sites in BOTH plan-capable role
+    policies and the boundary ceiling. Measured, not inferred: _check_resource('aws_sfn_state_machine', ...)
+    returns the unmapped-resource-type finding today, while the same call for aws_lambda_function gets past
+    classification.
+  - >-
+    THE SFN IAM WORK IS UNAVOIDABLE, AND THAT WAS DETERMINED BY MEASUREMENT RATHER THAN ACCEPTED BY DEFAULT. The
+    alternative considered was to put the spike stack in the legacy terraform/ root, which the coverage gate does
+    not scan and which already holds an aws_sfn_state_machine (terraform/data_pipeline.tf:457). It was REJECTED:
+    terraform-apply-sandbox.yml's paths filter and WORKDIR are terraform/personal/** exclusively, so the legacy
+    root has no apply pipeline at all and a spike placed there could only be applied out-of-band -- which
+    Decision 126 forecloses. The spike must live in terraform/personal, so the classification and grant work is
+    the cost of the audit's own mandated arm, and this plan pays it rather than routing around it. Consequence,
+    disclosed rather than discovered later: two of the five grant sites are in the ADMIN-ONLY bootstrap root
+    whose apply is out-of-band, so provisioning is blocked on an operator action this plan cannot perform.
+  - >-
+    TWO STRUCTURAL BUDGETS BIND THIS WAVE, both measured with the shipped counter
+    (scripts.checks.structural._classify.effective_lines). (1) terraform/personal/platform_roles.tf is at exactly
+    587 effective lines against its exactly-587 registered budget -- ANY added line breaches it, and its existing
+    `# raise-approved: dec-166 terraform class grandfather, install-time census` marker would not authorize a
+    further raise under Decision 165's authorization narrowing. The DailyOps states: grant therefore lands as its
+    own aws_iam_role_policy resource inside terraform/personal/esb_q5_spike.tf, which is the terraform class's own
+    named relief valve ("decompose by resource family (native .tf multi-file)"). (2)
+    config/agent/verification_registry/registry.yaml is 5,836 effective lines against a 6,000 budget -- 164 of
+    headroom -- and a command_exit_zero row of the shape already in that file costs 25-37 lines. Four rows fit
+    with margin; the prior draft's eight would not. That measurement, not preference, sets this plan's graduation
+    count, and VP step 11 asserts the post-graduation figure. Headroom for the other touched files was also
+    measured and is ample: oidc.tf 245, github_ci_apply_policy.tf 403, github_ci_apply_boundary.tf 95, all against
+    500. The plan file and findings.yaml classify as workflow_outputs (governed: false).
+  - >-
+    V3 SHAPE AND THE CD.16 ADJUDICATION, DETERMINED NOT ASSUMED, and re-measured at f3e4e6d. verification_tier is
+    V3 because scripts/checks/roadmap/validate_tier_floor.py::_compute_floor returns V3 on any scope file ending
+    .tf -- measured directly, and V2 on the same scope list with the .tf rows removed. On the CD.16 / Decision 79
+    per-Lambda question, NO existing active artifact is affected: compute_affected_artifacts returns {} for
+    scripts/esb_q5_spike/loop.py, terraform/personal/esb_q5_spike.tf, terraform/personal/variables.tf,
+    docs/decisions-index.json, config/agent/verification_registry/registry.yaml and
+    docs/plans/reports/esb-q5-spike-findings.yaml. The one non-empty result is docs/ROADMAP-PLATFORM.yaml ->
+    {'data-pipeline': 1}, which is an `assets:` entry, not a handler or include -- validate_tier_floor's
+    _lambda_code_files deliberately excludes assets. NOTE THE NEAR MISS that decided the file layout:
+    'src/lambdas/esb_q5_durable/handler.py' -> {'data-pipeline': 1, 'ops-compaction': 1}, because src/ is an
+    include pattern on BOTH active manifests. VP step 5 turns this measurement into a both-directions assertion
+    so it cannot silently rot. The spike Lambdas are packaged by terraform (a data "archive_file" block over
+    scripts/esb_q5_spike/, which the IAM scanner does not classify -- only `resource` blocks and one named data
+    source are scanned) rather than by a new src/lambdas manifest, which is what keeps the per-Lambda deploy lane
+    out of scope.
+  - >-
+    PLACEMENT, adjudicated against the repo's own class->home map rather than invented, and re-measured. Spike
+    CODE is a `scripts/` SUBPACKAGE (scripts/esb_q5_spike/) -- docs/contracts/file-router.yaml's
+    scripts_root_allowlist polices only depth-1 scripts/ files and says subpackage homes "are not policed here",
+    and validate_placement checks route SHAPE and dead targets, never that a new subdirectory has a route, so no
+    file-router edit is required. The spike FINDINGS artifact is docs/plans/reports/esb-q5-spike-findings.yaml,
+    exactly the home docs/CLAUDE.md's class->home map names for spike notes, with a live sibling precedent
+    already there (docs/plans/reports/ducklake-spike-findings.md). Tests mirror the source subpackage at
+    tests/esb_q5_spike/; measured this session, scripts.test_coverage_checker.map_source_to_test returns None for
+    every scripts/esb_q5_spike/ path (a NEW scripts/ subpackage is outside the six whitelisted families), so no
+    checker imposes a different home and the mirror is chosen on convention. The three iam_tf modules DO have
+    mapped homes (measured: tests/checks/iam_tf/test__read_coverage.py, test__write_coverage.py,
+    test__write_companions.py), which is where their new cases go.
+  - >-
+    NO REGISTRY-ROW COLLISION, re-swept this session because the registry grows every wave -- it now holds 454
+    check_id rows (294 when the prior draft swept it). Grepping for this wave's surfaces returns nothing that
+    collides: no row asserts the literal TBD_at_CD.43_ratification, no row reads selected_store, no row asserts
+    CD.27's `state: pending`, and no check_id contains esb-q5 or esb_q5. The rows that DO read CD.43 and CD.27
+    assert bounded shapes this wave preserves -- cd43-selection-criteria-well-formed asserts W1-W8 presence,
+    coverage_cases membership, options_considered_and_rejected non-emptiness and the no-cost-figure rule;
+    t41-names-workspace-store-criteria asserts T4.1 names CD.43 and its criteria; cd27-layer2-preconditions-cover-esb01
+    asserts the three declared precondition ids. ONE IS A LIVE CONSTRAINT ON THIS WAVE, not merely a
+    non-collision: cd43-selection-criteria-well-formed requires coverage_cases to contain
+    persona_to_ecs_task_handoff. Excluding the container ARM does NOT remove that coverage-case obligation -- the
+    store selection must still dispose the ECS-task-handoff case, on criteria rather than on measurement, and
+    removing the case to match the narrowed arm set would break a graduated row and hollow out W7.
+  - >-
+    W4 EGRESS-CLAIM DISCIPLINE, and a trap the exclusion could otherwise spring. CD.43 criterion W4 says any NAT
+    or VPC-egress reachability or COST claim must be validated against the production LiteLLM external-call
+    profile, "not a spike measurement taken with those calls mocked" -- and this spike's LLM steps ARE mocked. The
+    exclusion's standing-cost reason must therefore be written as what it is: a claim about the NAT gateway's
+    HOURLY STANDING CHARGE, which accrues regardless of traffic and is independent of the call profile entirely.
+    It must NOT be written as, or silently widened into, a per-GB data-processing claim -- that term IS
+    traffic-dependent and W4 forbids sourcing it from this spike. The corpus figure at
+    docs/ROADMAP-PLATFORM.yaml:344 ("33-35" usd/month, confidence medium) is a standing-charge bracket and is
+    cited as such.
+  - >-
+    SIGNIFICANCE GATE, adjudicated against docs/contracts/decision-entry.yaml's `significance:` section BEFORE
+    the entry was drafted, and against Decision 167's three property tests. (1) Envelope marker: the drafted
+    entry carries a fenced ```yaml envelope with number and a significance dict whose value is numbered_decision
+    -- verified by running validate_decision_entry_conformance against the scratch tree, which passed. (2)
+    Contract-first justification (rec-3015): the envelope names the rejected alternative home, a governance note
+    in docs/contracts/environment-taxonomy.yaml, and why -- that contract owns apply-model field semantics and
+    has no subject for a substrate CHOICE or its re-arm conditions. (3) amendment_forms (rec-3016): this entry
+    does not amend exactly one prior entry at a single call site -- it is a fresh forward-standing commitment
+    with its own reversal conditions -- so the dated in-place annotation form is not available. Checked against
+    the three deflection rows and none fits: not cd_state_flip alone (CD.27 does not flip at all, and CD.43's
+    flip is a consequence of the content rather than the content itself), not operational_fact (a
+    forward-standing commitment, not a what-is-currently-true statement), not field_semantics (it decides a
+    substrate class and a store, it does not describe a field). Decision 150 clause 2's batch-wave form is
+    categorically unavailable: it is scoped to same-session PURE gate-clears "carrying no content beyond 'this
+    CD's work is realized'", and this entry carries independent content several times over.
+  - >-
+    A CORRECTION CARRIED BY THE PRIOR DRAFT IS NOW REDUNDANT AND IS DELIBERATELY DROPPED, which is worth stating
+    so its absence does not read as an oversight. That draft planned a clause correcting Decision 160 point 11's
+    stated binding order (headers first, combined second). At f3e4e6d docs/contracts/decision-entry.yaml carries
+    a `lever_by_ceiling_matrix` block that already states machine-readably which lever bends which ceiling --
+    added by CFG-07's own remediation, "never inferred from prose alone". Restating it in a numbered entry would
+    duplicate a contract that now owns it, which is precisely what the significance gate's contract-first test
+    forbids. The entry's `amends: [160]` edge is retained only for the pointer.
+  - >-
+    CLOSURE OBLIGATION, adjudicated. This plan bundles no recommendations, so the rec-resolving trigger does not
+    fire. On the surface-retiring trigger: the scope carries no Delete row, and the CD.43 marker replacement and
+    the roadmap re-groundings are field-value transitions on a governance record, not a file / Lambda / write
+    path / config flag / backend cutover. The one removal this plan performs is the teardown of resources this
+    same plan created, which is rollback rather than surface retirement -- and it carries its sweep regardless
+    (VP step 16 asserts both resource classes are gone by name prefix). The obligation is therefore either not
+    triggered or already satisfied, whichever reading a reviewer prefers.
+  - >-
+    ci-rca DEFERRAL AT COMMIT TIME (the planning skill's HARD BLOCK, discharged by logged rationale). SIX
+    unresolved ci_rca recs are open in the read cache at this session: rec-2957 (CI-RCA log fetcher truncates
+    before the pytest FAIL summary, Critical, scripts/ci_rca/fetch_logs.py), rec-2958 (Main Canary post-merge
+    validate_invariants failure, Critical, scripts/checks/misc/validate_invariants.py), rec-2970
+    (validate_test_coverage is post-merge-only, Medium, scripts/checks/registry.py), rec-2973 and rec-2996
+    (ci-rca evidence truncation, Critical, scripts/ci_rca/log_evidence.py) and rec-2995 (full-tier validate
+    failure on main with a truncated log, Critical, scripts/validate.py). This plan satisfies none of the three
+    Related-Work conditions for any of them -- different files, different Decision Records, different failure
+    categories (CI log-evidence truncation four times, a post-merge coverage-gate design gap, and a post-merge
+    invariants regression, versus a substrate spike and a governance record) -- so all six are DEFERRED here by
+    explicit rationale. None blocks this wave; ESB-04 is safe_to_queue_now with depends_on []. TWO interactions
+    are worth watching rather than ignoring: the four truncation recs all concern CI evidence on the full tier,
+    and this plan's VP step 12 runs the full tier -- if it goes red in CI, read the raw job log rather than
+    trusting the rec body; and rec-2970 means a coverage regression from the new spike modules would not be
+    caught pre-merge, which is a second reason the plan authors real tests rather than relying on the gate.
+  - >-
+    BRANCH / FRESHNESS. Branch claude/executor-substrate-billing-audit-w2t1ur, reset to origin/main (f3e4e6d,
+    the root-scoped-diff-base merge, #931), clean working tree. The Main Divergence Assessment is a no-op at 0
+    behind / 0 ahead, so no rebase deferral is recorded. The repo's session preflight module was not runnable
+    under its documented name in this container (`scripts.session_preflight` does not resolve; the live module is
+    scripts/session/preflight.py), so the preflight-derived figures in this entry were measured directly instead
+    of read from logs/.preflight-report.json -- recorded rather than silently substituted.
+  - >-
+    STRATEGIC IS SUSPENDED, so this is a single larger IMPLEMENTATION plan by construction. The complexity
+    heuristic (>5 files or >8 steps) is exceeded and is informational only during the freeze. The plan is NOT
+    split into atomic siblings because its stages are strictly sequential through one hard gate and a teardown --
+    splitting would leave provisioned AWS resources standing across a plan boundary, and would separate the SFN
+    IAM-coverage work from the only terraform that makes it non-vacuous, which is exactly the coupling that makes
+    both land in the same PR.
+  - >-
+    EVERY HERMETIC MATCHER WAS PROVED AGAINST THE CORPUS THIS SESSION, NOT AGAINST STRINGS AUTHORED HERE. All
+    TEN hermetic commands (steps 1, 2, 3, 4, 5, 7, 8, 9, 10, 11) were extracted from the COMMITTED plan YAML by
+    yaml.safe_load and run verbatim -- which also proves the folding is clean, since a more-indented
+    continuation line would have left an embedded newline and every command is asserted single-line -- against
+    the f3e4e6d tree, and every one exits non-zero with a message naming the missing thing: `findings.yaml
+    absent`; `spike terraform absent -- the sweep would pass vacuously` (after passing the zero-networked and
+    zero-vpc_config legs over all 38 files); `no spike modules found`; `aws_sfn_state_machine has no read
+    classification`; `the deferral marker survives at 3 site(s), expected exactly 1`; `CD.27 is pending but the
+    newest Decision does not name ESB-06 as the remaining blocker with a follow-on rec id`; `expected the new
+    entry to be Decision 173, newest header is 172`; `expected exactly 4 graduated esb-q5 rows, found 0: []`.
+    FOUR were then run against a scratch post-change tree (spliced DECISIONS.md with the drafted entry,
+    regenerated index, edited roadmap, synthetic findings.yaml) and all four exit 0 with every backticked literal
+    in their `expected` field present in the captured output -- Decision 148's replay contract satisfied by
+    measurement. Steps 3, 5 and 7's passing legs are not reachable before implementation (they import
+    scripts.esb_q5_spike or read guard maps this plan edits); their failing legs are proved above and their logic
+    is the same two-way set-comparison shape as the already-graduated sibling rows. Step 2's `expected` says
+    `flag default false` deliberately rather than quoting a count, because the count is implementation-dependent.
+  - >-
+    DELIBERATE RE-AUTHORING, the third for this wave, recorded so the git history reads correctly. Two prior
+    wave-5 plans were authored and discarded -- one at full-arm scope (superseded by the operator's exclusion)
+    and one at the narrowed scope but schema v3 with ceiling figures that have since moved. Reasoning is lifted
+    where it survives (placement, the src/ manifest near-miss, the Decision 150 clause 2 adjudication, the
+    three-site TBD finding, the W4 egress discipline, the ESB-06 foreclosure) and EVERY measurement here was
+    re-derived against f3e4e6d rather than carried. Four things changed materially as a result: the index pin
+    moved 110,000 -> 131,000 so the mandatory three-entry compaction pass is GONE; the per-entry cap appeared so
+    the entry is thin and its evidence is cited; the class-versus-site sweep found the live pytest pins and the
+    three-map SFN classification family; and the registry's structural budget cut the graduation count from
+    eight to four.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    Only the plan-cited decision sections read -- Decisions 39, 55, 75, 77, 79, 86, 92, 94, 100, 105, 119, 126,
+    127, 128, 129, 132, 133, 144, 147, 148, 149, 150, 164, 165, 166, 167 -- not the full corpus
+  - >-
+    audits/executor-substrate-and-billing-shape-ad02653.yaml Q5 prose (:315-337) and ESB-04 (:887-907) read at
+    source, plus CD.27's three layer-2 precondition discipline_points (:946-948) and CD.43's
+    workspace_store_selection block (:1474-1570) in docs/ROADMAP-PLATFORM.yaml
+  - >-
+    audits/contract-first-governance-33c8667.yaml CFG-07 (:858-881) read at source before the entry's
+    within-entry split is written
+  - >-
+    docs/contracts/decision-entry.yaml's `significance:`, `metadata_envelope:` and `size_governance:` sections
+    read before drafting the Decision text
+  - >-
+    docs/contracts/environment-taxonomy.yaml (Axis A + guard classification) and docs/contracts/deploy-paths.yaml
+    read before any infra step, with the bootstrap row's admin-only/out-of-band clause read specifically
+  - docs/contracts/candidate-decision-ratification.yaml rules R1-R4 read before touching either CD's state
+  - >-
+    Per-entry cap RE-MEASURED by splice-and-regenerate against the current tree before committing the entry --
+    "expected to be identical" is not "measured identical"
+  - Current max `## Decision NNN:` header re-checked for the numbering race (172 measured this session)
+  - >-
+    config/agent/verification_registry/registry.yaml re-swept for row collisions and re-measured for headroom
+    (454 rows, 5,836 of 6,000 effective lines, measured this session)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Write docs/plans/reports/esb-q5-spike-findings.yaml FIRST, with audit_q5_arm_set enumerating the audit's full
+    Q5 arm set, arms[] naming the two Lambda arms, and excluded_arms{} naming the container and
+    shared-filesystem arms with all three recorded reasons each. This artifact is the exclusion's record and it
+    exists before any code or terraform, so the exclusion cannot become an unwritten premise.
+  - >-
+    Write the shared spike loop and its supports: scripts/esb_q5_spike/loop.py (one loop with an explicit resume
+    cursor, used verbatim by both arms), mock_llm.py (the sole LLM surface, with the append-only call ledger that
+    makes a re-issued step detectable as a duplicate row), workspace.py (STRATEGIES carrying exactly
+    s3_per_object and s3_tarball), handlers.py (the two Lambda entry points), and measure.py (deriving strategy
+    coverage from the registry, never from a hard-coded list).
+  - >-
+    Write tests/esb_q5_spike/test_loop.py, test_workspace.py and test_arms.py covering the resume cursor, BOTH
+    directions of the duplicate detector, both S3 strategies' round trip, that both arms delegate to the shared
+    loop, and that measured_strategies() derives from the registry. Confirm each new test FAILS before its
+    implementation exists -- failing-first is an entry criterion for every graduated command in this plan, not a
+    nicety.
+  - >-
+    Extend the three IAM classification maps for aws_sfn_state_machine BEFORE writing the terraform that needs
+    them, so the guard is the thing that proves the terraform is coverable rather than the thing that discovers
+    it late: scripts/checks/iam_tf/_read_coverage.py (CHECKED_TYPES), _write_coverage.py (WRITE_COVERAGE with the
+    agent-platform-esb-q5-* marker), and _write_companions.py (all three LIFECYCLE_COMPANIONS phases). Add the
+    matching cases, both directions, to tests/checks/iam_tf/test__read_coverage.py, test__write_coverage.py and
+    test__write_companions.py.
+  - >-
+    Write the grants in dependency order, ceiling first: terraform/bootstrap/github_ci_apply_boundary.tf
+    (DataPlaneAllow gains states:, without which every downstream grant is silently denied), then
+    terraform/bootstrap/github_ci_apply_policy.tf (github_ci_apply states: read + write on the
+    agent-platform-esb-q5-* family), then terraform/personal/oidc.tf (github_ci_planner states: refresh-read).
+    Both bootstrap edits land in the PR; their APPLY is an out-of-band operator action -- surface it, do not
+    attempt it.
+  - >-
+    Write terraform/personal/esb_q5_spike.tf -- two Lambdas named agent-platform-esb-q5-* packaged by a data
+    "archive_file" over scripts/esb_q5_spike/, one Step Functions state machine per arm, the spike S3 prefix, the
+    execution roles, and the DailyOps states: grant as its OWN aws_iam_role_policy on the existing PlatformDev
+    role (never an edit to platform_roles.tf, which is at its structural budget) -- everything count-gated by
+    var.esb_q5_spike_enabled, with NO VPC, subnet, NAT gateway, VPC endpoint, ECS or EFS resource and no
+    vpc_config. Add the single bool variable to terraform/personal/variables.tf with default false.
+  - >-
+    Run VP steps 1-11, then VP step 12 (the FULL tier) to completion in the foreground. Commit only after exit 0.
+  - >-
+    Open the terraform PR. Surface the bootstrap out-of-band apply to the operator and WAIT for confirmation it
+    landed; only then let the Decision 126 infra channel provision the personal root, holding the subscription
+    through apply per the implement skill's terraform/personal guidance. The new roles route to tf-gated-apply
+    and need a human approval -- surface it, do not wait on it silently.
+  - >-
+    Run VP steps 14 and 15: drive each arm, force-kill mid-loop, resume, and record per arm the duplicate-row
+    count and the hand-roll residue on the XS/S/M scale WITH ITS CONSTITUENT PARTS NAMED (for the stateless arm,
+    name each piece the durable arm gets from the platform: the state carrier, the resume cursor persistence, the
+    idempotency guard and the workspace-pointer plumbing). Measure the W6 scale basis with a real command on the
+    day it is run, then per-strategy re-materialization for every arm x strategy pair with all three W5 terms.
+  - >-
+    GATE 2 -- THE NON-DISCRIMINATION GATE. If the arms do not discriminate, or both show workspace
+    re-materialization dominating their failure handling, re-arm condition (ii) has fired: record it, do not
+    select a store or a substrate, and hand back for the container-class network-build decision. Do not decide
+    this branch before the measurements exist.
+  - >-
+    Complete findings.yaml as the CITED EVIDENCE RECORD: the comparative record over CD.27's five pinned
+    candidates (the two measured, and self_checkpointed_lambda_dynamodb, long_running_container and
+    hosted_cli_runner disposed on criteria and on the recorded exclusion, each with a reason), the audit's
+    decision rule applied verbatim, and the per-option W1-W8 disposition of ALL SEVEN CD.43 option_set members --
+    efs_mount and container_local_disk on the exclusion, and s3_express_one_zone, fsx_managed_filesystem,
+    lambda_ephemeral_tmp_10gb and git_as_store_commit_at_step_boundaries on criteria. W7 is coverage-case
+    completeness, so persona_to_ecs_task_handoff is disposed on criteria, never deleted.
+  - >-
+    Draft the THIN numbered Decision. Re-check the max header first (172 measured this session, so 173 unless a
+    concurrent PR claimed it). Content: the ruling (substrate + store), the EXCLUSION with its three recorded
+    reasons, the reversal conditions, the two boundary statements (EFS would eliminate hosted_cli_runner under
+    W2; the exclusion does NOT retire CD.27's ECS Run Task escape hatch), the ESB-06 residual with its follow-on
+    rec id, and the explicit entry-versus-evidence split addressed to CFG-07. Everything else -- the comparative
+    record, the measurements, the per-arm and per-option detail -- is CITED to findings.yaml, not restated.
+    Carry the metadata envelope (number, significance.value numbered_decision, and a justification naming the
+    rejected contract home) and the three required markers. MEASURE the drafted entry against 6,144 bytes by
+    splice-and-measure through scripts.decisions_md.iter_decision_sections before committing, and state the
+    measurement in the PR body.
+  - >-
+    Regenerate docs/decisions-index.json and run VP step 10 to print every headroom figure. Do NOT plan or
+    perform a compaction pass, and do not touch Decision 37.
+  - >-
+    Apply the roadmap edits as a set, never one site at a time: CD.43's selected_store AND its status AND its
+    canonical ratified shape, its detail prose compacted per Decision 147, its "Criteria-only discipline" point
+    re-grounded, and cost_projection.nat_contingency.applies_to re-grounded to name the exclusion. Re-ground
+    tests/esb_text_fix/test_workspace_store_criteria.py's two deferral-pinning tests in the SAME commit -- they
+    read the live roadmap and go red otherwise. Leave CD.27 at state pending and add no precondition_discharge
+    block to it; leave test_decision_scope_notes.py and test_t41_names_the_criteria_and_leaves_the_choice_open
+    untouched.
+  - >-
+    Obtain the execution-time human confirmation, then run the ops portal write for the Decision and
+    `ops_data_portal --backfill-decisions-md`. Decision 105 reserves these writes for /implement behind this
+    gate; never at plan time. File the ESB-06 follow-on rec through the portal and record its id in the Decision.
+    Graduate exactly the four `graduate`-dispositioned VP steps into config/agent/verification_registry/registry.yaml,
+    verifying each row's command runs green from the committed YAML and fails on revert (VF-05), then run VP step
+    11 to confirm the registry is still inside its 6,000-line budget.
+  - >-
+    TEARDOWN. Flip the flag false through the infra channel, let the destroy route to tf-gated-apply, and run VP
+    step 16's residual sweep. No spike resource survives the plan.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA
+    (Decision 55).
+  - >-
+    'Report: what was implemented, the measured comparison, which Gate-2 branch fired, the measured per-entry
+    byte figure against the 6,144 cap, the registry headroom after graduation, and verification results.'
+work_areas: []
+rollback: >-
+  Every spike resource is count-gated behind one default-false flag, so infrastructure rollback is flipping the
+  flag false and letting the destroy route through tf-gated-apply -- the same path teardown uses, with no bespoke
+  teardown to write. The three IAM classification-map edits and the three grant edits are additive and safe to
+  leave in place after teardown (they classify and permit a resource type that no longer exists, which the
+  discovery-driven gate simply stops asserting); reverting them is optional and, if done, must be done together
+  with the terraform or the coverage gate goes red. Rollback of the governance edits is a revert of the
+  DECISIONS.md and roadmap hunks plus an index regeneration and a revert of the re-grounded pytest -- those three
+  are coupled and must revert together, since the tests read the live roadmap. The ops portal Decision write, the
+  backfill and the ESB-06 rec filing are the non-revertible steps, which is why they are sequenced last, behind
+  the human confirmation gate, and after Gate 2 is known. If Gate 2 stops the plan, the Decision still lands as
+  the comparative record plus the fired re-arm condition, and only the CD.43 flip and its coupled sites are
+  withheld.
