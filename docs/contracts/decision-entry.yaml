@@ -31,7 +31,17 @@ contract:
   evaluator:
     check: validate_decision_entry_conformance
 
-amendment_log: []
+amendment_log:
+  - date: "2026-08-18"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      migration-step-5-index-skeleton (rec-3012): added size_governance.index_max_bytes (112000,
+      the third corpus ceiling alongside live_max_h2_headers/combined_max_bytes) and its
+      size_governance.lever_by_ceiling_matrix.index_max_bytes row; corrected the currency:
+      block's stale rec-3012 forward reference and the size_governance comment header's
+      misattribution of the bridge-raised live_max_h2_headers/combined_max_bytes figures to
+      Decision 134 (comment-only, non-parsed, included here for completeness).
 
 schema_version: 1
 
@@ -489,8 +499,9 @@ currency:
   # derived, per-live-entry classification of how directly an entry's content still governs,
   # projected onto docs/decisions-index.json by scripts.decisions_index and enforced by the
   # registered check scripts/checks/decisions/validate_decision_currency.py. Archive rows never
-  # carry this key -- projection-only on live rows (rec-3012 tracks eventual archive
-  # skeletonization; this plan does not thicken archive rows ahead of it).
+  # carry this key -- projection-only on live rows. rec-3012 (migration step 5) landed:
+  # scripts.decisions_index now skeletonizes every live:false row to eight stable keys, so an
+  # archive row was never at risk of carrying currency in the first place.
   values: [current, amended, superseded_pointer, superseded_compacted]
   derivation:
     # Precedence order (first match wins). scripts.decisions_md.derive_currency is the single
@@ -535,20 +546,35 @@ currency:
     Decision's monitored stanza would have provided.
 
 size_governance:
-  # Decision 134 / Decision-114 parity ceilings (enforced by
+  # live_max_h2_headers/combined_max_bytes ceilings (enforced by
   # scripts/checks/decisions/validate_decisions_size.py, both --pre and full tiers). Documented
   # here for authors. live_max_bytes (the Decision 145 stopgap raise, 400000 -> 500000) was
   # RETIRED by PLAN-decision-scout-bounded-retrieval: it existed solely to size the
   # decision-scout gate's whole-live-file read, and that read no longer happens (bounded index
   # triage plus targeted per-entry reads instead, see .claude/skills/decision-scout/SKILL.md).
   # The bounded-retrieval model plus the combined ceiling below are now the live-file backstop --
-  # live_max_bytes is implicitly <= combined_max_bytes minus archive bytes. Approaching either
-  # surviving ceiling is a signal to compact superseded bodies to pointer stubs (see compaction:
-  # above) or tighten per-entry authoring size, never to raise the ceiling -- archiving a live
-  # entry does NOT relieve combined_max_bytes (it only moves bytes between the two counted
-  # files). The validator constants are the SoT if these values ever drift from it again.
+  # live_max_bytes is implicitly <= combined_max_bytes minus archive bytes. NOT the Decision 134
+  # clause 2 / Decision 114 parity figures (those ratified 120 headers / 700,000 combined bytes,
+  # restated unchanged at Decision 160 point 4): both figures below are
+  # docs/plans/PLAN-decision-ceiling-bridge.yaml's recorded human override of a decision-scout
+  # BLOCK verdict, carried with no numbered Decision behind them. Approaching either surviving
+  # ceiling is a signal to compact superseded bodies to pointer stubs (see compaction: above) or
+  # tighten per-entry authoring size, never a further raise -- both ceilings already carry the
+  # bridge's one recorded exception, and archiving a live entry does NOT relieve
+  # combined_max_bytes (it only moves bytes between the two counted files). The validator
+  # constants are the SoT if these values ever drift from it again.
   live_max_h2_headers: 132
   combined_max_bytes: 780000
+  # index_max_bytes (rec-3012 / migration step 5): the third corpus ceiling, alongside the two
+  # above -- docs/decisions-index.json's committed byte size, enforced by
+  # tests/test_decisions_index.py::TestCommittedIndexSizePin's _COMMITTED_INDEX_MAX_BYTES (the
+  # validator constant is the SoT; this key mirrors it, pinned together by
+  # tests/checks/decisions/test_validate_decisions_index_freshness.py). Derived at the 120-header
+  # RATIFIED TARGET (Decision 134 clause 2), not the 132 enforced above -- deliberately: 132 is
+  # the bridge's unratified raise, and deriving against it would bank that raise permanently
+  # into this pin. THE PIN IS NEVER RAISED (operator's standing position): when it binds, the
+  # response is archival (Decision 146) or collapsing entries into contracts, never a raise.
+  index_max_bytes: 112000
   per_entry_size_norm:
     cap_bytes: 6144
     measured_as: >-
@@ -568,6 +594,13 @@ size_governance:
     combined_max_bytes: >-
       Compaction to pointer stubs (Decision 149) -- the only lever that reduces combined bytes;
       archival does NOT (it only moves bytes between the two counted files).
+    index_max_bytes: >-
+      Archival (Decision 146) -- worth ~507 bytes/entry moved as of rec-3012 (migration step 5),
+      up from ~69 before it, since a moved entry becomes a skeleton instead of staying
+      full-weight. Archive-row skeletonization itself (rec-3012) was the one-time structural
+      reclaim on the existing archive population. Compaction (Decision 149) does NOT bend this
+      ceiling -- a compacted stub stays a live row, so its triage_excerpt/category_tags/currency
+      keys are untouched.
     accrual_rate: >-
       per_entry_size_norm above -- the only lever that bends how fast combined bytes grow per new
       entry, not the existing stock.

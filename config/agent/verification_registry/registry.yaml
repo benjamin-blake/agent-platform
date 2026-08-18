@@ -6129,3 +6129,39 @@ entries:
     check_spec:
       node_id: >-
         tests/checks/verification/test_validate_handoff_full_tier.py::TestDeclarationAdoption
+  - check_id: decisions-index-archive-rows-are-skeletons
+    primitive_slot: command_exit_zero
+    guard_target: docs/decisions-index.json
+    guard_symbol: null
+    plan_slug: migration-step-5-index-skeleton
+    graduated_at: "2026-08-18"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import json; d=json.load(open('docs/decisions-index.json'))['decisions']; SKEL={'number','title','status','decided_date','supersedes','superseded_by','amends','live'}; FULL=SKEL|{'triage_excerpt','triage_excerpt_source','triage_excerpt_truncated','category_tags','currency'}; a=[r for r in d if not r['live']]; l=[r for r in d if r['live']]; assert a and l, (len(a),len(l)); bad=[r['number'] for r in a if set(r)!=SKEL]; assert not bad, ('archive row not a skeleton',bad); lbad=[r['number'] for r in l if set(r)!=FULL]; assert not lbad, ('live row lost a key',lbad); ar=len(json.dumps(a))/len(a); lr=len(json.dumps(l))/len(l); assert ar < 0.5*lr, ('archive rows not materially thinner',ar,lr); print('SKELETON_SHAPE ok')
+  - check_id: decisions-index-pin-112000-fresh-and-under
+    primitive_slot: command_exit_zero
+    guard_target: docs/decisions-index.json
+    guard_symbol: null
+    plan_slug: migration-step-5-index-skeleton
+    graduated_at: "2026-08-18"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import json,pathlib,re; from scripts.decisions_index import build_index; pin=int(re.search(r'_COMMITTED_INDEX_MAX_BYTES = (\S+)', pathlib.Path('tests/test_decisions_index.py').read_text()).group(1).replace('_','')); assert pin==112000, pin; p=pathlib.Path('docs/decisions-index.json'); n=len(p.read_bytes()); assert n<=pin, (n,pin); assert json.loads(p.read_text())==build_index(), 'committed index is stale'; print('PIN ok', n, 'of', pin)
+  - check_id: decision-entry-index-ceiling-homed
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/decision-entry.yaml
+    guard_symbol: null
+    plan_slug: migration-step-5-index-skeleton
+    graduated_at: "2026-08-18"
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import yaml,pathlib,re; y=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text()); c=y['size_governance']; pin=int(re.search(r'_COMMITTED_INDEX_MAX_BYTES = (\S+)', pathlib.Path('tests/test_decisions_index.py').read_text()).group(1).replace('_','')); assert c['index_max_bytes']==pin, (c['index_max_bytes'],pin); assert 'index_max_bytes' in c['lever_by_ceiling_matrix'], sorted(c['lever_by_ceiling_matrix']); log=y.get('amendment_log') or []; assert log, 'Class D amendment_log[] not appended'; assert log[-1]['change_class']=='field_add', log[-1]; print('CONTRACT_HOMED ok', c['index_max_bytes'])

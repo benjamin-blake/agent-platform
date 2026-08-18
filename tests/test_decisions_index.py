@@ -29,6 +29,10 @@ from scripts.decisions_index import (
 from scripts.decisions_md import decision_header_numbers, parse_decisions_md, status_is_superseded
 
 
+def _live_rows(idx: dict) -> list[dict]:
+    return [entry for entry in idx["decisions"] if entry["live"]]
+
+
 class TestDeterminism:
     """VP step 1: two consecutive build_index() calls must be byte-identical."""
 
@@ -47,27 +51,35 @@ class TestDeterminism:
             assert not (volatile & entry.keys()), f"dec-{entry['number']} leaked volatile field(s): {volatile & entry.keys()}"
 
     def test_entry_shape_is_the_stable_projection_only(self) -> None:
-        """PLAN-decision-corpus-currency: `currency` is a live-only key, so the stable shape now
-        branches on `live` rather than asserting one fixed key set for every entry."""
+        """rec-3012 / migration step 5: live:false rows regress to the eight skeleton keys;
+        live:true rows keep the four retrieval-aid keys plus `currency` layered on top."""
         idx = build_index()
-        base_keys = {
-            "number",
-            "title",
-            "status",
-            "decided_date",
-            "supersedes",
-            "superseded_by",
-            "amends",
-            "live",
-            "triage_excerpt",
-            "triage_excerpt_source",
-            "triage_excerpt_truncated",
-            "category_tags",
-        }
-        live_keys = base_keys | {"currency"}
+        skeleton_keys = {"number", "title", "status", "decided_date", "supersedes", "superseded_by", "amends", "live"}
+        retrieval_aid_keys = {"triage_excerpt", "triage_excerpt_source", "triage_excerpt_truncated", "category_tags"}
+        live_keys = skeleton_keys | retrieval_aid_keys | {"currency"}
         for entry in idx["decisions"]:
-            expected_keys = live_keys if entry["live"] else base_keys
+            expected_keys = live_keys if entry["live"] else skeleton_keys
             assert set(entry.keys()) == expected_keys, entry["number"]
+
+
+class TestSkeletonArchiveRows:
+    """rec-3012 / migration step 5: live:false rows project the eight stable keys only -- never
+    the five retrieval-aid keys decision-scout only reads for live:true rows (VP step 1)."""
+
+    def test_archive_rows_are_skeletons(self) -> None:
+        idx = build_index()
+        skel = {"number", "title", "status", "decided_date", "supersedes", "superseded_by", "amends", "live"}
+        for entry in idx["decisions"]:
+            if not entry["live"]:
+                assert set(entry.keys()) == skel, entry["number"]
+
+    def test_archive_rows_cost_materially_less_than_live_rows(self) -> None:
+        idx = build_index()["decisions"]
+        archive = [e for e in idx if not e["live"]]
+        live = [e for e in idx if e["live"]]
+        archive_bpr = len(json.dumps(archive)) / len(archive)
+        live_bpr = len(json.dumps(live)) / len(live)
+        assert archive_bpr < 0.5 * live_bpr, (archive_bpr, live_bpr)
 
 
 class TestBothFilesCoverage:
@@ -301,7 +313,7 @@ class TestTriageExcerptIntegration:
 
     def test_every_entry_carries_the_three_fields(self) -> None:
         idx = build_index()
-        for entry in idx["decisions"]:
+        for entry in _live_rows(idx):
             assert "triage_excerpt" in entry
             assert "triage_excerpt_source" in entry
             assert "triage_excerpt_truncated" in entry
@@ -311,12 +323,12 @@ class TestTriageExcerptIntegration:
 
     def test_no_excerpt_exceeds_320_chars(self) -> None:
         idx = build_index()
-        for entry in idx["decisions"]:
+        for entry in _live_rows(idx):
             assert len(entry["triage_excerpt"]) <= 320
 
     def test_non_empty_excerpt_always_names_a_source(self) -> None:
         idx = build_index()
-        for entry in idx["decisions"]:
+        for entry in _live_rows(idx):
             if entry["triage_excerpt"]:
                 assert entry["triage_excerpt_source"] in {"Intent", "Problem", "Context", "Decision"}
             else:
@@ -325,10 +337,12 @@ class TestTriageExcerptIntegration:
     def test_empty_excerpt_set_matches_independent_rederivation(self) -> None:
         """Re-derive the residual (no-marker) set straight from parse_decisions_md rows,
         independent of build_index()'s own excerpt logic, and cross-check equality -- not a
-        hardcoded count."""
+        hardcoded count. Intersected with live_numbers since rederived_empty is drawn from BOTH
+        files, but the indexed side is now live-only (rec-3012 skeletonized archive rows)."""
         idx = build_index()
-        indexed_empty = {x["number"] for x in idx["decisions"] if not x["triage_excerpt"]}
+        indexed_empty = {x["number"] for x in _live_rows(idx) if not x["triage_excerpt"]}
         rows = parse_decisions_md()
+        live_numbers = {x["number"] for x in _live_rows(idx)}
         rederived_empty = {
             row["decision_id"]
             for row in rows
@@ -336,15 +350,16 @@ class TestTriageExcerptIntegration:
             and not (row.get("problem") or "").strip()
             and not (row.get("context") or "").strip()
             and not (row.get("decision_text") or "").strip()
-        }
+        } & live_numbers
         assert indexed_empty == rederived_empty
 
     def test_excerpt_coverage_is_high(self) -> None:
-        """At most 4 entries lack any quotable marker (measured 135/139 at authoring time) --
-        expressed as a coverage floor, not an exact count, so new decisions don't break this."""
+        """At most 4 LIVE entries lack any quotable marker (measured 121/125 at authoring time,
+        rec-3012 having narrowed both sides from the pre-skeletonization 135/139) -- expressed as
+        a coverage floor, not an exact count, so new decisions don't break this."""
         idx = build_index()
-        total = len(idx["decisions"])
-        with_excerpt = sum(1 for x in idx["decisions"] if x["triage_excerpt"])
+        total = len(_live_rows(idx))
+        with_excerpt = sum(1 for x in _live_rows(idx) if x["triage_excerpt"])
         assert with_excerpt >= total - 4
 
     def test_truncated_flag_matches_source_text_length(self) -> None:
@@ -352,7 +367,7 @@ class TestTriageExcerptIntegration:
         field's raw length, never trusting the generator's own flag in isolation."""
         idx = build_index()
         rows_by_id = {row["decision_id"]: row for row in parse_decisions_md()}
-        for entry in idx["decisions"]:
+        for entry in _live_rows(idx):
             if not entry["triage_excerpt_source"]:
                 continue
             field_by_source = {
@@ -432,13 +447,13 @@ class TestCategoryTagsIntegration:
 
     def test_every_entry_carries_a_list_of_strings(self) -> None:
         idx = build_index()
-        for entry in idx["decisions"]:
+        for entry in _live_rows(idx):
             assert isinstance(entry["category_tags"], list)
             assert all(isinstance(t, str) for t in entry["category_tags"])
 
     def test_category_tags_is_sorted_and_deduped_for_every_entry(self) -> None:
         idx = build_index()
-        for entry in idx["decisions"]:
+        for entry in _live_rows(idx):
             tags = entry["category_tags"]
             assert tags == sorted(set(tags)), f"dec-{entry['number']} category_tags not sorted/deduped: {tags}"
 
@@ -455,56 +470,36 @@ class TestCategoryTagsIntegration:
 
 
 class TestCommittedIndexSizePin:
-    """AC1 / VP step 1 graduation candidate 'decisions-index-live-count-matches-file': the
-    committed docs/decisions-index.json stays within a re-derived byte pin, so the figure
-    recorded in the governing Decision cannot silently drift upward without review.
+    """AC1 / VP step 2: the committed docs/decisions-index.json stays within a re-derived byte
+    pin, so the figure recorded in the governing Decision cannot silently drift upward.
 
-    RE-DERIVED (Decision 166 point 9, PLAN-size-gov-engine): the prior 110,000-byte pin
-    (Decision 160 point 9) had only 236 bytes of headroom left before Decision 166's own
-    entry existed -- exhausted by ordinary corpus growth, not by any defect. Decision 160
-    point 9 itself named this outcome as an open question: "A future owner should reassess
-    whether this indirect bound remains adequate as the corpus grows past the header
-    ceiling's current runway." This is that reassessment.
+    RE-DERIVED DOWNWARD by migration step 5 of audits/contract-first-governance-33c8667.yaml,
+    per Decision 166 point 9's rec-3012 deferral and reversal condition (g): rec-3012 landed
+    (archive rows are skeletons now), so the archive term shrinks and this bound falls with it
+    -- mirrored at docs/contracts/decision-entry.yaml's size_governance.index_max_bytes.
 
-    Derivation (measured on this tree, indent=2 pretty-printed bytes -- the format the
-    committed file is actually written in):
-      - live term:    120 (live_max_h2_headers ceiling, decision-entry.yaml) x 764 bytes/row
-                       (measured: 119 live rows cost 90,857 bytes net of the {decisions,metadata}
-                       wrapper = 763.5 bytes/row, rounded up) = 91,680 bytes.
-      - archive term: 54 rows (2x the current 27-row archive population -- a multi-quarter
-                       buffer; archival is a rare, operator-disposed event per Decision 146,
-                       not a steady drip) x 726 bytes/row (measured: 27 archive rows cost
-                       19,583 bytes net of wrapper = 725.3 bytes/row, rounded up) = 39,204 bytes.
-      - total: 91,680 + 39,204 = 130,884 bytes, rounded up to 131,000 for measurement variance
-        (unicode, trailing newline, key-order drift).
+    Derivation (measured on this tree, indent=2 pretty-printed bytes): live term 120 (the
+    RATIFIED target, Decision 134 clause 2 / Decision 160 point 4 -- not 132, the unratified
+    PLAN-decision-ceiling-bridge ceiling) x 796 bytes/row = 95,520; archive term 54 skeleton
+    rows x 289 bytes/row = 15,606; total 111,126, rounded up to 112,000. Deriving at 132 would
+    have banked the bridge's temporary raise permanently (121,000) -- declined.
 
-    This is a stopgap, not a permanent fix, in the Decision 145 sense -- EXCEPT that the
-    named successor already exists and is dated: docs/decisions-index.json is a T1.5-INTERIM
-    surface (Decision 160 point 13: "This arrangement is INTERIM, not the T1.5 portal
-    cutover"). decision-scout's Phase 1 index read (its sole consumer) is scheduled for
-    removal by T1.5 c1 (that item's own exit criteria: "T1.5 c1 owns swapping its bounded
-    index-plus-targeted-reads mechanism for a queried tool call") once the DuckLake
-    ops-decisions portal cutover lands; T1.5 itself is STRATEGIC and CD.17-frozen (AGENTS.md
-    Temporary Operational Constraints), so this pin persists at least that long. rec-3012
-    (filed alongside Decision 166) owns thinning archive rows to skeletons (dropping
-    triage_excerpt/category_tags, which decision-scout never reads for live:false rows) --
-    once landed, the archive term above shrinks and this pin has room to fall back down,
-    never to be treated as a floor.
+    Consequence: a TWO-entry window. From the regenerated 107,367 B at 795.88 B/live row, the
+    pin fails starting at +6 live entries (112,142 B); the header ceiling (measured 125/132
+    today) only fails at +8 -- across +6 and +7 the byte pin is the sole guard to fire.
 
-    The 120-header live_max_h2_headers ceiling (Decision 134 clause 2) is measured separately
-    at 119/120 at this entry's time -- binding within ONE more live entry, not two, regardless
-    of this byte pin. This test does not relieve that ceiling; only an archival wave under
-    Decision 146 does, and queuing one is out of this plan's scope (noted in
-    docs/plans/PLAN-size-gov-engine.yaml Context, not actioned here).
+    THE PIN IS NEVER RAISED (operator's standing position, mirrored in the contract). When it
+    binds: archival under Decision 146, or collapsing entries into contracts -- never a raise,
+    and never a floor either: a further-shrunk archive term lets this bound fall again.
     """
 
-    _COMMITTED_INDEX_MAX_BYTES = 131_000
+    _COMMITTED_INDEX_MAX_BYTES = 112_000
 
     def test_committed_index_under_re_derived_byte_pin(self) -> None:
         size = len(_EXPORT_PATH.read_bytes())
         assert size <= self._COMMITTED_INDEX_MAX_BYTES, (
             f"committed index is {size} bytes, over the {self._COMMITTED_INDEX_MAX_BYTES:,}-byte pin "
-            "(Decision 166 point 9 re-derivation)"
+            "(re-derived downward, migration step 5 / Decision 166 point 9)"
         )
 
 
