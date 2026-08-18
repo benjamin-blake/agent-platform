@@ -74,4 +74,12 @@ ENTRIES: tuple[Entry, ...] = (
         pre=True,
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_root_scoped_diff_base",
+        module="scripts.checks.hygiene.validate_root_scoped_diff_base",
+        attr="validate_root_scoped_diff_base",
+        pre=True,
+        pre_globs=("scripts/checks/**",),
+        full_segment="full_after_lint",
+    ),
 )

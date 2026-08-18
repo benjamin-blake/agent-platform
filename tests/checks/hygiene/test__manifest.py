@@ -46,3 +46,13 @@ class TestValidateCheckAccountingDispatchedInBothTiers:
         full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
         assert "validate_check_accounting" in pre_names
         assert "validate_check_accounting" in full_names
+
+
+class TestValidateRootScopedDiffBaseDispatchedInBothTiers:
+    """rec-3166: the new guard is actually dispatched in both tiers, not merely defined."""
+
+    def test_registered_in_both_pre_and_full_sequence(self) -> None:
+        pre_names = {step.name for step in registry.pre_sequence() if step.kind == "check"}
+        full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "validate_root_scoped_diff_base" in pre_names
+        assert "validate_root_scoped_diff_base" in full_names

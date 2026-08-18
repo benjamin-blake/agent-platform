@@ -1,19 +1,15 @@
 """Tests for validate_graduation_completeness() (T3.21, VF-05 enforcement, re-keyed to content
 resolution -- Decision 148/plan-resolution-content-keyed).
 
-TestPlanPrLeg exercises the plan-PR leg via the changed_files/root injection seams (no real
-git needed for most cases; one net-new case uses a throwaway git repo, mirroring
-tests/test_verification_graduation.py's `refs/remotes/origin/main` pattern). TestImplementPrLeg,
-TestWaiver, and TestContentKeyedResolution exercise the implement leg, which resolves plans via
-`_common.resolve_declared_plans` (implementation_declared, content-keyed) and reads the registry
-baseline via the seamed baseline_registry_reader (avoiding a second real-git fixture for registry
-content).
-"""
+TestPlanPrLeg exercises the plan-PR leg via changed_files/root injection (a throwaway git repo
+for net-new cases). TestImplementPrLeg/TestWaiver/TestContentKeyedResolution exercise the
+implement leg (_common.resolve_declared_plans + the seamed baseline_registry_reader)."""
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -110,10 +106,7 @@ class TestPlanPrLeg:
         rel = _write_plan(
             tmp_path,
             "gc-complete",
-            [
-                _step(1, graduation="graduate", graduation_check_id="gc-complete-check"),
-                _step(2, graduation="not-applicable"),
-            ],
+            [_step(1, graduation="graduate", graduation_check_id="gc-complete-check"), _step(2, graduation="not-applicable")],
         )
         failed: list[str] = []
         validate_graduation_completeness(failed, changed_files=[rel], root=tmp_path)
@@ -157,11 +150,56 @@ class TestPlanPrLeg:
         validate_graduation_completeness(failed, changed_files=[rel], root=tmp_path)
         assert failed == []
 
+    def test_push_event_trigger_root_scoped_base_still_detects_net_new(self, tmp_path: Path, monkeypatch) -> None:
+        """rec-3166 (push event): pre-fix, push_context_base() read the DECOY `_common.ROOT` instead of `root`."""
+        decoy = tmp_path / "decoy"
+        _init_repo(decoy)
+        (decoy / "d.txt").write_text("decoy\n", encoding="utf-8")
+        _commit_all(decoy, "decoy first")
+        (decoy / "d2.txt").write_text("decoy2\n", encoding="utf-8")
+        _commit_all(decoy, "decoy second")
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        base_sha = _commit_all(repo, "base")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+        rel = _write_plan(repo, "gc-net-new-push", [_step(1), _step(2)])
+        _commit_all(repo, "add plan")
+
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", decoy):
+            validate_graduation_completeness(failed, changed_files=[rel], root=repo)
+        assert any("lack a graduation disposition" in f for f in failed)
+
+    def test_on_main_trigger_root_scoped_base_still_detects_net_new(self, tmp_path: Path) -> None:
+        """rec-3166 (on-main trigger): `root` itself is on main with that state; ROOT is a DECOY."""
+        decoy = tmp_path / "decoy"
+        _init_repo(decoy)
+        (decoy / "d.txt").write_text("decoy\n", encoding="utf-8")
+        _commit_all(decoy, "decoy commit")
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, ["init", "-q", "-b", "main"])
+        _git(repo, ["config", "user.email", "test@example.com"])
+        _git(repo, ["config", "user.name", "Test"])
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        base_sha = _commit_all(repo, "base")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", base_sha])
+        rel = _write_plan(repo, "gc-net-new-onmain", [_step(1), _step(2)])
+        after_sha = _commit_all(repo, "add plan")
+        _git(repo, ["update-ref", "refs/remotes/origin/main", after_sha])  # merge-base(origin/main, HEAD) == HEAD
+
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", decoy):
+            validate_graduation_completeness(failed, changed_files=[rel], root=repo)
+        assert any("lack a graduation disposition" in f for f in failed)
+
 
 class _ImplementFixture:
-    """Shared repo builder for the implement leg: a git repo with a base commit (origin/main)
-    then a second commit that DECLARES the plan (implementation_declared: true) -- the
-    resolvable, content-keyed shape. Registry state is written alongside."""
+    """Repo builder: a base commit (origin/main), then a commit declaring the plan."""
 
     def build(
         self,
@@ -234,8 +272,7 @@ class TestImplementPrLeg:
         assert failed == []
 
     def test_undeclared_plan_is_noop_pass(self, tmp_path: Path) -> None:
-        """A plan in the diff whose implementation_declared is false resolves nothing -- the
-        implement leg no-ops (plan-only PR, not yet implemented)."""
+        """implementation_declared=false resolves nothing -- plan-only PR, not yet implemented."""
         rel = _write_plan(
             tmp_path, "gc-undeclared", [_step(1, graduation="graduate", graduation_check_id="gc-undeclared-check")]
         )
@@ -273,10 +310,7 @@ class TestWaiver:
 
     def test_not_applicable_requires_no_registry_row(self, tmp_path: Path) -> None:
         repo, rel = self.fixture.build(
-            tmp_path,
-            "gc-not-applicable-only",
-            [_step(1, graduation="not-applicable")],
-            registry_entries=[],
+            tmp_path, "gc-not-applicable-only", [_step(1, graduation="not-applicable")], registry_entries=[]
         )
         failed: list[str] = []
         validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
@@ -284,8 +318,7 @@ class TestWaiver:
 
 
 class TestObligationAwareDiagnostics:
-    """Schema-v4 obligations reuse the existing (plan_slug, check_id) linkage -- the only
-    addition is naming which declared behaviors lose their guard when the row is missing."""
+    """Schema-v4 obligations name which declared behaviors lose their guard when a row is missing."""
 
     fixture = _ImplementFixture()
     _SELECTOR = "tests/test_example.py::test_behavior"
@@ -330,11 +363,7 @@ class TestObligationAwareDiagnostics:
 
     def test_missing_row_without_obligations_keeps_the_original_diagnostic(self, tmp_path: Path) -> None:
         repo, rel = self.fixture.build(
-            tmp_path,
-            "gc-obligation-absent",
-            self._steps(),
-            registry_entries=[],
-            plan_overrides=self._overrides([]),
+            tmp_path, "gc-obligation-absent", self._steps(), registry_entries=[], plan_overrides=self._overrides([])
         )
         failed: list[str] = []
         validate_graduation_completeness(failed, changed_files=[rel], root=repo, baseline_registry_reader=lambda r: [])
@@ -343,8 +372,7 @@ class TestObligationAwareDiagnostics:
 
 
 class TestLoadErrorHandling:
-    """A schema-invalid plan is validate_plan_documents' verdict to report, not this check's;
-    an import failure is a genuine error and stays fail-loud (Decision 55)."""
+    """A schema error is validate_plan_documents' verdict; an import failure stays fail-loud (Decision 55)."""
 
     fixture = _ImplementFixture()
 
@@ -402,8 +430,7 @@ _MALFORMED_REGISTRIES = ["{", "- not a mapping\n", "entries: 5\n"]
 
 
 class TestRegistryReaders:
-    """Both readers degrade to an empty list rather than raising -- a missing or malformed
-    registry must not wedge the check, it must simply contribute no baseline rows."""
+    """Both readers degrade to an empty list rather than raising on a missing/malformed registry."""
 
     def test_current_entries_missing_file_is_empty(self, tmp_path: Path) -> None:
         assert _current_registry_entries(tmp_path) == []
@@ -454,16 +481,12 @@ class TestRegistryReaders:
 
 
 class TestContentKeyedResolution:
-    """The defect this re-key closes: a checkpoint-only commit-message branch still resolves for
-    the implement leg (resolution is content-keyed, not commit-message-keyed). Also covers the
-    single terminal Decision 170 declaration and the push-aware registry baseline."""
+    """Resolution is content-keyed, not commit-message-keyed; also single-declaration + push-aware base."""
 
     fixture = _ImplementFixture()
 
     def test_checkpoint_only_commit_message_still_resolves_for_implement_leg(self, tmp_path: Path) -> None:
-        """Red before this plan: a checkpoint-only branch with a declaration resolved nothing
-        and no-opped (commit-subject resolution found no feat({slug}) subject). Green after:
-        the missing registry row is genuinely detected."""
+        """A checkpoint-only commit subject (no feat({slug}) match) must not block resolution."""
         repo, rel = self.fixture.build(
             tmp_path,
             "gc-checkpoint-only",
@@ -477,10 +500,7 @@ class TestContentKeyedResolution:
 
     def test_declaration_enforced_when_a_plan_resolves(self, tmp_path: Path) -> None:
         repo, rel = self.fixture.build(
-            tmp_path,
-            "gc-declared-enforced",
-            [_step(1, graduation="not-applicable")],
-            registry_entries=[],
+            tmp_path, "gc-declared-enforced", [_step(1, graduation="not-applicable")], registry_entries=[]
         )
         failed: list[str] = []
         registry.pop_declaration()
@@ -530,10 +550,8 @@ class TestContentKeyedResolution:
     def test_registry_baseline_and_resolution_stay_correct_on_simulated_post_merge_main(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Both diff baselines must be push-aware, not hardcoded to "origin/main" (Decision 159
-        class): origin/main is pinned to HEAD here (simulating post-merge main) while
-        GITHUB_EVENT_BEFORE names the true pre-merge commit; a hardcoded baseline would equal
-        HEAD and falsely report the registry row missing."""
+        """Both diff baselines must be push-aware (Decision 159): origin/main==HEAD here,
+        GITHUB_EVENT_BEFORE names the true pre-merge commit."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         (repo / "README.md").write_text("base\n", encoding="utf-8")
@@ -542,10 +560,7 @@ class TestContentKeyedResolution:
         slug = "gc-post-merge-main"
         cid = "gc-post-merge-main-check"
         rel = _write_plan(
-            repo,
-            slug,
-            [_step(1, graduation="graduate", graduation_check_id=cid)],
-            {"implementation_declared": True},
+            repo, slug, [_step(1, graduation="graduate", graduation_check_id=cid)], {"implementation_declared": True}
         )
         _write_registry(
             repo,
@@ -564,6 +579,13 @@ class TestContentKeyedResolution:
 
         monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
         monkeypatch.setenv("GITHUB_EVENT_BEFORE", before_sha)
+
+        # De-vacuum (rec-3166 second defect): assert on the DERIVED base itself, not only on
+        # failed == [] -- a wrong (real-repo) base would make every git show/diff fail inside
+        # the fixture repo, which also happens to yield failed == [] for the wrong reason.
+        from scripts.checks import _common
+
+        assert _common.push_context_base(root=repo) == before_sha
 
         failed: list[str] = []
         validate_graduation_completeness(failed, changed_files=[rel], root=repo)

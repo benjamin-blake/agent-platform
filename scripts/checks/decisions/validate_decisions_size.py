@@ -81,6 +81,22 @@ _PER_ENTRY_CAP_HARD_FAIL_CITATION = (
 )
 
 
+def _new_entries_examined_count(root, baseline_numbers: set[int]) -> int:
+    """Count of NEW (non-baseline) decision entries the per-entry cap sub-check evaluated --
+    mirrors `_per_entry_cap_failures`'s own new-vs-baseline scope, for the Decision 170
+    declaration on the fall-through exit path."""
+    count = 0
+    for rel in ("docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"):
+        path = root / rel
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8", errors="replace")
+        for m, _block in iter_decision_sections(content):
+            if int(m.group(1)) not in baseline_numbers:
+                count += 1
+    return count
+
+
 def _per_entry_cap_failures(root, baseline_numbers: set[int]) -> list[str]:
     """HARD-FAIL (Decision 167 clause 3's dated pre-commitment, fired by migration step 3) for
     each NEW entry (absent from baseline_numbers) over the per-entry authoring cap. Historical
@@ -133,6 +149,12 @@ def validate_decisions_size(
     default (production) root skips it whenever this
     check's own root equals _common.ROOT AND neither DECISIONS file changed in this diff, since
     this check runs UNGATED on every --pre invocation and the git baseline read is not free.
+
+    Composes exactly ONE terminal Decision 170 declaration on each of its five reachable exit
+    paths: a missing live or archive file `skipped()`s (could not examine); the cost-gated
+    early return `examined(0, ...)`s (definitively zero new entries to check, not an unmet
+    precondition); an unreachable diff base for the per-entry cap `skipped()`s; the
+    fall-through `examined(N, ...)`s the new entries actually checked against the cap.
     """
     print("\n=== DECISIONS size governance ===")
 
@@ -146,10 +168,12 @@ def validate_decisions_size(
     if not live_path.exists():
         print("  FAIL: docs/DECISIONS.md not found")
         failed.append("DECISIONS size governance")
+        registry.skipped("docs/DECISIONS.md not found")
         return
     if not archive_path.exists():
         print("  FAIL: docs/DECISIONS_ARCHIVE.md not found")
         failed.append("DECISIONS size governance")
+        registry.skipped("docs/DECISIONS_ARCHIVE.md not found")
         return
 
     live_text = live_path.read_text(encoding="utf-8")
@@ -164,15 +188,18 @@ def validate_decisions_size(
     else:
         print("  PASS: DECISIONS.md / DECISIONS_ARCHIVE.md size within ceiling.")
 
-    if using_default_root and not (set(_common.get_changed_files()) & {"docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"}):
+    if using_default_root and not (set(_common.get_changed_files(root)) & {"docs/DECISIONS.md", "docs/DECISIONS_ARCHIVE.md"}):
+        registry.examined(0, unit="new_decision_entries")
         return
 
     baseline_numbers = baseline_reader(root)
     if baseline_numbers is None:
         print("  (per-entry cap: SKIP, origin/main unreachable.)")
+        registry.skipped("origin/main unreachable")
         return
     per_entry_failures = _per_entry_cap_failures(root, baseline_numbers)
     for failure in per_entry_failures:
         print(failure)
     if per_entry_failures:
         failed.append("DECISIONS size governance")
+    registry.examined(_new_entries_examined_count(root, baseline_numbers), unit="new_decision_entries")

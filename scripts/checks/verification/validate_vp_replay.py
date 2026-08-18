@@ -213,7 +213,7 @@ def validate_vp_replay(failed: list[str], changed_files: list[str] | None = None
     resolution (plan-only defers, implement leg replays -- see module docstring).
 
     changed_files / root are test/dogfood injection seams -- default to
-    _common.get_changed_files() (vs origin/main) and _common.ROOT respectively.
+    _common.get_changed_files(root) (vs origin/main) and _common.ROOT respectively.
 
     Composes exactly ONE terminal Decision 170 declaration (docs/contracts/check-accounting.yaml):
     no plan present in the diff at all is an empty domain (examined(0), never skipped, since the
@@ -223,7 +223,7 @@ def validate_vp_replay(failed: list[str], changed_files: list[str] | None = None
     """
     print("\n=== Interactive VP replay (T3.15 c2, VF-01) ===")
     root = root if root is not None else _common.ROOT
-    changed = changed_files if changed_files is not None else _common.get_changed_files()
+    changed = changed_files if changed_files is not None else _common.get_changed_files(root)
 
     plan_files = _common.plan_paths_from_changed(changed)
     if not plan_files:
@@ -238,7 +238,7 @@ def validate_vp_replay(failed: list[str], changed_files: list[str] | None = None
         registry.skipped("diff base unreachable")
         return
 
-    base = _common.push_context_base() or "origin/main"
+    base = _common.push_context_base(root) or "origin/main"
     resolved = _common.resolve_declared_plans(changed, root, base)
     _plan_only_pr_leg(plan_files, root, set(resolved))
     _implement_pr_leg(root, resolved, failed)

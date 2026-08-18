@@ -94,6 +94,72 @@ class TestCommonPrimitives:
 
         assert set(entries) == {("M", "a.py"), ("D", "scripts/gone.py"), ("??", "new_thing.py")}
 
+    def test_get_changed_files_root_param_scopes_cwd_and_existence_filter(self, tmp_path: Path) -> None:
+        """rec-3166: passing root= must scope every subprocess cwd AND the existence filter to
+        the injected root, never to ROOT (patched to a different, decoy directory here)."""
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        injected = tmp_path / "injected"
+        injected.mkdir()
+        (injected / "a.py").write_text("x = 1\n", encoding="utf-8")
+
+        seen_cwds: list[Path] = []
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            seen_cwds.append(kwargs.get("cwd"))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "a.py\n"
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run), patch("scripts.checks._common.ROOT", decoy):
+            files = _common.get_changed_files(root=injected)
+        assert files == ["a.py"]
+        assert all(cwd == injected for cwd in seen_cwds)
+
+    def test_get_status_aware_diff_root_param_scopes_cwd_and_existence_filters(self, tmp_path: Path) -> None:
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        injected = tmp_path / "injected"
+        injected.mkdir()
+        (injected / "new_thing.py").write_text("x = 2\n", encoding="utf-8")
+
+        seen_cwds: list[Path] = []
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            seen_cwds.append(kwargs.get("cwd"))
+            result = MagicMock()
+            result.returncode = 0
+            if cmd[:2] == ["git", "merge-base"]:
+                result.stdout = "deadbeef\n"
+            elif cmd[:2] == ["git", "diff"]:
+                result.stdout = ""
+            elif cmd[:2] == ["git", "ls-files"]:
+                result.stdout = "new_thing.py\n"
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run), patch("scripts.checks._common.ROOT", decoy):
+            entries = _common.get_status_aware_diff(root=injected)
+        assert entries == [("??", "new_thing.py")]
+        assert all(cwd == injected for cwd in seen_cwds)
+
+    def test_get_changed_files_nonexistent_root_raises(self) -> None:
+        """Decision 55 fail-loud: a nonexistent injected root must never silently degrade to
+        reading the real repository (the pre-fix rec-3166 behaviour)."""
+        with pytest.raises(FileNotFoundError):
+            _common.get_changed_files(root=Path("/nonexistent-root-rec-3166"))
+
+    def test_get_status_aware_diff_nonexistent_root_raises(self) -> None:
+        with pytest.raises(FileNotFoundError):
+            _common.get_status_aware_diff(root=Path("/nonexistent-root-rec-3166"))
+
+    def test_push_context_base_nonexistent_root_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+        with pytest.raises(FileNotFoundError):
+            _common.push_context_base(root=Path("/nonexistent-root-rec-3166"))
+
     def test_get_status_aware_diff_merge_base_failure_fallback(self, tmp_path: Path) -> None:
         def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
             result = MagicMock()
