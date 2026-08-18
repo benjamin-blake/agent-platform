@@ -9,6 +9,11 @@ would surface the right decision. This is a proxy, not the real measurement: VP 
 scout dispatch (comparing whole-file vs bounded CITE/SPIRIT sets across the same probe briefs) is
 what actually proves recall did not regress.
 
+Scored against the LIVE projection only (migration step 5 of
+audits/contract-first-governance-33c8667.yaml): rec-3012 skeletonized live:false rows, dropping
+triage_excerpt, and decision-scout's own Phase 1 triage already filters to live:true before any
+downstream read -- this harness's population matches the scout's, not the raw committed file.
+
 The `pg_dump_backup` probe is the one required to NOT share vocabulary with its target: its
 keywords appear nowhere in Decision 100's title, only in its triage_excerpt (the Problem-marker
 fallback) -- proving the excerpt field, not the title alone, carries the discriminating signal.
@@ -37,7 +42,10 @@ _PROBES: tuple[tuple[str, tuple[str, ...], int, bool], ...] = (
 
 
 def _load_index() -> list[dict[str, Any]]:
-    return json.loads(_INDEX_PATH.read_text(encoding="utf-8"))["decisions"]
+    """Live rows only -- migration step 5 skeletonized live:false rows out of triage_excerpt,
+    matching decision-scout's own Phase 1 filter (it never triages an archived entry)."""
+    entries = json.loads(_INDEX_PATH.read_text(encoding="utf-8"))["decisions"]
+    return [e for e in entries if e["live"]]
 
 
 def _score(entry: dict[str, Any], keywords: tuple[str, ...], *, title_only: bool = False) -> int:

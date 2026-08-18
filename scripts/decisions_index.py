@@ -29,9 +29,12 @@ Edge derivation:
 `significance` is a parse_decisions_md() row key (the envelope's routing claim dict, or {} when
 absent) that is DELIBERATELY NOT projected into docs/decisions-index.json -- it is parser-surfaced
 and check-read only (scripts.checks.decisions.validate_decision_entry_conformance), mirroring the
-index-only treatment of `intent`/`amends`/`title_supersedes` before them: the 131,000-byte index
-pin (Decision 166 point 9) grows with every projected field on every row, and significance is a
-per-entry authoring-time claim the index's consumers (decision-scout triage) have no use for.
+index-only treatment of `intent`/`amends`/`title_supersedes` before them: the docs/decisions-index.json
+byte pin (112,000 bytes as of migration step 5 of audits/contract-first-governance-33c8667.yaml,
+re-derived downward from Decision 166 point 9's original 131,000 per that point's rec-3012
+deferral and reversal condition (g); see tests/test_decisions_index.py for the derivation) grows
+with every projected field on every row, and significance is a per-entry authoring-time claim the
+index's consumers (decision-scout triage) have no use for.
 
 `live` derivation (PLAN-decision-scout-bounded-retrieval): whether the decision number is headed
 in docs/DECISIONS.md, via scripts.decisions_md.decision_header_numbers(paths=[docs/DECISIONS.md])
@@ -45,16 +48,23 @@ sets built ONCE per build_index() call from this generator's own supersedes_map 
 projections -- never recomputed per row. This generator never validates the derived value against
 docs/contracts/decision-entry.yaml's vocabulary; that is scripts.checks.decisions.
 validate_decision_currency's job (invariant I3), so check_index_freshness keeps failing cleanly on
-drift instead of this module surfacing an uncaught traceback on an unexpected value.
+drift instead of this module surfacing an uncaught traceback on an unexpected value. `currency`
+was already the narrowest of the five retrieval-aid keys; as of migration step 5 the other four
+(below) share its live-only scope, for the same reason (see next paragraph).
 
-`triage_excerpt` derivation: a <=320-char excerpt for the decision-scout bounded-retrieval SPIRIT
-lane (Decision 152 gate (ii) widened to admit a Decision-clause quote), fallback order Intent ->
-Problem -> Context (the parser's Rationale/Key details/Context extraction) -> Decision (the
-decision-body marker). `triage_excerpt_source` names which of the four supplied the excerpt (or
-"" when none of the four markers are present at all). `triage_excerpt_truncated` is True iff the
-source text exceeded 320 chars and was cut.
+`triage_excerpt` derivation, LIVE ROWS ONLY as of migration step 5 of
+audits/contract-first-governance-33c8667.yaml (decision-scout never reads it for an archived row,
+and the docs/decisions-index.json byte pin grows with every projected field on every row -- the
+same rationale this docstring already gives above for excluding `significance`): a <=320-char
+excerpt for the decision-scout bounded-retrieval SPIRIT lane (Decision 152 gate (ii) widened to
+admit a Decision-clause quote), fallback order Intent -> Problem -> Context (the parser's
+Rationale/Key details/Context extraction) -> Decision (the decision-body marker).
+`triage_excerpt_source` names which of the four supplied the excerpt (or "" when none of the four
+markers are present at all). `triage_excerpt_truncated` is True iff the source text exceeded 320
+chars and was cut.
 
-`category_tags` derivation: a sorted list of deterministic artifact/process-category tags (see
+`category_tags` derivation, LIVE ROWS ONLY (same migration-step-5 scope and rationale as
+`triage_excerpt` above): a sorted list of deterministic artifact/process-category tags (see
 _CATEGORY_TAG_PATTERNS) matched against title + triage_excerpt only. Closes a recall gap the
 excerpt alone left in decision-scout's bounded index-pass triage -- a decision that governs by
 ARTIFACT TYPE (e.g. any new Lambda) rather than shared vocabulary was being silently discarded
@@ -197,7 +207,6 @@ def build_index() -> dict[str, Any]:
 
     decisions = []
     for n in sorted(by_number):
-        excerpt, excerpt_source, excerpt_truncated = _build_triage_excerpt(by_number[n])
         is_live = n in live_numbers
         entry: dict[str, Any] = {
             "number": n,
@@ -208,12 +217,16 @@ def build_index() -> dict[str, Any]:
             "superseded_by": superseded_by_map[n],
             "amends": amends_map[n],
             "live": is_live,
-            "triage_excerpt": excerpt,
-            "triage_excerpt_source": excerpt_source,
-            "triage_excerpt_truncated": excerpt_truncated,
-            "category_tags": _derive_category_tags(by_number[n]["title"], excerpt),
         }
+        # Skeleton archive rows (rec-3012, migration step 5): a live:false row never derives or
+        # carries these five keys -- decision-scout only ever triages live:true rows, and every
+        # projected field on every row grows the docs/decisions-index.json byte pin.
         if is_live:
+            excerpt, excerpt_source, excerpt_truncated = _build_triage_excerpt(by_number[n])
+            entry["triage_excerpt"] = excerpt
+            entry["triage_excerpt_source"] = excerpt_source
+            entry["triage_excerpt_truncated"] = excerpt_truncated
+            entry["category_tags"] = _derive_category_tags(by_number[n]["title"], excerpt)
             entry["currency"] = derive_currency(by_number[n], inbound_supersedes, inbound_amends)
         decisions.append(entry)
 
