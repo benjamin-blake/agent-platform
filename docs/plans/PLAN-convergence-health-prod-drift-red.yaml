@@ -353,6 +353,22 @@ verification_plan:
     fix_if: Any failing check -- fix at source, never by narrowing the check or waiving the budget.
     hermetic: false
     graduation: not-applicable
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      Full-tier validation passes before commit, as handoff_policy.full_validation_required_before
+      _commit declares (Decision 163 / rec-2965). This is the gate the fast tier does not cover --
+      full_after_lint checks including validate_test_coverage, which is where this plan's coverage
+      and concern-split work is actually adjudicated.
+    command: bin/venv-python -m scripts.validate
+    expected: exit 0
+    fix_if: >-
+      A full-tier-only failure (most likely validate_test_coverage on
+      scripts/convergence_health/code_drift.py) -- fix at source. On timeout, treat as blocked per
+      handoff_policy.timeout_disposition and rerun the full tier from the start; do not commit on a
+      partial run.
+    hermetic: false
+    graduation: not-applicable
   - step: 12
     phase: post-deploy
     action: After merge, the latest scheduled convergence-health run on main succeeded
@@ -421,6 +437,29 @@ test_obligations:
     red_green_expectation: >-
       red before, green after -- the Entry declares only full_segment today, so the pre assertion
       fails before the change.
+  - source: config/check_accounting_baseline.yaml
+    behavior: >-
+      check_source_registry is absent from the baseline roster and the accounting gate passes,
+      i.e. the examined() adoption and the roster shrink stay paired.
+    verification_step: 5
+    command: bin/venv-python -c "from scripts.checks.hygiene.validate_check_accounting import validate_check_accounting; f=[]; validate_check_accounting(f); assert not f, f; print('ACCOUNTING_OK')"
+    waiver_reason: >-
+      This is a declarative roster file, not executable behavior, so it has no unit test of its
+      own. Its correctness is exactly what verification step 5 asserts by running the real
+      validate_check_accounting gate, which fails if the row is removed without the examined()
+      adoption or vice versa -- a dedicated test would re-implement that gate.
+  - source: docs/contracts/build-lambda.yaml
+    behavior: >-
+      The deploy_record freshness stanza is present and the Class D amendment_log carries a
+      matching new entry.
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      This is a Class D contract document, not executable code. Its governance is enforced by
+      check_amendment_log_for_class_d (scripts/checks/contracts/_population.py:374, dispatched from
+      the pre=True validate_contract_drift), which verification step 11 runs -- it fails a
+      parsed-content change carrying no new amendment_log entry. A unit test would duplicate that
+      registered check.
   - source: scripts/test_coverage_checker.py
     behavior: >-
       code_drift.py resolves to the tests/convergence_health/code_drift/ package directory, keeping
