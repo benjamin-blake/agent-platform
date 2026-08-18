@@ -147,16 +147,24 @@ scope:
   - file: terraform/personal/esb_q5_spike.tf
     action: Create
     purpose: >-
-      The whole spike stack, count-gated behind ONE default-false flag: two Lambda functions packaged from
-      scripts/esb_q5_spike/ (named agent-platform-esb-q5-* so the EXISTING DailyOps log-read grant on
-      /aws/lambda/agent-platform-* covers them without a second policy change), one Step Functions state machine
-      per arm, the spike S3 prefix, the execution roles, AND the DailyOps `states:` grant as its OWN
-      aws_iam_role_policy on the existing PlatformDev role. The grant lives HERE, not in platform_roles.tf,
-      because that file measures exactly 587 effective lines against its exactly-587 structural budget -- any
-      added line breaches it and would force a budget raise, where Decision 128 says decompose and the terraform
-      class's own relief valve is "decompose by resource family (native .tf multi-file)". NO VPC, subnet, NAT
-      gateway, VPC endpoint, ECS or EFS resource, and no Lambda vpc_config -- the exclusion is enforced
-      structurally by absence and swept repo-wide by VP step 2, not asserted in prose.
+      The whole spike stack, count-gated behind ONE default-false flag, and SELF-DRIVING so that no grant lands
+      on PlatformDev (see the AUTHORITY-BUDGET REACHABILITY context entry -- the original design was
+      unreachable). Contents: two arm Lambdas packaged from scripts/esb_q5_spike/, one Step Functions state
+      machine per arm, one driver Lambda, the spike S3 prefix under the existing data-lake bucket, one
+      EventBridge rate rule plus target, and the execution roles. EVERY role is named agent-platform-esb-q5-*
+      and carries `permissions_boundary = agent-platform-github-ci-apply-boundary` -- mandatory under Decision
+      144 clause 3 and enforced by validate_boundary_attached, and also what keeps the roles inside
+      github_ci_apply's IAMRoleWriteBounded budget (role/agent-platform-* PLUS the boundary condition key), so
+      their inline policies auto-apply instead of approve-then-AccessDenying. The `states:` verbs the spike
+      needs live on the DRIVER's own in-budget role, never on PlatformDev. DELIBERATE, RECORDED DECISION 125
+      EXCEPTION: the two arm Lambdas carry NO `lifecycle { ignore_changes = [source_code_hash] }` -- code/infra
+      decoupling exists to protect artifacts that ship through a governed CD channel, and this flag-gated spike
+      has none and is destroyed by its own teardown, so coupling code to the apply is the correct shape here.
+      The exception is written into the file as a comment citing Decision 125 and asserted both ways by VP step
+      2, because validate_deploy_channel_conformance globs only ducklake*.tf and prod_lambdas.tf and would
+      otherwise let the omission pass silently. NO VPC, subnet, NAT gateway, VPC endpoint, ECS or EFS resource,
+      and no Lambda vpc_config -- the exclusion is enforced structurally by absence and swept repo-wide by VP
+      step 2, not asserted in prose.
   - file: terraform/personal/variables.tf
     action: Modify
     purpose: >-
@@ -172,10 +180,27 @@ scope:
   - file: terraform/bootstrap/github_ci_apply_policy.tf
     action: Modify
     purpose: >-
-      The apply half of the same requirement: github_ci_apply's identity policy gains the `states:` refresh-read
-      and write grants for the agent-platform-esb-q5-* state-machine family. ADMIN-ONLY ROOT -- Axis A bootstrap
-      is "admin-only (agent_platform_admin), NEVER auto-apply, out-of-band from CD pipeline". This edit lands in
-      the PR but its apply is an out-of-band operator action that must precede the personal-root apply.
+      The WRITE half only, and the split is Decision 156's rule, not a preference: this file holds
+      `resource "aws_iam_role_policy" "github_ci_apply"` (:713), the inline WRITE-AUTHORITY document, and
+      Decision 156 clause 1 moved every READ Sid out of it. So github_ci_apply's `states:` CREATE/UPDATE/DELETE
+      verbs on the agent-platform-esb-q5-* state-machine family land here; the refresh-read Sid does NOT (see
+      the next row). ADMIN-ONLY ROOT -- Axis A bootstrap is "admin-only (agent_platform_admin), NEVER
+      auto-apply, out-of-band from CD pipeline". This edit lands in the PR but its apply is an out-of-band
+      operator action that must precede the personal-root apply.
+  - file: terraform/bootstrap/github_ci_apply_reads.tf
+    action: Modify
+    purpose: >-
+      THE READ HOME, and the file the first draft of this plan omitted. Decision 156 clause 1 -- "reads move,
+      authority stays" -- relocated github_ci_apply's read grants into the customer-managed
+      `agent-platform-github-ci-apply-reads` policy (`resource "aws_iam_policy"` at :272, 21 Sids today), so the
+      `states:` refresh-read Sid belongs HERE. This is not bookkeeping: measured this session, the inline write
+      document minifies to roughly 8,491 bytes against its 10,240-byte AWS hard limit while this reads policy
+      minifies to roughly 4,199 against its 6,144 limit, and a LimitExceeded is INVISIBLE to terraform plan --
+      it surfaces only inside the admin-only out-of-band apply window, stranding a half-applied IAM change,
+      which is the exact failure Decision 156 exists to prevent. Coverage is indifferent to the choice, which is
+      why only the size and the architecture decide it: validate_ci_refresh_read_coverage composes
+      `apply_statements = inline_statements + reads_statements` (:104-122), so the union satisfies the gate from
+      either home. Same admin-only root and same out-of-band apply ordering.
   - file: terraform/bootstrap/github_ci_apply_boundary.tf
     action: Modify
     purpose: >-
@@ -260,17 +285,26 @@ infrastructure_dependencies:
     the convergence-record shape; this plan names the required checks and does not restate the mechanics.
   - >-
     TWO ROOTS, TWO GATES, IN ORDER. terraform/bootstrap is Axis A `bootstrap`: "admin-only
-    (agent_platform_admin), NEVER auto-apply, out-of-band from CD pipeline". The boundary DataPlaneAllow
-    extension and the github_ci_apply `states:` grants live there and must be applied out-of-band by the operator
-    BEFORE the personal-root apply, or every states: grant downstream is denied by the identity/boundary
-    intersection and the spike cannot start an execution. This is a disclosed cost, surfaced at plan time: this
-    plan costs at least one operator bootstrap apply plus two tf-gated-apply approvals (stack up, stack down).
+    (agent_platform_admin), NEVER auto-apply, out-of-band from CD pipeline". Three bootstrap edits live there --
+    the boundary DataPlaneAllow `states:` extension, github_ci_apply's `states:` WRITE grants
+    (github_ci_apply_policy.tf), and its `states:` REFRESH-READ Sid (github_ci_apply_reads.tf, per Decision 156)
+    -- and all three must be applied out-of-band by the operator BEFORE the personal-root apply. The boundary
+    edit is a precondition twice over: it is the ceiling for github_ci_apply AND for the spike's own
+    boundary-carrying agent-platform-esb-q5-* roles, so without it every `states:` grant on either side is
+    silently denied by the identity/boundary intersection. Disclosed cost, surfaced at plan time: ONE operator
+    bootstrap apply plus two tf-gated-apply approvals (stack up, stack down). It is NOT three operator applies
+    -- see the AUTHORITY-BUDGET REACHABILITY context entry for the PlatformDev design that would have cost that
+    and why it was rejected.
   - >-
-    New IAM roles (two Lambda execution roles and one Step Functions execution role) carry trust policies, the
-    DailyOps states: grant is an inline-policy ADD on a managed boundary-carrying role, and the teardown is a
-    destroy. Trust and destroy route to the human-gated tf-gated-apply Environment rather than auto-applying;
-    the in-budget inline-policy diff routes per the taxonomy contract's guard classification, which is that
-    file's call and not this plan's.
+    New IAM roles (two arm Lambda execution roles, one driver Lambda execution role, one Step Functions
+    execution role, one EventBridge target role) carry trust policies, and the teardown is a destroy. Trust and
+    destroy route to the human-gated tf-gated-apply Environment rather than auto-applying. Every one of these
+    roles is named agent-platform-esb-q5-* and boundary-carrying, so their INLINE POLICIES are in budget --
+    github_ci_apply's IAMRoleWriteBounded Sid grants iam:PutRolePolicy on role/agent-platform-* conditioned on
+    the mandatory boundary, and authority_budget.json v2 puts create+update of aws_iam_role_policy /
+    aws_iam_role_policy_attachment on that prefix in budget. No policy is written to any role outside that
+    prefix, which is what keeps the whole personal-root diff inside the normal gated pipeline. Guard
+    classification of each diff is the taxonomy contract's call, not this plan's.
   - >-
     Local terraform is NOT installed in this container and terraform/personal's third-party kislerdm/neon
     provider cannot init from a stock CC-web session (Decision 119, terraform/CLAUDE.md). All local terraform
@@ -314,6 +348,27 @@ acceptance_criteria:
     LIFECYCLE_COMPANIONS phases, and validate_ci_refresh_read_coverage passes clean over terraform/personal with
     the spike stack present -- i.e. the state machines are refresh-read-covered in BOTH plan-capable role
     policies and write-covered by github_ci_apply.
+  - >-
+    The grants sit in their Decision 156 homes and are asserted both ways: the `states:` refresh-read Sid is in
+    terraform/bootstrap/github_ci_apply_reads.tf, the `states:` write verbs are in
+    terraform/bootstrap/github_ci_apply_policy.tf, and NO `states:` read verb appears in that inline
+    write-authority document. The boundary DataPlaneAllow carries `states:` as the ceiling for both
+    github_ci_apply and the spike's own boundary-carrying roles.
+  - >-
+    Every IAM role the spike creates is named agent-platform-esb-q5-* and carries
+    permissions_boundary = agent-platform-github-ci-apply-boundary, and no spike resource writes a policy onto
+    PlatformDev -- so every personal-root IAM diff stays inside github_ci_apply's IAMRoleWriteBounded budget and
+    the plan needs NO out-of-band admin apply in terraform/personal.
+  - >-
+    The Decision 125 coupling exception is RECORDED in terraform/personal/esb_q5_spike.tf and asserted both
+    ways: no spike Lambda carries ignore_changes=[source_code_hash], and the file cites Decision 125 for why --
+    which matters because validate_deploy_channel_conformance globs only ducklake*.tf and prod_lambdas.tf and
+    cannot see this file.
+  - >-
+    findings.yaml carries a measurement_subject block barring persona-loop wall-clock, per-iteration duration
+    and timeout-headroom claims (the LLM steps are mocked), and naming workspace re-materialization as the ONE
+    wall-clock term the spike is entitled to; the same discipline appears in the numbered Decision's reversal
+    conditions.
   - >-
     The deterministic V-tier floor computed over this plan's own scope is V3 AND is forced by the .tf rows alone
     -- recomputing the floor with the .tf rows removed yields a tier below V3, proving no scope file matches
@@ -367,19 +422,31 @@ verification_plan:
       extra=sorted((arms | set(exc)) - full); assert not extra, f'arm(s) outside the audit Q5 set: {extra}';
       need=('standing_cost','operability','re_arm_conditions'); bad=sorted((a,k) for a,v in exc.items() for k in
       need if not str(v.get(k,'')).strip()); assert not bad, f'excluded arm(s) missing a recorded reason:
-      {bad}'; print('OK partition covers', len(full), 'audit arms;', len(arms), 'built,', len(exc), 'excluded,
-      all with 3 recorded reasons; both directions clean')"
+      {bad}'; ms=f.get('measurement_subject') or {}; assert str(ms.get('mocked_llm_disclaimer','')).strip(),
+      'findings.yaml records no measurement_subject.mocked_llm_disclaimer -- the LLM steps are mocked, so a
+      wall-clock or timeout-headroom claim would have an unrepresentative subject (Decision 82)'; assert
+      str(ms.get('entitled_wall_clock_term','')).strip(), 'findings.yaml does not name the ONE wall-clock term
+      the spike is entitled to (workspace re-materialization), so the disclaimer would read as barring the W5
+      term it must not bar'; print('OK partition covers', len(full), 'audit arms;', len(arms), 'built,',
+      len(exc), 'excluded, all with 3 recorded reasons; measurement subject disclosed; both directions
+      clean')"
     expected: >-
-      Exit 0 with a line beginning `OK partition covers` and ending `both directions clean`. Proved in both
-      directions this session: on the f3e4e6d tree the same command exits 1 with an "findings.yaml absent"
-      assertion; on the scratch post-change tree it printed "OK partition covers 5 audit arms; 2 built, 3
-      excluded, all with 3 recorded reasons; both directions clean".
+      Exit 0 with a line beginning `OK partition covers` and containing `measurement subject disclosed`, ending
+      `both directions clean`. Proved in both directions this session: on the f3e4e6d tree the same command
+      exits 1 with a "findings.yaml absent" assertion, and against a findings file carrying the arm partition
+      but no measurement_subject block it exits 1 naming that omission; on the scratch post-change tree it
+      prints the OK line.
     fix_if: >-
       `audit arm(s) neither built nor excluded` names an arm dropped without a record -- write it into
       excluded_arms with its three reasons, or build it. Do NOT satisfy this by shrinking audit_q5_arm_set: that
       set is the audit's, and editing it to match what was built is exactly the unwritten-premise defect ESB-04
       exists to remove. `excluded arm(s) missing a recorded reason` names the arm and the field -- write the
-      missing standing_cost, operability or re_arm_conditions entry for that arm.
+      missing standing_cost, operability or re_arm_conditions entry for that arm. `records no
+      measurement_subject.mocked_llm_disclaimer` means the Decision 82 discipline was skipped -- write the
+      disclaimer barring persona-loop wall-clock, per-iteration duration and timeout-headroom claims, and write
+      entitled_wall_clock_term naming workspace re-materialization, whose subject (bytes and objects moved) is
+      real and unmocked. Do NOT discharge this by deleting the W5 wall-clock term: the disclaimer is scoped to
+      the LOOP, not to the workspace measurement.
     hermetic: true
     graduation: graduate
     graduation_check_id: "esb-q5-exclusion-partitions-audit-arm-set"
@@ -387,42 +454,75 @@ verification_plan:
     phase: pre-deploy
     action: >-
       The exclusion is enforced STRUCTURALLY, swept as a class over every terraform file in the repo rather than
-      over the spike file alone. Assert zero networked resources of any excluded family and zero Lambda
-      vpc_config anywhere under terraform/, assert the spike file exists and declares a Step Functions state
-      machine so the sweep cannot pass by the spike simply not existing, and assert the single default-false
-      flag is declared and gates every spike resource.
+      over the spike file alone, and the same sweep carries the three IAM/deploy invariants the spike stack must
+      satisfy to be applicable at all. Assert zero networked resources of any excluded family and zero Lambda
+      vpc_config anywhere under terraform/; assert the spike file exists and declares a Step Functions state
+      machine so the sweep cannot pass vacuously; assert the single default-false flag is declared and gates
+      every spike resource; assert every spike IAM role is named agent-platform-esb-q5-* AND carries the
+      mandatory permissions_boundary (Decision 144 clause 3, and the condition that keeps the role inside
+      github_ci_apply's IAMRoleWriteBounded budget); assert the spike writes no policy onto PlatformDev; and
+      assert the Decision 125 coupling exception is RECORDED and that no spike Lambda silently carries
+      ignore_changes. Comments are stripped before every structural scan -- proved necessary this session, since
+      the exception comment names the very construct the ignore_changes assertion forbids.
     command: >-
-      bin/venv-python -c "import pathlib,re; files=sorted(pathlib.Path('terraform').rglob('*.tf')); assert files,
-      'no terraform files found';
-      fam=r'aws_vpc|aws_subnet|aws_nat_gateway|aws_vpc_endpoint|aws_ecs_[a-z_]+|aws_efs_[a-z_]+';
-      hits={str(p):sorted(set(re.findall(r'resource\s+\"('+fam+r')\"', p.read_text(encoding='utf-8')))) for p in
-      files}; hits={k:v for k,v in hits.items() if v}; assert not hits, f'networked/excluded-family resource(s)
+      bin/venv-python -c "import pathlib,re; files=sorted(pathlib.Path('terraform').rglob('*.tf')); assert files, 'no
+      terraform files found';
+      fam=r'aws_vpc|aws_subnet|aws_nat_gateway|aws_vpc_endpoint|aws_ecs_[a-z_]+|aws_efs_[a-z_]+'; strip=lambda s:
+      chr(10).join(l for l in s.splitlines() if not l.lstrip().startswith('#'));
+      hits={str(p):sorted(set(re.findall(r'resource\s+\"('+fam+r')\"', strip(p.read_text(encoding='utf-8'))))) for p
+      in files}; hits={k:v for k,v in hits.items() if v}; assert not hits, f'networked/excluded-family resource(s)
       present: {hits}'; vpc=[str(p) for p in files if re.search(r'\n\s*vpc_config\s*\{',
-      p.read_text(encoding='utf-8'))]; assert not vpc, f'Lambda vpc_config block(s) present: {vpc}';
-      tf=pathlib.Path('terraform/personal/esb_q5_spike.tf'); assert tf.exists(), 'spike terraform absent -- the
-      sweep would pass vacuously'; body=tf.read_text(encoding='utf-8'); assert
-      re.search(r'resource\s+\"aws_sfn_state_machine\"', body), 'spike declares no Step Functions state machine
-      -- there is no arm to drive'; blocks=re.findall(r'resource\s+\"[a-z0-9_]+\"\s+\"[a-z0-9_]+\"\s*\{',
-      body); assert len(blocks)==body.count('var.esb_q5_spike_enabled ?')+body.count('count ='), 'a spike
-      resource is not count-gated on var.esb_q5_spike_enabled';
-      v=pathlib.Path('terraform/personal/variables.tf').read_text(encoding='utf-8'); assert
-      re.search(r'variable\s+\"esb_q5_spike_enabled\"[^}]*default\s*=\s*false', v, re.S), 'esb_q5_spike_enabled
-      is not declared with default false in terraform/personal/variables.tf'; print('OK', len(files), 'terraform
-      files swept; 0 networked resources; 0 vpc_config;', len(blocks), 'spike resources all count-gated; flag
-      default false')"
+      strip(p.read_text(encoding='utf-8')))]; assert not vpc, f'Lambda vpc_config block(s) present: {vpc}';
+      tf=pathlib.Path('terraform/personal/esb_q5_spike.tf'); assert tf.exists(), 'spike terraform absent -- the sweep
+      would pass vacuously'; body=tf.read_text(encoding='utf-8'); code=strip(body); assert
+      re.search(r'resource\s+\"aws_sfn_state_machine\"', code), 'spike declares no Step Functions state machine --
+      there is no arm to drive'; blocks=re.findall(r'resource\s+\"([a-z0-9_]+)\"\s+\"([a-z0-9_]+)\"\s*\{', code);
+      ungated=[n for _,n in blocks if not re.search(r'\"'+n+r'\"\s*\{[^}]*?count\s*=\s*var\.esb_q5_spike_enabled',
+      code, re.S)]; assert not ungated, f'spike resource(s) not count-gated on var.esb_q5_spike_enabled: {ungated}';
+      roles=[n for ty,n in blocks if ty=='aws_iam_role']; assert roles, 'spike declares no IAM role -- the boundary
+      sweep would pass vacuously'; unbounded=[n for n in roles if not
+      re.search(r'\"'+n+r'\"\s*\{[^}]*?permissions_boundary\s*=\s*[^\n]*agent-platform-github-ci-apply-boundary',
+      code, re.S)]; assert not unbounded, f'spike role(s) missing the mandatory permissions_boundary (Decision 144
+      cl.3): {unbounded}'; offprefix=[m for m in re.findall(r'name\s*=\s*\"([^\"]+)\"', code) if not
+      m.startswith('agent-platform-esb-q5-')]; assert not offprefix, f'spike names a resource outside the
+      agent-platform-esb-q5-* prefix, so it falls outside the IAMRoleWriteBounded budget: {offprefix}'; assert
+      'PlatformDev' not in code and 'platform_dev' not in code, 'the spike writes to PlatformDev, which is outside
+      github_ci_apply IAMRoleWriteBounded role/agent-platform-* budget -- approve-then-AccessDeny'; assert not
+      re.search(r'ignore_changes\s*=\s*\[[^\]]*source_code_hash', code), 'a spike Lambda carries
+      ignore_changes=[source_code_hash] -- this stack is deliberately COUPLED (Decision 125 scoped exception)'; assert
+      re.search(r'decision 125', body, re.I), 'the Decision 125 coupling exception is not recorded in the file;
+      validate_deploy_channel_conformance globs only ducklake*.tf and prod_lambdas.tf, so an unrecorded omission
+      passes silently'; v=pathlib.Path('terraform/personal/variables.tf').read_text(encoding='utf-8'); assert
+      re.search(r'variable\s+\"esb_q5_spike_enabled\"[^}]*default\s*=\s*false', v, re.S), 'esb_q5_spike_enabled is not
+      declared with default false in terraform/personal/variables.tf'; print('OK', len(files), 'terraform files swept;
+      0 networked resources; 0 vpc_config;', len(blocks), 'spike resources all count-gated;', len(roles), 'roles all
+      boundary-carrying; 0 PlatformDev writes; Decision 125 exception recorded; flag default false')"
     expected: >-
-      Exit 0 with a line beginning `OK` and ending `flag default false`, reporting the count of terraform files
-      swept and the count of count-gated spike resources. Proved failing this session on f3e4e6d: the same
-      command exits 1 with a "spike terraform absent -- the sweep would pass vacuously" assertion, having already
-      passed the zero-networked-resource and zero-vpc_config assertions over all 38 files.
+      Exit 0 with a line beginning `OK` and ending `flag default false`, reporting the terraform-file count, the
+      count-gated spike-resource count and the boundary-carrying role count. Proved in both directions this
+      session: on f3e4e6d it exits 1 with a "spike terraform absent -- the sweep would pass vacuously"
+      assertion, having already passed the zero-networked-resource and zero-vpc_config assertions over all 38
+      files; against a synthetic spike stack it printed the OK line, and each new clause was additionally proved
+      negatively in isolation -- stripping permissions_boundary, adding a PlatformDev reference, and adding
+      ignore_changes each produce their own named assertion.
     fix_if: >-
       A named file and family means a networked resource was introduced -- delete it. The container and
       shared-filesystem arms are EXCLUDED by operator decision for recorded standing-cost and operability
       reasons; re-introducing one is not a fix, it is a reversal, and a reversal goes through the re-arm
-      conditions the Decision records, not through a terraform edit. `a spike resource is not count-gated` means
-      a resource would provision unconditionally -- add the count gate, because the flag is also this plan's
-      rollback and teardown mechanism. `esb_q5_spike_enabled is not declared with default false` means the flag
-      is missing or defaults true -- declare it false in terraform/personal/variables.tf.
+      conditions the Decision records, not through a terraform edit. `spike resource(s) not count-gated` means a
+      resource would provision unconditionally -- add the count gate, because the flag is also this plan's
+      rollback and teardown mechanism. `spike role(s) missing the mandatory permissions_boundary` means the role
+      would guard-route to the gated Environment and then AccessDeny (the DEP-02 shape) -- add
+      permissions_boundary = the agent-platform-github-ci-apply-boundary ARN, which is also what puts the role's
+      inline policies inside the apply role's budget. `outside the agent-platform-esb-q5-* prefix` or `writes to
+      PlatformDev` means the diff has left the IAMRoleWriteBounded budget -- rename the resource into the
+      prefix; do NOT resolve it by asking for an out-of-band admin apply, which is the expensive path the
+      AUTHORITY-BUDGET REACHABILITY context entry rejected. `carries ignore_changes=[source_code_hash]` means
+      someone applied the DuckLake/prod decoupling shape to a stack that has no CD channel -- remove it. `the
+      Decision 125 coupling exception is not recorded` means the omission is silent, because
+      validate_deploy_channel_conformance globs only ducklake*.tf and prod_lambdas.tf -- write the citation into
+      the file. `esb_q5_spike_enabled is not declared with default false` means the flag is missing or defaults
+      true -- declare it false in terraform/personal/variables.tf.
     hermetic: true
     graduation: graduate
     graduation_check_id: "esb-q5-no-networked-terraform-resources"
@@ -559,53 +659,77 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: >-
-      The Step Functions IAM-coverage obligation, asserted as a class over all three classification maps AND by
-      running the shipped gate itself, plus a presence assertion on each of the three policy files the grants
-      must land in. Measured this session: aws_sfn_state_machine is in NONE of the five read sets today, and
-      _check_resource returns the "unmapped resource type" finding for it, so the spike cannot land without this
-      work.
+      The Step Functions IAM obligation, asserted as a class over all three classification maps, as a
+      READ/WRITE-HOME split over the four policy surfaces, and by running the shipped gate itself. Measured this
+      session: aws_sfn_state_machine is in NONE of the five read sets today, and _check_resource returns the
+      "unmapped resource type" finding for it. The home split is Decision 156 clause 1 -- reads move to the
+      customer-managed reads policy, write authority stays inline -- and it is asserted in BOTH directions: the
+      reads policy must carry a states: read verb, the inline document must carry a states: write verb, and the
+      inline document must carry NO states: read verb.
     command: >-
-      bin/venv-python -c "import pathlib; from scripts.checks.iam_tf._read_coverage import CHECKED_TYPES,
+      bin/venv-python -c "import pathlib,re; from scripts.checks.iam_tf._read_coverage import CHECKED_TYPES,
       ENUMERATED_IAM_TYPES, TRANSITIVE_TYPES, NON_AWS_TYPES, NO_GRANT_TYPES; from
       scripts.checks.iam_tf._write_coverage import WRITE_COVERAGE, WRITE_EXEMPT_TYPES; from
       scripts.checks.iam_tf._write_companions import LIFECYCLE_COMPANIONS; from
       scripts.checks.iam_tf.validate_ci_refresh_read_coverage import validate_ci_refresh_read_coverage;
-      T='aws_sfn_state_machine'; assert T in CHECKED_TYPES or T in ENUMERATED_IAM_TYPES or T in TRANSITIVE_TYPES
-      or T in NON_AWS_TYPES or T in NO_GRANT_TYPES, f'{T} has no read classification -- the coverage gate fails
-      loud on an unmapped resource type'; assert T in WRITE_COVERAGE or T in WRITE_EXEMPT_TYPES, f'{T} has no
-      write classification'; rows=LIFECYCLE_COMPANIONS.get(T) or {}; missing=sorted({'create','update','delete'}
-      - set(rows)) if T in WRITE_COVERAGE else []; assert not missing, f'{T} declares no lifecycle-companion row
-      for phase(s): {missing}'; grants=[p for p in ('terraform/personal/oidc.tf',
-      'terraform/bootstrap/github_ci_apply_policy.tf', 'terraform/bootstrap/github_ci_apply_boundary.tf') if
-      'states:' not in pathlib.Path(p).read_text(encoding='utf-8')]; assert not grants, f'policy file(s) carry no
-      states: grant at all: {grants}'; failed=[]; validate_ci_refresh_read_coverage(failed); assert not failed,
-      f'refresh-read/write coverage findings: {failed}'; print('OK', T, 'classified read+write with all 3
-      lifecycle phases; 3 policy files carry states: grants; coverage gate clean over', len(WRITE_COVERAGE),
-      'write-managed types')"
+      T='aws_sfn_state_machine'; assert T in CHECKED_TYPES or T in ENUMERATED_IAM_TYPES or T in TRANSITIVE_TYPES or T
+      in NON_AWS_TYPES or T in NO_GRANT_TYPES, f'{T} has no read classification -- the coverage gate fails loud on an
+      unmapped resource type'; assert T in WRITE_COVERAGE or T in WRITE_EXEMPT_TYPES, f'{T} has no write
+      classification'; rows=LIFECYCLE_COMPANIONS.get(T) or {}; missing=sorted({'create','update','delete'} -
+      set(rows)) if T in WRITE_COVERAGE else []; assert not missing, f'{T} declares no lifecycle-companion row for
+      phase(s): {missing}'; rd=r'\"states:(Describe|List|Get)'; wr=r'\"states:(Create|Update|Delete|Tag|Untag)';
+      reads=pathlib.Path('terraform/bootstrap/github_ci_apply_reads.tf').read_text(encoding='utf-8');
+      inline=pathlib.Path('terraform/bootstrap/github_ci_apply_policy.tf').read_text(encoding='utf-8');
+      bound=pathlib.Path('terraform/bootstrap/github_ci_apply_boundary.tf').read_text(encoding='utf-8');
+      planner=pathlib.Path('terraform/personal/oidc.tf').read_text(encoding='utf-8'); assert re.search(rd, reads), 'no
+      states: refresh-read verb in github_ci_apply_reads.tf -- Decision 156 clause 1 puts every READ Sid in the
+      customer-managed reads policy'; assert re.search(wr, inline), 'no states: write verb in
+      github_ci_apply_policy.tf -- the inline document is where write AUTHORITY stays';
+      stray=sorted(set(re.findall(rd, inline))); assert not stray, f'states: READ verb(s) placed in the inline
+      WRITE-authority document, against Decision 156 clause 1: {stray}'; assert 'states:' in bound, 'the boundary
+      DataPlaneAllow carries no states: entry -- it is the ceiling for github_ci_apply AND for the boundary-carrying
+      spike roles, so every states: grant is silently denied without it'; assert re.search(rd, planner), 'no states:
+      refresh-read verb in terraform/personal/oidc.tf -- github_ci_planner is the second plan-capable role the
+      coverage gate requires'; failed=[]; validate_ci_refresh_read_coverage(failed); assert not failed,
+      f'refresh-read/write coverage findings: {failed}'; print('OK', T, 'classified read+write with all 3 lifecycle
+      phases; reads Sid in the reads policy, writes inline, 0 stray reads inline; boundary ceiling carries states:;
+      coverage gate clean over', len(WRITE_COVERAGE), 'write-managed types')"
     expected: >-
       Exit 0 with a line beginning `OK aws_sfn_state_machine classified read+write with all 3 lifecycle phases`
       and ending `write-managed types`. Proved failing this session on f3e4e6d: exits 1 with an
-      "aws_sfn_state_machine has no read classification -- the coverage gate fails loud on an unmapped resource
-      type" assertion.
+      "aws_sfn_state_machine has no read classification" assertion, and the live tree independently confirms all
+      four grant surfaces are currently empty of states: (boundary, planner, reads policy, inline policy). The
+      three home-split matchers were each proved in both directions against synthetic policy text, including
+      the Decision 156 breach case (a states: read verb placed inline) matching and the clean case not matching.
+      The final validate_ci_refresh_read_coverage leg's PASSING direction is not reachable before
+      implementation -- it needs the maps and the terraform to exist together -- so only its failing direction
+      is proved here.
     fix_if: >-
       `has no read classification` means the CHECKED_TYPES entry was not added -- add it with the states:
       refresh-read actions and the name attribute; do NOT reach for TRANSITIVE_TYPES, which would claim a parent
       resource's grant covers it and there is no such parent. `has no write classification` or `declares no
       lifecycle-companion row` means the discovery-driven write half was left unanswered -- add the
       WRITE_COVERAGE entry and all three phase rows (an empty companion tuple is legal only with a collocated
-      justification). `policy file(s) carry no states: grant at all` names the file the grant is missing from --
-      remember the bootstrap root is admin-only and its apply is out-of-band and must precede the personal apply.
-      `refresh-read/write coverage findings` is the shipped gate speaking; read its message, which names the
-      resource and the role policy that does not cover it.
+      justification). `no states: refresh-read verb in github_ci_apply_reads.tf` means the read Sid was put in
+      the wrong file -- move it to the reads policy, which is Decision 156 clause 1's rule and is also the
+      cheaper home by measurement (the inline document minifies to roughly 8,491 bytes of its 10,240 limit
+      against the reads policy's roughly 4,199 of 6,144, and a LimitExceeded is invisible to terraform plan).
+      `states: READ verb(s) placed in the inline WRITE-authority document` is the same defect seen from the
+      other side -- move it, do not duplicate it. `the boundary DataPlaneAllow carries no states: entry` means
+      the ceiling was skipped, which silently denies BOTH the apply role's grants and the spike roles' own --
+      extend it first, since it is the precondition for everything else. `refresh-read/write coverage findings`
+      is the shipped gate speaking; read its message, which names the resource and the role policy that does not
+      cover it.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
       Non-admissible under VF-05 differential admission, and that is a measured property rather than a
-      preference: validate_ci_refresh_read_coverage IS the standing enforced guard for this and already runs in
-      both the --pre and full tiers. A graduated duplicate would be reverted alongside the spike terraform, so on
-      origin/main BOTH the state-machine resource and its classification are absent, the gate passes, and the
-      row fails admission as tautological. The step is retained for its explicit three-map plus three-file
-      assertion, which localises the failure far faster than the gate's own message.
+      preference: validate_ci_refresh_read_coverage IS the standing enforced guard for the coverage half and
+      already runs in both the --pre and full tiers. A graduated duplicate would be reverted alongside the spike
+      terraform, so on origin/main BOTH the state-machine resource and its classification are absent, the gate
+      passes, and the row fails admission as tautological. The step is retained for its three-map, four-surface,
+      both-directions assertion, which localises the failure far faster than the gate's own message and which
+      the gate does not make at all for the Decision 156 home split.
   - step: 8
     phase: pre-deploy
     action: >-
@@ -727,7 +851,8 @@ verification_plan:
       _DECISIONS_COMBINED_MAX_BYTES-comb, '; index headroom', 131000-idx)"
     expected: >-
       Exit 0 with a line containing `cap headroom`, `headers`, `combined headroom` and `index headroom`, every
-      figure non-negative. Proved in both directions this session: on f3e4e6d it exits 1 with an "expected the
+      figure non-negative (measured on the scratch post-change tree: entry 5,686 bytes with 458 of cap headroom,
+      126 headers with 6 free, 36,680 combined bytes free, 10,886 index bytes free). Proved in both directions this session: on f3e4e6d it exits 1 with an "expected the
       new entry to be Decision 173, newest header is 172 -- re-check the numbering race" assertion; on the
       scratch post-change tree it printed "OK entry 173 is 5183 bytes, cap headroom 961 ; headers 126 headroom 6
       ; combined headroom 37183 ; index headroom 10886".
@@ -980,7 +1105,10 @@ test_obligations:
   - source: terraform/personal/esb_q5_spike.tf
     behavior: >-
       The spike stack declares a Step Functions state machine, count-gates every resource on the single
-      default-false flag, and introduces no networked resource or Lambda vpc_config anywhere in the repo.
+      default-false flag, keeps every IAM role inside the agent-platform-esb-q5-* prefix WITH the mandatory
+      permissions_boundary, writes no policy onto PlatformDev, records the Decision 125 coupling exception while
+      carrying no ignore_changes, and introduces no networked resource or Lambda vpc_config anywhere in the
+      repo.
     verification_step: 2
     command: terraform/personal/esb_q5_spike.tf
     red_green_expectation: >-
@@ -1006,13 +1134,23 @@ test_obligations:
       once the states: read statement lands.
   - source: terraform/bootstrap/github_ci_apply_policy.tf
     behavior: >-
-      github_ci_apply's identity policy refresh-read- and write-covers the spike state machines, which is the
-      other half of the coverage gate's requirement.
+      github_ci_apply's inline WRITE-authority document carries the spike's states: write verbs and, per
+      Decision 156 clause 1, carries NO states: read verb.
     verification_step: 7
     command: terraform/bootstrap/github_ci_apply_policy.tf
     red_green_expectation: >-
-      Red while the apply half is uncovered; green once the states: read and write grants land on the
-      agent-platform-esb-q5-* family.
+      Red while the write half is uncovered (measured: the live file has no states: verb of any kind), and red
+      again if a read verb is placed here instead of in the reads policy; green with writes inline and reads
+      absent.
+  - source: terraform/bootstrap/github_ci_apply_reads.tf
+    behavior: >-
+      The customer-managed agent-platform-github-ci-apply-reads policy carries the spike's states: refresh-read
+      Sid -- the Decision 156 read home, and the one with measured byte headroom.
+    verification_step: 7
+    command: terraform/bootstrap/github_ci_apply_reads.tf
+    red_green_expectation: >-
+      Red while no states: read verb is in this file (measured absent on the live tree); green once the Sid
+      lands here rather than in the inline document.
   - source: terraform/bootstrap/github_ci_apply_boundary.tf
     behavior: >-
       The permissions-boundary ceiling permits states:, without which every states: identity grant on
@@ -1132,6 +1270,38 @@ constraints:
     config/agent/verification_registry/registry.yaml has 164 effective lines of headroom, which is why exactly
     four rows graduate. Neither budget is raised, and no `# raise-approved:` marker is written.
   - >-
+    GRANT HOMES ARE DECISION 156's CALL, NOT THE AUTHOR'S. The `states:` refresh-read Sid goes in
+    terraform/bootstrap/github_ci_apply_reads.tf (the customer-managed reads policy); only the `states:` write
+    verbs go in terraform/bootstrap/github_ci_apply_policy.tf (the inline write-authority document). Coverage is
+    indifferent -- validate_ci_refresh_read_coverage composes inline + reads statements -- so architecture and
+    bytes decide, and both point the same way: the inline document is nearer its AWS hard limit and a
+    LimitExceeded is invisible to terraform plan, surfacing only inside the admin-only out-of-band apply window.
+    Decision 157's read/write scope-parity rule is why the write grant REQUIRES the matching refresh-read at an
+    overlapping scope: neither half is optional.
+  - >-
+    NOTHING IS GRANTED TO PlatformDev, AND THE SPIKE IS SELF-DRIVING BECAUSE OF IT. Every spike role is named
+    agent-platform-esb-q5-* and carries the mandatory boundary, which is exactly what puts its inline policies
+    inside github_ci_apply's IAMRoleWriteBounded budget (role/agent-platform-* plus the boundary condition key,
+    authority_budget.json v2). A grant on PlatformDev would be outside that prefix and would approve-then-
+    AccessDeny -- the DEP-02 shape -- so the spike drives itself and the agent's only interaction is through S3
+    grants PlatformDev already holds. Do not "fix" a permissions problem by adding a Sid to DailyOps.
+  - >-
+    DECISION 125 EXCEPTION, RECORDED AND ASSERTED, NOT ASSUMED. The spike Lambdas are deliberately COUPLED --
+    no ignore_changes=[source_code_hash] -- because decoupling protects artifacts on a governed CD channel and
+    this flag-gated, self-destroying stack has none. validate_deploy_channel_conformance globs only ducklake*.tf
+    and prod_lambdas.tf, so the rule binds while the gate cannot see it; the exception is therefore written into
+    the terraform file citing Decision 125 and asserted in both directions by VP step 2.
+  - >-
+    MEASUREMENT SUBJECT (Decision 82, applied to duration as CD.43 W4 applies to cost). The LLM steps are
+    mocked, so no persona-loop wall-clock, per-iteration duration, or 15-minute-timeout-headroom claim may be
+    sourced from this spike, from findings.yaml, or from the Decision -- including any re-arm argument about the
+    excluded container class. The ONE wall-clock term the spike is entitled to is workspace re-materialization,
+    whose subject (bytes and objects moved) is real and unmocked; the disclaimer is scoped to the LOOP and must
+    not be read as retiring the W5 wall-clock term. Parameterizing the mock with a representative delay was
+    considered and REJECTED: no measured per-call latency distribution exists for the executor (telemetry is on
+    the dead path pending Decision 84 Phase 4 / T2.36), so an invented delay would substitute a fabricated
+    subject for an honest disclaimer.
+  - >-
     PyYAML safe_dump doubles backslashes in a multi-line string containing an indented line, and two graduated
     commands here carry backslash regexes. Write the graduated rows into
     config/agent/verification_registry/registry.yaml by hand or verify the round trip, and re-run each graduated
@@ -1171,13 +1341,15 @@ context:
     (Decision 167 clause 3, fired by migration step 3). Measured this session: wave 4's comparable Decision 164 is
     7,257 bytes and would fail it; Decisions 170 and 172 are 5,757 and 5,775. A full draft of THIS wave's entry
     was written and spliced into a copy of the live corpus, then measured through the SHIPPED span
-    (scripts.decisions_md.iter_decision_sections, the same span the checker measures): 5,183 bytes with the
-    placeholders filled and 5,201 with them unresolved -- roughly 950 bytes of headroom under the cap. The draft
+    (scripts.decisions_md.iter_decision_sections, the same span the checker measures). At round 1 the entry
+    gained the Decision 82 measurement-subject clause and was RE-MEASURED rather than assumed: 5,686 bytes with
+    the placeholders filled, 458 bytes of headroom under the cap (it was 5,183 / 961 before that clause). The draft
     also PASSES validate_decision_entry_conformance (metadata envelope with number + significance, the three
-    required markers, block separator) and validate_decisions_size, both run against the scratch tree with a
-    baseline reader excluding 173. The drafted content is: the ruling, the exclusion with three reasons, three
-    reversal conditions, the two boundary statements (EFS/hosted_cli_runner, ECS escape hatch), the ESB-06
-    residual, the explicit entry-versus-evidence split, and a Related list.
+    required markers, block separator) and validate_decisions_size, both re-run against the scratch tree after
+    the round-1 clause landed, with a baseline reader excluding 173. The drafted content is: the ruling, the
+    exclusion with three reasons, three reversal conditions plus the measurement-subject clause, the two
+    boundary statements (EFS/hosted_cli_runner, ECS escape hatch), the ESB-06 residual, the explicit
+    entry-versus-evidence split, and a Related list.
   - >-
     THE WITHIN-ENTRY SPLIT, MADE EXPLICIT BECAUSE CFG-07 IS OPEN. audits/contract-first-governance-33c8667.yaml
     CFG-07 records that "the routing rule is silent on the standing-commitment class and on the within-entry
@@ -1198,7 +1370,9 @@ context:
     live+archive 737,634 of 780,000; index 119,189 of the 131,000 pin in tests/test_decisions_index.py. Measured
     post-change by splice-and-regenerate with the shipped generator (the regenerated baseline reproduced the
     committed 119,189 byte-for-byte, which is what makes the delta trustworthy): headers 126 (6 free), combined
-    742,835 (37,165 free), index 120,114 (10,886 free). Every ceiling has room and the entry costs 925 index
+    743,320 (36,680 free, re-measured after the round-1 clause grew the entry), index 120,114 (10,886 free --
+    unchanged, because the index row's excerpt is capped at 320 characters so a longer BODY does not enlarge
+    it). Every ceiling has room and the entry costs 925 index
     bytes. The prior wave-5 drafts planned a MANDATORY three-entry compaction pass because the index pin was then
     110,000 with 236 bytes of headroom; Decision 166 plus the decision-ceiling-bridge (#863) moved the pin to
     131,000 and the ceilings with it, so that pass is now unnecessary AND is explicitly not planned. Decision 37
@@ -1245,6 +1419,48 @@ context:
     because CD.27 does not flip and T4.1's text does not change; and the three graduated registry rows reading
     CD.43/CD.27 (cd43-selection-criteria-well-formed, t41-names-workspace-store-criteria,
     cd27-layer2-preconditions-cover-esb01) assert shapes this wave preserves.
+  - >-
+    AUTHORITY-BUDGET REACHABILITY -- THE ENGINEERING READ ON THE DailyOps GRANT, and the finding that most
+    changed the terraform shape at round 1. The first draft landed the `states:` grant as a new
+    aws_iam_role_policy on PlatformDev. Verified at source this session: platform_roles.tf:33 names that role
+    `PlatformDev`; github_ci_apply's IAMRoleWriteBounded Sid scopes iam:PutRolePolicy to
+    `role/agent-platform-*` conditioned on the mandatory boundary; authority_budget.json v2's
+    in_budget_managed_role_prefix is `agent-platform-`. PlatformDev carries the boundary but its NAME is outside
+    the prefix, so the apply role cannot write that policy even after gated-Environment approval -- the DEP-02
+    approve-then-AccessDeny shape. THE ANSWER IS YES, IT CAN HANG OFF AN agent-platform-* ROLE, and the plan now
+    does that. The bridge question is what made it non-obvious: PlatformDev's DailyOps document grants NO
+    identity `sts:AssumeRole` (the only two sts:AssumeRole occurrences in that file are TRUST policies) and its
+    lambda:InvokeFunction is scoped to enumerated DuckLake ARNs, so the CC-web session cannot assume a spike
+    driver role or invoke a spike Lambda without a PlatformDev edit -- every "just let the agent call it" path
+    reintroduces the same out-of-budget write. The one bridge that needs NO new PlatformDev grant is S3: the
+    DailyOps S3ReadWrite Sid already covers `${data_lake.arn}/*` (minus the tfstate/convergence Denies). So the
+    spike is SELF-DRIVING: an agent-platform-esb-q5-driver Lambda on its own in-budget, boundary-carrying role
+    holds the `states:` verbs scoped to the two spike state machines; a flag-gated EventBridge rate rule wakes
+    it; the agent requests a run by PUTting a control object into the spike prefix and reads results by GETting
+    from it, both with grants it already holds. Every resource type this adds (aws_cloudwatch_event_rule /
+    _target, aws_iam_role_policy) is ALREADY classified read and write -- checked, not assumed -- so it costs no
+    further classification work. REJECTED ALTERNATIVES, recorded: (a) keep the grant on PlatformDev -- genuinely
+    possible, but it requires a break-glass agent_platform_admin apply of terraform/personal on the way UP and
+    again on the way DOWN (the teardown removes the policy), i.e. THREE out-of-band operator applies counting
+    bootstrap, and it hand-applies the one root the pipeline is supposed to own, creating exactly the split-brain
+    the taxonomy avoids; (b) an S3 bucket-notification trigger instead of EventBridge -- rejected because
+    aws_s3_bucket_notification is a SINGLETON per bucket and terraform/personal/prod_lambdas.tf:489 already
+    declares data_lake_prod_triggers with an in-repo GOTCHA comment saying a third trigger must EXTEND that
+    resource, so a throwaway spike would have to edit a production Lambda-trigger surface. The operator is being
+    shown the cheap path and the expensive one it replaces, not just the choice.
+  - >-
+    ROUND-1 DECISION-SCOUT REMEDIATION, recorded so the diff between plan versions is legible. The scout
+    returned BLOCK on one finding and four WARN/SPIRIT findings, all in the IAM/bootstrap family; the two-arm
+    design, the thin-Decision shape and the exclusion record were unaffected. Each was verified at source before
+    adoption rather than accepted on relay: the Decision 156 read/write split (reads file has 21 Sids, its
+    aws_iam_policy at :272, the inline write document at :713, and the coverage gate composes
+    `apply_statements = inline_statements + reads_statements` at :104-122, so coverage is indifferent and only
+    architecture and bytes decide); the PlatformDev budget miss (above); validate_boundary_attached's
+    agent-platform-* scope; validate_deploy_channel_conformance's ducklake*/prod_lambdas-only globs; and
+    Decision 82's measurement-subject frame correction, which is explicitly "a Decision-75 measurement-subject
+    frame correction" in its own text. One correction to the relayed detail, made by measurement: the inline
+    document minifies to roughly 8,491 bytes rather than 8,580 -- the same conclusion, and the reads policy sits
+    at roughly 4,199 of its own 6,144 limit, so the read Sid fits comfortably in its Decision 156 home.
   - >-
     THE SFN IAM WORK IS UNAVOIDABLE, AND THAT WAS DETERMINED BY MEASUREMENT RATHER THAN ACCEPTED BY DEFAULT. The
     alternative considered was to put the spike stack in the legacy terraform/ root, which the coverage gate does
@@ -1295,7 +1511,11 @@ context:
     already there (docs/plans/reports/ducklake-spike-findings.md). Tests mirror the source subpackage at
     tests/esb_q5_spike/; measured this session, scripts.test_coverage_checker.map_source_to_test returns None for
     every scripts/esb_q5_spike/ path (a NEW scripts/ subpackage is outside the six whitelisted families), so no
-    checker imposes a different home and the mirror is chosen on convention. The three iam_tf modules DO have
+    checker imposes a home -- but the layout is NOT ad-hoc convention, which is how this plan first described it.
+    Decision 131 clause 1's mirror rule is the authority and states it verbatim: drop the leading src/scripts
+    root, keep the remaining sub-path, name the test test_<stem>.py. scripts/esb_q5_spike/loop.py ->
+    tests/esb_q5_spike/test_loop.py is that rule applied, and it is the repo's forward convention rather than
+    the retiring grandfather table. The three iam_tf modules DO have
     mapped homes (measured: tests/checks/iam_tf/test__read_coverage.py, test__write_coverage.py,
     test__write_companions.py), which is where their new cases go.
   - >-
@@ -1370,6 +1590,12 @@ context:
     trusting the rec body; and rec-2970 means a coverage regression from the new spike modules would not be
     caught pre-merge, which is a second reason the plan authors real tests rather than relying on the gate.
   - >-
+    FULL-TIER VERDICT, run rather than declared. `bin/venv-python -m scripts.validate` (scope: all) completed
+    with "All checks passed." and exit 0 against this branch. It exceeds a single Bash invocation in this
+    harness, so it was run to a log and blocked on to completion rather than declared or skipped. It was
+    started at the first plan commit; the commits after it changed only this plan document, and `--pre` was
+    re-run green after each.
+  - >-
     BRANCH / FRESHNESS. Branch claude/executor-substrate-billing-audit-w2t1ur, reset to origin/main (f3e4e6d,
     the root-scoped-diff-base merge, #931), clean working tree. The Main Divergence Assessment is a no-op at 0
     behind / 0 ahead, so no rebase deferral is recorded. The repo's session preflight module was not runnable
@@ -1394,13 +1620,25 @@ context:
     classification`; `the deferral marker survives at 3 site(s), expected exactly 1`; `CD.27 is pending but the
     newest Decision does not name ESB-06 as the remaining blocker with a follow-on rec id`; `expected the new
     entry to be Decision 173, newest header is 172`; `expected exactly 4 graduated esb-q5 rows, found 0: []`.
-    FOUR were then run against a scratch post-change tree (spliced DECISIONS.md with the drafted entry,
-    regenerated index, edited roadmap, synthetic findings.yaml) and all four exit 0 with every backticked literal
-    in their `expected` field present in the captured output -- Decision 148's replay contract satisfied by
-    measurement. Steps 3, 5 and 7's passing legs are not reachable before implementation (they import
-    scripts.esb_q5_spike or read guard maps this plan edits); their failing legs are proved above and their logic
-    is the same two-way set-comparison shape as the already-graduated sibling rows. Step 2's `expected` says
-    `flag default false` deliberately rather than quoting a count, because the count is implementation-dependent.
+    EIGHT of the ten were then run against a scratch post-change tree (spliced DECISIONS.md with the drafted
+    entry, regenerated index, edited roadmap, synthetic findings.yaml, synthetic spike terraform, stub spike
+    modules) and all eight exit 0 with every backticked literal in their `expected` field present in the
+    captured output -- Decision 148's replay contract satisfied by measurement, in both directions, for steps
+    1, 2, 3, 4, 5, 8, 9 and 10. The round-1 rebuild of steps 1, 2 and 7 was re-proved the same
+    way, and each NEW clause was additionally proved NEGATIVELY in isolation: stripping permissions_boundary,
+    adding a PlatformDev reference, adding ignore_changes, removing measurement_subject, and removing only its
+    entitled_wall_clock_term each produce their own named assertion, and the three Decision 156 home-split
+    matchers were exercised against synthetic policy text in both directions including the breach case (a
+    states: read verb placed inline). THAT EXERCISE CAUGHT A REAL DEFECT reasoning alone did not: the first
+    draft of step 2's ignore_changes assertion scanned the whole file and FALSE-POSITIVED on the Decision 125
+    exception COMMENT, which necessarily names the construct it forbids -- the shipped step strips comment lines
+    before every structural scan and asserts the citation against the raw text. A second, smaller one: the
+    citation matcher was case-sensitive and missed an all-caps "DECISION 125" banner, so it is now
+    case-insensitive. Exactly TWO passing legs are not reachable before implementation and are named rather than
+    glossed: step 7's, which needs the three guard maps and the spike terraform to exist together, and step
+    11's, which needs the four graduated registry rows to have landed. Both failing legs are proved above, and
+    step 7's five text matchers were each proved in both directions separately. Step 2's `expected` says `flag default false`
+    deliberately rather than quoting a count, because the counts are implementation-dependent.
   - >-
     DELIBERATE RE-AUTHORING, the third for this wave, recorded so the git history reads correctly. Two prior
     wave-5 plans were authored and discarded -- one at full-arm scope (superseded by the operator's exclusion)
@@ -1416,8 +1654,9 @@ pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
   - >-
-    Only the plan-cited decision sections read -- Decisions 39, 55, 75, 77, 79, 86, 92, 94, 100, 105, 119, 126,
-    127, 128, 129, 132, 133, 144, 147, 148, 149, 150, 164, 165, 166, 167 -- not the full corpus
+    Only the plan-cited decision sections read -- Decisions 39, 55, 75, 79, 82, 86, 92, 94, 98, 100, 105, 115,
+    119, 125, 126, 127, 128, 129, 131, 132, 133, 143, 144, 147, 148, 149, 150, 156, 157, 163, 164, 165, 166,
+    167, and Decision 77 -- not the full corpus
   - >-
     audits/executor-substrate-and-billing-shape-ad02653.yaml Q5 prose (:315-337) and ESB-04 (:887-907) read at
     source, plus CD.27's three layer-2 precondition discipline_points (:946-948) and CD.43's
@@ -1432,6 +1671,15 @@ pre_implementation_checklist:
     docs/contracts/environment-taxonomy.yaml (Axis A + guard classification) and docs/contracts/deploy-paths.yaml
     read before any infra step, with the bootstrap row's admin-only/out-of-band clause read specifically
   - docs/contracts/candidate-decision-ratification.yaml rules R1-R4 read before touching either CD's state
+  - >-
+    terraform/bootstrap/github_ci_apply_reads.tf (the 21-Sid reads policy) and
+    terraform/bootstrap/github_ci_apply_policy.tf (the inline write-authority document) both read before any
+    grant is written, so the Decision 156 read/write home split is applied from the files rather than from this
+    plan's summary of them
+  - >-
+    terraform/bootstrap/authority_budget.json and the IAMRoleWriteBounded Sid read before any IAM role or
+    inline policy is named, so every spike role lands inside the agent-platform-* prefix with the mandatory
+    boundary and nothing is written to PlatformDev
   - >-
     Per-entry cap RE-MEASURED by splice-and-regenerate against the current tree before committing the entry --
     "expected to be identical" is not "measured identical"
@@ -1509,9 +1757,11 @@ execution_steps:
   - >-
     Draft the THIN numbered Decision. Re-check the max header first (172 measured this session, so 173 unless a
     concurrent PR claimed it). Content: the ruling (substrate + store), the EXCLUSION with its three recorded
-    reasons, the reversal conditions, the two boundary statements (EFS would eliminate hosted_cli_runner under
-    W2; the exclusion does NOT retire CD.27's ECS Run Task escape hatch), the ESB-06 residual with its follow-on
-    rec id, and the explicit entry-versus-evidence split addressed to CFG-07. Everything else -- the comparative
+    reasons, the reversal conditions INCLUDING the Decision 82 measurement-subject clause (no persona-loop
+    wall-clock, per-iteration duration or timeout-headroom claim is sourced from this spike; workspace
+    re-materialization is the one entitled term), the two boundary statements (EFS would eliminate
+    hosted_cli_runner under W2; the exclusion does NOT retire CD.27's ECS Run Task escape hatch), the ESB-06
+    residual with its follow-on rec id, and the explicit entry-versus-evidence split addressed to CFG-07. Everything else -- the comparative
     record, the measurements, the per-arm and per-option detail -- is CITED to findings.yaml, not restated.
     Carry the metadata envelope (number, significance.value numbered_decision, and a justification naming the
     rejected contract home) and the three required markers. MEASURE the drafted entry against 6,144 bytes by
