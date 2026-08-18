@@ -113,7 +113,11 @@ scope:
       (line 381) to 50. The freeze constant's own comment mandates this in the same commit as a
       deliberate report-key addition. Without this row the plan's new report key fails 2 frozen
       assertions that pass today (99 tests green), and constraint "only files in Scope may be
-      modified" would box the implementer in.
+      modified" would box the implementer in. ALSO drop _format_preflight_summary from the
+      _MOVED_SYMBOLS subtraction at lines 243-252: it is excluded there on the stated grounds that
+      it is "facade-resident" and "never had a new home to migrate to", and this plan relocates it
+      into scripts/preflight/summary.py, which falsifies that premise and would silently drop it
+      from TestResidualPatchSiteClosure's coverage.
   - file: tests/convergence_health/test_code_drift.py
     action: Delete
     purpose: >-
@@ -153,6 +157,18 @@ scope:
       Cover the widened scan (an unregistered literal in any SCANNED_PATHS module fails the
       guard), that SCANNED_PATHS is the complete set actually scanned including the portal files,
       and the examined() declaration.
+  - file: tests/session/preflight/test_main_report.py
+    action: Modify
+    purpose: >-
+      Neutralize the new liveness check's shell-out in the two tests that already do this for its
+      sibling. Lines 63 and 112 patch check_credentials to "ok", then lines 81 and 130 patch
+      _check_ci_rca_liveness specifically to stop it issuing a real `gh` call.
+      _check_convergence_sensor_liveness inherits none of that: it would pass its own creds guard
+      and issue a live `gh run list --workflow convergence-health.yml` with timeout=15 during a
+      unit test. It degrades to None when gh is absent, so this is not fatal -- but VP step 9 runs
+      this file, and without this row the "only files in Scope" constraint would force a scope
+      amendment mid-implementation. The file is at 493 effective lines (7 of headroom), so the two
+      patch lines fit.
   - file: tests/session/preflight/test_ci_rca_signals.py
     action: Modify
     purpose: >-
@@ -215,7 +231,9 @@ verification_plan:
     command: bin/venv-python -m pytest tests/convergence_health/code_drift -q
     expected: >-
       all tests pass, including a case where the recorded sha postdates the latest source-touching
-      commit and is reported FRESH, and cases where null / unresolvable / empty report STALE
+      commit and is reported FRESH, cases where null / unresolvable / empty report STALE, and an
+      assertion that the generated acceptance string encodes the reachability oracle rather than a
+      bare latest_sha grep
     fix_if: >-
       A recorded sha that postdates the latest source commit still reports stale -- the comparison
       is still equality, not reachability. A null or unresolvable sha reports fresh -- the
@@ -352,7 +370,8 @@ verification_plan:
     fix_if: >-
       action is "file" or "update" -- check the deploy records against the latest prod-source
       commit. If the recorded sha postdates it, the oracle is still wrong. A non-zero exit means a
-      source is still unregistered.
+      source is still unregistered, OR the unshallow fell through (both fetch forms failed) and the
+      new fail-loud shallow guard fired -- in that case fix the clone, never relax the guard.
     graduation: not-applicable
   - step: 14
     phase: post-deploy
@@ -369,7 +388,10 @@ test_obligations:
     behavior: >-
       Freshness is the reachability oracle, not equality: the latest watched-source commit
       reachable from the recorded sha must equal the latest on HEAD. Null, unresolvable and empty
-      inputs are stale.
+      inputs are stale. The rec's acceptance string must also be SEMANTICALLY correct under the new
+      oracle -- note that the relocated TestAcceptanceLint only asserts lint_acceptance_command(...)
+      == (True, None), which a string still grepping for latest_sha would pass unchanged, so this
+      needs its own assertion rather than relying on the lint.
     verification_step: 2
     test_selector: tests/convergence_health/code_drift/test_prod.py
     red_green_expectation: >-
