@@ -2,6 +2,7 @@ schema_version: 4
 handoff_policy:
   full_validation_required_before_commit: true
   timeout_disposition: blocked
+implementation_declared: true
 slug: "convergence-health-prod-drift-red"
 intent: >-
   Restore the convergence-health sensor to green and convert the prod-class Lambda code-drift
@@ -175,6 +176,27 @@ scope:
       Cover the liveness check: a failing latest convergence-health run alerts even when the
       convergence record is green; a successful run does not; missing creds, a gh failure and a
       malformed payload each degrade to None so preflight never crashes (rec-2027 pattern).
+  - file: tests/session/preflight/test_main_branches.py
+    action: Create
+    purpose: >-
+      Added post-plan, during VP step 15 execution (code-review finding, addressed): running
+      scripts.validate to actual completion in this session (working around the separate
+      rec-2489 coverage-subprocess-timeout-kills-its-own-parent defect via COVERAGE_CORE=sysmon,
+      never a repo file change) surfaced that scripts/session/preflight.py -- already Modify in
+      this plan's own scope above -- measured 90.8% coverage, not 100%. All 17 missing lines
+      predate this plan (wrong-venv CRITICAL branch, log-sync-committed uncommitted-flag clear,
+      the terraform_pending tuple-unpack branch, outbox non-empty/exception paths, the warm_sync
+      exception path, the PYTEST_CURRENT_TEST-absent S3_LOG_BUCKET default, and
+      open_telemetry_session's exception fallback) and were only ever exercised by the separate
+      tests/test_session_preflight_decomposition.py equivalence suite, which
+      scripts.test_coverage_checker's map_source_to_test does not include in preflight.py's
+      mapped coverage run (tests/session/preflight/ is the sole mapped target). Since
+      scripts/session/preflight.py is already Modify-in-scope, closing its coverage to 100% is
+      part of modifying it, not new scope -- but this NEW FILE achieving that (rather than
+      growing test_main_report.py, itself at 495/500 effective lines) was not anticipated at
+      planning time and should have been added to Scope then; recorded here instead, after the
+      fact, per code review. New in Decision 128 spirit (decompose by default): a fresh file
+      rather than pushing test_main_report.py over its SLOC budget.
   - file: tests/test_coverage_checker/test_coverage_checker_map.py
     action: Modify
     purpose: >-
@@ -221,8 +243,20 @@ verification_plan:
     expected: prints REGISTERED and exits 0
     fix_if: Raises ValueError "Unknown source" -- the canonical_id entry is missing or misspelled.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: drift-and-hotfix-sources-registered
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential rejected as unsound, not tautological: verified by hand in a real
+      `git worktree add --detach <tmp> origin/main`, the check_spec's `bin/venv-python -c "..."`
+      command never reaches validate_source() on that leg -- bin/venv-python resolves
+      $REPO_ROOT from its own script path, finds no .venv in the bare worktree (never
+      checked out, gitignored), and falls back to the container's system python3, which
+      lacks pydantic (scripts.executor's own import chain requires it). The origin/main leg
+      therefore fails with "ERROR: venv Python not found" before the real assertion ever
+      runs -- an artifact of the differential gate's worktree lacking a venv, not proof the
+      fix is caught. A test_selector rewrite (sys.executable-based, immune to this) would
+      need a new dedicated pytest test with no natural existing home for
+      scripts.executor.rec_write_guidance.validate_source; deferred rather than force-fit
+      one in for this single assertion.
   - step: 2
     phase: pre-deploy
     action: >-
@@ -260,8 +294,19 @@ verification_plan:
       between pre_globs and SCANNED_PATHS and lets an edit to an uncovered scanned file skip the
       fast tier. Leave pre_globs None (see scripts/validate.py's _should_run_in_pre).
     hermetic: true
-    graduation: graduate
-    graduation_check_id: source-registry-guard-pre-ungated
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same bin/venv-python-in-a-bare-worktree defect as drift-and-hotfix-sources-registered
+      (verified by hand: `git worktree add --detach <tmp> origin/main` then running this
+      exact command reports "ERROR: venv Python not found" before ever importing
+      scripts.checks.ops_governance._manifest, since the worktree has no .venv and the
+      container's fallback system python3 lacks pydantic). The origin/main "fail" the
+      mechanical differential recorded is that environment artifact, not proof that
+      pre_globs/pre are actually unset on origin/main -- un-graduatable via command_exit_zero
+      as specified. A test_selector rewrite would need a new dedicated pytest test; tests/
+      checks/ops_governance/test__manifest.py exists but this plan does not touch it, and
+      adding one exclusively to satisfy graduation was judged not worth the added surface
+      for a single two-field assertion.
   - step: 5
     phase: pre-deploy
     action: check_accounting is satisfied by the examined() declaration and the baseline shrink
@@ -271,8 +316,16 @@ verification_plan:
       Failure naming check_source_registry -- either examined() was not added, or the name was not
       removed from config/check_accounting_baseline.yaml, or both.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: check-accounting-source-registry-clean
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same bin/venv-python-in-a-bare-worktree defect (verified by hand): the origin/main leg
+      never reaches validate_check_accounting() -- it dies at venv resolution first, for the
+      same reason as drift-and-hotfix-sources-registered. Un-graduatable via command_exit_zero
+      as specified; a test_selector rewrite is possible against the existing
+      tests/checks/hygiene/test_validate_check_accounting.py, but a new case there would
+      re-litigate the general shrink-only/touch-it-fix-it ratchet that file already covers
+      rather than adding coverage specific to this plan's fix, so it was deferred rather than
+      added purely to satisfy graduation.
   - step: 6
     phase: pre-deploy
     action: Every gated file this plan touches is under the SLOC limit with no budget raise
@@ -282,8 +335,16 @@ verification_plan:
       A path listed with its size means that file crossed 500 -- decompose it further. A path
       listed because it is in budgets means a raise was taken instead (Decision 128 forbids it here).
     hermetic: true
-    graduation: graduate
-    graduation_check_id: convergence-plan-touched-files-under-sloc-gate
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same bin/venv-python-in-a-bare-worktree defect (verified by hand) blocks a
+      command_exit_zero differential -- the origin/main leg dies at venv resolution before
+      reading any file. Independent of that defect, this check is a poor graduation
+      candidate on its own merits: it hardcodes THIS plan's specific touched-file list, which
+      is a point-in-time fact rather than a durable property, and is entirely subsumed by the
+      standing, repo-wide validate_sloc_limits gate (registered, runs on every file every
+      tier) -- a dedicated registry row here would duplicate that gate's coverage without
+      adding any incremental regression-catching capability once these files evolve further.
   - step: 7
     phase: pre-deploy
     action: >-
@@ -296,8 +357,18 @@ verification_plan:
       Coverage below 100% -- cases were lost in the split; restore them rather than adding a
       coverage-baseline entry (validate_coverage_baseline_edits is a registered check, Decision 159).
     hermetic: false
-    graduation: graduate
-    graduation_check_id: code-drift-concern-split-coverage-100
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same bin/venv-python-in-a-bare-worktree defect (verified by hand) blocks a
+      command_exit_zero differential for the chained `pytest ... && bin/venv-python -c "..."
+      && pytest ...` command -- the middle python -c segment dies at venv resolution in the
+      origin/main leg before the chain can even reach the map_source_to_test assertion.
+      Independent of that defect, the intended regression (code_drift.py's coverage dropping
+      out of the roster) is already covered by the standing, non-hardcoded
+      test_maps_code_drift_to_concern_split_package_directory test (test_selector-graduatable
+      in principle, but this step's own declared command is the chained multi-part form, not
+      that single assertion) -- graduating a second, narrower row for the same fact was
+      judged redundant rather than incremental.
   - step: 8
     phase: pre-deploy
     action: >-
@@ -337,11 +408,17 @@ verification_plan:
   - step: 10
     phase: pre-deploy
     action: The retired test module is gone with no dangling references (closure obligation, surface retirement)
-    command: test ! -e tests/convergence_health/test_code_drift.py && ! grep -rn "test_code_drift\.py\|tests\.convergence_health\.test_code_drift" --include="*.py" --include="*.yaml" --include="*.yml" --include="*.md" . --exclude-dir=.venv --exclude-dir=.git --exclude-dir=docs && echo SWEEP_CLEAN
+    command: test ! -e tests/convergence_health/test_code_drift.py && ! grep -rn "test_code_drift\.py\|tests\.convergence_health\.test_code_drift" --include="*.py" --include="*.yaml" --include="*.yml" --include="*.md" --exclude="registry.yaml" . --exclude-dir=.venv --exclude-dir=.git --exclude-dir=docs && echo SWEEP_CLEAN
     expected: prints SWEEP_CLEAN
     fix_if: >-
       A hit means something still references the retired module -- update that reference to the
-      new tests/convergence_health/code_drift/ package.
+      new tests/convergence_health/code_drift/ package. The --exclude="registry.yaml" is
+      required and deliberate (code-review finding, addressed post-review): this exact command
+      string is itself embedded verbatim in this plan's own graduated
+      retired-test-module-sweep-clean registry.yaml row's check_spec once step 10 is graduated,
+      so an unexcluded re-run of this command self-matches its own stored copy and reports a
+      false hit. Without the exclusion the check would tautologically fail forever after this
+      PR merges, on a "reference" that is itself just the check's own stored command text.
     hermetic: true
     graduation: graduate
     graduation_check_id: retired-test-module-sweep-clean

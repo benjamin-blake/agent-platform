@@ -26,6 +26,14 @@ amendment_log:
       CFG-11 conversion: deploy_channels.ducklake_functions.see repointed from the deleted
       deleted markdown contract's anchor to the environment-taxonomy.yaml conformance key
       path.
+  - date: "2026-08-18"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      PLAN-convergence-health-prod-drift-red: added the deploy_record field-semantics stanza
+      (shape + freshness-is-reachability + null-source_git_sha-is-stale) now that
+      scripts.convergence_health.code_drift applies a reachability oracle instead of an
+      equality comparison.
 
 version: 1
 contract_version: 1
@@ -85,6 +93,32 @@ deploy_targets:
     - ducklake-deps-layer
     - ducklake-extensions-layer
     - ducklake-pgclient-layer
+
+# deploy_record field semantics (Decision 103 reachability oracle; PLAN-convergence-health-prod-
+# drift-red). The JSON blob write_deploy_record() (scripts/build_lambda_deploy.py) writes to
+# deploy-records/<channel>/<function>.json and read_deploy_record() reads back, consumed by
+# scripts.convergence_health.detect_ducklake_code_drift / detect_prod_code_drift.
+deploy_record:
+  shape:
+    function: "str -- the deployed Lambda function name"
+    code_sha256: "str -- CodeSha256 from the update-function-code response"
+    source_git_sha: "str | null -- os.environ.get(GITHUB_SHA) at deploy time; null for a break-glass local deploy (no GITHUB_SHA set)"
+    deployed_at: "str -- ISO8601 UTC timestamp of the deploy"
+  freshness_semantics: >-
+    Freshness is REACHABILITY, not equality: a deploy record is fresh iff the latest
+    watched-source commit reachable FROM its recorded source_git_sha equals the latest
+    watched-source commit on HEAD (git log -1 --format=%H <recorded_sha> -- <pathspecs>). A
+    push-triggered deploy sets source_git_sha to the exact commit that touched source; a
+    workflow_dispatch recovery deploy can set it to a LATER commit that never itself touches
+    source -- both are correctly fresh under this oracle. Bare equality (the pre-fix defect)
+    reported the latter as stale, which is what let a correct workflow_dispatch recovery deploy
+    look drifted.
+  null_source_git_sha: >-
+    A null source_git_sha (break-glass local deploy, scripts.build_lambda [--ducklake-only]
+    --deploy run outside CI with no GITHUB_SHA set) is deliberately treated as STALE, never
+    fresh -- fail closed on uncertainty. write_deploy_record's GITHUB_SHA semantics are never
+    changed to work around this; the record stays an honest statement of which commit was
+    deployed, and the sensor's comparison is what changed.
 
 # Flag DEFAULTS (--profile=company-aws-profile, --region=eu-west-2) are OUT of registry scope.
 # The equivalence test compares flag-name sets only.

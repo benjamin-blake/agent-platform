@@ -20,7 +20,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path  # noqa: F401  (kept for back-compat test patch targets, e.g. session_preflight.Path.cwd)
 
 from scripts.preflight import (
     _common,
@@ -35,6 +35,7 @@ from scripts.preflight import (
     priority_queue,
     prose_context,
     recs_cache,
+    summary,
 )
 
 # Facade re-exports (Decision 80/104 pattern): every public function and every test-referenced
@@ -96,6 +97,7 @@ from scripts.preflight.ci_rca_signals import (  # noqa: F401
     _CONVERGENCE_RCA_GAP_GRACE_MINUTES,
     _check_ci_rca_liveness,
     _check_convergence_rca_gap,
+    _check_convergence_sensor_liveness,
     _derive_ci_rca_closed,
     _derive_ci_rca_dispute_open,
     _derive_ci_rca_open,
@@ -151,6 +153,7 @@ from scripts.preflight.recs_cache import (  # noqa: F401
     _tally_rec_counts,
     count_recommendations,
 )
+from scripts.preflight.summary import _format_preflight_summary  # noqa: F401
 from scripts.roadmap import platform_roadmap
 from scripts.roadmap import product_roadmap as product_roadmap_module
 from scripts.sync.ops import _rebuild_local_cache as _sync_ops_pull  # noqa: F401  (kept for back-compat test patch targets)
@@ -271,6 +274,7 @@ def main(roadmap_detail: str = "slim") -> int:
         fut_commits = phase_b.submit(env_git._get_recent_main_commits)
         fut_decision_ts = phase_b.submit(recs_cache._get_latest_decision_ts, dec_cache)
         fut_ci_liveness = phase_b.submit(ci_rca_signals._check_ci_rca_liveness, creds_status, recs_rows_cache)
+        fut_convergence_sensor_liveness = phase_b.submit(ci_rca_signals._check_convergence_sensor_liveness, creds_status)
         fut_convergence_rca_gap = phase_b.submit(
             ci_rca_signals._check_convergence_rca_gap, convergence_health_data, recs_rows_cache
         )
@@ -286,6 +290,7 @@ def main(roadmap_detail: str = "slim") -> int:
         recent_main_commits = fut_commits.result()
         latest_decision_ts = fut_decision_ts.result()
         ci_rca_liveness_alert = fut_ci_liveness.result()
+        convergence_sensor_liveness_alert = fut_convergence_sensor_liveness.result()
         convergence_rca_gap_alert = fut_convergence_rca_gap.result()
         forward_fix_alert = fut_forward_fix.result()
         budget_bypass_alert = fut_budget.result()
@@ -408,38 +413,19 @@ def main(roadmap_detail: str = "slim") -> int:
     report["decision_conditions"] = decision_conditions_bucket
     report["non_automatable_softcap_breached"] = recs_cache._check_non_automatable_softcap(non_automatable_count)
     report["ci_rca_liveness_alert"] = ci_rca_liveness_alert
+    report["convergence_sensor_liveness_alert"] = convergence_sensor_liveness_alert
+    summary.print_convergence_sensor_liveness_alert(convergence_sensor_liveness_alert)
     report["convergence_rca_gap_alert"] = convergence_rca_gap_alert
-    if convergence_rca_gap_alert is not None:
-        print(
-            f"Convergence RCA gap alert: record red {convergence_rca_gap_alert['red_age_hours']}h "
-            f"(commit {convergence_rca_gap_alert.get('commit_sha', '')[:8]}) with no matching ci_rca rec filed "
-            "since the red episode began -- file one manually or dispatch ci-rca.yml.",
-            file=sys.stderr,
-        )
+    summary.print_convergence_rca_gap_alert(convergence_rca_gap_alert)
     report["forward_fix_recursion_alert"] = forward_fix_alert
     report["budget_bypass_alert"] = budget_bypass_alert
-    if budget_bypass_alert is not None:
-        print(
-            f"Budget bypass alert: {budget_bypass_alert['count']} --ignore-budget invocations in the last 7 days."
-            " Repeated bypass indicates fast-tier drift -- consider a planning session to revisit the budget.",
-            file=sys.stderr,
-        )
+    summary.print_budget_bypass_alert(budget_bypass_alert)
     report["budget_breach_summary"] = budget_breach_summary
-    if budget_breach_summary is not None:
-        _dominant_breach_phase = max(budget_breach_summary["by_phase"], key=budget_breach_summary["by_phase"].get)
-        print(
-            f"Budget breach summary: {budget_breach_summary['count']} fast-tier budget breach(es) in the last "
-            f"7 days (dominant phase: {_dominant_breach_phase}).",
-            file=sys.stderr,
-        )
+    summary.print_budget_breach_summary(budget_breach_summary)
 
     endstate_drift = context_docs._check_endstate_drift()
     report["endstate_drift"] = endstate_drift
-    if endstate_drift.get("stale"):
-        new_ids = endstate_drift.get("new_ids") or []
-        ids_note = f" (new ids: {new_ids})" if new_ids else ""
-        _msg = f"Advisory: Platform End-State fingerprint stale -- roadmap has new tier_item IDs since the stamp.{ids_note}"
-        print(_msg, file=sys.stderr)
+    summary.print_endstate_drift_advisory(endstate_drift)
 
     # Fail-open prose-context advisory (Decision 110/62/59); never affects the exit code below.
     report["prose_context"] = prose_context.measure_prose_context()
@@ -449,7 +435,7 @@ def main(roadmap_detail: str = "slim") -> int:
     PREFLIGHT_REPORT.parent.mkdir(parents=True, exist_ok=True)
     PREFLIGHT_REPORT.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    print(_format_preflight_summary(report, PREFLIGHT_REPORT))
+    print(summary._format_preflight_summary(report, PREFLIGHT_REPORT))
 
     return 0 if venv_ok else 1
 
@@ -480,36 +466,6 @@ def _slim_roadmap_state(state: dict, full: bool = False) -> dict:
         "next_eligible": state.get("next_eligible", []),
         "strategic_pending": state.get("strategic_pending", []),
     }
-
-
-def _format_preflight_summary(report: dict, report_path: Path) -> str:
-    """One-line summary for stdout. The full JSON is on disk -- duplicating it here
-    forces every consuming agent to pay ~12-15k tokens for a payload already
-    available via file read."""
-    mf = report.get("main_freshness", {}) or {}
-    behind = mf.get("commits_behind", "?")
-    ahead = mf.get("commits_ahead", "?")
-    recs_status = report.get("recs_read_status", "ok")
-    recs_status_suffix = "" if recs_status == "ok" else f" [DEGRADED: recs_read_status={recs_status}]"
-    ci_rca_unresolved = len(report.get("ci_rca_unresolved_recs") or [])
-    ci_rca_likely = len(report.get("ci_rca_likely_resolved_recs") or [])
-    if ci_rca_unresolved or ci_rca_likely:
-        ci_rca_summary = f"ci_rca_unresolved={ci_rca_unresolved} ci_rca_likely_resolved={ci_rca_likely}"
-    else:
-        ci_rca_summary = "ci_rca=0"
-    convergence_rca_gap = report.get("convergence_rca_gap_alert")
-    convergence_rca_gap_suffix = (
-        f" convergence_rca_gap_alert=red_{convergence_rca_gap['red_age_hours']}h" if convergence_rca_gap else ""
-    )
-    return (
-        f"Preflight OK -> {report_path}\n"
-        f"  venv={report.get('venv_ok')} creds={report.get('creds_status')} "
-        f"branch={report.get('branch')} main=({behind} behind, {ahead} ahead)\n"
-        f"  open_recs={report.get('open_recommendations')} "
-        f"non_automatable={report.get('non_automatable_recommendations')} "
-        f"{ci_rca_summary}{recs_status_suffix}{convergence_rca_gap_suffix}\n"
-        f"  Read the report file for full constraint detail."
-    )
 
 
 def open_telemetry_session(workflow: str, branch: str) -> str:

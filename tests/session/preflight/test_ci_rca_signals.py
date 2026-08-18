@@ -7,6 +7,7 @@ dispute-recs printing, undetermined (abstention-review) recs derivation/fetch/pr
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -61,6 +62,76 @@ class TestCiRcaLivenessAlert:
     def test_alert_none_when_creds_not_ok(self) -> None:
         result = _preflight._check_ci_rca_liveness("unavailable")
         assert result is None
+
+
+class TestConvergenceSensorLivenessAlert:
+    """Tests for _check_convergence_sensor_liveness() -- modelled on _check_ci_rca_liveness,
+    but fires on the convergence-health.yml WORKFLOW's own conclusion, independent of the
+    convergence record's colour: a green record does not suppress this alert (the 2026-08-17
+    incident's blind spot -- ~20 consecutive scheduled runs failed while the record stayed
+    green)."""
+
+    def _make_gh_result(
+        self, conclusion: str | None, created_at: str = "2026-08-17T11:00:00Z", url: str = "https://github.com/run/2"
+    ) -> MagicMock:
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = json.dumps([{"conclusion": conclusion, "createdAt": created_at, "url": url}])
+        return result
+
+    def test_alert_set_when_latest_run_failed(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_gh_result("failure")):
+            result = _preflight._check_convergence_sensor_liveness("ok")
+        assert result is not None
+        assert result["conclusion"] == "failure"
+        assert result["run_url"] == "https://github.com/run/2"
+
+    def test_alert_none_when_latest_run_succeeded(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_gh_result("success")):
+            result = _preflight._check_convergence_sensor_liveness("ok")
+        assert result is None
+
+    def test_alert_none_when_creds_not_ok(self) -> None:
+        assert _preflight._check_convergence_sensor_liveness("unavailable") is None
+
+    def test_alert_none_on_gh_nonzero_returncode(self) -> None:
+        failed_result = MagicMock(returncode=1, stdout="")
+        with patch("session_preflight.subprocess.run", return_value=failed_result):
+            assert _preflight._check_convergence_sensor_liveness("ok") is None
+
+    def test_alert_none_on_gh_not_found(self) -> None:
+        with patch("session_preflight.subprocess.run", side_effect=OSError("gh not found")):
+            assert _preflight._check_convergence_sensor_liveness("ok") is None
+
+    def test_alert_none_on_timeout(self) -> None:
+        with patch(
+            "session_preflight.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=15),
+        ):
+            assert _preflight._check_convergence_sensor_liveness("ok") is None
+
+    def test_alert_none_on_malformed_json(self) -> None:
+        bad_result = MagicMock(returncode=0, stdout="not-json{{{")
+        with patch("session_preflight.subprocess.run", return_value=bad_result):
+            assert _preflight._check_convergence_sensor_liveness("ok") is None
+
+    def test_alert_none_on_empty_run_list(self) -> None:
+        empty_result = MagicMock(returncode=0, stdout=json.dumps([]))
+        with patch("session_preflight.subprocess.run", return_value=empty_result):
+            assert _preflight._check_convergence_sensor_liveness("ok") is None
+
+    def test_alert_none_when_conclusion_null_still_running(self) -> None:
+        """A still-in-progress scheduled tick reports conclusion=null -- not evidence of failure
+        yet, so this must not fire a false-positive alert on a run that simply hasn't finished."""
+        with patch("session_preflight.subprocess.run", return_value=self._make_gh_result(None)):
+            assert _preflight._check_convergence_sensor_liveness("ok") is None
+
+    def test_gh_invoked_with_convergence_health_workflow(self) -> None:
+        with patch("session_preflight.subprocess.run", return_value=self._make_gh_result("success")) as mock_run:
+            _preflight._check_convergence_sensor_liveness("ok")
+        args = mock_run.call_args[0][0]
+        assert "--workflow" in args
+        assert args[args.index("--workflow") + 1] == "convergence-health.yml"
 
 
 class TestConvergenceRcaGapAlert:

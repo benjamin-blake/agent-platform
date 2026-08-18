@@ -258,6 +258,65 @@ def _check_ci_rca_liveness(creds_status: str, cache_rows: object = _common._READ
     return {"run_url": run.get("url", ""), "elapsed_minutes": round(elapsed_minutes, 1)}
 
 
+def _check_convergence_sensor_liveness(creds_status: str) -> dict | None:
+    """Return alert dict when the latest scheduled convergence-health.yml run did not succeed.
+
+    Modelled directly on _check_ci_rca_liveness: same creds_status guard, same subprocess `gh run
+    list` shape with a timeout, same degrade-to-None error handling. Fires on the WORKFLOW's own
+    conclusion, independent of the convergence record's colour -- this closes the exact blind spot
+    the 2026-08-17 incident exposed: the sensor step raised (an unregistered source) and exited
+    non-zero on ~20 consecutive scheduled runs over 22 hours, but the convergence RECORD stayed
+    green throughout (only a separate, unrelated writer flips it), so preflight's existing
+    convergence_health.status read reported healthy the whole time. Returns its own payload shape
+    under its own report key -- never touches _check_convergence_rca_gap's payload contract.
+
+    Returns None when credentials are unavailable, the gh call fails/times out/raises, the
+    payload is malformed, or the latest run's conclusion is success or not yet terminal (null --
+    e.g. a still-running scheduled tick, which is not evidence of anything wrong yet).
+    """
+    if creds_status != "ok":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "run",
+                "list",
+                "--branch",
+                "main",
+                "--workflow",
+                "convergence-health.yml",
+                "--limit",
+                "1",
+                "--json",
+                "conclusion,createdAt,url",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        runs = json.loads(result.stdout)
+        if not runs:
+            return None
+        run = runs[0]
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError, IndexError):
+        return None
+
+    conclusion = run.get("conclusion")
+    if not conclusion or conclusion == "success":
+        return None
+
+    return {
+        "run_url": run.get("url", ""),
+        "conclusion": conclusion,
+        "created_at": run.get("createdAt", ""),
+    }
+
+
 _CONVERGENCE_RCA_GAP_GRACE_MINUTES = 30
 
 
