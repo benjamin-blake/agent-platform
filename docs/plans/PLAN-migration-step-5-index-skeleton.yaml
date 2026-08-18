@@ -56,8 +56,12 @@ scope:
     purpose: >-
       Home the contract-to-constant pin test (VP step 3's guard) here rather than in
       tests/test_decisions_index.py. It covers docs/contracts/decision-entry.yaml, not
-      scripts/decisions_index.py, so it has no tie to the module's coverage mapping, and this
-      file has ample headroom (62 SLOC) where the other has 13.
+      scripts/decisions_index.py, so it has no tie to the module's coverage mapping, and at 62
+      SLOC it has 438 lines of headroom against the other file's 13.
+      tests/test_decision_field_grammar.py::TestTerminatorConstantToContractPin is the
+      incumbent contract-to-constant pin against this same contract and was considered; it is
+      passed over only because its constants live in a source module while this plan's live in
+      a test module, which forces the text-read mechanism named in execution step 10.
   - file: docs/contracts/decision-entry.yaml
     action: Modify
     purpose: >-
@@ -262,7 +266,13 @@ verification_plan:
       validate_decisions_index_freshness failing means the committed index was not regenerated.
       Any structural-size or SLOC failure routes to the budgeted trims above, never a raise.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      The full validator passes on origin/main, so a registry row for it could not clear the
+      differential admission gate; it is also the parent check-runner rather than a single
+      canonical-slot shape, so registering it would be circular. Classified waive rather than
+      not-applicable to stay uniform with steps 5 and 6, which are waived for the same
+      origin/main-passes reason.
   - step: 8
     phase: post-deploy
     action: >-
@@ -294,6 +304,40 @@ test_obligations:
       fails), green after. Linked to step 5 because the schema requires the linked step's
       command to host the pytest node id; VP step 1 is the stronger artifact-level
       discriminator for the same behaviour and is the graduated guard.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The committed artifact carries skeleton rows for every live:false entry and full
+      thirteen-key rows for every live:true entry -- the regenerated file, not just the
+      generator, is what decision-scout and every other consumer actually reads.
+    verification_step: 1
+    command: archive row not a skeleton
+    red_green_expectation: >-
+      Red before (all 27 archive rows carry 12 keys, so the skeleton key-set assertion fails
+      naming every one of them), green after with 8 keys per archive row.
+  - source: docs/contracts/decision-entry.yaml
+    behavior: >-
+      size_governance.index_max_bytes exists, equals the enforcing test constant, and carries a
+      lever_by_ceiling_matrix row -- so the third corpus ceiling is discoverable beside its two
+      siblings and cannot silently drift from the value actually enforced.
+    verification_step: 3
+    command: c['index_max_bytes']==pin
+    red_green_expectation: >-
+      Red before (size_governance has no index_max_bytes key, so the command raises KeyError),
+      green after with the contract and test constant both at 112000.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      Three new rows keyed (check_id, plan_slug) back the three graduate-disposition VP steps,
+      each clearing the differential admission gate.
+    verification_step: 7
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      The registry's own content is not guarded by a dedicated test but by two registered
+      checks that VP step 7 already runs: validate_graduation_completeness's implement-PR leg
+      fails if any of the three (check_id, plan_slug) rows is missing or mis-keyed, and
+      validate_verification_registry's differential admission gate re-executes each new row
+      against a real origin/main worktree and refuses any that does not fail there and pass on
+      HEAD. A bespoke test asserting the rows exist would be strictly weaker than the admission
+      gate that already proves they discriminate.
 
 constraints:
   - >-
@@ -386,20 +430,24 @@ context:
     7,879 of 46,194 excerpt characters, average 291.8 -- the drift is live-corpus growth since
     the audit's base commit, not an error in the finding.
   - >-
-    PIN DERIVATION AND THE 120-VS-132 RULING (operator decision, recorded because it is
-    deliberately inconsistent with the enforced ceiling). The pin is re-derived at the 120-
-    header TARGET, not the 132-header enforced ceiling: 120 x 796 + 54 x 289 = 111,126, rounded
-    up to 112,000 for measurement variance (the same round-up-to-a-clean-thousand step Decision
-    166 point 9 applied to 130,884 -> 131,000). Deriving at 132 would have yielded 120,678 ->
-    121,000. The operator chose 120 knowing the consequence: at 112,000 the pin binds after
-    about 5 more live entries (4,633 B headroom / 796 B per row = 5.8) while the header ceiling
-    permits 7, so for a one-entry window the byte pin -- not the header ceiling -- is the first
-    guard to fire. That is intended. The 132 raise was instrumental (it bought room to author
-    the governance entries that stop unbounded growth), the operator is steering back to 120,
-    and a pin derived at 120 encodes the target state rather than the transitional allowance:
-    once the corpus is back at 120 live it has about 9 entries of slack and stops binding.
-    Deriving at 132 would bank the bridge's temporary raise permanently into the pin, which the
-    operator declined.
+    PIN DERIVATION AND THE 120-VS-132 RULING (operator decision). The pin is re-derived at the
+    120-header TARGET, not the 132-header enforced constant: 120 x 796 + 54 x 289 = 111,126,
+    rounded up to 112,000 for measurement variance (the same round-up-to-a-clean-thousand step
+    Decision 166 point 9 applied to 130,884 -> 131,000). Deriving at 132 would have yielded
+    120,678 -> 121,000. Note what 120 actually is: it is the only RATIFIED header ceiling
+    (Decision 134 clause 2, restated unchanged at Decision 160 point 4). 132 is unratified
+    bridge state carried by PLAN-decision-ceiling-bridge's recorded human override of a
+    decision-scout BLOCK, with no numbered Decision behind it. So deriving at 120 is consistent
+    with ratified governance and inconsistent only with a transitional constant -- not the
+    reverse. The operator chose it knowing the consequence, which is a TWO-entry window, not
+    one: from the regenerated 107,367 B at 795.88 B per live row, the pin fails at +6 entries
+    (112,142 B) while the header ceiling still passes at +7 (132 headers) and fails only at +8,
+    so across +6 and +7 the byte pin is the first and only guard to fire. That is intended. The
+    132 raise was instrumental (it bought room to author the governance entries that stop
+    unbounded growth), the operator is steering back to 120, and a pin derived at 120 encodes
+    the target state rather than the transitional allowance: once the corpus is back at 120
+    live it has about 9 entries of slack and stops binding. Deriving at 132 would bank the
+    bridge's temporary raise permanently into the pin, which the operator declined.
   - >-
     OPERATOR FORWARD INTENT (the reason the tight pin is safe). The plan of record for
     reclaiming headroom is to collapse existing Decisions and their h2 headers into
@@ -480,12 +528,23 @@ context:
     reversal condition (f) re-audits the registry's design on a second raise. This plan spends
     that runway knowingly.
   - >-
+    WHY ARCHIVE ROWS STAY IN THE INDEX AT ALL (the prior question, answered before the
+    alternative below). Deleting live:false rows outright would reclaim the entire archive term
+    rather than 61% of it, and is nonetheless wrong: build_index() derives supersedes /
+    superseded_by as a CORPUS-WIDE union across both files (scripts/decisions_index.py:168-184
+    -- superseded_by_map and supersedes_map are built over every parsed row, and
+    title_supersedes targets resolve against the same dict), so an archived number must stay
+    resolvable or live entries acquire dangling edges pointing at numbers the index no longer
+    contains. A skeleton is the minimum row that keeps the edge graph closed -- which is why
+    `number`, the three edge keys and `live` are non-negotiable members of the retained set.
+  - >-
     ALTERNATIVE CONSIDERED AND DECLINED (frame check). Splitting docs/decisions-index.json into
     separate live and archive artifacts would reclaim the whole archive term (a further 7,239 B)
     rather than the 61% skeletonization reclaims, but it costs the single-artifact freshness
-    check, the `live` flag's provenance role, and every consumer's one-file read. Not worth it
-    against a surface with a dated successor in T1.5 c1; recorded so a later reader does not
-    mistake the partial reclaim for an oversight.
+    check, the `live` flag's provenance role, and every consumer's one-file read -- and it does
+    not escape the edge-graph constraint above, since resolving one edge would then need both
+    files. Not worth it against a surface with a dated successor in T1.5 c1; recorded so a
+    later reader does not mistake the partial reclaim for an oversight.
   - >-
     WHAT THE PROMPT THAT COMMISSIONED THIS PLAN GOT WRONG, so the implementing agent does not
     reintroduce it. (a) It asked to "RETAIN the currency field" on archived rows. Archive rows
@@ -551,7 +610,8 @@ execution_steps:
     TestCommittedIndexSizePin's docstring to 22 non-blank lines or fewer (it is 39 today). It
     must record: the new arithmetic (120 x 796 + 54 x 289 = 111,126, rounded up to 112,000)
     with its measured inputs; that 120 is the TARGET while 132 is the enforced ceiling, that
-    this is deliberate, and the one-entry consequence; that the pin is never raised and the
+    this is deliberate, and the TWO-entry consequence (the pin fails at +6 live entries, the
+    header ceiling only at +8); that the pin is never raised and the
     response to binding is archival or collapsing entries into contracts; and the corrected
     attributions per constraints 2 and 3. The Decision 166 acute-landing narrative is preserved
     verbatim in docs/DECISIONS.md and must not be restated. Delete the stale "binding within
@@ -589,7 +649,15 @@ execution_steps:
     tests/test_decisions_index.py's _COMMITTED_INDEX_MAX_BYTES and that
     lever_by_ceiling_matrix carries the index_max_bytes row. It is homed here, not in
     tests/test_decisions_index.py, because it covers the contract rather than
-    scripts/decisions_index.py and this file has headroom (62 SLOC) where the other has 13.
+    scripts/decisions_index.py and, at 62 SLOC, has 438 lines of headroom against the other
+    file's 13. MECHANISM IS MANDATORY: read the constant by regexing the test module's TEXT (as
+    VP step 3's own command does), never by importing it -- `from tests.test_decisions_index
+    import _COMMITTED_INDEX_MAX_BYTES` would trip Decision 131's cross-test-import guard
+    (scripts/checks/hygiene/validate_no_cross_test_imports.py flags any tests/**/*.py import
+    whose final dotted component starts with test_). This is also why
+    tests/test_decision_field_grammar.py::TestTerminatorConstantToContractPin is not the model
+    here: its constants live in scripts/decisions_md.py, a source module, so it can import
+    them.
   - >-
     Execute Verification Plan steps 1-6; loop until pass. Confirm steps 1-3 FAIL on origin/main
     and PASS on HEAD before registering them -- all three were dry-run at planning time and
