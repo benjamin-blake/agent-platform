@@ -34,7 +34,12 @@ scope:
     purpose: >-
       Defect C. Export a module-level SCANNED_PATHS holding the COMPLETE scan set -- the existing
       portal files AND the enumerated producer modules (see constraints) -- drive the scan from it,
-      and add registry.examined() so the check declares an outcome (Decision 170 touch-it-fix-it).
+      and add registry.examined() so the check declares an outcome (Decision 170's touch-it-fix-it
+      clause makes this mandatory once the module is edited, not optional). SCANNED_PATHS entries
+      MUST be repo-relative strings joined against _common.ROOT at call time, never absolute Paths
+      resolved at import: tests/checks/_common/test_primitives.py:407 patches
+      scripts.checks._common.ROOT and dispatches this check, and an import-time absolute constant
+      would freeze the real ROOT and silently defeat that seam.
   - file: scripts/checks/ops_governance/_manifest.py
     action: Modify
     purpose: >-
@@ -71,24 +76,44 @@ scope:
       list` shape with a timeout, same degrade-to-None error handling -- pointed at
       --workflow convergence-health.yml. It returns its OWN payload shape and does NOT touch
       _check_convergence_rca_gap's payload contract.
-  - file: scripts/preflight/alerts.py
+  - file: scripts/preflight/summary.py
     action: Create
     purpose: >-
-      Relocation target for the existing convergence/ci-rca alert PRINTING and summary-suffix
-      logic currently inline in scripts/session/preflight.py. This exists to create SLOC headroom:
-      preflight.py is at 498 effective lines against the hard 500 gate, so the new liveness wiring
+      NEW module, relocation target for the alert PRINTING and summary-suffix logic currently
+      inline in scripts/session/preflight.py (the three alert-print blocks at L412-418, L421-426,
+      L428-434 plus the endstate-drift block at L436-442). This exists to create SLOC headroom:
+      preflight.py is at 498 effective lines against the hard 500 gate, so the liveness wiring
       cannot be added without first moving something out (Decision 128 decompose, never raise).
+      Deliberately NOT scripts/preflight/alerts.py -- that module already exists, its docstring
+      scopes it to "Recurrence and bypass alert concern", and every one of its seven functions is
+      a pure derivation that prints nothing. Folding presentation into it would mix concerns; a
+      separate summary module is the cleaner Decision 80/104/124 boundary and yields the same
+      headroom.
   - file: scripts/session/preflight.py
     action: Modify
     purpose: >-
-      Move the alert printing/summary block into scripts/preflight/alerts.py, then add the
-      liveness wiring: the facade re-export of _check_convergence_sensor_liveness into the
+      Move the alert printing/summary block into the new scripts/preflight/summary.py, then add
+      the liveness wiring: the facade re-export of _check_convergence_sensor_liveness into the
       existing `from scripts.preflight.ci_rca_signals import (...)  # noqa: F401` block (lines
-      95-105) -- required because tests reach signals through the facade via
+      95-111) -- required because tests reach signals through the facade via
       tests/fixtures/session_preflight_module -- plus the call, its own report key, and its own
-      summary entry. Net effective lines MUST end below 500. Keep the alert under a key distinct
-      from convergence_rca_gap_alert, whose consumers at lines 414 and 502 hard-subscript
+      summary entry. GENERAL OBLIGATION: any symbol relocated out of preflight.py that appears in
+      tests/test_session_preflight_decomposition.py::FROZEN_EXPORTS must keep a facade re-export
+      -- _format_preflight_summary is in that frozen set (lines 231/246) and is called as
+      _preflight._format_preflight_summary(...) at tests/session/preflight/test_main_report.py:32
+      and :51. Net effective lines MUST end below 500. Keep the alert under a key distinct from
+      convergence_rca_gap_alert, whose consumers at lines 414 and 502 hard-subscript
       ['red_age_hours'].
+  - file: tests/test_session_preflight_decomposition.py
+    action: Modify
+    purpose: >-
+      Bump FROZEN_REPORT_KEYS to include the new sensor-liveness report key and raise BOTH the
+      module-level `assert len(FROZEN_REPORT_KEYS) == 49` (line 128) and
+      TestReportSchemaFreeze::test_report_key_set_matches_frozen_49's `len(report.keys()) == 49`
+      (line 381) to 50. The freeze constant's own comment mandates this in the same commit as a
+      deliberate report-key addition. Without this row the plan's new report key fails 2 frozen
+      assertions that pass today (99 tests green), and constraint "only files in Scope may be
+      modified" would box the implementer in.
   - file: tests/convergence_health/test_code_drift.py
     action: Delete
     purpose: >-
@@ -100,10 +125,13 @@ scope:
   - file: tests/convergence_health/code_drift/conftest.py
     action: Create
     purpose: >-
-      Shared fixtures both halves need -- _FakeDeployRecordsS3 (currently line 53 of the retired
-      module) and _RecordingS3. Decision 131 point 2's validate_no_cross_test_imports forbids one
-      tests/** module importing from another test_* module, so these MUST live in conftest.py
-      rather than being imported across the split. Precedent:
+      Shared fixtures both halves need. _FakeDeployRecordsS3 is a module-level class at line 53 of
+      the retired module and hoists directly. _RecordingS3 is NOT one symbol -- it is two separate
+      NESTED local class definitions (lines 175 and 399); the hoist must reconcile them into a
+      single shared fixture rather than moving one and leaving the other. Decision 131 point 2's
+      validate_no_cross_test_imports forbids one tests/** module importing from another test_*
+      module, so these MUST live in conftest.py (a `from .conftest import X` is permitted -- the
+      final module component is `conftest`, not `test_*`). Precedent:
       tests/checks/contracts/validate_contract_drift/conftest.py.
   - file: tests/convergence_health/code_drift/test_ducklake.py
     action: Create
@@ -134,8 +162,11 @@ scope:
   - file: tests/test_coverage_checker/test_coverage_checker_map.py
     action: Modify
     purpose: >-
-      Assert code_drift.py now maps to the tests/convergence_health/code_drift/ DIRECTORY, so the
-      concern-split registration is guarded against silent removal.
+      Two edits, both required. (1) Remove or amend the ("code_drift", "test_code_drift.py") row in
+      test_maps_convergence_health_submodules_to_their_own_mirror's parametrize list (line 310) --
+      it asserts the PRE-registration mapping and fails the moment the concern-split entry lands.
+      (2) Add the directory-mapping assertion so the registration is guarded against silent
+      removal.
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -227,7 +258,7 @@ verification_plan:
   - step: 6
     phase: pre-deploy
     action: Every gated file this plan touches is under the SLOC limit with no budget raise
-    command: bin/venv-python -c "import yaml; from pathlib import Path; b=(yaml.safe_load(Path('config/sloc_budgets.yaml').read_text()) or {}).get('budgets') or {}; ps=['scripts/session/preflight.py','tests/convergence_health/code_drift/test_prod.py','tests/convergence_health/code_drift/test_ducklake.py','scripts/preflight/alerts.py','scripts/convergence_health/code_drift.py']; bad=[]; [bad.append((p,s)) for p in ps for s in [len([l for l in Path(p).read_text().splitlines() if l.strip() and not l.strip().startswith('#')])] if s>=500 or p in b]; assert not bad, bad; print('SLOC_OK')"
+    command: bin/venv-python -c "import yaml; from pathlib import Path; b=(yaml.safe_load(Path('config/sloc_budgets.yaml').read_text()) or {}).get('budgets') or {}; ps=['scripts/session/preflight.py','tests/convergence_health/code_drift/test_prod.py','tests/convergence_health/code_drift/test_ducklake.py','tests/convergence_health/code_drift/conftest.py','scripts/preflight/summary.py','scripts/preflight/ci_rca_signals.py','scripts/convergence_health/code_drift.py']; bad=[]; [bad.append((p,s)) for p in ps for s in [len([l for l in Path(p).read_text().splitlines() if l.strip() and not l.strip().startswith('#')])] if s>500 or p in b]; assert not bad, bad; print('SLOC_OK')"
     expected: prints SLOC_OK and exits 0
     fix_if: >-
       A path listed with its size means that file crossed 500 -- decompose it further. A path
@@ -268,13 +299,21 @@ verification_plan:
     graduation_check_id: convergence-sensor-liveness-signal
   - step: 9
     phase: pre-deploy
-    action: Preflight runs end to end with the relocated alert printing and the new alert wired in
-    command: bin/venv-python -m scripts.session.preflight
-    expected: exits 0 and writes logs/.preflight-report.json containing the new sensor-liveness key
+    action: >-
+      Preflight runs end to end with the relocated printing and the new alert wired in, AND the
+      report-key freeze plus facade-export freeze are both updated to match
+    command: bin/venv-python -m scripts.session.preflight && bin/venv-python -m pytest tests/test_session_preflight_decomposition.py tests/session/preflight/test_main_report.py -q
+    expected: >-
+      preflight exits 0 and writes logs/.preflight-report.json containing the new sensor-liveness
+      key, then the freeze tests pass with FROZEN_REPORT_KEYS at 50
     fix_if: >-
-      KeyError on 'red_age_hours' means the liveness payload was merged into
-      convergence_rca_gap_alert instead of being given its own key (preflight.py lines 414 and 502
-      hard-subscript that field). ImportError means the alerts.py relocation left a dangling name.
+      A frozen-count assertion failure means FROZEN_REPORT_KEYS (line 128) and/or
+      test_report_key_set_matches_frozen_49 (line 381) were not bumped 49 -> 50 alongside the new
+      key. An AttributeError on _format_preflight_summary means a relocated symbol in
+      FROZEN_EXPORTS lost its facade re-export. KeyError on 'red_age_hours' means the liveness
+      payload was merged into convergence_rca_gap_alert instead of getting its own key
+      (preflight.py lines 414 and 502 hard-subscript that field). ImportError means the summary.py
+      relocation left a dangling name.
     hermetic: false
     graduation: not-applicable
   - step: 10
@@ -380,22 +419,32 @@ test_obligations:
       before the change.
   - source: scripts/session/preflight.py
     behavior: >-
-      The liveness alert is surfaced under its own report key, the facade re-export resolves for
-      test access, and the convergence_rca_gap_alert payload contract is unchanged.
+      The liveness alert is surfaced under its own report key, every FROZEN_EXPORTS symbol keeps a
+      facade re-export, and the convergence_rca_gap_alert payload contract is unchanged.
     verification_step: 9
-    command: bin/venv-python -m scripts.session.preflight
+    command: bin/venv-python -m scripts.session.preflight && bin/venv-python -m pytest tests/test_session_preflight_decomposition.py tests/session/preflight/test_main_report.py -q
     red_green_expectation: >-
       red before, green after -- the report carries no sensor-liveness key today; after the change
-      preflight completes and the key is present.
-  - source: scripts/preflight/alerts.py
+      preflight completes, the key is present, and the freeze tests pass at 50.
+  - source: tests/test_session_preflight_decomposition.py
+    behavior: >-
+      The report-key freeze tracks the real report surface: FROZEN_REPORT_KEYS and both count
+      assertions equal the actual number of report keys.
+    verification_step: 9
+    command: bin/venv-python -m scripts.session.preflight && bin/venv-python -m pytest tests/test_session_preflight_decomposition.py tests/session/preflight/test_main_report.py -q
+    red_green_expectation: >-
+      red before, green after -- the two frozen assertions pin 49 today and fail the moment the
+      50th key is added, then pass once bumped in the same commit.
+  - source: scripts/preflight/summary.py
     behavior: The relocated alert printing and summary-suffix logic renders identically from its new home.
     verification_step: 9
-    command: bin/venv-python -m scripts.session.preflight
+    command: bin/venv-python -m scripts.session.preflight && bin/venv-python -m pytest tests/test_session_preflight_decomposition.py tests/session/preflight/test_main_report.py -q
     waiver_reason: >-
       This is a pure relocation of existing print/format statements with no behavior change, and
       scripts/preflight/** is not in the coverage roster (map_source_to_test returns None). Its
-      correctness is proven end-to-end by verification step 9 running the real preflight, which is
-      the only caller; a dedicated unit test would assert stdout formatting and nothing more.
+      correctness is proven end-to-end by verification step 9 running the real preflight -- its only
+      caller -- plus test_main_report.py asserting the summary string through the facade; a
+      dedicated unit test would assert stdout formatting and nothing more.
 constraints:
   - >-
     Decision 55 anti-masking. Do NOT fix the red by swallowing validate_source's raise, by adding
@@ -511,15 +560,25 @@ context:
     creds guard and degrade-to-None handling -- the platform-native "did workflow X last succeed"
     primitive, in the very file being edited. No IAM change, no workflow edit.
   - >-
-    Scope additions from critique round 2, each verified by executing the gate rather than reading
-    it. (i) scripts/session/preflight.py measures 498 effective lines against the hard 500 gate and
-    is unregistered, and validate_sloc_limits is pre=True with no pre_globs (always runs) -- so the
-    liveness wiring cannot be added without first relocating code, hence scripts/preflight/alerts.py.
-    (ii) Splitting the test module drops code_drift.py coverage from 100% to 58% (50 statements,
-    lines 222-225/229-230/242/273-342) because map_source_to_test resolves it to a single file;
-    hence the _CONCERN_SPLIT_TEST_PACKAGES registration. Note that decomposing the SOURCE module
-    into a package would instead make it map to None and fall OUT of the coverage roster entirely --
-    that would be gate-dodging, and is deliberately not the chosen route.
+    Scope additions from critique rounds 2 and 3, each verified by executing the gate rather than
+    reading it. (i) scripts/session/preflight.py measures 498 effective lines against the hard 500
+    gate and is unregistered, and validate_sloc_limits is pre=True with no pre_globs (always runs)
+    -- so the liveness wiring cannot be added without first relocating code, hence the NEW
+    scripts/preflight/summary.py. Round 3 corrected an error here: an earlier draft named
+    scripts/preflight/alerts.py as a Create target, but that module already exists (118 effective
+    lines, seven derivation-only functions, four re-exported through preflight.py L64-69 and three
+    called at L277-279); declaring Create on it risked an overwrite, and folding presentation into
+    a derivation-only module mixed concerns. (ii) Splitting the test module breaks the coverage
+    measurement for code_drift.py because map_source_to_test resolves it to a single file; hence
+    the _CONCERN_SPLIT_TEST_PACKAGES registration. Measured precisely: with the prod cases removed
+    the mapped file yields 58% (50 of 119 statements, lines 222-225/229-230/242/273-342) -- that is
+    an INTERMEDIATE-state figure; in the merged end-state, with the mapped file deleted and no
+    registration, coverage_baseline skips the module entirely (test_path missing) and produces NO
+    measurement at all, which is a quieter and arguably worse failure. Either way the registration
+    is the fix. (iii) Adding a report key trips two frozen assertions in
+    tests/test_session_preflight_decomposition.py (99 tests green today), so that file is in scope.
+    Note that decomposing the SOURCE module into a package instead would make it map to None and
+    fall OUT of the coverage roster entirely -- gate-dodging, deliberately not chosen.
   - >-
     Verification tier note. No scope file appears in any src/lambdas/*/manifest.yaml
     (compute_affected_artifacts returns empty for all scope paths), so Decision 79's
@@ -606,11 +665,17 @@ execution_steps:
     plus the new reachability and fail-closed cases). Both new modules carry the module-scope
     `import boto3  # noqa: F401`. Delete tests/convergence_health/test_code_drift.py.
   - >-
-    scripts/preflight/alerts.py and scripts/session/preflight.py -- move the existing alert
-    printing and summary-suffix logic into alerts.py, then add the liveness wiring to preflight.py:
-    the facade re-export of _check_convergence_sensor_liveness into the existing noqa: F401 import
-    block, the call, its own report key, and its own summary entry. Confirm preflight.py ends below
-    500 effective lines.
+    scripts/preflight/summary.py (NEW) and scripts/session/preflight.py -- move the existing alert
+    printing and summary-suffix logic into summary.py, leaving scripts/preflight/alerts.py (which
+    already exists, derivation-only) untouched. Then add the liveness wiring to preflight.py: the
+    facade re-export of _check_convergence_sensor_liveness into the existing noqa: F401 import
+    block at lines 95-111, the call, its own report key, and its own summary entry. Keep a facade
+    re-export for every relocated symbol in FROZEN_EXPORTS (notably _format_preflight_summary).
+    Confirm preflight.py ends below 500 effective lines.
+  - >-
+    tests/test_session_preflight_decomposition.py -- add the new sensor-liveness key to
+    FROZEN_REPORT_KEYS and bump both count assertions (line 128 and line 381) from 49 to 50, in
+    this same commit as the freeze constant's comment requires.
   - >-
     scripts/preflight/ci_rca_signals.py -- add _check_convergence_sensor_liveness modelled on
     _check_ci_rca_liveness: creds_status guard, `gh run list --branch main --workflow
