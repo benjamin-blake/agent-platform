@@ -301,7 +301,19 @@ verification_plan:
     fix_if: >-
       A recorded sha that postdates the latest source commit still reports stale -- the comparison
       is still equality, not reachability. A null or unresolvable sha reports fresh -- the
-      fail-closed default is inverted.
+      fail-closed default is inverted. NOTE on this step's graduated row: it is a command_exit_zero
+      exercising _is_fresh directly, NOT a test_selector naming a node from the pytest command
+      above. Found when pr-validate reddened on the first attempt -- these tests drive
+      detect_prod_code_drift, so their module imports boto3 at module scope (deliberately, so the
+      fast tier's --collect-only pass sees the heavy-dep requirement and defers the file
+      proactively). requirements-fast.txt, which pr-validate installs, excludes boto3, and the
+      differential admission gate shells a raw pytest with none of pytest_diff's deferral logic, so
+      a node_id row is unrunnable there by construction. The replacement was checked to be a real
+      differential rather than a shape that merely satisfies the gate: _is_fresh does not exist on
+      origin/main at all (AST-verified), so the revert leg's ImportError is genuine in any
+      environment with a working interpreter. The local reproduction of that leg is muddied by the
+      same bin/venv-python-in-a-bare-worktree artifact behind steps 1/4/5/6/7's waivers; CI
+      installs pydantic on PATH, so it does not apply there.
     hermetic: false
     graduation: graduate
     graduation_check_id: convergence-drift-reachability-tests
