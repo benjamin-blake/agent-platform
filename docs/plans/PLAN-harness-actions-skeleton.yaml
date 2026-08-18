@@ -1,0 +1,718 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "harness-actions-skeleton"
+intent: >-
+  Build the first two milestones of a self-hosted agent harness whose EXECUTION substrate is a GitHub
+  Actions job and whose CONTROL PLANE is a vendor-neutral task journal in the warehouse. M1: an
+  operator-gated trigger runs ONE WHOLE AGENT TASK-ATTEMPT against a real checked-out working tree and
+  writes its outcome to the journal. M2: a forced mid-task kill is resumed from checkpoint by a second
+  job, and the RESUME TAX is measured against pre-registered falsifiers. This plan REPLACES the
+  two-arm AWS substrate spike (PLAN-esb-q5-substrate-spike.yaml), which is retired as
+  non-discriminating by construction, and records that retirement as a numbered Decision.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-harness-actions-skeleton.yaml
+phase: >-
+  Platform T4.1 / T4.2 (executor substrate). Supersedes wave 5 of the remediation run against
+  audits/executor-substrate-and-billing-shape-ad02653.yaml; waves 1-4 are merged. Discharges ESB-04 by
+  a reasoned retirement rather than by measurement, and leaves CD.43 (workspace_store_selection)
+  OPEN -- the workspace question is answered by the Actions checkout, not by an S3 strategy race.
+
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      TWO clauses in one numbered Decision (173). Clause 1 retires the two-arm AWS substrate comparison
+      and says why it was non-discriminating: an agent's real state is a git working tree plus a
+      transcript, not a 256KB checkpoint blob, so both arms were forced to hand-build the same S3
+      workspace layer and the headline metric was decided by the shared loop's cursor granularity
+      rather than by either substrate. Clause 2 records the PUBLICNESS DEPENDENCY as an explicit
+      re-trigger: free executor minutes are a property of THIS REPO BEING PUBLIC, and a future private
+      product repo re-opens the substrate question. Clause 2 exists because that dependency was
+      silently load-bearing -- it converted a disclosure decision (Decisions 73/83/101) into
+      infrastructure economics with nothing written down.
+  - file: docs/contracts/harness-task-model.yaml
+    action: Create
+    purpose: >-
+      The task-tree contract, authored BEFORE any loop code so persistence is never re-grained. Two
+      grains stated in one sentence each per the data-modeling standard: agent_tasks is "one row per
+      task" (mutable entity over its lifetime -> SCD2 history plus a Type-1 current projection),
+      agent_task_events is "one row per event" (insert-once -> append_only). ULID minted at the write
+      boundary, never client-side. parent_task_id is the tree edge; a sequential run is the degenerate
+      case of a tree with one leaf. Both tables partitioned (CD.9). Also declares the CLAIM/LEASE
+      semantic that closes the duplicate-resume race, and the monotonic sequence that closes the
+      lost-wake race -- both named here rather than left to the implementation.
+  - file: scripts/harness/__init__.py
+    action: Create
+    purpose: >-
+      Package facade for the harness. Deliberately a NEW package rather than an addition to
+      scripts/executor/: that package is the Decision 67 frozen executor (26 modules), and reusing its
+      name would conflate a frozen surface with an unfrozen one.
+  - file: scripts/harness/task_tree.py
+    action: Create
+    purpose: >-
+      The task model: TaskId (ULID), parent_task_id, status transitions, branch ref, transcript ref,
+      checkpoint ref. Pure data plus transition validation, no I/O -- so the tree grain is testable
+      without a warehouse or a runner.
+  - file: scripts/harness/journal.py
+    action: Create
+    purpose: >-
+      The control-plane client. Appends events and merges task rows on the business key. Owns the
+      claim/lease (claim_task returns False for an already-claimed live task) and the monotonic
+      sequence check (a write carrying a stale sequence is rejected, not silently applied). This is
+      the UP direction of the AWS/GitHub seam, and it is a JOURNAL WRITE, not a callback -- there is
+      no token to leak and recovery is an idempotent sweep rather than a heartbeat.
+  - file: scripts/harness/checkpoint.py
+    action: Create
+    purpose: >-
+      Serialize and restore a task-attempt's resumable state (transcript ref, cursor into the task
+      tree, working-tree branch). Deliberately stores REFERENCES not payloads, so checkpoint size is
+      bounded and independent of transcript length.
+  - file: scripts/harness/loop.py
+    action: Create
+    purpose: >-
+      The agent loop itself: Messages API calls, tool dispatch, and the decide-to-checkpoint boundary.
+      Substrate-agnostic by construction -- it takes a checkpoint in and returns a checkpoint out, and
+      imports nothing from boto3, Step Functions, or the GitHub API. That property is what makes a
+      later substrate change an adapter swap rather than a rewrite, and VP step 4 asserts it.
+  - file: scripts/harness/cli.py
+    action: Create
+    purpose: >-
+      The entrypoint the workflow invokes. Claims the task, restores the checkpoint if resuming, runs
+      the loop, writes the outcome, and exits non-zero on an unclaimed task so a duplicate dispatch
+      fails loudly instead of racing.
+  - file: .github/workflows/harness-task.yml
+    action: Create
+    purpose: >-
+      The M1 execution surface. Gated on OPERATOR IDENTITY, never on issue content -- this repo is
+      public, anyone can open an issue, and the runner holds credentials. Carries a concurrency group
+      so agent jobs cannot starve CI in the shared per-account runner pool (Free 20 / Pro 40 / Team
+      60, FIFO, no priority field exists), and a hard timeout-minutes rather than relying on a prompt
+      constraint alone.
+  - file: tests/harness/__init__.py
+    action: Create
+    purpose: Package marker for the harness test suite.
+  - file: tests/harness/test_task_tree.py
+    action: Create
+    purpose: >-
+      Grain and transition tests: a task carries parent_task_id, a tree of depth 2 round-trips, and an
+      illegal status transition raises. Proves the schema is tree-shaped BEFORE any parallelism exists.
+  - file: tests/harness/test_journal_claim.py
+    action: Create
+    purpose: >-
+      The duplicate-resume race. Two concurrent claims on one task: exactly one succeeds. Fails
+      without the lease.
+  - file: tests/harness/test_checkpoint_roundtrip.py
+    action: Create
+    purpose: >-
+      Checkpoint serialize -> restore preserves the resumable state, and stores refs rather than
+      payloads (a 10x larger transcript must not grow the checkpoint).
+  - file: tests/harness/test_resume_races.py
+    action: Create
+    purpose: >-
+      The lost-wake race. An event arriving while a checkpoint write is in flight must not be applied
+      out of order: a stale-sequence write is rejected and the wake still finds live state.
+  - file: tests/harness/test_loop_contract.py
+    action: Create
+    purpose: >-
+      The loop is checkpoint-in / checkpoint-out. Proves the substrate-agnostic contract behaviourally,
+      where verification step 4 proves it structurally by import sweep -- the two are deliberately
+      different instruments on the same property, because an import sweep cannot see state smuggled
+      through a module-level global.
+  - file: tests/harness/test_workflow_gating.py
+    action: Create
+    purpose: >-
+      Parses .github/workflows/harness-task.yml and asserts the trigger condition references an actor
+      or label identity gate and does NOT dispatch on raw issue/comment body content; asserts a
+      concurrency group and a timeout-minutes are present. This is the security-relevant assertion in
+      the plan and it is mechanical, not prose.
+  - file: tests/harness/test_no_orchestration_state_leak.py
+    action: Create
+    purpose: >-
+      CLASS assertion, not a site assertion: sweeps scripts/harness/ for orchestration state encoded
+      anywhere except the journal -- run names, branch names, artifact names, labels, or cache keys
+      used as status carriers. Written as a sweep because the plan's own reviewers named
+      class-versus-site as this project's dominant recurring defect.
+  - file: docs/plans/reports/harness-skeleton-findings.yaml
+    action: Create
+    purpose: >-
+      Where M2's measurements land, and where the NOT-TESTED register lives as a first-class section
+      rather than a caveats footnote. Carries the resume tax (runner queue, workspace
+      re-materialization, prompt-cache miss cost), the two race outcomes, and the pre-registered
+      falsifier thresholds with the measured value beside each.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Bookkeeping only. Records that the T4.1/T4.2 substrate question is answered by Decision 173
+      rather than by the retired spike, and that CD.43 (workspace_store_selection) is NOT closed by
+      this plan -- the Actions checkout answers the workspace question for this substrate, which is a
+      different answer than the S3-strategy race CD.43 was written to expect.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Graduate exactly ONE property: the workflow identity gate (tests/harness/test_workflow_gating.py).
+      It is the only assertion here that is durable rather than transient -- a public-repo agent
+      trigger that regresses to content-gating is a standing security defect, not a fact about this
+      plan. Everything else is deliberately NOT graduated; see constraints.
+
+bundled_recommendations: []
+closes_criteria: []
+
+infrastructure_dependencies:
+  - >-
+    An AWS role assumable from GitHub Actions via the OIDC trust that ALREADY EXISTS (CD.21 retired the
+    self-hosted runner in favour of GitHub-hosted runners with OIDC to the personal account). No new
+    trust relationship, no VPC, no NAT, no standing cost. If the existing role lacks warehouse-write
+    permission for the two new tables, that grant is the ONE out-of-band change this plan needs.
+  - >-
+    CLAUDE_CODE_OAUTH_TOKEN or an Anthropic API credential available to the workflow. The repo already
+    holds CLAUDE_CODE_OAUTH_TOKEN for .github/workflows/claude.yml.
+  - >-
+    The DuckLake writer must accept two new tables. This is the plan's single new mechanism and it is
+    declared, not smuggled -- see the constraint on additions.
+
+acceptance_criteria:
+  - "A numbered Decision 173 exists carrying BOTH clauses: the spike retirement with its reason, and the publicness re-trigger."
+  - "docs/contracts/harness-task-model.yaml states the grain of both tables in one sentence each, names the write mode of each, and names ULID identity minted at the write boundary."
+  - "agent_tasks carries parent_task_id, so a tree of concurrent work is expressible without a schema change."
+  - "Both tables are partitioned; neither is designed as one-row-per-entity-mutated-in-place."
+  - "scripts/harness/loop.py imports nothing from boto3, no GitHub API client, and no Step Functions or durable-functions SDK."
+  - "The workflow trigger is gated on operator identity (actor or operator-applied label) and NOT on raw issue or comment body content."
+  - "The workflow declares a concurrency group and an explicit timeout-minutes."
+  - "Exactly one claim succeeds when two claims race for the same task."
+  - "A journal write carrying a stale sequence is rejected rather than silently applied."
+  - "A checkpoint stores references, not payloads: a 10x larger transcript does not materially grow the checkpoint."
+  - "No orchestration state is encoded in run names, branch names, artifact names, labels, or cache keys -- proven by a sweep, not by inspection of one site."
+  - "M1 runs end-to-end: an operator-gated trigger produces a task-attempt that writes a journal row and either opens a PR or persists a checkpoint."
+  - "M2 runs end-to-end: a forced mid-task kill is resumed by a second job from checkpoint, and the task completes."
+  - "harness-skeleton-findings.yaml records the measured resume tax and BOTH race outcomes, each beside its pre-registered falsifier threshold."
+  - "harness-skeleton-findings.yaml carries a NOT-TESTED register naming, per item, what this design cannot demonstrate and what would be required to demonstrate it."
+  - "Exactly one verification step graduates; every other step carries a substantive waiver naming why its subject is transient."
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      The Decision carries BOTH clauses. Clause 2 (publicness) is the one at risk of being dropped as
+      an afterthought, because it is the only clause that constrains a FUTURE decision rather than
+      recording a past one, so it is asserted by name.
+    command: >-
+      bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8');
+      m=re.search(r'^## Decision 173:.*?(?=^## Decision |\Z)', t, re.M|re.S); assert m, 'no Decision 173 header';
+      b=m.group(0); assert re.search(r'non-discriminat|retire', b, re.I), 'clause 1 (spike retirement) absent';
+      assert re.search(r'public', b, re.I) and re.search(r'private', b, re.I), 'clause 2 (publicness re-trigger)
+      absent -- the dependency stays silent and load-bearing'; print('OK Decision 173 carries both clauses',
+      len(b.encode()), 'bytes')"
+    expected: >-
+      Exits 0 printing `OK Decision 173 carries both clauses` and a byte count under the 6,144 per-entry
+      cap. On origin/main it exits 1 with `no Decision 173 header` (the newest header is 172).
+    fix_if: >-
+      If clause 2 is missing, do NOT satisfy this by adding the word "public" -- write the re-trigger:
+      a future private product repo re-opens the substrate question, because free minutes are a
+      property of publicness.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A graduated row would assert the existence of one Decision number forever, which is a transient
+      fact about this plan rather than a standing platform property.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      The task-model contract states both grains, both write modes, ULID-at-the-boundary, the tree
+      edge, and partitioning. Asserted as a CLASS over the two declared tables rather than as two
+      named-table assertions, so a third table added later cannot pass silently.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('docs/contracts/harness-task-model.yaml').read_text());
+      tabs=d.get('tables') or {}; assert set(tabs)=={'agent_tasks','agent_task_events'}, f'unexpected table set:
+      {sorted(tabs)}'; missing={n:[k for k in ('grain','write_mode','partition_by') if not str(t.get(k,'')).strip()]
+      for n,t in tabs.items()}; bad={n:m for n,m in missing.items() if m}; assert not bad, f'tables missing required
+      fields: {bad}'; modes={n:t['write_mode'] for n,t in tabs.items()}; assert modes['agent_tasks']=='scd2',
+      f\"agent_tasks must be scd2, got {modes['agent_tasks']}\"; assert modes['agent_task_events']=='append_only',
+      f\"agent_task_events must be append_only, got {modes['agent_task_events']}\"; assert 'parent_task_id' in
+      str(tabs['agent_tasks'].get('columns','')), 'agent_tasks has no parent_task_id -- the tree is not expressible';
+      assert 'ulid' in str(d.get('identity','')).lower(), 'identity does not name ULID'; print('OK 2 tables, grains
+      stated, modes', modes, 'partitioned, tree edge present')"
+    expected: >-
+      Exits 0 printing `OK 2 tables, grains stated, modes` with agent_tasks scd2 and agent_task_events
+      append_only. On origin/main it exits 1 -- the contract file does not exist.
+    fix_if: >-
+      If agent_tasks is append_only, the grain was chosen wrong: a task is a MUTABLE entity over its
+      lifetime. If agent_task_events is scd2, the same error in the other direction -- an event is
+      insert-once.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A registry row pinning this plan's exact two-table set would have to be amended by the next
+      table the harness adds, which makes it a transient fact wearing a standing check's clothes.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      The workflow's trigger is identity-gated, not content-gated, and carries the two guards that
+      bound blast radius. This is the security-relevant assertion in the plan.
+    command: >-
+      bin/venv-python -m pytest tests/harness/test_workflow_gating.py -q
+    expected: >-
+      All tests pass. The suite asserts the `if:` condition references github.actor or a label, that it
+      does NOT reference github.event.issue.body or github.event.comment.body, and that both
+      `concurrency:` and `timeout-minutes:` are present. On origin/main it exits non-zero -- neither the
+      workflow nor the test exists.
+    fix_if: >-
+      If the gate is content-based, this is the live defect class: .github/workflows/claude.yml today
+      triggers on `contains(github.event.issue.body, '@claude')`, which is content. Do not copy it.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: harness-workflow-identity-gate
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      The loop is substrate-agnostic. Asserted by import sweep over the whole package rather than by
+      reading loop.py, so a substrate import added to a sibling module is caught too.
+    command: >-
+      bin/venv-python -c "import pathlib,re; ban=re.compile(r'\b(boto3|stepfunctions|sfn|durable_functions|
+      PyGithub|github3)\b'); files=sorted(pathlib.Path('scripts/harness').glob('*.py')); assert files, 'no harness
+      modules found -- the sweep would pass vacuously'; core=[f for f in files if f.name in ('loop.py','task_tree.py',
+      'checkpoint.py')]; assert len(core)==3, f'expected 3 core modules, found {[f.name for f in core]}';
+      hits={f.name:sorted(set(ban.findall(f.read_text()))) for f in core}; bad={n:h for n,h in hits.items() if h};
+      assert not bad, f'substrate imports leaked into substrate-agnostic modules: {bad}'; print('OK', len(files),
+      'harness modules;', len(core), 'core modules free of substrate imports')"
+    expected: >-
+      Exits 0 printing `OK N harness modules; 3 core modules free of substrate imports`. Fails CLOSED
+      when the package is absent (`no harness modules found`) rather than passing vacuously. On
+      origin/main it exits 1 on exactly that anti-vacuity leg.
+    fix_if: >-
+      If a substrate import is in loop.py, the adapter boundary is in the wrong place -- move the
+      substrate call to cli.py or journal.py, which are allowed to know where they run.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The property is durable but the subject is this plan's package; a registry row would assert that
+      scripts/harness/ exists forever, which forecloses ever renaming or retiring it.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      The two races, run as tests rather than argued as prose. These are the genuinely unknown things
+      the design turns on, per the consult that reframed the durable-suspension concern.
+    command: >-
+      bin/venv-python -m pytest tests/harness -q
+    expected: >-
+      All tests pass: exactly one of two racing claims succeeds, and a stale-sequence write is rejected
+      while the wake still finds live state. On origin/main it exits non-zero -- the tests do not exist.
+    fix_if: >-
+      If a duplicate claim succeeds, the lease is advisory rather than enforced. Do NOT close it by
+      adding a lock service -- the claim must be atomic in the same write that sets status.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The race semantics are durable, but the tests are already standing pytest coverage in --pre; a
+      registry row would duplicate a check the suite already runs on every PR.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Checkpoint stores references, not payloads. Bounded checkpoint size is what makes resume cheap
+      and what keeps the design independent of transcript length.
+    command: >-
+      bin/venv-python -m pytest tests/harness/test_checkpoint_roundtrip.py -q
+    expected: >-
+      Tests pass, including the size-independence case: a 10x larger transcript does not materially
+      grow the serialized checkpoint. On origin/main it exits non-zero.
+    fix_if: >-
+      If checkpoint size scales with transcript length, the transcript is being embedded. Store the ref.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient: asserts a property of this plan's checkpoint format, which the harness is expected to
+      evolve.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      No orchestration state outside the journal. A CLASS sweep, because class-versus-site is this
+      project's dominant recurring defect and it has shipped to main once in this run.
+    command: >-
+      bin/venv-python -m pytest tests/harness/test_no_orchestration_state_leak.py -q
+    expected: >-
+      Tests pass -- no status, claim, or sequence value is carried in a run name, branch name, artifact
+      name, label, or cache key. On origin/main it exits non-zero.
+    fix_if: >-
+      If state leaked into a branch name, that is a second source of truth by accident. Move it to the
+      journal; the branch name may carry the task id as an OPAQUE label only.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Standing pytest coverage already runs this in --pre; a registry row would be a duplicate reader
+      of the same test.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Exactly one graduation, and the plan says which. Asserted as a count so a later reviewer cannot
+      quietly add a second.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('docs/plans/PLAN-harness-actions-skeleton.yaml').read_text());
+      vp=d['verification_plan']; g=[s['step'] for s in vp if s.get('graduation')=='graduate']; assert g==[3],
+      f'expected exactly step 3 to graduate, got {g}'; w=[s['step'] for s in vp if s.get('graduation')=='waive'];
+      missing=[s for s in w if not str(next(x for x in vp if x['step']==s).get('graduation_waiver_reason','')).strip()];
+      assert not missing, f'waived steps with no reason: {missing}'; print('OK 1 graduated (step 3),', len(w),
+      'waived, all with reasons')"
+    expected: >-
+      Exits 0 printing `OK 1 graduated (step 3),` a waived count, `all with reasons`. This command
+      PASSES on origin/main only if the plan file exists there; it does not, so it exits 1.
+    fix_if: >-
+      If more than one step graduates, re-read the waiver reasons: everything except the identity gate
+      asserts a transient fact about this plan.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step reads THIS PLAN's own file; a registry row would pin one plan's graduation count into
+      the permanent suite.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      The NOT-TESTED register exists and is populated. The operator required this as a first-class
+      section, not a caveats footnote, because the retired plan buried its biggest limitation in prose
+      and a critique had to dig it out.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; p=pathlib.Path('docs/plans/reports/harness-skeleton-findings.yaml');
+      assert p.exists(), 'findings.yaml absent'; d=yaml.safe_load(p.read_text()) or {}; nt=d.get('not_tested') or [];
+      assert len(nt)>=4, f'not_tested register has {len(nt)} entries -- too thin to be a real register';
+      bad=[e for e in nt if not (str(e.get('item','')).strip() and str(e.get('why_not','')).strip() and
+      str(e.get('what_would_be_required','')).strip())]; assert not bad, f'{len(bad)} not_tested entries are
+      incomplete'; print('OK not_tested register:', len(nt), 'entries, each with why_not and
+      what_would_be_required')"
+    expected: >-
+      Exits 0 printing `OK not_tested register:` with at least 4 complete entries. On origin/main it
+      exits 1 with `findings.yaml absent`.
+    fix_if: >-
+      Do NOT satisfy this by listing trivia. The register must name the real ones: no measurement of
+      behaviour past the 6-hour job cap, no multi-product concurrency evidence, no private-repo cost
+      evidence, and no parallel-task evidence.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts the shape of one plan's report file, which is transient by construction.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Falsifiers are pre-registered WITH thresholds before M2 runs, so the measurement cannot be
+      rationalised after the fact. Each falsifier must name the milestone that measures it.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('docs/plans/reports/harness-skeleton-findings.yaml').read_text())
+      or {}; f=d.get('falsifiers') or []; assert len(f)>=3, f'expected at least 3 pre-registered falsifiers, got
+      {len(f)}'; bad=[x for x in f if not (str(x.get('claim','')).strip() and str(x.get('threshold','')).strip()
+      and str(x.get('measured_by','')).strip())]; assert not bad, f'{len(bad)} falsifiers lack claim/threshold/measured_by';
+      print('OK', len(f), 'falsifiers pre-registered with thresholds')"
+    expected: >-
+      Exits 0 printing `OK N falsifiers pre-registered with thresholds`. On origin/main it exits 1.
+    fix_if: >-
+      A falsifier with no numeric or binary threshold is not a falsifier. State the margin.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient: the falsifier set belongs to this plan's experiment, not to the platform.
+  - step: 11
+    phase: pre-deploy
+    action: Full presubmit tier, per handoff_policy.
+    command: bin/venv-python -m scripts.validate
+    expected: "Exit 0, `All checks passed`."
+    fix_if: >-
+      A timeout is timeout_disposition blocked: resume the named check and rerun the full tier from the
+      start rather than reporting a partial pass.
+    hermetic: false
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: >-
+      M1 END-TO-END, the first real information this plan produces. An operator-gated trigger runs one
+      task-attempt against a real checkout and writes a journal row. Read back from the journal, not
+      from the workflow log -- the log is not the source of truth.
+    command: >-
+      bin/venv-python -m scripts.harness.cli --verify-last-run --expect-status completed
+    expected: >-
+      Exits 0 reporting one task row with a terminal status, a branch ref, and a transcript ref. A
+      task-attempt that produced no journal row is a FAILURE of this step even if the workflow was green.
+    fix_if: >-
+      If the workflow was green but no journal row exists, the seam is broken in the UP direction --
+      the OIDC role most likely lacks warehouse-write for the new tables. That is the one out-of-band
+      grant named in infrastructure_dependencies.
+    hermetic: false
+    graduation: not-applicable
+  - step: 13
+    phase: post-deploy
+    action: >-
+      M2 END-TO-END: forced mid-task kill, resumed from checkpoint by a second job, task completes. This
+      is the step that answers the operator's actual concern -- whether checkpoint-and-relaunch is an
+      adequate substitute for durable suspension.
+    command: >-
+      bin/venv-python -m scripts.harness.cli --verify-resume --expect-attempts 2
+    expected: >-
+      Exits 0 reporting exactly two attempts against one task_id, the second starting from the first's
+      checkpoint, with a terminal completed status. Two attempts that both started from scratch is a
+      FAILURE -- that is relaunch without resume.
+    fix_if: >-
+      If attempt 2 restarted from scratch, the checkpoint ref was not read. If THREE attempts appear,
+      the duplicate-resume race is live in production despite step 5 passing -- which is the
+      class-versus-site defect, and the fix belongs in the journal, not in the workflow.
+    hermetic: false
+    graduation: not-applicable
+  - step: 14
+    phase: post-deploy
+    action: >-
+      The resume tax is measured and written down beside its threshold, and the verdict is stated
+      either way. A measurement that exceeds its falsifier is a RESULT, not a failure of the plan.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('docs/plans/reports/harness-skeleton-findings.yaml').read_text())
+      or {}; r=d.get('resume_tax') or {}; need=('runner_queue_s','workspace_rematerialization_s','prompt_cache_miss_usd','total_s');
+      gaps=sorted(k for k in need if r.get(k) is None); assert not gaps, f'resume tax not measured: {gaps}';
+      v=[x for x in (d.get('falsifiers') or []) if not str(x.get('verdict','')).strip()]; assert not v, f'{len(v)}
+      falsifiers carry no verdict after M2 -- an unjudged falsifier is a phantom'; print('OK resume tax measured,
+      total', r['total_s'], 's; all falsifiers judged')"
+    expected: >-
+      Exits 0 printing `OK resume tax measured, total <N> s; all falsifiers judged`. Fails while any
+      falsifier is unjudged, so the experiment cannot end without a verdict on each.
+    fix_if: >-
+      If a falsifier fired, do NOT soften it. A fired falsifier is the re-entry ticket for a durable
+      waiter and should be recorded as such -- that is the plan working, not the plan failing.
+    hermetic: false
+    graduation: not-applicable
+
+test_obligations:
+  - source: scripts/harness/task_tree.py
+    behavior: "A task carries parent_task_id; a depth-2 tree round-trips; an illegal status transition raises."
+    verification_step: 5
+    test_selector: tests/harness/test_task_tree.py
+    red_green_expectation: "Red before task_tree.py exists (collection error); green once the tree model lands."
+  - source: scripts/harness/journal.py
+    behavior: "Exactly one of two concurrent claims on a task succeeds; a stale-sequence write is rejected."
+    verification_step: 5
+    test_selector: tests/harness/test_journal_claim.py
+    red_green_expectation: "Red without the lease and sequence check; green with both."
+  - source: scripts/harness/checkpoint.py
+    behavior: "Serialize-restore preserves resumable state and stores refs, not payloads."
+    verification_step: 6
+    test_selector: tests/harness/test_checkpoint_roundtrip.py
+    red_green_expectation: "Red while the transcript is embedded (size scales 10x); green once it is a ref."
+  - source: scripts/harness/loop.py
+    behavior: "The loop takes a checkpoint in and returns one out, holding no substrate state across calls."
+    verification_step: 5
+    test_selector: tests/harness/test_loop_contract.py
+    red_green_expectation: "Red while loop state persists in a module-level global; green once it is checkpoint-in/checkpoint-out."
+  - source: scripts/harness/cli.py
+    behavior: "Claiming an already-claimed live task exits non-zero rather than proceeding."
+    verification_step: 5
+    test_selector: tests/harness/test_journal_claim.py
+    red_green_expectation: "Red while cli.py ignores the claim result; green once it exits on a lost claim."
+  - source: tests/harness/test_resume_races.py
+    behavior: "An event arriving during an in-flight checkpoint write is not applied out of order."
+    verification_step: 5
+    test_selector: tests/harness/test_resume_races.py
+    red_green_expectation: "Red without the monotonic sequence; green once a stale-sequence write is rejected."
+  - source: .github/workflows/harness-task.yml
+    behavior: "The trigger is identity-gated, not content-gated, and declares a concurrency group and a timeout."
+    verification_step: 3
+    test_selector: tests/harness/test_workflow_gating.py
+    red_green_expectation: "Red against a content-gated trigger (the shape claude.yml uses today); green once identity-gated."
+  - source: tests/harness/test_no_orchestration_state_leak.py
+    behavior: "No orchestration state is encoded outside the journal, swept as a class across the package."
+    verification_step: 7
+    test_selector: tests/harness/test_no_orchestration_state_leak.py
+    red_green_expectation: "Red when a status value is planted in a branch name; green once it lives only in the journal."
+  - source: docs/contracts/harness-task-model.yaml
+    behavior: "Both grains stated, both write modes declared, ULID identity, tree edge, partitioning."
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A contract YAML declares no behavior of its own; its content is asserted mechanically by
+      verification step 2, and its schema conformance by the contracts check already standing in the
+      validate tier. A bespoke test would assert the YAML parser against itself.
+  - source: docs/DECISIONS.md
+    behavior: "Decision 173 carries the retirement clause and the publicness re-trigger clause."
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      Decision entries are prose governed by validate_decisions_size and the category-consistency
+      check, both standing guards. Verification step 1 asserts the two clauses by name; a permanent
+      test would pin one Decision number into the suite forever.
+  - source: tests/harness/__init__.py
+    behavior: "Package marker; importability is exercised transitively by every test in the package."
+    verification_step: 5
+    command: bin/venv-python -m pytest tests/harness -q
+    waiver_reason: >-
+      A package marker declares no behavior of its own. A dedicated test would assert that pytest can
+      import a package pytest just imported.
+  - source: docs/plans/reports/harness-skeleton-findings.yaml
+    behavior: "Carries the not-tested register, pre-registered falsifiers with thresholds, and the measured resume tax."
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A findings report is data produced by the experiment, not code with behavior. Steps 9, 10 and 14
+      assert its shape and completeness mechanically, including that no falsifier ends unjudged.
+
+  - source: scripts/harness/__init__.py
+    behavior: "Package facade re-exporting the harness public surface."
+    verification_step: 5
+    command: bin/venv-python -m pytest tests/harness -q
+    waiver_reason: >-
+      A facade's only property is that its re-exports import, which every test in tests/harness
+      exercises transitively at collection time. A dedicated test would assert that an import that
+      already happened happened.
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: "Records T4.1/T4.2 as answered by Decision 173 and CD.43 as explicitly NOT closed."
+    verification_step: 11
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      Roadmap edits are already policed by validate_platform_roadmap and the closure-obligation check,
+      both standing guards in the validate tier. A bespoke test would pin this plan's roadmap deltas
+      into the permanent suite, which the next roadmap edit would have to amend.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: "Registers exactly one graduated row, harness-workflow-identity-gate."
+    verification_step: 8
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('docs/plans/PLAN-harness-actions-skeleton.yaml').read_text());
+      vp=d['verification_plan']; g=[s['step'] for s in vp if s.get('graduation')=='graduate']; assert g==[3],
+      f'expected exactly step 3 to graduate, got {g}'; w=[s['step'] for s in vp if s.get('graduation')=='waive'];
+      missing=[s for s in w if not str(next(x for x in vp if x['step']==s).get('graduation_waiver_reason','')).strip()];
+      assert not missing, f'waived steps with no reason: {missing}'; print('OK 1 graduated (step 3),', len(w),
+      'waived, all with reasons')"
+    waiver_reason: >-
+      The registry's own standing guards already own every durable half of this: validate_verification_registry
+      checks schema, uniqueness and differential admission of added rows, and the structural size check
+      enforces the line budget. Verification step 8 asserts the count from this plan's side. A bespoke
+      test would pin this plan's row count into the permanent suite.
+
+constraints:
+  - >-
+    THE SINGLE NEW MECHANISM IS THE JOURNAL, AND IT IS DECLARED. This run's diagnosed recurrence engine
+    is remediate-by-adding-mechanism: across five waves, every failed fix was additive. This plan adds
+    exactly one thing -- two warehouse tables and their writer -- because no existing mechanism stores
+    task state. Everything else REUSES what exists: the OIDC trust from CD.21, CLAUDE_CODE_OAUTH_TOKEN
+    from claude.yml, native workflow triggers, GitHub concurrency groups, and the standing pytest suite.
+    Any reviewer finding a second new mechanism should treat it as a defect.
+  - >-
+    NO STEP FUNCTIONS, NO DURABLE FUNCTIONS, NO TASK TOKEN, NO LAMBDA IN THE LOOP. An earlier design in
+    this run proposed Step Functions holding the task tree with a .waitForTaskToken callback. It was
+    rejected as TWO BRAINS: the SFN execution history would be a second live copy of a task tree the
+    warehouse-as-source-of-truth invariant already mandates. The seam is asymmetric on purpose -- DOWN
+    is a dispatch, UP is a journal write. There is no token, so there is nothing to leak, and recovery
+    is an idempotent sweep rather than a heartbeat.
+  - >-
+    ONE ACTIONS JOB = ONE WHOLE TASK-ATTEMPT, NEVER ONE TOOL CALL. Runner startup is 10-60 seconds. A
+    per-tool-call crossing would make latency dominate everything the design buys. The loop inside the
+    job is an ordinary loop with no external orchestration per turn.
+  - >-
+    THE TRIGGER IS IDENTITY-GATED. This repo is public, anyone can open an issue, and the runner holds
+    credentials. Gate on actor or an operator-applied label, never on issue or comment body content.
+    Note that .github/workflows/claude.yml today gates on `contains(github.event.issue.body, '@claude')`
+    -- that is the content shape, and it must not be copied into a workflow that writes branches.
+  - >-
+    THE 15-MINUTE ENVELOPE IS NOT THIS PLAN'S CONTROL. An earlier design bounded agent work by a
+    system-prompt instruction. That is a good cost and capability control but a weak correctness
+    control, and its failure mode is a poison pill: a too-long command is killed, retried, killed
+    again. Actions gives the same control as a HARD limit via timeout-minutes, with a 6-hour ceiling
+    instead of 15 minutes. Use the hard limit; the prompt constraint is optional and additive.
+  - >-
+    CD.43 IS NOT CLOSED BY THIS PLAN. CD.43 (workspace_store_selection) was written expecting a race
+    between S3 workspace strategies. Under this design the workspace is the Actions checkout and the
+    question does not arise in that form. Say so in the roadmap rather than silently marking it
+    answered -- a criterion closed by a question that changed shape is a false closure.
+  - >-
+    IMPLEMENT SEQUENTIALLY, GRAIN AS A TREE. Parallel subagent execution is OUT OF SCOPE (milestone 4).
+    But parent_task_id ships in milestone 1, because schema is cheap and re-graining persistence later
+    is not. A sequential run is the degenerate case: a tree with one leaf.
+  - >-
+    SET THE PROMPT CACHE TTL TO ONE HOUR. Anthropic prompt caching is server-side and prefix-keyed, so
+    a fresh runner hits an existing cache exactly like a long-lived process -- the concern that a
+    stateless substrate breaks caching is unfounded. What IS real is the gap between attempts eating
+    the default 5-minute TTL. One parameter fixes it; step 14 measures what a miss actually costs.
+  - >-
+    OUT OF SCOPE, WITH NAMED TRIGGERS. Milestone 3 (dispatcher Lambda, wait-on-external-event routing)
+    enters when cross-task dependencies or scheduled runs outlive a single workflow. Milestone 4
+    (parallel leaf tasks under a concurrency group) enters when a real task tree has more than one
+    ready leaf. A durable waiter (SFN or durable functions) re-enters ONLY if a falsifier in step 14
+    fires. None of these is scheduled; each is contingent.
+
+context:
+  - >-
+    WHY THE SPIKE WAS RETIRED, stated once so the Decision can be short. The two-arm comparison could
+    not discriminate, for a reason neither arm's design revealed: an agent's real state is a git
+    working tree plus a transcript, not a 256KB checkpoint blob. Both AWS arms hit a 256KB cap
+    (durable-functions checkpoints and Step Functions state alike) and were therefore forced to
+    offload the real state to S3 and hand-build the same workspace layer. What remained to compare was
+    replay of control-flow position, worth roughly one duplicated tool call -- and even that number was
+    decided by the shared loop's per-iteration cursor rather than by either substrate.
+  - >-
+    THE FRAME THAT WAS MISSING FOR THREE RE-PLANS. Every version of this question was asked as "which
+    AWS service hosts the loop". The load-bearing question was "which substrate hands you the working
+    tree for free". Exactly one option in the constraint set does: a GitHub Actions runner, with the
+    repo already checked out, no VPC, no standing cost, and native GitHub integration because it is
+    GitHub. The tell that the earlier design was inverted: Actions had already been proposed as the
+    OVERFLOW route, and a design whose fallback strictly dominates its primary is upside down.
+  - >-
+    THE DURABLE-SUSPENSION CONCERN, AND WHY IT IS NOT A STRUCTURAL GAP. The operator's sharpest
+    objection was that a workflow cannot suspend durably, await an external event mid-run, loop, or
+    resume past six hours. That is all true of a single workflow RUN. It is not true of the harness,
+    because this platform already implements suspension as checkpoint-and-relaunch at the transcript
+    level -- subscribe_pr_activity, the CI-green comment wake, and the merge-conflict wake, with the
+    standing rule to end the turn rather than busy-wait. An agent's waits are event-shaped, not
+    process-shaped, and GitHub fires native triggers on exactly those events. What is genuinely unknown
+    is not whether resume works but what it COSTS and which races it opens, which is milestone 2.
+  - >-
+    WHAT THE OPERATOR'S OBJECTIONS CHANGED. Four facts moved the design: concurrency is capped per
+    ACCOUNT not per repository (so the pool does not scale with a multi-product platform); there is no
+    job priority, only FIFO; free minutes are contingent on the repo being public; and putting the
+    executor on Actions collapses CI, execution and deploy into one failure domain. The first three are
+    answered by the control plane being vendor-neutral from milestone 1 plus a written Decision clause
+    -- not by adding AWS compute. The fourth is weaker than it appears: during a GitHub outage an agent
+    running on AWS cannot push, test, review or merge, so it is a brain with no hands. What must survive
+    an outage is STATE, which is exactly what the journal seam protects.
+  - >-
+    A CORRECTION CARRIED FORWARD RATHER THAN QUIETLY DROPPED. An earlier version of this design offered
+    Step Functions MaxConcurrency as the answer to the concurrency cap. That was wrong: MaxConcurrency
+    bounds SFN's dispatch rate, but dispatched jobs still contend FIFO with CI in the shared
+    per-account runner pool. The lever that actually protects CI is a GitHub-side concurrency group,
+    which is why one appears in the workflow scope row and is asserted by step 3 rather than left to
+    the implementer.
+  - >-
+    HOW THIS PLAN WAS AUTHORED, because the provenance bears on how it should be read. It was written
+    by the overseer directly rather than by a dispatched author, at the operator's instruction, after
+    two Fable consults -- the second of which was reopened with the operator's counter-arguments and
+    partially conceded. It has NOT yet been through the three-lens critique. Treat every judgment here
+    as unreviewed until that lands.
+
+pre_implementation_checklist:
+  - "Confirm the CD.21 OIDC role can write the two new tables; if not, that grant is the one out-of-band change."
+  - "Confirm CLAUDE_CODE_OAUTH_TOKEN is readable from a workflow other than claude.yml."
+  - "Read .github/workflows/claude.yml's `if:` block before writing the new trigger -- it is the content-gated shape to avoid."
+  - "Confirm Decision 173 is still the next free number at authoring time (main moves)."
+  - "Confirm no scripts/harness/ package exists yet, so the Decision 67 frozen executor is untouched."
+
+execution_steps:
+  - "Write docs/contracts/harness-task-model.yaml FIRST -- both grains, both write modes, ULID at the boundary, parent_task_id, partitioning, claim/lease and sequence semantics. No loop code before this file exists."
+  - "Create the two warehouse tables per the contract, with the writer path the journal client will use."
+  - "Write scripts/harness/task_tree.py and its test; prove the depth-2 tree round-trips before anything reads it."
+  - "Write scripts/harness/journal.py with claim/lease and the sequence check; write both race tests and watch them fail first."
+  - "Write scripts/harness/checkpoint.py storing refs, not payloads; prove size-independence with the 10x transcript case."
+  - "Write scripts/harness/loop.py as checkpoint-in/checkpoint-out, importing no substrate SDK."
+  - "Write scripts/harness/cli.py; exit non-zero on a lost claim."
+  - "Write .github/workflows/harness-task.yml: identity gate, concurrency group, timeout-minutes, OIDC role, 1-hour prompt cache TTL."
+  - "Write tests/harness/test_workflow_gating.py and test_no_orchestration_state_leak.py as CLASS sweeps, not site checks."
+  - "Author docs/plans/reports/harness-skeleton-findings.yaml with the not-tested register and the pre-registered falsifiers BEFORE running M2, so thresholds cannot be set after seeing the numbers."
+  - "Write Decision 173 with both clauses; verify the byte count against the 6,144 per-entry cap."
+  - "Update ROADMAP-PLATFORM.yaml: T4.1/T4.2 answered by Decision 173; CD.43 explicitly NOT closed."
+  - "Register the single graduated row (harness-workflow-identity-gate) in the verification registry."
+  - "Run the full validate tier (VP step 11) before commit, per handoff_policy."
+  - "Deploy M1 and run VP step 12 end-to-end; read the result back from the journal, not the workflow log."
+  - "Run M2 (VP step 13): force a mid-task kill, relaunch, confirm exactly two attempts against one task_id."
+  - "Record the resume tax and judge every falsifier (VP step 14). A fired falsifier is a result to write down, not a failure to fix."
+
+rollback: >-
+  Every artifact in this plan is additive and independently removable: delete scripts/harness/,
+  tests/harness/, .github/workflows/harness-task.yml, docs/contracts/harness-task-model.yaml and
+  docs/plans/reports/harness-skeleton-findings.yaml, drop the single registry row, and revert the two
+  bookkeeping edits. NOTHING here is count-gated or otherwise pinned in place by a standing check --
+  the one graduated row asserts the workflow's identity gate, so removing the workflow and the row
+  together is coherent and leaves main green. The two warehouse tables are the only durable residue;
+  they are append-only and SCD2 respectively, so they are dropped rather than mutated, and no other
+  table references them. Decision 173 is NOT rolled back even if the skeleton is abandoned -- its
+  clause 1 records why the AWS spike was retired, which stays true regardless, and clause 2 records
+  the publicness dependency, which stays true regardless. If the harness is abandoned, supersede
+  Decision 173 with a new entry rather than deleting it.
