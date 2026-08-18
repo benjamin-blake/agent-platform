@@ -18,43 +18,50 @@ scope:
     action: Create
     purpose: >-
       Advisory, fail-open SessionStart hook that completes a shallow clone, plus the header documenting
-      residual/degraded semantics and per-consumer depth needs.
+      residual/degraded semantics, per-consumer depth needs, and the parallel-hook lock-contention retry.
   - file: .claude/settings.json
     action: Modify
-    purpose: Register the hook in the SessionStart block, directly after session_start_sync_main.sh.
+    purpose: Register the hook in the SessionStart block, adjacent to session_start_sync_main.sh.
   - file: tests/hooks/test_session_start_deepen_history.py
     action: Create
-    purpose: Hermetic coverage of all three hook paths plus the settings.json registration and ordering.
+    purpose: Hermetic coverage of all four hook paths plus the settings.json registration.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Add the graduated check row owed by verification_plan step 1's graduate disposition
+      (validate_graduation_completeness implement-PR leg).
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
   - After the hook runs in a shallow container, git rev-parse --is-shallow-repository reports false and .git/shallow is absent.
   - A git log query for a file untouched within the former shallow window names its true last-touch commit, not the shallow-boundary commit.
   - The hook exits 0 and leaves the clone usable when the fetch fails, times out, or the remote is unreachable, printing a WARNING naming what is now unreliable.
-  - The hook no-ops without invoking --unshallow when the clone is already complete (a bare --unshallow on a complete repo is a fatal git error).
-  - The hook is registered in .claude/settings.json SessionStart immediately after session_start_sync_main.sh.
+  - The hook exits 0 and warns when a concurrent git process holds a .git lock, rather than leaving a half-applied state.
+  - The hook no-ops without invoking --unshallow when the clone is already complete (a bare --unshallow on a complete repo is a fatal git error, rc=128).
+  - The hook is registered in .claude/settings.json SessionStart adjacent to session_start_sync_main.sh.
   - A follow-on recommendation is filed for scripts/convergence_health/record.py's silent return-0, which this plan deliberately does not fix inline.
+  - config/agent/verification_registry/registry.yaml carries a new cc-web-deepen-hook-unit-suite row with plan_slug session-start-deepen-history.
 verification_plan:
   - step: 1
     phase: pre-deploy
-    action: Run the new hermetic hook test module (all three hook paths plus registration).
+    action: Run the new hermetic hook test module (all four hook paths plus registration).
     command: bin/venv-python -m pytest tests/hooks/test_session_start_deepen_history.py -v
-    expected: All tests pass, including the wrong-answer reproduction, the already-complete no-op, and the fail-open case.
+    expected: All tests pass, including the wrong-answer reproduction, the already-complete no-op, the fail-open case, and the lock-contention case.
     fix_if: A failure names which behaviour regressed; the reproduction test failing means the fixture no longer models the shallow boundary.
     hermetic: true
     graduation: graduate
     graduation_check_id: cc-web-deepen-hook-unit-suite
   - step: 2
     phase: pre-deploy
-    action: Confirm hook registration and ordering in the SessionStart block.
-    command: bin/venv-python -c "import json;c=[h['command'] for h in json.load(open('.claude/settings.json'))['hooks']['SessionStart'][0]['hooks']];i=c.index('bash .claude/hooks/session_start_deepen_history.sh');assert i==c.index('bash .claude/hooks/session_start_sync_main.sh')+1;print('ORDER_OK')"
-    expected: ORDER_OK
-    fix_if: Hook missing from, or out of order in, the SessionStart block.
+    action: Confirm hook registration and placement in the SessionStart block.
+    command: bin/venv-python -c "import json;c=[h['command'] for h in json.load(open('.claude/settings.json'))['hooks']['SessionStart'][0]['hooks']];i=c.index('bash .claude/hooks/session_start_deepen_history.sh');assert i==c.index('bash .claude/hooks/session_start_sync_main.sh')+1;print('PLACEMENT_OK')"
+    expected: PLACEMENT_OK
+    fix_if: Hook missing from, or moved within, the SessionStart block.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Duplicates the registration/ordering assertion already carried by the graduated step-1 pytest
-      selector (test_hook_registered_after_sync_main); a second registry row would guard the identical
+      Duplicates the placement assertion already carried by the graduated step-1 pytest selector
+      (test_hook_registered_adjacent_to_sync_main); a second registry row would guard the identical
       predicate twice and drift independently.
   - step: 3
     phase: pre-deploy
@@ -78,16 +85,32 @@ verification_plan:
       2026-07-01), substitute any file untouched in the last 50 commits and compare against the GitHub
       API commit list for that path.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a single command_output_matches slot, but the assertion is true only in a
+      deepened dev container - CI checks out at fetch-depth 2 (Decision 159 clause 1), where it would
+      fail permanently. Graduating it would install a standing check that cannot pass in the environment
+      the registry runs in.
   - step: 5
     phase: pre-deploy
     action: File the follow-on recommendation for the silent return-0 this plan does not fix inline, then confirm it landed.
-    command: bin/venv-python -m scripts.sync.ops pull && grep -c "count_unapplied_tf_commits" logs/.recommendations-log.jsonl
+    command: bin/venv-python -m scripts.ops_data_portal --sync && grep -c "count_unapplied_tf_commits" logs/.recommendations-log.jsonl
     expected: At least 1 - an open rec referencing count_unapplied_tf_commits exists in the read cache after the portal write and sync.
     fix_if: A 0 count means the portal write did not land; re-file via file_rec (writes fail loudly, there is no offline outbox).
     hermetic: false
     graduation: not-applicable
   - step: 6
+    phase: pre-deploy
+    action: Confirm the graduated registry row was added for step 1's graduate disposition.
+    command: bin/venv-python -c "import yaml;e=[x for x in yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'] if x.get('check_id')=='cc-web-deepen-hook-unit-suite'];assert e and e[0]['plan_slug']=='session-start-deepen-history' and e[0]['check_spec']['node_id']=='tests/hooks/test_session_start_deepen_history.py';print('REGISTRY_ROW_OK')"
+    expected: REGISTRY_ROW_OK
+    fix_if: >-
+      A missing or mis-slugged row fails validate_graduation_completeness's implement-PR leg. Registry
+      shape verified at plan time - top-level key is `entries` (454 rows); a bare AssertionError here
+      means the row was not added, not that the lookup is wrong.
+    hermetic: true
+    graduation: not-applicable
+  - step: 7
     phase: pre-deploy
     action: Run the fast presubmit tier.
     command: bin/venv-python -m scripts.validate --pre
@@ -95,7 +118,7 @@ verification_plan:
     fix_if: Address the named failing check.
     hermetic: false
     graduation: not-applicable
-  - step: 7
+  - step: 8
     phase: pre-deploy
     action: Run the full presubmit tier before handoff (Decision 163 / validate_handoff_full_tier).
     command: bin/venv-python -m scripts.validate
@@ -107,20 +130,37 @@ test_obligations:
   - source: .claude/hooks/session_start_deepen_history.sh
     behavior: >-
       Completes a shallow clone so out-of-window git log answers become true, no-ops on an
-      already-complete clone, and exits 0 with a WARNING when the fetch cannot run.
+      already-complete clone, and exits 0 with a WARNING when the fetch cannot run (unreachable remote,
+      or a concurrent git process holding a .git lock).
     verification_step: 1
     test_selector: tests/hooks/test_session_start_deepen_history.py
     red_green_expectation: red before (hook and module absent), green after
   - source: .claude/settings.json
-    behavior: The hook is registered in SessionStart directly after session_start_sync_main.sh.
+    behavior: >-
+      The hook is registered in SessionStart adjacent to session_start_sync_main.sh (a grouping
+      convention, not an execution-order guarantee - see the parallel-hooks context entry).
     verification_step: 1
-    test_selector: tests/hooks/test_session_start_deepen_history.py::test_hook_registered_after_sync_main
+    test_selector: tests/hooks/test_session_start_deepen_history.py::test_hook_registered_adjacent_to_sync_main
     red_green_expectation: red before (no SessionStart entry), green after
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      The cc-web-deepen-hook-unit-suite row exists and points at the hook's test module, so step 1's
+      graduated check has a registry home.
+    verification_step: 8
+    command: bin/venv-python -m scripts.validate
+    red_green_expectation: >-
+      red before (validate_graduation_completeness implement-PR leg fails on the missing row), green
+      after
 constraints:
   - >-
     Advisory and fail-open - a network failure must never block session start. Mirror
     session_start_sync_main.sh exactly - set -uo pipefail, exit 0 on every branch, and a loud
     "WARNING: ... (non-fatal)" per failure mode rather than a silent bare exit 0.
+  - >-
+    SessionStart hooks in one matcher block run in PARALLEL, not in sequence (Claude Code hooks docs,
+    "All matching hooks run in parallel"). The hook therefore must not assume session_start_sync_main.sh
+    has finished, and must tolerate that hook's concurrent `git fetch origin main` competing for .git
+    locks. Bounded retry on lock contention, then fail open.
   - >-
     No CI workflow fetch-depth changes. SessionStart hooks do not run in GitHub Actions, so ci.yml and
     main-canary.yml stay pinned at fetch-depth 2 (Decision 159 clause 1) and ci-rca.yml keeps its own
@@ -137,20 +177,27 @@ constraints:
     assertion on it (Decision 131 clause 2, validate_no_cross_test_imports fails a tests/** module that
     imports another test_* module).
   - >-
-    Do not assert an exact SessionStart hook count (assert len(...) == N) - the SessionStart block grows
-    by addition and validate_test_count_coupling flags exact-count assertions against growing collections.
-    Assert membership and relative index instead.
+    Assert hook membership and relative index rather than an exact SessionStart hook count - the block
+    grows by addition and an exact-count assertion would break on the next hook added. (This is a
+    style rule, not an enforced one - validate_test_count_coupling fires only on its six curated
+    collection tokens, none of which is a settings.json hooks list.)
   - >-
     Size governance - the hook falls in the shell class (*.sh, 500 effective lines, 2000 max line chars,
     enforced in both presubmit tiers, Decision 166) and the test module is SLOC/CC-governed at 500 with no
-    .claude/ or tests/ exemption (Decision 130 clause 1). Both land far under; do not let the documented
-    header push the hook over.
+    .claude/ or tests/ exemption (Decision 130 clause 1). registry.yaml measures 5836 effective lines
+    against its 6000 budget - 164 lines of headroom, ample for one ~9-line row, but do not batch
+    unrelated rows into this PR.
   - >-
     Reference the hook path literally in the test module so the --pre affected-set data-edge channel
-    selects it off a .sh-only edit (Decision 135).
+    selects it off a .sh-only edit (Decision 135; affected_tests.py _data_edge_reference_candidates keys
+    on any changed non-.py file).
   - >-
     Do not fix scripts/convergence_health/record.py or scripts/roadmap/plan_audit.py inline - they are
     out of scope; file a recommendation instead (AGENTS.md out-of-scope rule, Decision 55).
+  - >-
+    Portal discipline - the Single Portal Invariant agent surface is file_rec / update_rec / sync only.
+    Never call scripts.sync.ops or any drain/compact/pull CLI directly (AGENTS.md); the sanctioned
+    cache refresh is `bin/venv-python -m scripts.ops_data_portal --sync`.
   - No rescue agents or workaround loops (Decision 55).
 context:
   - >-
@@ -179,6 +226,21 @@ context:
     _verify_rec_in_git greps git log origin/main --grep=rec-NNNN and false-negatives any rec merged before
     the boundary; ad-hoc agent git log/git blame needs full history.
   - >-
+    Parallel-hooks semantics, and what it cost. The Claude Code hooks documentation states "All matching
+    hooks run in parallel", so the seven SessionStart entries execute concurrently. Two consequences.
+    First, placement adjacent to session_start_sync_main.sh is a readability convention only - it does NOT
+    sequence the two hooks, and any rationale claiming it avoids delaying the main sync is unfounded.
+    Second, session_start_sync_main.sh:30's `git fetch origin main` runs concurrently with this hook's
+    `git fetch --unshallow origin main`, so both can contend for .git locks (shallow.lock, FETCH_HEAD).
+    Git fails fast rather than corrupting, and both hooks are fail-open, so the untreated failure mode is
+    a silent no-op session - which is precisely the confidently-wrong mode this plan exists to end. Hence
+    the bounded retry and its dedicated test.
+  - >-
+    Hook timeout headroom - the harness default for `command` hooks is 600s (the hooks docs lower it only
+    for UserPromptSubmit/MessageDisplay/SessionEnd, not SessionStart), so the hook's internal 120s
+    DEEPEN_HISTORY_TIMEOUT_S bound fires well before the harness ceiling and acceptance criterion 3's
+    timeout branch is reachable in production. Measured fetch is 2.9s, so 120s is ~40x headroom.
+  - >-
     Decision 55 NOTE from the decision-scout, and its resolution. The scout argued a bare fail-open changes
     the trust profile from uniformly-untrusted to usually-trusted-occasionally-silently-wrong. Two
     corrections - Decision 55's "Deterministic recovery remains valid" clause explicitly preserves
@@ -200,9 +262,16 @@ context:
     session-start deepen. The hook reduces the local incidence of rec-2685's symptom without fixing its
     guard, so rec-2685 stays open on its own merits.
   - >-
-    Verified prototype - the hook and the file:// fixture were both exercised in the planning session. The
-    fixture reproduces the class (shallow git log -- old.txt names c6, a commit that never touched it) and
-    the hook resolves it (c1 creates old.txt), no-ops on a complete clone, and exits 0 on a broken remote.
+    Verified prototype - the hook and the file:// fixture were both exercised in the planning session, and
+    independently reproduced by the plan-critique gate. The fixture reproduces the class (shallow
+    git log -- old.txt names c6, a commit that never touched it) and the hook resolves it (c1 creates
+    old.txt), no-ops on a complete clone, and exits 0 on a broken remote. A second --unshallow on a
+    complete repo exits 128, so the is-shallow guard is load-bearing, not defensive padding.
+  - >-
+    Benign side effect to expect, not to read as a regression - push_context_base()/get_changed_files()
+    compute against merge-base(origin/main, HEAD), which on a shallow clone can be the graft boundary.
+    Completing the clone makes that base correct, so a local `validate --pre` may select a different
+    (correct) test set before vs after the hook first runs. CI is unaffected (its own pinned depths).
   - >-
     Tier Item Freshness Gate skipped - the intent is an audit-derived finding with no tier_item
     (roadmap_crossref item_ids []), matching the ad_hoc_rec soft-warn exception category.
@@ -214,7 +283,7 @@ context:
     settings.json/SessionStart and is incidental, so hook registration, SessionStart ordering and
     advisory fail-open behaviour are Decision-ungoverned - AGENTS.md plus the session_start_sync_main.sh
     precedent govern instead, and no citation is manufactured for them."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE round 1, re-dispatched after revision"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -225,30 +294,40 @@ execution_steps:
   - >-
     Create .claude/hooks/session_start_deepen_history.sh. Order - resolve REPO_ROOT from BASH_SOURCE and
     cd (exit 0 if that fails); exit 0 if not inside a work tree; exit 0 with "clone already complete" when
-    git rev-parse --is-shallow-repository is not true (a bare --unshallow on a complete repo is fatal);
-    capture the before-count; run the fetch under timeout with a DEEPEN_HISTORY_TIMEOUT_S override
-    (default 120) as git fetch --unshallow --quiet origin main; on failure print the two WARNING lines and
-    exit 0; re-check shallowness and print the before -> after commit count on success.
+    git rev-parse --is-shallow-repository is not true (a bare --unshallow on a complete repo is fatal,
+    rc=128); capture the before-count; run the fetch under timeout with a DEEPEN_HISTORY_TIMEOUT_S
+    override (default 120) as git fetch --unshallow --quiet origin main, wrapped in a bounded retry (3
+    attempts, ~2s apart) so a .git lock held by the concurrently-running session_start_sync_main.sh
+    fetch does not lose the deepen; on terminal failure print the two WARNING lines and exit 0; re-check
+    shallowness and print the before -> after commit count on success.
   - >-
     Write the hook header to document, in this order - the confidently-wrong-answer mechanism with the
     b89c9a4 vs a3393db worked example; the three consumers and the depth each needs; why full unshallow
-    over bounded deepen, carrying the 2.9s / 13MB -> 21MB / 902-commit measurement; the DEGRADED MODE
-    paragraph stating that a failed fetch leaves every wrong answer live for the session and that
-    .git/shallow absence is the machine-detectable signal a consumer can check; and that CI is unaffected
-    because SessionStart hooks do not run in GitHub Actions.
+    over bounded deepen, carrying the 2.9s / 13MB -> 21MB / 902-commit measurement; that SessionStart
+    hooks run in parallel and hence the lock-contention retry; the DEGRADED MODE paragraph stating that a
+    failed fetch leaves every wrong answer live for the session and that .git/shallow absence is the
+    machine-detectable signal a consumer can check; and that CI is unaffected because SessionStart hooks
+    do not run in GitHub Actions.
   - >-
     Register the hook in .claude/settings.json SessionStart, directly after
-    "bash .claude/hooks/session_start_sync_main.sh" so the cheap main sync is never delayed behind the
-    fetch.
+    "bash .claude/hooks/session_start_sync_main.sh". This is a grouping convention for readability only -
+    hooks in a matcher block run in parallel, so it guarantees nothing about execution order.
   - >-
-    Create tests/hooks/test_session_start_deepen_history.py with four tests - registration and relative
-    ordering read from settings.json; the shallow-clone completion case, which must first assert the
+    Create tests/hooks/test_session_start_deepen_history.py with five tests - registration and relative
+    placement read from settings.json; the shallow-clone completion case, which must first assert the
     fixture reproduces the wrong answer and then assert the hook makes it true; the already-complete
-    no-op; and the fail-open case pointing origin at a nonexistent file:// path. Build each fixture as a
-    local origin repo plus a --depth=1 file:// clone, copy the hook into <clone>/.claude/hooks/ so
-    BASH_SOURCE resolves inside the fixture, and set HOME/GIT_CONFIG_GLOBAL with commit.gpgsign false per
-    the tests/hooks/test_session_start_commit_signing.py precedent (the container signs commits globally,
-    which would otherwise break fixture commits).
+    no-op; the fail-open case pointing origin at a nonexistent file:// path; and the lock-contention case
+    that pre-creates .git/shallow.lock and asserts the hook still exits 0 with a WARNING. Build each
+    fixture as a local origin repo plus a --depth=1 file:// clone, copy the hook into
+    <clone>/.claude/hooks/ so BASH_SOURCE resolves inside the fixture, and set HOME/GIT_CONFIG_GLOBAL with
+    commit.gpgsign false per the tests/hooks/test_session_start_commit_signing.py precedent (the container
+    signs commits globally, which would otherwise break fixture commits).
+  - >-
+    Add the graduated row to config/agent/verification_registry/registry.yaml, matching the
+    cc-web-signing-hook-unit-suite precedent - check_id cc-web-deepen-hook-unit-suite, primitive_slot
+    test_selector, guard_target .claude/hooks/session_start_deepen_history.sh, guard_symbol null,
+    plan_slug session-start-deepen-history, graduated_at the implement date, graduated_by implement-agent,
+    check_spec.node_id tests/hooks/test_session_start_deepen_history.py.
   - >-
     File the follow-on recommendation for scripts/convergence_health/record.py's silent return-0 via
     file_rec, calling get_rec_write_guidance() first per the Precision Context Injection rule. Do not fix
@@ -256,5 +335,5 @@ execution_steps:
   - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
   - 'Report: what was implemented, verification results'
 rollback: >-
-  Remove the hook file and its .claude/settings.json entry; the clone simply stays shallow and the
-  pre-existing wrong-answer behaviour returns. No data or infrastructure state is touched.
+  Remove the hook file, its .claude/settings.json entry, and its registry.yaml row; the clone simply stays
+  shallow and the pre-existing wrong-answer behaviour returns. No data or infrastructure state is touched.
