@@ -216,7 +216,7 @@ scope:
     purpose: >-
       THE READ HOME, and the file the first draft of this plan omitted. Decision 156 clause 1 -- "reads move,
       authority stays" -- relocated github_ci_apply's read grants into the customer-managed
-      `agent-platform-github-ci-apply-reads` policy (`resource "aws_iam_policy"` at :272, 21 Sids today), so the
+      `agent-platform-github-ci-apply-reads` policy (`resource "aws_iam_policy"` at :272, 12 Sids today), so the
       `states:` refresh-read Sid belongs HERE. This is not bookkeeping: measured this session, the inline write
       document minifies to roughly 8,491 bytes against its 10,240-byte AWS hard limit while this reads policy
       minifies to roughly 4,199 against its 6,144 limit, and a LimitExceeded is INVISIBLE to terraform plan --
@@ -234,8 +234,10 @@ scope:
     purpose: >-
       A boundary is a CEILING: measured this session, DataPlaneAllow's service list carries s3/athena/glue/
       dynamodb/lambda/logs/events/sns/cloudwatch/secretsmanager/ssm and NO states:. Without the ceiling
-      extension, BOTH the apply-role grant above and the DailyOps grant in the spike .tf are silently denied by
-      the identity/boundary intersection -- PlatformDev carries this same boundary. Same admin-only root, same
+      extension, BOTH the apply-role grant above and the spike roles' own grants are silently denied by
+      the identity/boundary intersection -- every agent-platform-* role carries this same boundary.
+      NOT DailyOps/PlatformDev: an earlier draft put the grant there and this sentence outlived it; the
+      plan now writes nothing to PlatformDev and VP step 2 hard-asserts that. Same admin-only root, same
       out-of-band apply ordering.
   - file: docs/contracts/environment-taxonomy.yaml
     action: Modify
@@ -247,7 +249,7 @@ scope:
       and Decision 125 -- is the shape the contract already uses. An HCL-comment-only record would be a second
       surface the contract's own evaluator cannot see, which is the phantom-control shape. Measured before
       choosing: this file is 266 effective lines of its 500 contracts-class budget, so a typed pair fits
-      comfortably, whereas the Decision 173 entry has only 458 bytes of per-entry headroom left after the
+      comfortably, whereas the Decision 173 entry has only 145 bytes of per-entry headroom left after the
       Decision 82 clause -- the contract is both the correct home and the cheaper one. Additive: the existing
       checks read their own keys by name, so a third class does not disturb them.
   - file: docs/plans/reports/esb-q5-spike-findings.yaml
@@ -1475,7 +1477,7 @@ constraints:
     typed conformance.spike_class / spike_detail pair and the terraform carries only a pointer. An
     HCL-comment-only record would be a second surface the contract's own evaluator cannot see -- the
     phantom-control shape. Measured before choosing the home: the contract is 266 effective lines of 500, while
-    the Decision 173 entry has 458 bytes of per-entry headroom left, so the contract is both the correct home
+    the Decision 173 entry has 145 bytes of per-entry headroom left, so the contract is both the correct home
     and the cheaper one. Asserted in both directions by VP step 2.
   - >-
     THE AGENT'S IDENTITY CANNOT SWEEP AWS, AND THE PLAN SAYS SO RATHER THAN CALLING APIS IT CANNOT REACH.
@@ -1664,8 +1666,15 @@ context:
     round 3. (2) REUSED VP step 2 as the reader for conformance.spike_class rather than adding a check --
     roughly three lines over data it already parses, failing closed on DISAGREEMENT and equally on ABSENCE.
     (3) ADDED one observational print of the inline document's minified size (inert, asserts nothing).
-    (4) DELETED VP step 16's "gone or fully gated" prose. Nothing new was introduced, which is what structurally
-    excludes a round 5.
+    (4) DELETED VP step 16's "gone or fully gated" prose. (5) ADDED two required findings.yaml keys --
+    governance_cost.{fixed_cost_observed,insensitivity_condition} and measurement_subject.reopen_condition --
+    read by the SAME graduated VP step 1 in the SAME assert shape it already used for two sibling keys. That
+    fifth item is additive in field names, so "nothing new" is stated precisely rather than absolutely: no new
+    script, check module, registry row, graduation_check_id, enforcement surface or convention was introduced,
+    and the only reader is the step that defines the fields over an artifact this plan itself authors. An
+    earlier draft of this entry enumerated only four changes and asserted "nothing new was introduced" flatly;
+    a zero-context verifier caught the omission, which is the plan's own false-self-report class landing on the
+    plan. What structurally excludes a round 5 is the delete-or-reuse constraint, not the bare count.
   - >-
     THE conformance.spike_class SELF-CORRECTION, recorded because the reasoning error is more instructive than
     the fix. Round 2 rejected the HCL-comment home on the stated ground that it "would be a second surface the
@@ -1753,7 +1762,7 @@ context:
     ROUND-1 DECISION-SCOUT REMEDIATION, recorded so the diff between plan versions is legible. The scout
     returned BLOCK on one finding and four WARN/SPIRIT findings, all in the IAM/bootstrap family; the two-arm
     design, the thin-Decision shape and the exclusion record were unaffected. Each was verified at source before
-    adoption rather than accepted on relay: the Decision 156 read/write split (reads file has 21 Sids, its
+    adoption rather than accepted on relay: the Decision 156 read/write split (reads file has 12 Sids, its
     aws_iam_policy at :272, the inline write document at :713, and the coverage gate composes
     `apply_statements = inline_statements + reads_statements` at :104-122, so coverage is indifferent and only
     architecture and bytes decide); the PlatformDev budget miss (above); validate_boundary_attached's
