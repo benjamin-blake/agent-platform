@@ -254,11 +254,12 @@ verification_plan:
       l.strip().startswith('#')]); assert n<=500, n; print('SLOC ok', n, 'of 500')"
     expected: "Exit 0, prints `SLOC ok` with a count at or under 500"
     fix_if: >-
-      Over 500: trim the TestCommittedIndexSizePin docstring further toward the 22-line budget
-      (the Decision 166 acute-landing narrative is preserved verbatim in docs/DECISIONS.md and
-      must not be restated here), and confirm the contract-to-constant pin test went into
-      tests/checks/decisions/ rather than this file. Neither a budget raise nor a mirror split
-      is available -- see constraint 5.
+      Over 500: the lever is TestSkeletonArchiveRows, NOT the docstring -- the docstring budget
+      is already at its 22-line floor and trimming it further is not a recovery path. Check the
+      class is written with single-line set literals (19 SLOC) rather than one key per line (35
+      SLOC); that difference alone is the 16 lines between 495 and 511. Also confirm the
+      contract-to-constant pin test went into tests/checks/decisions/ rather than this file.
+      Neither a budget raise nor a mirror split is available -- see constraint 5.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -435,7 +436,7 @@ context:
     reading rather than per-key, so adding index_max_bytes does not breach it -- and VP step
     3's contract-to-constant pin exceeds the incumbent "the validator constants are the SoT,
     the contract documents" precedent the two sibling ceilings settle for.
-  - "gates: decision-scout=FLAGS_FOUND (4 flags, all resolved); plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND (4 flags, all resolved); plan-critique=PROCEED after 4 round(s)"
   - >-
     MEASURED ARITHMETIC (this tree, indent=2 pretty-printed bytes, 152 rows = 125 live + 27
     archive). Committed index today 119,189 B. Live rows cost 99,485 B = 795.88 B/row; archive
@@ -462,7 +463,14 @@ context:
     unbounded growth), the operator is steering back to 120, and a pin derived at 120 encodes
     the target state rather than the transitional allowance: once the corpus is back at 120
     live it has about 9 entries of slack and stops binding. Deriving at 132 would bank the
-    bridge's temporary raise permanently into the pin, which the operator declined.
+    bridge's temporary raise permanently into the pin, which the operator declined. THE
+    ARCHIVE-SIDE PATH, recorded because only the live-side one is obvious: in the operator's own
+    steady state (hold live at 120, archive the overflow) each archival still nets +288.70 B of
+    permanent skeleton weight, so from a 120-live / 32-archive position the roughly 7,200 B of
+    slack is about 25 archivals before the pin binds from the ARCHIVE side instead. At that
+    point constraint 4 forbids a raise and the edge-graph argument below forbids deleting
+    archive rows, so the only remaining lever is the one OPERATOR FORWARD INTENT already names:
+    entries leave the corpus entirely rather than moving into the archive.
   - >-
     OPERATOR FORWARD INTENT (the reason the tight pin is safe). The plan of record for
     reclaiming headroom is to collapse existing Decisions and their h2 headers into
@@ -493,7 +501,7 @@ context:
     CONSUMER SWEEP (the audit's own step-5 abort criterion, "Abort if skeletonization breaks a
     scout consumer that reads archived excerpts... verify at build"). The change was SIMULATED
     against the pre-change tree by monkeypatching build_index() and rewriting the committed
-    artifact in a throwaway run: exactly 10 tests fail, 58 pass. Six in
+    artifact in a throwaway run: exactly 10 tests fail. Six in
     TestTriageExcerptIntegration (test_every_entry_carries_the_three_fields,
     test_no_excerpt_exceeds_320_chars, test_non_empty_excerpt_always_names_a_source,
     test_empty_excerpt_set_matches_independent_rederivation, test_excerpt_coverage_is_high,
@@ -518,15 +526,31 @@ context:
     equality (+1); test_excerpt_coverage_is_high must narrow its `total` denominator, or the
     `total - 4` floor silently loosens by 27 (+0). The three-way key-set branch in
     test_entry_shape_is_the_stable_projection_only costs +2. TestSkeletonArchiveRows costs
-    about +18. The TestCommittedIndexSizePin docstring is 39 non-blank lines today and is
-    budgeted to 22 or fewer (-17). Net about +6, landing near 493. The contract-to-constant pin
-    test is deliberately homed in tests/checks/decisions/ and costs this file nothing.
+    at most +19, which is a HARD sub-budget and the plan's tightest single number: written in
+    this file's local one-key-per-line convention (the shape base_keys uses today) the class
+    costs 35 and lands the file at 511, over the limit. Write both key sets as SINGLE-LINE set
+    literals instead -- measured at 118 characters each, inside the 127-char ruff limit -- which
+    lands the class at 19 and the file at about 495. The TestCommittedIndexSizePin docstring is
+    38 non-blank lines today and is budgeted to 22 or fewer (-16). Net about +7, landing near
+    494. The contract-to-constant pin test is deliberately homed in tests/checks/decisions/ and
+    costs this file nothing.
   - >-
     CONTRACT STRUCTURAL-SIZE BUDGET. docs/contracts/decision-entry.yaml is governed by the
     Decision 166 engine's `contracts` class at a 500-effective-line limit and measures 458
     today -- 42 lines of headroom. effective_lines excludes comments, so execution step 8(a)
     and 8(b) are free; the additions that cost are index_max_bytes (+1), the
     lever_by_ceiling_matrix folded scalar (+4 to +6) and the amendment_log entry (+4 to +5) --
+    see also the note below on why the constant itself stays in the test module.
+  - >-
+    WHY index_max_bytes DOES NOT CONVERGE ONTO validate_decisions_size.py. Its two sibling
+    ceilings are enforced by module constants in that registered check, while this one's source
+    of truth stays a pytest class attribute -- which is why VP steps 2 and 3 must regex a TEST
+    module's text to read a governance constant. That asymmetry is inherited, not introduced:
+    Decision 166 point 9 deliberately put the pin in the test module, and moving it would mean
+    building a registered index-size check, which is a different plan against a surface T1.5 c1
+    is scheduled to retire. Recorded so a later reader reads the divergence as scoped-out rather
+    than overlooked; the contract key added here is what makes the ceiling discoverable in the
+    meantime.
     about +10 to +12, landing near 470. It fits, but it is budgeted here rather than assumed,
     because this plan forecloses its own escape: constraints 4 and 5 bar budget raises, and
     Decision 166's raise guard would demand a `# raise-approved: dec-NNN` marker naming an
@@ -635,8 +659,11 @@ execution_steps:
     live-assuming assertion through it: all six TestTriageExcerptIntegration tests and both
     TestCategoryTagsIntegration tests named in the CONSUMER SWEEP entry. Two need more than a
     filter -- in test_empty_excerpt_set_matches_independent_rederivation, `rederived_empty` is
-    built from parse_decisions_md() over BOTH files, so it must also be intersected with the
-    live number set or the equality assertion breaks; in test_excerpt_coverage_is_high, `total`
+    built from parse_decisions_md() over BOTH files, so it should also be intersected with the
+    live number set -- defensive, not forced: at this tree the no-marker set is exactly
+    {63, 64, 65, 67} and all four are live, so the intersect is a no-op today and the test
+    passes without it. It is worth the +1 because the day a no-marker entry is archived the
+    equality assertion would break with no other guard; in test_excerpt_coverage_is_high, `total`
     must become the live count or the `total - 4` floor silently loosens by 27. Re-run the
     simulation figures: 121 of 125 live entries carry an excerpt, so the floor holds exactly.
   - >-
@@ -733,8 +760,11 @@ execution_steps:
 rollback: >-
   Fully reversible in one commit: revert the generator branch, re-run
   `bin/venv-python -m scripts.decisions_index --write` to restore the full-weight rows, restore
-  _COMMITTED_INDEX_MAX_BYTES to 131_000, drop the three registry rows, and revert
-  docs/contracts/decision-entry.yaml (both size_governance keys plus the amendment_log entry). Nothing outside the
+  _COMMITTED_INDEX_MAX_BYTES to 131_000, drop the three registry rows, revert
+  docs/contracts/decision-entry.yaml (both size_governance keys plus the amendment_log entry),
+  un-narrow tests/test_decision_scout_retrieval.py's _load_index()/_score(), and drop the
+  contract-to-constant pin test from
+  tests/checks/decisions/test_validate_decisions_index_freshness.py. Nothing outside the
   repo changes -- no warehouse write, no infrastructure, no deploy. The only irreversible side
   effect is closing rec-3012, which is reopened by filing a follow-up rec if the change is
   reverted.
