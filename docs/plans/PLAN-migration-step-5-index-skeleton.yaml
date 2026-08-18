@@ -67,9 +67,11 @@ scope:
     purpose: >-
       Retire the now-satisfied rec-3012 forward reference in the currency: block; home the
       third corpus ceiling next to its two siblings (size_governance.index_max_bytes plus a
-      lever_by_ceiling_matrix row) with the operator's standing never-raise position; and
-      correct the line-538 comment header that misattributes the bridge's 132 / 780,000 to
-      Decision 134.
+      lever_by_ceiling_matrix row) with the operator's standing never-raise position; correct
+      the line-538 comment header that misattributes the bridge's 132 / 780,000 to Decision
+      134; and append the MANDATORY Class D amendment_log[] entry the parsed-content change
+      obliges (see the CLASS D AMENDMENT LOG context entry -- without it the PR fails
+      validate_contract_drift in the --pre tier).
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
@@ -110,6 +112,11 @@ acceptance_criteria:
     with the edits landed as budgeted in the SLOC BUDGET context entry. Neither a
     config/sloc_budgets.yaml raise nor a Decision 131 mirror split is an acceptable outcome --
     both are structurally unavailable for this file (see constraint 5).
+  - >-
+    docs/contracts/decision-entry.yaml carries a new amendment_log[] entry
+    ({date, semantic_break: false, change_class: field_add, summary}) covering the
+    index_max_bytes and lever_by_ceiling_matrix additions, so validate_contract_drift's Class D
+    leg passes.
   - >-
     config/agent/verification_registry/registry.yaml carries three new rows whose check_ids are
     decisions-index-archive-rows-are-skeletons, decisions-index-pin-112000-fresh-and-under and
@@ -173,16 +180,21 @@ verification_plan:
       cannot drift from the enforcing test constant.
     command: >-
       bin/venv-python -c "import yaml,pathlib,re;
-      c=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())['size_governance'];
+      y=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text());
+      c=y['size_governance'];
       pin=int(re.search(r'_COMMITTED_INDEX_MAX_BYTES = (\S+)',
       pathlib.Path('tests/test_decisions_index.py').read_text()).group(1).replace('_',''));
       assert c['index_max_bytes']==pin, (c['index_max_bytes'],pin);
       assert 'index_max_bytes' in c['lever_by_ceiling_matrix'], sorted(c['lever_by_ceiling_matrix']);
+      log=y.get('amendment_log') or []; assert log, 'Class D amendment_log[] not appended';
+      assert log[-1]['change_class']=='field_add', log[-1];
       print('CONTRACT_HOMED ok', c['index_max_bytes'])"
     expected: "Exit 0, prints `CONTRACT_HOMED ok 112000`"
     fix_if: >-
       A KeyError means the size_governance or lever_by_ceiling_matrix addition is missing; a
-      value mismatch means the contract and the test constant have drifted.
+      value mismatch means the contract and the test constant have drifted; an empty
+      amendment_log means the Class D obligation was skipped, which validate_contract_drift
+      will also fail in the --pre tier.
     hermetic: true
     graduation: graduate
     graduation_check_id: decision-entry-index-ceiling-homed
@@ -213,7 +225,8 @@ verification_plan:
     action: >-
       Run all three affected test modules to prove every live-assuming consumer was narrowed.
       A simulated run of this change against the pre-change tree failed exactly 10 tests
-      (enumerated in the CONSUMER SWEEP context entry); this step must return zero failures.
+      (enumerated in the CONSUMER SWEEP context entry) out of the 72 these three modules pass
+      today; this step must return zero failures.
     command: >-
       bin/venv-python -m pytest tests/test_decisions_index.py tests/test_decision_scout_retrieval.py
       tests/checks/decisions/test_validate_decisions_index_freshness.py -q
@@ -256,9 +269,11 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: >-
-      Run the full validation tier before handoff, per handoff_policy above. This is also the
-      only tier that exercises validate_graduation_completeness's implement-PR leg, which fails
-      if any of the three registry rows is missing or mis-keyed.
+      Run the full validation tier before handoff, per handoff_policy above. It re-runs
+      validate_graduation_completeness's implement-PR leg (which fails if any of the three
+      registry rows is missing or mis-keyed) and validate_contract_drift's Class D leg -- both
+      are registered pre=True, so --pre catches them too; this step is the belt-and-braces
+      full-tier pass, not their only exercise.
     command: bin/venv-python -m scripts.validate
     expected: "Exit 0 with no failed checks"
     fix_if: >-
@@ -486,7 +501,9 @@ context:
     (test_category_tags_is_sorted_and_deduped_for_every_entry,
     test_every_entry_carries_a_list_of_strings); TestDeterminism::
     test_entry_shape_is_the_stable_projection_only; and TestCuratedRetrievalProbes::
-    test_each_probe_discriminates_to_its_expected_entry. No PRODUCTION consumer breaks:
+    test_each_probe_discriminates_to_its_expected_entry. Across the three modules VP step 5
+    runs, the pre-change baseline is 72 passed and the simulated post-change split is 10 failed
+    / 62 passed. No PRODUCTION consumer breaks:
     .claude/skills/decision-scout/SKILL.md triages live entries only (Phase 1 derives M from
     live:true; Phase 2 shortlists live entries) and already treats archived rows as out of
     scope by currency-key absence, and tests/esb_text_fix/test_persona_routing_rationale.py
@@ -504,6 +521,16 @@ context:
     about +18. The TestCommittedIndexSizePin docstring is 39 non-blank lines today and is
     budgeted to 22 or fewer (-17). Net about +6, landing near 493. The contract-to-constant pin
     test is deliberately homed in tests/checks/decisions/ and costs this file nothing.
+  - >-
+    CONTRACT STRUCTURAL-SIZE BUDGET. docs/contracts/decision-entry.yaml is governed by the
+    Decision 166 engine's `contracts` class at a 500-effective-line limit and measures 458
+    today -- 42 lines of headroom. effective_lines excludes comments, so execution step 8(a)
+    and 8(b) are free; the additions that cost are index_max_bytes (+1), the
+    lever_by_ceiling_matrix folded scalar (+4 to +6) and the amendment_log entry (+4 to +5) --
+    about +10 to +12, landing near 470. It fits, but it is budgeted here rather than assumed,
+    because this plan forecloses its own escape: constraints 4 and 5 bar budget raises, and
+    Decision 166's raise guard would demand a `# raise-approved: dec-NNN` marker naming an
+    authorizing Decision this plan deliberately mints none of.
   - >-
     COVERAGE-FLOOR NOTE for test_excerpt_coverage_is_high. All four no-marker entries (63, 64,
     65, 67) are LIVE, so narrowing the denominator to live rows preserves the `total - 4` floor
@@ -607,7 +634,12 @@ execution_steps:
     simulation figures: 121 of 125 live entries carry an excerpt, so the floor holds exactly.
   - >-
     tests/test_decisions_index.py -- set _COMMITTED_INDEX_MAX_BYTES = 112_000 and rewrite
-    TestCommittedIndexSizePin's docstring to 22 non-blank lines or fewer (it is 39 today). It
+    TestCommittedIndexSizePin's docstring to 22 non-blank lines or fewer (it is 38 today).
+    REGEX-ORDERING TRAP: VP steps 2 and 3 both locate the pin by regexing this module's text
+    for `_COMMITTED_INDEX_MAX_BYTES = `, and the docstring sits ABOVE the assignment -- so the
+    rewritten prose must never contain that literal followed by a number (write "the prior
+    131,000-byte pin", never "_COMMITTED_INDEX_MAX_BYTES = 131_000"), or re.search latches onto
+    the prose occurrence and both steps read the wrong value. It
     must record: the new arithmetic (120 x 796 + 54 x 289 = 111,126, rounded up to 112,000)
     with its measured inputs; that 120 is the TARGET while 132 is the enforced ceiling, that
     this is deliberate, and the TWO-entry consequence (the pin fails at +6 live entries, the
@@ -642,6 +674,19 @@ execution_steps:
     (this plan, a one-time structural reclaim). Note that compaction (Decision 149) does NOT
     bend this ceiling, since a compacted stub stays a live row. Keep the block's existing "the
     validator constants are the SoT" convention -- the contract documents, the test enforces.
+  - >-
+    docs/contracts/decision-entry.yaml -- append the Class D amendment_log[] entry. This is
+    MANDATORY, not optional: scripts/checks/contracts/_population.py's
+    check_amendment_log_for_class_d fails iff the canonical dump of every top-level key except
+    amendment_log differs from base with no new entry appended, and validate_contract_drift is
+    registered pre=True. The comment-only edits in step 8(a)/(b) are free (comments do not
+    parse), but 8(c)'s index_max_bytes key and step 9's matrix row both change parsed content.
+    Shape per scripts/contracts_schema.py's AmendmentLogEntry, following the
+    docs/contracts/contract-population.yaml exemplar: {date, semantic_break: false,
+    change_class: field_add, summary} -- summary naming migration step 5, the index_max_bytes
+    addition and the matrix row. Simulated at planning time: the planned edit without a log
+    entry returns "parsed content changed but no new amendment_log[] entry was added"; with one
+    it returns None.
   - >-
     tests/checks/decisions/test_validate_decisions_index_freshness.py -- add the
     contract-to-constant pin test backing VP step 3, asserting
@@ -681,7 +726,8 @@ execution_steps:
 rollback: >-
   Fully reversible in one commit: revert the generator branch, re-run
   `bin/venv-python -m scripts.decisions_index --write` to restore the full-weight rows, restore
-  _COMMITTED_INDEX_MAX_BYTES to 131_000, and drop the three registry rows. Nothing outside the
+  _COMMITTED_INDEX_MAX_BYTES to 131_000, drop the three registry rows, and revert
+  docs/contracts/decision-entry.yaml (both size_governance keys plus the amendment_log entry). Nothing outside the
   repo changes -- no warehouse write, no infrastructure, no deploy. The only irreversible side
   effect is closing rec-3012, which is reopened by filing a follow-up rec if the change is
   reverted.
