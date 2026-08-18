@@ -81,7 +81,15 @@ scope:
       The measurement harness: drives one arm, issues the forced kill mid-loop, resumes, and emits the three
       audit metrics (resume-without-reissue, hand-roll residue, workspace re-materialization cost) into
       findings.yaml. Derives strategy coverage from workspace.STRATEGIES rather than a hard-coded list, so a
-      strategy added without a measurement fails the class check instead of passing silently.
+      strategy added without a measurement fails the class check instead of passing silently. THE DRIVE IS
+      REMOTE, AND THIS ROW SAYS SO because a straightforward reading reproduces the round-2 AccessDenied at its
+      surviving sibling site: the arm drive, the forced kill, the resume and all three W5 terms EXECUTE AND ARE
+      MEASURED INSIDE THE DRIVER/ARM EXECUTION ENVIRONMENT. This session's identity holds no states: verb and no
+      lambda:InvokeFunction on the spike functions, and this plan refuses to add either, so the local CLI does
+      exactly what VP step 13's readiness bridge already does -- PUT a control object into the spike prefix, GET
+      the result back, both with s3 grants PlatformDev already holds -- and never calls StartExecution,
+      StopExecution or InvokeFunction itself. Each W5 wall_clock_s / object_count / bytes triple is the PER-RUN
+      TOTAL for its arm x strategy pair, never a per-event figure.
   - file: tests/esb_q5_spike/__init__.py
     action: Create
     purpose: Test package marker mirroring scripts/esb_q5_spike/ (tests/checks/ precedent).
@@ -150,7 +158,12 @@ scope:
       IAM only: exactly THREE roles, all named agent-platform-esb-q5-* and all carrying
       permissions_boundary = agent-platform-github-ci-apply-boundary. agent-platform-esb-q5-arm (shared by both
       arm Lambdas -- the arms differ in substrate, not in IAM), agent-platform-esb-q5-driver, and
-      agent-platform-esb-q5-sfn (the Step Functions execution role). Round 2 minted FIVE roles; the count fell
+      agent-platform-esb-q5-sfn (the Step Functions execution role). The DRIVER role's inline policy carries
+      the verbs that drive AND KILL an arm -- states:StartExecution, states:StopExecution and
+      states:DescribeExecution, scoped to the two spike state machines -- because the forced kill of VP step 14
+      executes from the driver, not from this session's identity. That role is spike-owned, boundary-carrying
+      and inside the agent-platform-esb-q5-* prefix, so the kill verb is in github_ci_apply's
+      IAMRoleWriteBounded budget and is NOT a PlatformDev widening. Round 2 minted FIVE roles; the count fell
       to three because the EventBridge edge no longer needs a target role (see the compute row) and the two
       arms share one execution role. Split from the compute family PRE-DECLARED rather than discovered at
       implement time: the terraform class caps a file at 500 effective lines and Decision 128 makes decomposition
@@ -305,14 +318,6 @@ scope:
       test_t41_names_the_criteria_and_leaves_the_choice_open (:103-116) and
       test_decision_scope_notes.py::test_cd27_stays_pending_with_expected_filed_via SURVIVE unchanged and are
       deliberately not touched -- T4.1's text does not change and CD.27 stays pending.
-  - file: config/agent/verification_registry/registry.yaml
-    action: Modify
-    purpose: >-
-      FOUR graduated rows, and the count is set by MEASUREMENT, not preference: the registry is 5,836 effective
-      lines against its 6,000 structural budget (config class), so 164 lines of headroom exist and a
-      command_exit_zero row of the shape this repo already uses costs roughly 25-37 lines. Four rows fit with
-      margin; eight (the prior draft's count) would breach the budget and force exactly the raise Decision 128
-      forbids as the default. VP step 11 asserts the post-graduation figure rather than assuming it.
 bundled_recommendations: []
 closes_criteria: []
 infrastructure_dependencies:
@@ -462,12 +467,22 @@ acceptance_criteria:
     conditional assertion in both directions: if CD.27 were flipped to ratified it would instead have to carry a
     non-empty precondition_discharge entry for each of ESB-01, ESB-04 and ESB-06.
   - >-
-    config/agent/verification_registry/registry.yaml carries exactly four new esb-q5-* rows and remains at or
-    under its 6,000-effective-line structural budget, with the measured headroom printed.
+    config/agent/verification_registry/registry.yaml gains NO esb-q5 row and is not in scope: this plan
+    graduates NOTHING. Every candidate property either pins spike artifacts the teardown removes as one set
+    (VP steps 1, 4, 6 and step 2's spike-specific legs) or, for the durable VPC-free invariant, already holds on
+    origin/main and is therefore inadmissible under the shipped VF-06 c2 differential -- measured, see the
+    ROUND-4 REMEDIATION context entry. VP step 11 asserts the registry gained no esb-q5 row rather than
+    budgeting for rows.
   - >-
-    After teardown the spike flag reads default-false on origin/main and the gated destroy run completed; the
-    residual AWS resource sweep is SURFACED for an operator identity holding states:List*/lambda:List* and
-    reported empty, because PlatformDev holds neither and this plan refuses to widen it.
+    After teardown no spike AWS resource survives (the gated destroy run completed) AND the spike's repo
+    furniture is gone from origin/main as ONE set -- scripts/esb_q5_spike/, tests/esb_q5_spike/, the
+    terraform/personal/esb_q5_spike*.tf family and its esb_q5_spike_enabled variable, the
+    conformance.spike_class / spike_detail pair, and the aws_sfn_state_machine entries in the three iam_tf
+    classification maps with the cases that pin them -- while docs/plans/reports/esb-q5-spike-findings.yaml and
+    the numbered Decision REMAIN, because they are the evidence record rather than furniture. The removal is
+    what makes rec-3192's bootstrap-tier revert executable. The residual AWS resource sweep is SURFACED for an
+    operator identity holding states:List*/lambda:List* and reported empty, because PlatformDev holds neither
+    and this plan refuses to widen it.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -525,8 +540,14 @@ verification_plan:
       fixed_cost_observed and insensitivity_condition. Do NOT resolve it by softening the finding: if the
       plumbing differential is small against the fixed governance cost, saying so IS the result.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: "esb-q5-exclusion-partitions-audit-arm-set"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same transient-fact ground step 5 already states: a graduated registry row is a standing repo-wide guard,
+      and one that reads docs/plans/reports/esb-q5-spike-findings.yaml would hold THIS one spike's record shape
+      as a permanent repo invariant. Nothing else in the corpus produces that artifact, so the row would assert
+      a transient fact forever and would red main the day a later plan supersedes or archives the record. The
+      completeness of the evidence record is enforced where it is actually authored -- here, plan-locally, at
+      the moment it is written.
   - step: 2
     phase: pre-deploy
     action: >-
@@ -621,8 +642,25 @@ verification_plan:
       budget` means the family needs a further split by resource family -- Decision 128 makes that the default
       and a raise the Decision-cited exception this wave has no grounds to write.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: "esb-q5-no-networked-terraform-resources"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Split deliberately into its two halves, and BOTH come out waived. (a) The spike-specific legs -- family
+      existence, count-gating, the boundary and prefix sweeps, the conformance.spike_class agreement and the
+      file sizes -- are exactly what step 5 already refuses: a graduated row asserting
+      terraform/personal/esb_q5_spike*.tf EXISTS asserts a transient fact forever, and it would red main the
+      moment the teardown removes the family so rec-3192 can execute. That assertion was also load-bearing
+      against rec-3192 in a way no site said out loud: _read_coverage._scan_resources is a PURE TEXT SCAN over
+      terraform/personal/*.tf, so a resource count-gated to zero is still DISCOVERED and still demands its
+      refresh-read and write coverage -- pinning the family in the tree pinned the bootstrap-tier `states:`
+      widening with it. (b) The durable half -- zero aws_vpc / aws_subnet / aws_nat_gateway / aws_vpc_endpoint /
+      aws_ecs_* / aws_efs_* and zero vpc_config across terraform/** -- IS a standing platform invariant and does
+      survive the spike, but it is INADMISSIBLE as a registry row and that was measured rather than assumed: it
+      exits 0 on origin/main today (38 terraform files, 0 hits, 0 vpc_config), so
+      verification_graduation.run_differential gets a PASS on the reverted worktree and returns "not admitted --
+      revert did not produce FAIL (tautological)", which validate_verification_registry turns into a --pre
+      failure. Same VF-06 c2 ground steps 7 and 10 are waived on. The invariant stays a plan-local assertion,
+      and the operator's VPC-free scoping decision keeps its enforcement here rather than gaining a row that
+      would red the implement PR.
   - step: 3
     phase: pre-deploy
     action: >-
@@ -650,12 +688,12 @@ verification_plan:
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      Non-admissible under VF-05 differential admission rather than merely inconvenient: the row's own subject
-      (scripts/esb_q5_spike/) is created by this plan, so a graduated row here duplicates the coverage step 4's
-      graduated row already gives the same module set, and the registry has a measured 164 effective lines of
-      headroom that four rows consume with margin and five do not. The property is additionally guarded by
-      tests/esb_q5_spike/test_arms.py::test_measured_strategies_derives_from_the_registry, which IS run by the
-      graduated step-6 row.
+      Same transient-fact ground step 5 states: a graduated registry row is a standing repo-wide guard, and one
+      whose subject is scripts/esb_q5_spike/ -- created by this plan and REMOVED by its teardown as one set --
+      asserts a transient fact forever and would red main at that removal. The property is guarded for the whole
+      window in which the modules exist by
+      tests/esb_q5_spike/test_arms.py::test_measured_strategies_derives_from_the_registry, which VP step 6 runs,
+      and it leaves with the modules it describes.
   - step: 4
     phase: pre-deploy
     action: >-
@@ -682,8 +720,13 @@ verification_plan:
       prefix. Do not add the module to an exemption list; no-production-writes is the whole basis on which this
       spike is safe to run.
     hermetic: true
-    graduation: graduate
-    graduation_check_id: "esb-q5-mocked-llm-and-no-ops-writes"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same transient-fact ground step 5 states: a graduated registry row whose subject is scripts/esb_q5_spike/
+      -- created by this plan and REMOVED by its teardown as one set -- asserts a transient fact forever and
+      would red main the moment the spike's repo furniture goes, which is the removal rec-3192 depends on. The
+      no-production-writes property is enforced plan-locally here, which is the entire window in which any spike
+      module exists.
   - step: 5
     phase: pre-deploy
     action: >-
@@ -727,8 +770,9 @@ verification_plan:
       This step reads THIS PLAN's own scope list from docs/plans/PLAN-esb-q5-substrate-spike.yaml. A graduated
       registry row is a standing repo-wide guard, and one that parses a single plan document goes stale the
       moment that plan is superseded or its scope list is edited -- it would assert a transient fact forever.
-      The durable half of the property (no spike module affects an existing artifact) is covered by the
-      graduated step-4 row's module sweep over the same directory.
+      The durable half of the property (no spike module affects an existing artifact) is covered for the life of
+      the spike by VP step 4's module sweep over the same directory, which is waived on this same ground and
+      leaves with the directory it sweeps.
   - step: 6
     phase: pre-deploy
     action: >-
@@ -751,14 +795,25 @@ verification_plan:
       failing test_workspace_store_criteria case means the re-grounding and the roadmap edit disagree -- fix
       whichever is wrong; do not delete the assertion.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: "esb-q5-loop-arms-and-classification-unit-tests"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same transient-fact ground step 5 states: a graduated registry row here pins tests/esb_q5_spike/, created
+      by this plan and REMOVED by its teardown as one set, so it asserts a transient fact forever and would red
+      main at that removal. The legs that OUTLIVE the spike need no new row: the re-grounded
+      tests/esb_text_fix/test_workspace_store_criteria.py cases run in the standing --pre test tier once they
+      land, and the aws_sfn_state_machine classification cases leave together with the map entries they pin.
   - step: 7
     phase: pre-deploy
     action: >-
-      The Step Functions IAM obligation, asserted as three classes: the three classification maps; the Decision
-      156 read/write HOME split over the four policy surfaces; and the grants no pre-merge gate covers (the
-      states: tag/untag pair, and an iam:PassRole conditioned on states.amazonaws.com). LITERAL ARN ENUMERATION
+      The Step Functions IAM obligation, asserted as two classes plus a shipped-gate invocation: the three
+      classification maps; the Decision 156 read/write HOME split over the four policy surfaces; and the ONE
+      grant no pre-merge gate covers at all, an iam:PassRole conditioned on states.amazonaws.com. THE
+      states:Tag/UntagResource LEG WAS DELETED THIS ROUND, same shape as round 3's deletion from this same
+      step: check_tag_untag_symmetry (scripts/checks/iam_tf/_write_symmetry.py) is already invoked by
+      validate_ci_refresh_read_coverage (:158), derives the Untag counterpart MECHANICALLY and requires it at an
+      OVERLAPPING Resource scope, while the bespoke leg was a bare substring test that passes when the pair is
+      granted at non-overlapping scopes -- the exact case the shipped rule exists to catch, i.e. a fail-open
+      duplicate of a fail-closed gate. LITERAL ARN ENUMERATION
       OF THE SPIKE ROLES IS **NOT** ASSERTED HERE, AND THAT IS THE POINT: this step's final leg invokes
       `validate_ci_refresh_read_coverage`, the SHIPPED gate that already closes that class -- discovery-driven
       over terraform/personal, brace-balanced via `_vir._extract_block`, literal-only on `aws_iam_role`,
@@ -790,10 +845,7 @@ verification_plan:
       customer-managed reads policy'; assert re.search(wr, inline), 'no states: write verb in
       github_ci_apply_policy.tf -- the inline document is where write AUTHORITY stays';
       stray=sorted(set(re.findall(rd, inline))); assert not stray, f'states: READ verb(s) placed in the inline
-      WRITE-authority document, against Decision 156 clause 1: {stray}'; assert 'states:TagResource' in inline and
-      'states:UntagResource' in inline, 'states:TagResource / states:UntagResource are not both granted --
-      terraform/personal/main.tf sets default_tags, so create tags the state machine and the tag-untag symmetry rule
-      requires the pair at an overlapping scope'; assert 'states:' in
+      WRITE-authority document, against Decision 156 clause 1: {stray}'; assert 'states:' in
       pathlib.Path('terraform/bootstrap/github_ci_apply_boundary.tf').read_text(encoding='utf-8'), 'the boundary
       DataPlaneAllow carries no states: entry -- it is the ceiling for github_ci_apply AND for the boundary-carrying
       spike roles'; assert re.search(rd, planner), 'no states: refresh-read verb in terraform/personal/oidc.tf --
@@ -805,7 +857,7 @@ verification_plan:
       doc=re.sub(r'\$\{[^}]*\}', '123456789012', re.sub(r'(?m)^\s*#.*$', '', inline[i:j])); mini=len(re.sub(r'\s+',
       '', doc)); failed=[]; validate_ci_refresh_read_coverage(failed); assert not failed, f'refresh-read/write
       coverage findings: {failed}'; print('OK', T, 'classified read+write with all 3 lifecycle phases; reads Sid in
-      the reads policy, writes inline, 0 stray reads inline; tag/untag pair granted; states PassRole conditioned;
+      the reads policy, writes inline, 0 stray reads inline; states PassRole conditioned;
       boundary ceiling carries states:; refresh-read coverage clean over', len(WRITE_COVERAGE), 'write-managed
       types'); print('INLINE-DOC SIZE (observational, Decision 156 founding problem): github_ci_apply inline policy
       minifies to approximately', mini, 'bytes of its 10240 AWS hard limit --', 10240-mini, 'bytes of headroom; the
@@ -824,16 +876,17 @@ verification_plan:
       a classification map was left unedited -- add the entry; do NOT reach for TRANSITIVE_TYPES, which would
       claim a parent grant covers it and there is no such parent. `no states: refresh-read verb in
       github_ci_apply_reads.tf` or `states: READ verb(s) placed in the inline WRITE-authority document` is the
-      Decision 156 home split violated from one side or the other -- move the Sid, do not duplicate it.
-      `states:TagResource / states:UntagResource are not both granted` means a tags diff will AccessDeny on the
-      first apply that REMOVES a tag -- grant the pair at an overlapping scope. `no iam:PassRole grant
+      Decision 156 home split violated from one side or the other -- move the Sid, do not duplicate it. `no
+      iam:PassRole grant
       conditioned on states.amazonaws.com` is the invisible one: no pre-merge gate covers PassRole, so leaving
       it AccessDenies inside the admin apply window -- add the Sid next to the states: write verbs.
       `refresh-read/write coverage findings` is the SHIPPED gate speaking and is where an unenumerated spike
       role surfaces: read its message, which names the resource and the role policy that does not cover it, and
       add each full literal ARN to IAMRolesRead and IAMPlatformRolesRead -- the agent-platform-* prefix does not
-      satisfy the literal-only rule. Do NOT re-add a local derivation of the role set to make that failure
-      arrive sooner; a fail-open duplicate of a fail-closed gate is how this plan reached round 3. An
+      satisfy the literal-only rule. That same message carries check_tag_untag_symmetry's finding when a
+      states:Tag* grant has no Untag* counterpart at an overlapping scope: grant the pair, and do NOT re-add a
+      substring test for it. Do NOT re-add a local derivation of the role set to make any of this arrive sooner;
+      a fail-open duplicate of a fail-closed gate is how this plan reached round 3. An
       `INLINE-DOC SIZE` headroom approaching zero is a warning, not a failure here -- relocate a Sid to the
       reads policy per Decision 156 before the admin plan window rejects it.
     hermetic: true
@@ -843,9 +896,12 @@ verification_plan:
       validate_ci_refresh_read_coverage is the standing enforced guard for the coverage half and runs in both
       tiers already, and a graduated duplicate would be reverted alongside the spike terraform, so on origin/main
       both the resource and its classification are absent, the gate passes, and the row fails admission as
-      tautological. The step is retained because it asserts three things the shipped gate does not -- the
-      Decision 156 home split, the tag/untag pair, and the states.amazonaws.com PassRole, which no gate covers
-      at all -- plus one observational print.
+      tautological. The step is retained because it asserts TWO things the shipped gate does not -- the
+      Decision 156 home split, and the states.amazonaws.com PassRole, which no gate covers at all -- plus one
+      observational print. The claim read THREE until this round, and the middle third was UNTRUE: the tag/untag
+      pair IS covered, by check_tag_untag_symmetry, which validate_ci_refresh_read_coverage already calls and
+      which requires the counterpart at an OVERLAPPING Resource scope rather than merely somewhere in the
+      document.
   - step: 8
     phase: pre-deploy
     action: >-
@@ -896,10 +952,9 @@ verification_plan:
     graduation: waive
     graduation_waiver_reason: >-
       The durable half of this property is being written into the live-roadmap pytest suite this plan already
-      re-grounds (tests/esb_text_fix/test_workspace_store_criteria.py), which the graduated step-6 row runs, and
-      the existing graduated row cd43-selection-criteria-well-formed already guards the block's W1-W8 shape and
-      coverage_cases. A fifth registry row would also spend headroom the measured 164-line budget does not have
-      once the four planned rows land.
+      re-grounds (tests/esb_text_fix/test_workspace_store_criteria.py), which VP step 6 runs now and which the
+      standing --pre test tier runs after it lands, and the existing graduated row
+      cd43-selection-criteria-well-formed already guards the block's W1-W8 shape and coverage_cases.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -992,36 +1047,46 @@ verification_plan:
   - step: 11
     phase: pre-deploy
     action: >-
-      Registry growth is budgeted, not assumed. Assert exactly the four planned esb-q5 rows landed, that check_id
-      values stay unique, and that the registry is still at or under its measured structural budget -- printing
-      the remaining headroom so the next wave inherits a number rather than a guess.
+      This plan graduates NOTHING, and that is asserted rather than assumed. Assert the registry gained NO
+      esb-q5 row at all -- the anti-recurrence guard, because every candidate property either pins spike
+      artifacts the teardown removes as one set (steps 1, 4, 6 and step 2's spike-specific legs) or, for the
+      durable VPC-free invariant, already holds on origin/main and so cannot pass the shipped VF-06 c2
+      differential -- that check_id values stay unique, and that the registry is still at or under its measured
+      structural budget, printing the headroom so the next wave inherits a number rather than a guess.
     command: >-
       bin/venv-python -c "import pathlib,yaml; from scripts.checks.structural._classify import effective_lines;
       p=pathlib.Path('config/agent/verification_registry/registry.yaml'); text=p.read_text(encoding='utf-8');
       rows=yaml.safe_load(text)['entries']; ids=[r['check_id'] for r in rows]; mine=sorted(i for i in ids if
-      i.startswith('esb-q5-')); assert len(mine)==4, f'expected exactly 4 graduated esb-q5 rows, found
-      {len(mine)}: {mine}'; assert len(ids)==len(set(ids)), 'duplicate check_id in the registry';
+      i.startswith('esb-q5-') or 'esb_q5' in i); assert not mine, f'this plan graduates nothing, but esb-q5
+      registry row(s) landed: {mine}'; assert len(ids)==len(set(ids)), 'duplicate check_id in the registry';
       budget=yaml.safe_load(pathlib.Path('config/structural_size_budgets.yaml').read_text(encoding='utf-8'))['budgets'][p.as_posix()];
       eff=effective_lines(text); assert eff<=budget, f'registry is {eff} effective lines, over its {budget}
       budget -- Decision 128 says decompose or retire rows, never raise'; print('OK', len(rows), 'registry
-      rows,', len(mine), 'esb-q5 rows;', eff, 'effective lines of', budget, ', headroom', budget-eff)"
+      rows,', len(mine), 'esb-q5 rows (this plan graduates nothing);', eff, 'effective lines of', budget, ',
+      headroom', budget-eff)"
     expected: >-
-      Exit 0 with a line beginning `OK` and ending with a non-negative `headroom` figure. Proved failing this
-      session on f3e4e6d: exits 1 with an "expected exactly 4 graduated esb-q5 rows, found 0: []" assertion, and
-      the same command's budget leg passes today at 5,836 effective lines of 6,000.
+      Exit 0 with a line beginning `OK` and ending with a non-negative `headroom` figure. This command PASSES
+      on f3e4e6d and is MEANT to -- it is a plan-local regression guard against a spike-pinning row creeping
+      into the registry, not a differential, and that is stated rather than dressed up as a failing proof. Run
+      verbatim this session against the live tree: `OK 454 registry rows, 0 esb-q5 rows (this plan graduates
+      nothing); 5836 effective lines of 6000 , headroom 164`. Its failing direction was proved by construction:
+      with a synthetic esb-q5 row spliced into the parsed rows it exits 1 with `this plan graduates nothing, but
+      esb-q5 registry row(s) landed`.
     fix_if: >-
-      `expected exactly 4 graduated esb-q5 rows` means a plan-declared graduation was skipped or an extra one was
-      added -- the four are fixed at plan time by graduation_check_id and the count is the registry budget's
-      constraint, not a preference. `over its budget` means the four rows were authored too verbosely -- tighten
-      the check_spec commands; do NOT raise the budget, which Decision 128 makes a reviewable exception requiring
-      an authorizing Decision marker (Decision 165) that this wave has no grounds to write.
+      `this plan graduates nothing, but esb-q5 registry row(s) landed` means a spike-pinning row was graduated
+      after all -- DELETE the row. A row asserting that the findings record, the spike modules, the spike tests
+      or the terraform family exists is reverted by this plan's own teardown and would red main permanently,
+      which is why every step's disposition is waive; and the durable VPC-free invariant cannot be graduated
+      either, because it passes on origin/main and VF-06 c2 rejects it as tautological. `over its budget` means
+      the registry grew from some other source -- Decision 128 says decompose or retire rows, never raise, and
+      no `# raise-approved:` marker is available to this wave.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      A registry row that asserts how many rows the registry has is self-referential -- it would have to be
-      amended by every subsequent graduating plan, and it asserts a count fixed by THIS plan rather than a
-      durable property. The durable half (schema validity, unique ids, differential admission of added rows) is
-      already validate_verification_registry's job in the --pre tier, and the size half is
+      A registry row that asserts what the registry contains is self-referential -- it would have to be amended
+      by every subsequent graduating plan, and it asserts a fact fixed by THIS plan rather than a durable
+      property. The durable half (schema validity, unique ids, differential admission of added rows) is already
+      validate_verification_registry's job in the --pre tier, and the size half is
       validate_structural_size_limits'.
   - step: 12
     phase: pre-deploy
@@ -1078,9 +1143,16 @@ verification_plan:
   - step: 14
     phase: post-deploy
     action: >-
-      Run each arm end-to-end, force-kill it mid-loop, and resume it. Assert the measurement actually
-      DISCRIMINATES: the call ledger must show the completed-step count and any duplicate rows, per arm, and the
-      hand-roll residue must be recorded with its constituent parts named rather than as a bare XS/S/M letter.
+      Run each arm end-to-end, force-kill it mid-loop, and resume it. THE DRIVE, THE KILL AND THE RESUME
+      EXECUTE INSIDE THE DRIVER/ARM EXECUTION ENVIRONMENT, not from this session: the driver role holds
+      states:StartExecution / states:StopExecution / states:DescribeExecution on the two spike state machines,
+      and this session's identity holds none of them. The local CLI invocation below is a CONTROL-OBJECT PUT
+      into the spike prefix plus a result GET -- the same S3 bridge VP step 13's readiness record already uses,
+      on s3 grants PlatformDev already holds. Reading it as a local StartExecution or InvokeFunction call
+      reproduces the round-2 AccessDenied at its surviving sibling site, which is why the step says so instead
+      of leaving it to the implementer. Assert the measurement actually DISCRIMINATES: the call ledger must show
+      the completed-step count and any duplicate rows, per arm, and the hand-roll residue must be recorded with
+      its constituent parts named rather than as a bare XS/S/M letter.
     command: >-
       bin/venv-python -m scripts.esb_q5_spike.measure --arm all --forced-kill mid-loop --emit
       docs/plans/reports/esb-q5-spike-findings.yaml && bin/venv-python -c "import yaml;
@@ -1109,7 +1181,12 @@ verification_plan:
     action: >-
       Measure workspace re-materialization for every registered strategy on every arm that ran, at the W6 scale
       basis, recording wall-clock, request/object count and bytes for each pair -- and record the W6 basis itself
-      with the measurement command and the date it was run.
+      with the measurement command and the date it was run. ALL THREE W5 TERMS ARE MEASURED INSIDE THE
+      DRIVER/ARM EXECUTION ENVIRONMENT, on the ARM's own S3 path. If measure.py re-materialized locally the
+      triple would describe the CC-web container's S3 path rather than the arm's, and W5's wall-clock term is
+      the ONE wall-clock term this plan claims entitlement to. The local CLI invocation below is the same
+      control-object PUT and result GET VP step 13's readiness bridge uses. Each wall_clock_s / object_count /
+      bytes triple is the PER-RUN TOTAL for its arm x strategy pair, never a per-event figure.
     command: >-
       bin/venv-python -m scripts.esb_q5_spike.measure --rematerialization-only --emit
       docs/plans/reports/esb-q5-spike-findings.yaml && bin/venv-python -c "import yaml;
@@ -1136,32 +1213,62 @@ verification_plan:
     phase: post-deploy
     action: >-
       Teardown, verified on the two halves this session's identity can and cannot reach, stated separately
-      rather than blurred. AGENT-EXECUTABLE half: the flag reads default-false on origin/main, the spike
-      terraform family REMAINS IN THE TREE fully count-gated to zero, and the gated-apply DESTROY run completed
-      rather than sitting unapproved. The family is deliberately NOT deleted -- step 2 is graduated and
-      hard-asserts that terraform/personal/esb_q5_spike*.tf exists, so removing it would red main permanently.
-      Teardown is a flag flip, never a file removal, and this action says so rather than leaving "gone or fully
-      gated" open. OPERATOR half: the residual AWS resource sweep. The agent SURFACES the sweep commands and does not run
+      rather than blurred. TEARDOWN IS A FLAG FLIP FOR THE AWS RESOURCES PLUS ONE COORDINATED REMOVAL OF THE
+      SPIKE'S REPO FURNITURE, in that order -- the destroy lands first, while the terraform still describes the
+      resources, and the removal lands second. AGENT-EXECUTABLE half: the gated-apply DESTROY run completed
+      rather than sitting unapproved, and origin/main no longer carries scripts/esb_q5_spike/,
+      tests/esb_q5_spike/, the terraform/personal/esb_q5_spike*.tf family, the esb_q5_spike_enabled variable,
+      the conformance.spike_class / spike_detail pair, or the aws_sfn_state_machine entries in the three iam_tf
+      classification maps -- removed as ONE set, which is what makes rec-3192's bootstrap-tier revert
+      executable. This plan graduates NOTHING, so no standing registry row asserts any of them exists and the
+      removal reds nothing.
+      docs/plans/reports/esb-q5-spike-findings.yaml STAYS, and the command asserts it does: it is the evidence
+      record, and asserting it is also what keeps this sweep from passing vacuously before the plan lands.
+      OPERATOR half: the residual AWS resource sweep. The agent SURFACES the sweep commands and does not run
       them -- PlatformDev holds no states: verb and no lambda:List*, and adding either is refused by this plan's
       own constraint, so a sweep the agent executes would AccessDeny by construction. The round-2 version of
-      this step called those APIs directly and could never have passed.
+      this step called those APIs directly and could never have passed. The printed JMESPath carries the
+      'esb-q5' LITERAL, built with chr(39)/chr(34): an escaping rework at 18cdd5b had reduced it to
+      contains(name,@), which raises "'in <string>' requires string as left operand, not dict" and could never
+      have run as printed.
     command: >-
-      bin/venv-python -c "import pathlib,re,subprocess; main=subprocess.run(['git','show','origin/main:terraform/personal/variables.tf'],capture_output=True,text=True).stdout;
-      assert re.search(r'variable\s+"esb_q5_spike_enabled"[^}]*default\s*=\s*false', main, re.S), 'the flag
-      does not read default false on origin/main -- teardown is not landed'; tf=subprocess.run(['git','ls-tree','-r','--name-only','origin/main','terraform/personal/'],capture_output=True,text=True).stdout.split();
-      spike=[f for f in tf if 'esb_q5_spike' in f]; print('OK flag default false on origin/main;', len(spike),
-      'spike terraform file(s) remain, all count-gated'); print('OPERATOR SWEEP -- run with an identity holding
-      states:List* and lambda:List*, e.g. PlatformAdmin, and report the result:'); print('  aws stepfunctions
-      list-state-machines --region eu-west-2 --query \"stateMachines[?contains(name,@)].name\" --output
-      text'); print('  aws lambda list-functions --region eu-west-2 --query
-      \"Functions[?contains(FunctionName,@)].FunctionName\" --output text')"
+      bin/venv-python -c "import subprocess; q=chr(34); a=chr(39);
+      ls=subprocess.run(['git','ls-tree','-r','--name-only','origin/main'],capture_output=True,text=True).stdout.split();
+      assert 'docs/plans/reports/esb-q5-spike-findings.yaml' in ls, 'the spike findings record is not on
+      origin/main -- the plan has not landed, so a teardown sweep would pass vacuously'; left=[f for f in ls if
+      'esb_q5_spike' in f]; assert not left, f'spike repo furniture survives on origin/main: {left}';
+      v=subprocess.run(['git','show','origin/main:terraform/personal/variables.tf'],capture_output=True,text=True).stdout;
+      assert 'esb_q5_spike_enabled' not in v, 'the spike flag variable survives in
+      terraform/personal/variables.tf';
+      tax=subprocess.run(['git','show','origin/main:docs/contracts/environment-taxonomy.yaml'],capture_output=True,text=True).stdout;
+      assert 'spike_class' not in tax and 'spike_detail' not in tax, 'conformance.spike_class / spike_detail
+      survive in the taxonomy contract'; stale=[m for m in
+      ('_read_coverage.py','_write_coverage.py','_write_companions.py') if 'aws_sfn_state_machine' in
+      subprocess.run(['git','show','origin/main:scripts/checks/iam_tf/'+m],capture_output=True,text=True).stdout];
+      assert not stale, f'aws_sfn_state_machine classification survives in: {stale}'; print('OK teardown set
+      removed from origin/main as ONE set: 0 spike files, no flag variable, no conformance.spike_class, no
+      aws_sfn_state_machine classification; the findings record remains -- rec-3192 is now executable');
+      print('OPERATOR SWEEP -- run with an identity holding states:List* and lambda:List*, e.g. PlatformAdmin,
+      and report the result:'); print('  aws stepfunctions list-state-machines --region eu-west-2 --query
+      '+q+'stateMachines[?contains(name,'+a+'esb-q5'+a+')].name'+q+' --output text'); print('  aws lambda
+      list-functions --region eu-west-2 --query
+      '+q+'Functions[?contains(FunctionName,'+a+'esb-q5'+a+')].FunctionName'+q+' --output text')"
     expected: >-
-      Exit 0 with a line beginning `OK flag default false on origin/main`, followed by the two printed
-      `OPERATOR SWEEP` commands. The operator reports both sweeps empty -- no state machine and no Lambda
-      carrying the esb-q5 prefix.
+      Exit 0 with a line beginning `OK teardown set removed from origin/main as ONE set` and ending `rec-3192
+      is now executable`, followed by the two printed `OPERATOR SWEEP` commands. Proved failing this session at
+      db4e9af: it exits 1 with `the spike findings record is not on origin/main -- the plan has not landed, so a
+      teardown sweep would pass vacuously`, so the sweep cannot pass before the plan lands. The two printed
+      commands were run as printed against a jmespath 1.1.0 fixture this session and both select the esb-q5
+      member, where the pre-fix `contains(name,@)` form raises. The operator reports both sweeps empty -- no
+      state machine and no Lambda carrying the esb-q5 prefix.
     fix_if: >-
-      `the flag does not read default false on origin/main` means the teardown PR has not merged -- merge it
-      before claiming teardown. A non-empty operator sweep means the destroy did not fully land: re-check that
+      `spike repo furniture survives on origin/main`, `the spike flag variable survives`,
+      `conformance.spike_class / spike_detail survive` or `aws_sfn_state_machine classification survives` means
+      the removal PR landed PARTIALLY -- remove the remainder in one commit; the set moves together or the
+      coverage gate goes red mid-way. `the spike findings record is not on origin/main` means the plan itself
+      has not landed, so there is nothing to tear down yet. Do NOT satisfy the sweep by deleting the findings
+      record: it is the evidence the Decision cites. A non-empty operator sweep means the destroy did not fully
+      land: re-check that
       the gated-apply destroy run completed rather than being left awaiting approval. Do not delete the residue
       with a console or CLI delete -- that puts state out of band with terraform and the next apply resurrects
       or errors on it. Do NOT resolve an AccessDenied here by granting DailyOps states: or lambda:List*: the
@@ -1352,17 +1459,6 @@ test_obligations:
       Red at f3e4e6d, where the existing test_cd43_is_pending_and_r2_shaped and
       test_store_choice_deferred_and_evaluation_floors_hold pin the deferral (measured this session); green once
       both are re-grounded to the ratified shape and the roadmap edit lands.
-  - source: config/agent/verification_registry/registry.yaml
-    behavior: >-
-      Exactly the four planned graduated rows land, check_ids stay unique, and the registry stays inside its
-      structural budget.
-    verification_step: 11
-    command: config/agent/verification_registry/registry.yaml
-    waiver_reason: >-
-      The registry's own standing guards already own every durable half of this: validate_verification_registry
-      checks schema, uniqueness and VF-06 c2 differential admission of added rows in the --pre tier, and
-      validate_structural_size_limits enforces the 6,000-line budget. A bespoke test would pin THIS plan's row
-      count into the permanent suite, which the next graduating plan would have to amend.
 constraints:
   - >-
     THE EXCLUSION IS A RECORDED OPERATOR DECISION, NOT A DEFERRAL, AND IT IS NOT RE-OPENABLE MID-IMPLEMENTATION.
@@ -1437,11 +1533,12 @@ constraints:
     Decision 164; re-arm only if ESB-03's reopen fires), and the escape-hatch-reachability probe stays OPTIONAL.
     Neither absence is an omission to be quietly repaired mid-implementation.
   - >-
-    DECOMPOSE, NEVER RAISE (Decision 128 / Decision 165). Two measured budgets bind this wave:
-    terraform/personal/platform_roles.tf sits at exactly its 587-line structural budget, which is why the DailyOps
-    states: grant lands as its own aws_iam_role_policy in the spike .tf; and
-    config/agent/verification_registry/registry.yaml has 164 effective lines of headroom, which is why exactly
-    four rows graduate. Neither budget is raised, and no `# raise-approved:` marker is written.
+    DECOMPOSE, NEVER RAISE (Decision 128 / Decision 165). ONE measured budget binds this wave:
+    terraform/personal/platform_roles.tf sits at exactly its 587-line structural budget, so that file is not
+    touched at all and the spike's own terraform is PRE-DECOMPOSED by resource family for the same class rule.
+    No budget anywhere is raised and no `# raise-approved:` marker is written. Budget headroom is NOT a selector
+    for what becomes permanent: this plan graduates nothing, and the reason is transience and VF-06 c2
+    admissibility (VP steps 1, 2, 4 and 6), never how many rows would have fit.
   - >-
     GRANT HOMES ARE DECISION 156's CALL, NOT THE AUTHOR'S. The `states:` refresh-read Sid goes in
     terraform/bootstrap/github_ci_apply_reads.tf (the customer-managed reads policy); only the `states:` write
@@ -1501,11 +1598,6 @@ constraints:
     then in force) before any decision that turns on per-iteration duration -- specifically before the 15-minute
     Lambda wall is relied on as a discriminator, and before re-arm condition (ii) is argued on duration grounds.
     Recorded in findings.yaml and in the entry's reversal conditions, not only here.
-  - >-
-    PyYAML safe_dump doubles backslashes in a multi-line string containing an indented line, and two graduated
-    commands here carry backslash regexes. Write the graduated rows into
-    config/agent/verification_registry/registry.yaml by hand or verify the round trip, and re-run each graduated
-    command FROM THE COMMITTED REGISTRY ROW -- not from this plan's text -- before declaring it green.
   - "No rescue agents or workaround loops (Decision 55). An arm that will not resume is a finding to record, not a failure to retry around."
 context:
   - >-
@@ -1668,13 +1760,66 @@ context:
     (3) ADDED one observational print of the inline document's minified size (inert, asserts nothing).
     (4) DELETED VP step 16's "gone or fully gated" prose. (5) ADDED two required findings.yaml keys --
     governance_cost.{fixed_cost_observed,insensitivity_condition} and measurement_subject.reopen_condition --
-    read by the SAME graduated VP step 1 in the SAME assert shape it already used for two sibling keys. That
+    read by the SAME VP step 1 in the SAME assert shape it already used for two sibling keys. That
     fifth item is additive in field names, so "nothing new" is stated precisely rather than absolutely: no new
     script, check module, registry row, graduation_check_id, enforcement surface or convention was introduced,
     and the only reader is the step that defines the fields over an artifact this plan itself authors. An
     earlier draft of this entry enumerated only four changes and asserted "nothing new was introduced" flatly;
     a zero-context verifier caught the omission, which is the plan's own false-self-report class landing on the
     plan. What structurally excludes a round 5 is the delete-or-reuse constraint, not the bare count.
+  - >-
+    ROUND-4 REMEDIATION (plan-critique round 1), UNDER A DELETE-ONLY CONSTRAINT -- and one finding here is
+    larger than the fixes. THE B1 CONFLICT, stated plainly: four VP steps were graduated, and the graduated
+    step-2 row hard-asserted that terraform/personal/esb_q5_spike*.tf EXISTS. Because
+    _read_coverage._scan_resources is a PURE TEXT SCAN over terraform/personal/*.tf, a resource count-gated to
+    zero is still DISCOVERED and still demands refresh-read and write coverage forever -- so pinning the family
+    in the tree also pinned the bootstrap-tier `states:` widening, and rec-3192 (open, operator-directed,
+    acceptance `grep -c 'states:' terraform/bootstrap/github_ci_apply_boundary.tf` -> 0) had NO route:
+    executing it redded --pre on main, and deleting the family to allow it redded the graduated row. A
+    graduation decision was silently making a bootstrap-tier privilege widening permanent. WHAT CONCEALED IT was
+    the rollback parenthetical, which was factually INVERTED -- it said the grants "permit a resource type that
+    no longer exists, which the discovery-driven gate simply stops asserting"; the gate does not stop asserting
+    while the family is in-tree, so the grants were not "safe to leave" but MANDATORY to leave. The changes,
+    enumerated, with anything additive named rather than a flat "nothing new": (1) VP steps 1, 4 and 6
+    de-graduated to `waive` on the transient-fact reason step 5 already carries, and their three
+    graduation_check_ids deleted. (2) VP step 2 de-graduated too, which is a DEVIATION from the critique's
+    instruction and is made on measurement rather than preference: the critique directed graduating only the
+    durable half (zero networked resources and zero vpc_config across terraform/**), but that half exits 0 on
+    origin/main TODAY -- measured this session, 38 terraform files, 0 hits, 0 vpc_config -- so
+    verification_graduation.run_differential gets a PASS on the reverted worktree and returns "not admitted --
+    revert did not produce FAIL (tautological)", which validate_verification_registry raises as a --pre failure
+    and validate_graduation_completeness passes over with "no graduate-disposition step(s)". Graduating it would
+    RED the implement PR. Graduated rows therefore go 4 -> 0 rather than 4 -> 1, and the operator's VPC-free
+    scoping decision keeps its enforcement as a plan-local assertion. (3) Every site stating the count or the
+    budget rationale updated, and the "which is why exactly four rows graduate" selector DELETED at both sites
+    with no replacement rationale -- headroom is not how permanence is chosen. registry.yaml leaves `scope`,
+    with its test obligation and its checklist row, since nothing is written to it. (4) The teardown set is now
+    scripts/esb_q5_spike/, tests/esb_q5_spike/, the terraform family and its flag variable, the
+    conformance.spike_class / spike_detail pair and the three classification-map entries, removed as ONE set
+    after the destroy lands; teardown is a flag flip for the AWS resources PLUS that single coordinated removal,
+    and rec-3192 becomes executable after this plan instead of foreclosed by it. (5) B3: VP steps 14 and 15, the
+    measure.py scope row and the drive execution step now STATE that the arm drive, the forced kill, the resume
+    and all three W5 terms execute and are measured INSIDE the driver/arm execution environment, with the local
+    CLI doing only the control-object PUT and result GET that VP step 13's readiness bridge already uses -- the
+    round-2 reachability defect survived at this sibling site because it was fixed only where it was reported.
+    The W5 triple is stated as the PER-RUN TOTAL. The driver role's declared grants now name the kill verb,
+    states:StopExecution beside StartExecution/DescribeExecution: ADDITIVE in IAM verbs, on a spike-owned,
+    boundary-carrying, in-prefix role, and named as additive rather than glossed -- it is not a PlatformDev
+    widening. (6) A1: VP step 7's tag/untag substring legs DELETED as a fail-open duplicate of
+    check_tag_untag_symmetry, which validate_ci_refresh_read_coverage already calls (:158) and which derives the
+    counterpart mechanically at an OVERLAPPING scope; the step's "three things the shipped gate does not"
+    corrected to two, the middle third having been untrue. (7) A3: VP step 16's printed sweep carried
+    contains(name,@), which raises "'in <string>' requires string as left operand, not dict" -- reproduced
+    against a jmespath 1.1.0 fixture this session -- and the 'esb-q5' literal lost in the 18cdd5b escaping
+    rework is restored in both commands, built with chr(39)/chr(34) so a further rework cannot eat it. (8) A4:
+    the DECOMPOSE-NEVER-RAISE clause instructing the implementer to land a DailyOps `states:` grant "as its own
+    aws_iam_role_policy in the spike .tf" DELETED -- no such grant exists and VP step 2 hard-asserts it cannot.
+    (9) A10: `21-Sid` corrected to `12-Sid` (measured: 12 `Sid =` entries in github_ci_apply_reads.tf) and the
+    whole file swept for other Sid figures -- the two remaining sites already read 12. NOTHING was added: no new
+    field, check, script, marker, convention, registry row, graduation id or enforcement surface. The additive
+    items in any sense are the two named above -- the driver role's kill verb, and the prose these entries add.
+    B2, the comparison-parameter confound, is DEFERRED to a human decision and was deliberately not touched: VP
+    step 14's fix_if, either arm's checkpointing and any granularity field are untouched.
   - >-
     THE conformance.spike_class SELF-CORRECTION, recorded because the reasoning error is more instructive than
     the fix. Round 2 rejected the HCL-comment home on the stated ground that it "would be a second surface the
@@ -1792,9 +1937,10 @@ context:
     the terraform class's own named relief valve ("decompose by resource family (native .tf multi-file)"). VP
     step 2 prints each family file's measured size so the budget is checked rather than assumed. (2)
     config/agent/verification_registry/registry.yaml is 5,836 effective lines against a 6,000 budget -- 164 of
-    headroom -- and a command_exit_zero row of the shape already in that file costs 25-37 lines. Four rows fit
-    with margin; the prior draft's eight would not. That measurement, not preference, sets this plan's graduation
-    count, and VP step 11 asserts the post-graduation figure. Headroom for the other touched files was also
+    headroom -- and that figure is recorded here as a MEASUREMENT ONLY, because this wave writes no row to it.
+    An earlier round let that same headroom SELECT what became permanent ("which is why exactly four rows
+    graduate"); deciding what is permanent by how many lines fit is the wrong selector and that rationale is
+    deleted rather than replaced. Headroom for the other touched files was also
     measured and is ample: oidc.tf 245, github_ci_apply_policy.tf 403, github_ci_apply_boundary.tf 95, all against
     500. The plan file and findings.yaml classify as workflow_outputs (governed: false).
   - >-
@@ -1927,17 +2073,21 @@ context:
     TEN hermetic commands (steps 1, 2, 3, 4, 5, 7, 8, 9, 10, 11) were extracted from the COMMITTED plan YAML by
     yaml.safe_load and run verbatim -- which also proves the folding is clean, since a more-indented
     continuation line would have left an embedded newline and every command is asserted single-line -- against
-    the f3e4e6d tree, and every one exits non-zero with a message naming the missing thing: `findings.yaml
+    the f3e4e6d tree, and NINE of the ten exit non-zero with a message naming the missing thing (step 11 is the
+    named exception, discussed below): `findings.yaml
     absent`; `spike terraform absent -- the sweep would pass vacuously` (after passing the zero-networked and
     zero-vpc_config legs over all 38 files); `no spike modules found`; `aws_sfn_state_machine has no read
     classification`; `the deferral marker survives at 3 site(s), expected exactly 1`; `CD.27 is pending but the
     newest Decision does not name ESB-06 as the remaining blocker with a follow-on rec id`; `expected the new
-    entry to be Decision 173, newest header is 172`; `expected exactly 4 graduated esb-q5 rows, found 0: []`.
+    entry to be Decision 173, newest header is 172`.
     EIGHT of the ten were then run against a scratch post-change tree (spliced DECISIONS.md with the drafted
     entry, regenerated index, edited roadmap, synthetic findings.yaml, synthetic spike terraform, stub spike
     modules) and all eight exit 0 with every backticked literal in their `expected` field present in the
     captured output -- Decision 148's replay contract satisfied by measurement, in both directions, for steps
-    1, 2, 3, 4, 5, 8, 9 and 10. The round-1 rebuild of steps 1, 2 and 7 was re-proved the same
+    1, 2, 3, 4, 5, 8, 9 and 10. STEP 11 WAS INVERTED IN ROUND 4 and no longer belongs to that failing set: it
+    now asserts that NO esb-q5 registry row landed, so it passes on f3e4e6d by design and is a regression guard
+    rather than a differential -- stated here rather than left to read as a missing proof. The round-1 rebuild
+    of steps 1, 2 and 7 was re-proved the same
     way, and each NEW clause was additionally proved NEGATIVELY in isolation: stripping permissions_boundary,
     adding a PlatformDev reference, adding ignore_changes, removing measurement_subject, and removing only its
     entitled_wall_clock_term each produce their own named assertion, and the three Decision 156 home-split
@@ -1948,8 +2098,8 @@ context:
     before every structural scan and asserts the citation against the raw text. A second, smaller one: the
     citation matcher was case-sensitive and missed an all-caps "DECISION 125" banner, so it is now
     case-insensitive. Exactly TWO passing legs are not reachable before implementation and are named rather than
-    glossed: step 7's, which needs the three guard maps and the spike terraform to exist together, and step
-    11's, which needs the four graduated registry rows to have landed. Both failing legs are proved above, and
+    glossed: step 7's, which needs the three guard maps and the spike terraform to exist together. Step 11 is
+    no longer the second, for the reason above. That failing leg is proved above, and
     step 7's five text matchers were each proved in both directions separately. Step 2's `expected` says `flag default false`
     deliberately rather than quoting a count, because the counts are implementation-dependent.
   - >-
@@ -1961,8 +2111,10 @@ context:
     re-derived against f3e4e6d rather than carried. Four things changed materially as a result: the index pin
     moved 110,000 -> 131,000 so the mandatory three-entry compaction pass is GONE; the per-entry cap appeared so
     the entry is thin and its evidence is cited; the class-versus-site sweep found the live pytest pins and the
-    three-map SFN classification family; and the registry's structural budget cut the graduation count from
-    eight to four.
+    three-map SFN classification family; and the graduation count fell to ZERO -- not on budget grounds, which
+    is the selector this round deleted, but because every candidate property either pins spike artifacts the
+    teardown removes as one set or (the durable VPC-free invariant) already holds on origin/main and cannot pass
+    VF-06 c2 differential admission.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -1985,7 +2137,7 @@ pre_implementation_checklist:
     read before any infra step, with the bootstrap row's admin-only/out-of-band clause read specifically
   - docs/contracts/candidate-decision-ratification.yaml rules R1-R4 read before touching either CD's state
   - >-
-    terraform/bootstrap/github_ci_apply_reads.tf (the 21-Sid reads policy) and
+    terraform/bootstrap/github_ci_apply_reads.tf (the 12-Sid reads policy) and
     terraform/bootstrap/github_ci_apply_policy.tf (the inline write-authority document) both read before any
     grant is written, so the Decision 156 read/write home split is applied from the files rather than from this
     plan's summary of them
@@ -2008,9 +2160,6 @@ pre_implementation_checklist:
     Per-entry cap RE-MEASURED by splice-and-regenerate against the current tree before committing the entry --
     "expected to be identical" is not "measured identical"
   - Current max `## Decision NNN:` header re-checked for the numbering race (172 measured this session)
-  - >-
-    config/agent/verification_registry/registry.yaml re-swept for row collisions and re-measured for headroom
-    (454 rows, 5,836 of 6,000 effective lines, measured this session)
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
 execution_steps:
@@ -2034,7 +2183,7 @@ execution_steps:
     Write tests/esb_q5_spike/test_loop.py, test_workspace.py and test_arms.py covering the resume cursor, BOTH
     directions of the duplicate detector, both S3 strategies' round trip, that both arms delegate to the shared
     loop, and that measured_strategies() derives from the registry. Confirm each new test FAILS before its
-    implementation exists -- failing-first is an entry criterion for every graduated command in this plan, not a
+    implementation exists -- failing-first is an entry criterion for every VP command in this plan, not a
     nicety.
   - >-
     Extend the three IAM classification maps for aws_sfn_state_machine BEFORE writing the terraform that needs
@@ -2080,7 +2229,11 @@ execution_steps:
     through apply per the implement skill's terraform/personal guidance. The new roles route to tf-gated-apply
     and need a human approval -- surface it, do not wait on it silently.
   - >-
-    Run VP steps 14 and 15: drive each arm, force-kill mid-loop, resume, and record per arm the duplicate-row
+    Run VP steps 14 and 15. THE DRIVE, THE KILL, THE RESUME AND ALL THREE W5 TERMS RUN INSIDE THE DRIVER/ARM
+    EXECUTION ENVIRONMENT -- the local CLI does a control-object PUT into the spike prefix and a result GET, the
+    same bridge VP step 13's readiness record uses, because this session's identity holds no states: verb and no
+    lambda:InvokeFunction on the spike functions. Each W5 triple is the PER-RUN TOTAL for its arm x strategy
+    pair, not a per-event figure. Drive each arm, force-kill mid-loop, resume, and record per arm the duplicate-row
     count and the hand-roll residue on the XS/S/M scale WITH ITS CONSTITUENT PARTS NAMED (for the stateless arm,
     name each piece the durable arm gets from the platform: the state carrier, the resume cursor persistence, the
     idempotency guard and the workspace-pointer plumbing). Measure the W6 scale basis with a real command on the
@@ -2127,33 +2280,57 @@ execution_steps:
     Obtain the execution-time human confirmation, then run the ops portal write for the Decision and
     `ops_data_portal --backfill-decisions-md`. Decision 105 reserves these writes for /implement behind this
     gate; never at plan time. File the ESB-06 follow-on rec through the portal and record its id in the Decision.
-    Graduate exactly the four `graduate`-dispositioned VP steps into config/agent/verification_registry/registry.yaml,
-    verifying each row's command runs green from the committed YAML and fails on revert (VF-05), then run VP step
-    11 to confirm the registry is still inside its 6,000-line budget.
+    Graduate NOTHING: no VP step carries a `graduate` disposition, so
+    config/agent/verification_registry/registry.yaml is not edited at all. Run VP step 11 to confirm the
+    registry gained no esb-q5 row and is still inside its 6,000-line budget.
   - >-
-    TEARDOWN. Flip the flag false through the infra channel and let the destroy route to tf-gated-apply, then
-    run VP step 16: the agent-executable half (flag default-false on origin/main, family still present and fully
-    gated, destroy run completed) and the SURFACED operator sweep, whose result the operator reports. No spike
-    AWS RESOURCE survives the plan -- but the spike TERRAFORM FAMILY stays in the tree, count-gated to zero,
-    because the graduated step-2 row asserts it exists and deleting it would red main permanently.
+    TEARDOWN, IN TWO ORDERED LANDINGS. FIRST flip the flag false through the infra channel and let the destroy
+    route to tf-gated-apply, so every spike AWS resource is gone while the terraform still describes it. THEN,
+    once that destroy run has completed, remove the spike's repo furniture as ONE set in a single commit:
+    scripts/esb_q5_spike/, tests/esb_q5_spike/, the terraform/personal/esb_q5_spike*.tf family and its
+    esb_q5_spike_enabled variable, the conformance.spike_class / spike_detail pair in
+    docs/contracts/environment-taxonomy.yaml, and the aws_sfn_state_machine entries in the three iam_tf
+    classification maps together with the test cases that pin them. This plan graduates NOTHING, so no standing
+    registry row asserts any of them exists and the removal reds nothing -- and it is what makes rec-3192's
+    bootstrap-tier revert executable rather than foreclosed. docs/plans/reports/esb-q5-spike-findings.yaml and the numbered Decision
+    STAY: they are the evidence record, not furniture. Then run VP step 16 -- the agent-executable half (the set
+    is gone from origin/main, the findings record remains, the destroy run completed) and the SURFACED operator
+    sweep, whose result the operator reports.
   - >-
     Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA
     (Decision 55).
   - >-
     'Report: what was implemented, the measured comparison, which Gate-2 branch fired, the measured per-entry
-    byte figure against the 6,144 cap, the registry headroom after graduation, and verification results.'
+    byte figure against the 6,144 cap, the confirmation that no esb-q5 registry row landed, and verification
+    results.'
 work_areas: []
 rollback: >-
-  Every spike resource is count-gated behind one default-false flag, so infrastructure rollback is flipping the
-  flag false and letting the destroy route through tf-gated-apply -- the same path teardown uses, with no bespoke
-  teardown to write -- a flag flip, NEVER a deletion of the spike terraform family, which the graduated step-2
-  row asserts exists. The IAM classification-map edits and the grant edits are safe to leave in place across
-  teardown (they classify and permit a resource type that no longer exists, which the discovery-driven gate
-  simply stops asserting), so nothing here is time-critical -- but reverting the BOOTSTRAP-TIER privilege
-  widening is NOT optional. The operator has directed that revert and it is tracked as rec-3192, which lands
-  AFTER the spike is destroyed and OWNS that work; this plan deliberately does not widen its scope to include
-  it. If any revert is performed, the map edits and the terraform must move together or the coverage gate goes
-  red. Rollback of the governance edits is a revert of the
+  Every spike AWS resource is count-gated behind one default-false flag, so infrastructure rollback is flipping
+  the flag false and letting the destroy route through tf-gated-apply -- the same path teardown uses, with no
+  bespoke teardown to write. TEARDOWN IS NO LONGER "A FLAG FLIP, NEVER A FILE REMOVAL": it is the flag flip for
+  the AWS resources PLUS one coordinated removal of the spike's repo furniture, landed as a SINGLE set once the
+  destroy has completed -- scripts/esb_q5_spike/, tests/esb_q5_spike/, the terraform/personal/esb_q5_spike*.tf
+  family and its esb_q5_spike_enabled variable, the conformance.spike_class / spike_detail pair, and the
+  aws_sfn_state_machine entries in the three iam_tf classification maps with the cases that pin them. This plan
+  graduates NOTHING, so no standing registry row asserts any of them exists and the removal reds nothing.
+  THE PARENTHETICAL THIS SECTION CARRIED WAS FACTUALLY INVERTED, and correcting it is what exposed the
+  conflict. It said the classification-map and grant edits are "safe to leave in place across teardown (they
+  classify and permit a resource type that no longer exists, which the discovery-driven gate simply stops
+  asserting)". The gate does NOT stop asserting while the family is in the tree:
+  _read_coverage._scan_resources is a PURE TEXT SCAN over terraform/personal/*.tf, so a resource count-gated to
+  zero is still DISCOVERED and still demands its refresh-read and write coverage. Under the old
+  never-a-file-removal teardown those grants were therefore not "safe to leave" -- they were MANDATORY to
+  leave, which silently made the bootstrap-tier `states:` widening permanent. rec-3192 (open,
+  operator-directed) reverts that widening with acceptance
+  `grep -c 'states:' terraform/bootstrap/github_ci_apply_boundary.tf` -> 0, and after this round it is
+  EXECUTABLE AFTER this plan's teardown rather than foreclosed by it: once the family leaves the tree the gate
+  discovers no state machine and the grants become genuinely optional to keep. rec-3192 still OWNS that revert
+  and this plan does not widen its scope to include it; whichever way it executes, the classification-map edits
+  and the terraform must move together or the coverage gate goes red. (rec-3192's own body argues the
+  classification-map entries are worth KEEPING as descriptive; this plan removes them with the family because
+  they classify a type the tree no longer contains and a later reintroduction earns its own review -- either
+  disposition leaves rec-3192 executable, which is the property that was missing.) Rollback of the governance
+  edits is a revert of the
   DECISIONS.md and roadmap hunks plus an index regeneration and a revert of the re-grounded pytest -- those three
   are coupled and must revert together, since the tests read the live roadmap. The ops portal Decision write, the
   backfill and the ESB-06 rec filing are the non-revertible steps, which is why they are sequenced last, behind
