@@ -57,9 +57,12 @@ verification_plan:
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      Duplicates validate_test_coverage's own floor enforcement, which already runs in the full
-      tier post-merge; the guard belongs in that gate rather than beside it. It also costs ~141s
-      measured, well outside the cheap-standing-check bar.
+      Cost: 142.5s measured, far outside the cheap-standing-check bar and past
+      validate_vp_replay's 120s aggregate ceiling. The standing guard is not this row but
+      validate_test_coverage's 100% floor, which fires on any diff touching
+      scripts/platform_roadmap_state.py -- the only way a new short-circuit can be introduced above
+      these branches. Note it does NOT fire on this plan's own test-only diff (changed-source set
+      empty, verified live), which is why VP step 1 runs the measurement directly here.
   - step: 2
     phase: pre-deploy
     action: >-
@@ -72,8 +75,19 @@ verification_plan:
       would still pass if the fixture became parseable, letting lines 125-126 go dark again. Assert
       the raise.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: followon-negative-path-fixtures-pin-their-branch
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible in principle, impractical now, on two verified grounds. (1) The
+      differential admission gate (validate_verification_registry -> run_differential) requires a
+      new row to FAIL on origin/main and PASS here; both node ids this step selects PASS on
+      origin/main today (measured: 2 passed, 44 deselected), so a row naming them is rejected as
+      tautological. Admitting one would require inventing a new test purely to fit the registry
+      row, which is the tail wagging the dog. (2) TestSelectorCheck.node_id is ONE pytest argument
+      and the two pins land in different classes (TestComputeFollowonState and
+      TestComputeFollowonStateMalformedPlanShapes), so one row structurally cannot express both.
+      The standing guard against re-shadowing already exists and is not duplicated by this row:
+      validate_test_coverage's 100% floor fires whenever scripts/platform_roadmap_state.py itself
+      changes, which is the only way a new short-circuit can be introduced above these branches.
   - step: 3
     phase: pre-deploy
     action: >-
@@ -101,15 +115,19 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Bare full tier, discharging handoff_policy.full_validation_required_before_commit. This is
-      the tier that actually enforces the coverage floor today, so it is the authoritative
-      confirmation that the corrective fix holds.
+      Bare full tier, discharging handoff_policy.full_validation_required_before_commit and
+      Decision 163. This step does NOT prove the coverage fix -- see expected.
     command: bin/venv-python -m scripts.validate
-    expected: Exit 0, including validate_test_coverage reporting 0 files below 100% coverage.
+    expected: >-
+      Exit 0. validate_test_coverage will report "No source file changes to check" and declare
+      examined(0): get_changed_source_files() excludes test files, and this plan's diff touches
+      only a test file, so the coverage check is VACUOUS BY CONSTRUCTION here and passes
+      identically on the unfixed tree (verified live: the changed-source set is empty on this
+      branch). VP step 1 is the only place this plan's central claim is proven.
     fix_if: >-
-      A validate_test_coverage failure naming scripts/platform_roadmap_state.py means the fixture
-      fix did not take. Any other failure is outside this plan's scope and should be triaged before
-      commit, never worked around.
+      Do NOT read a green validate_test_coverage here as confirmation of the fix -- that is the
+      passes-on-the-pre-fix-tree shape rec-3220 exists to stop. Any failure in this step is
+      unrelated to this plan's scope and should be triaged before commit, never worked around.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: This step IS the full tier; a tier cannot be a registry check inside itself.
@@ -118,7 +136,7 @@ verification_plan:
     action: >-
       After merge, confirm the two bundled CI-RCA recs actually closed via the Resolves trailer.
     command: |-
-      bin/venv-python -m scripts.ops_data_portal --sync && grep -cE '"id": "rec-(3211|3212)".*"status": "closed"' logs/.recommendations-log.jsonl
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c 'import json;print(sum(1 for l in open("logs/.recommendations-log.jsonl",encoding="utf-8") if (d:=json.loads(l)).get("id") in {"rec-3211","rec-3212"} and d.get("status")=="closed"))'
     expected: Prints 2.
     fix_if: >-
       Fewer than 2 means rec-autoclose.yml did not fire; fall back to the documented
@@ -212,17 +230,22 @@ context:
     floors), dec-165 (markers must name an AUTHORIZING Decision), dec-142 (Resolves trailer
     auto-close), dec-72 and dec-55 (RCA-as-plan-source -- rec-3212's inverted root cause is refused
     on the record, not silently deviated from), dec-128 (decompose, never raise), dec-131
-    (test-colocation mirror), dec-103 (rec lifecycle), dec-70 (update-rec fallback). Flags dec-153,
+    (test-colocation mirror), dec-103 (rec lifecycle), dec-70 (update-rec fallback), dec-132
+    (verification graduation is an enforced pre-merge obligation -- the Decision that makes the
+    step-2 waiver load-bearing rather than cosmetic), dec-163 (pre-handoff full-tier obligation,
+    discharged by VP step 5). Flags dec-153,
     dec-60, dec-169, dec-170 and dec-163 attached exclusively to the preventive half and lapse with
     it; all are recorded in rec-3221.
   - >-
     "gates: decision-scout=FLAGS_FOUND (preventive-half flags lapsed with the scope reduction);
-    plan-critique=REVISE rounds 1-4 on the wider scope, every corrective-half finding actioned, the
-    preventive half withdrawn to rec-3221; re-critiqued at the reduced scope."
+    plan-critique=REVISE rounds 1-4 on the wider scope, then REVISE round 5 at this reduced scope
+    (corrective fix verified correct on disk; F1-F7 actioned -- graduation flipped to waive on the
+    tautology and one-node-id grounds, VP step 5's vacuity stated, the fixture-decoupled assertion
+    form forbidden, the closure probe made key-order-free)."
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - only the plan-cited decision sections
+  - docs/DECISIONS.md read -- only the plan-cited sections (48, 55, 70, 72, 73, 103, 128, 131, 132, 142, 159, 163, 165)
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
 execution_steps:
@@ -233,12 +256,20 @@ execution_steps:
     `closes_criteria`), and give test_malformed_plan_skipped's fixture text the token while keeping
     it unparseable (e.g. `closes_criteria: [T-1: {`). Do not weaken either existing assertion.
   - >-
-    tests/platform_roadmap_state/test_state_dict_and_feeds.py -- pin each test to its OWN branch.
-    For the malformed case assert yaml.safe_load RAISED (e.g. a spy that records the exception, or
-    a direct assertion that parsing the fixture text raises) -- a spy proving only that safe_load
-    was called would still pass if the fixture later became parseable, leaving 125-126 dark. For the
-    non-dict case assert safe_load returned a non-dict. Keep the existing result assertions
-    alongside the pins.
+    tests/platform_roadmap_state/test_state_dict_and_feeds.py -- pin each test to its OWN branch
+    using a SPY over the module's own yaml.safe_load, recording each call's outcome. Follow the
+    pattern TestKeylessPlanSkipsYamlParse already uses (same file, around line 557). Each test
+    asserts BOTH: (i) exactly one recorded outcome, proving the module actually reached its
+    safe_load call rather than short-circuiting at line 112; and (ii) the KIND of that outcome --
+    raised, for test_malformed_plan_skipped; returned-a-non-dict, for
+    test_plan_yaml_top_level_not_dict_skipped. Assertion (i) kills re-shadowing, (ii) kills the
+    weaker "the call happened" form. Do NOT substitute a direct assertion on the fixture text
+    (pytest.raises(yaml.YAMLError) on the literal, or isinstance on yaml.safe_load(text)): those
+    assert a property of the FIXTURE, decoupled from compute_followon_state, and would stay green
+    through the exact regression this plan prevents -- narrowing the pre-filter from
+    `"closes_criteria" not in text` to `"closes_criteria:" not in text` re-shadows both fixtures
+    while every direct-form assertion still passes. Keep the existing result assertions alongside
+    the pins.
   - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
   - 'Report: what was implemented, verification results'
 work_areas: []
