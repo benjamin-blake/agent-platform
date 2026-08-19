@@ -113,333 +113,478 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
-      THE AMENDMENT IS RESIDENCY-SCOPED. Round 2's assertion used markers already present in Decision
-      87 (sixteen `[Amendment` markers exist, and `T4.5` already appears in Related), so two of its
-      four legs were dead. This asserts only what is genuinely new, and asserts the SCOPE, because a
-      wholesale inversion would supersede Decision 85's git clause pre-producer.
+      THE AMENDMENT IS RESIDENCY-SCOPED. Round 2 asserted markers already present in Decision 87 (sixteen [Amendment
+      markers exist, and T4.5 already appears in Related), so two of its four legs were dead. This asserts only what
+      is genuinely new, and asserts the SCOPE. The AUTHORITY leg is paragraph-scoped on purpose: the bare word
+      authority already occurs in Decision 87 on origin/main, so authority and T4.6 must co-occur in one paragraph or
+      the leg proves nothing.
     command: >-
       bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8');
       m=re.search(r'^## Decision 87:.*?(?=^## Decision |\Z)', t, re.M|re.S); assert m, 'Decision 87 missing';
       b=m.group(0); assert re.search(r'residenc', b, re.I), 'the amendment does not scope the inversion to residency';
-      assert re.search(r'prerequisite', b, re.I), 'the amendment does not state the prerequisite'; assert
-      re.search(r'authority', b, re.I) and re.search(r'T4\.6', b), 'the amendment does not state that the AUTHORITY
-      flip stays timed to T4.6'; assert re.search(r'circular', b, re.I), 'the amendment does not name the circularity';
-      print('OK Decision 87 residency-scoped,', len(b.encode()), 'bytes')"
+      assert re.search(r'prerequisite', b, re.I), 'the amendment does not state the prerequisite'; assert [p for p in
+      re.split(r'\n\s*\n', b) if re.search(r'authority', p, re.I) and re.search(r'T4\.6', p)], 'no single paragraph
+      states that the AUTHORITY flip stays timed to T4.6 -- the bare word authority is already present on origin/main,
+      so the two must co-occur'; assert re.search(r'circular', b, re.I), 'the amendment does not name the
+      circularity'; print('OK Decision 87 residency-scoped,', len(b.encode()), 'bytes')"
     expected: >-
-      Exits 0 printing `OK Decision 87 residency-scoped,` and a byte count. On origin/main it exits 1
-      on the FIRST leg (`residenc` absent) -- verified, not assumed.
+      Exits 0 printing `OK Decision 87 residency-scoped,` and a byte count. On origin/main it exits 1 on the FIRST
+      leg, residency absent -- verified, not assumed. Fault-injected both ways against /tmp fixtures: with the
+      amendment paragraph removed it fails on residency; with a decoy carrying residency, prerequisite and circular
+      but leaving authority only in the paragraph that already holds it on main, it fails on the authority-and-T4.6
+      co-occurrence leg.
     fix_if: >-
-      If the amendment inverts wholesale, human PLAN-*.yaml lose diff review for nothing. Executor
-      plans are born warehouse-native; there is nothing to flip for them.
-    hermetic: true
-    graduation: waive
-    graduation_waiver_reason: "Asserts one Decision's amendment text; graduating it pins one entry's wording forever."
-  - step: 3
-    phase: pre-deploy
-    action: >-
-      T4.5 AND T4.6 MOVE WITH THE DECISION. Round 2 amended the corpus and left the items restating
-      the superseded clause -- T4.5's intent still ends "no warehouse consumer of plans exists until
-      the T4.6 loop", the exact sentence this design falsifies.
-    command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
-      t={x['id']: x for x in d['tier_items']}; t45=str(t['T4.5'].get('intent','')); t46=str(t['T4.6'].get('intent',''));
-      assert not re.search(r'no warehouse\\s+consumer of plans exists', t45), 'T4.5 still carries the deferral rationale
-      this design falsifies'; assert re.search(r'(residenc|amended|Decision 87 as amended)', t45+t46, re.I), 'neither
-      T4.5 nor T4.6 acknowledges the amended clause'; print('OK T4.5/T4.6 moved with the Decision')"
-    expected: >-
-      Exits 0 printing `OK T4.5/T4.6 moved with the Decision`. On origin/main it exits 1 on the first
-      leg -- the rationale is present verbatim.
-    fix_if: >-
-      Amending the Decision without the items leaves the roadmap contradicting the corpus at the exact
-      seam the amendment exists to close.
-    hermetic: true
-    graduation: waive
-    graduation_waiver_reason: "Two item intents mid-transition; the text changes again when T4.5 is built."
-  - step: 4
-    phase: pre-deploy
-    action: >-
-      THE ROUTING TABLE IS COMPLETED, NOT DUPLICATED. Asserts the new row, its migration framing, and
-      that the deliberate-deferral case is resolvable -- round 2's three buckets could not resolve it
-      while its own acceptance criteria required it.
-    command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text());
-      sig=d['significance']; rows=sig['routing']; assert 'work_item' in rows or any('tier_item' in str(v) and 'roadmap'
-      in str(v) for v in rows.values()), 'no work-item routing row'; blob=str(sig); assert re.search(r'(bootstrap|supersede|
-      destination form|migration)', blob, re.I), 'the row does not state the migration direction'; assert
-      re.search(r'(defer|not-now|declined)', blob, re.I), 'the routing table cannot resolve a deliberate deferral';
-      assert re.search(r'cross_tier_gate|deferred_post_mvp|exit_criteri', blob), 'the row does not name what the roadmap
-      uniquely provides today'; print('OK routing table completed:', sorted(rows))"
-    expected: >-
-      Exits 0 printing `OK routing table completed:` and the row names. On origin/main it exits 1 with
-      `no work-item routing row`.
-    fix_if: >-
-      Do NOT enumerate topics. Name the CAPABILITY the roadmap uniquely provides today -- gate
-      evaluation, MVP-boundary classification, per-criterion exit lifecycle -- so the boundary moves
-      on its own as recs gain them. ops_recommendations already carries dependencies VARCHAR[], so
-      the graph primitive exists.
+      If the amendment inverts wholesale, human PLAN-*.yaml lose diff review for nothing. Executor plans are born
+      warehouse-native; there is nothing to flip for them. Put the authority sentence and T4.6 in the same paragraph
+      -- the leg is paragraph-scoped because the word alone is already there.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      The row's content is asserted here; validate_decision_entry_conformance owns the file's grammar
-      as a standing check, and a registry row would duplicate that reader.
+      Asserts one Decision's amendment text; graduating it pins one entry's wording forever.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      T4.5 AND T4.6 MOVE WITH THE DECISION. Round 2 amended the corpus and left the items restating the superseded
+      clause -- T4.5 intent still ends "no warehouse consumer of plans exists until the T4.6 loop", the exact sentence
+      this design falsifies. The acknowledgement leg is per-item and demands as-amended or residency wording, not a
+      bare Decision 87 reference: T4.6 already cites Decision 87 on origin/main, so a pooled Decision-87 grep would be
+      satisfied before the edit.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t={x['id']: x for x in
+      d['tier_items']}; t45=str(t['T4.5'].get('intent','')); t46=str(t['T4.6'].get('intent','')); assert not
+      re.search(r'no warehouse\s+consumer of plans exists', t45), 'T4.5 still carries the deferral rationale this
+      design falsifies'; assert re.search(r'(as amended|residenc)', t45, re.I), 'T4.5 intent does not acknowledge the
+      amended clause -- a bare Decision 87 reference is already there on origin/main'; assert re.search(r'(as
+      amended|residenc)', t46, re.I), 'T4.6 intent does not acknowledge the amended clause -- a bare Decision 87
+      reference is already there on origin/main'; print('OK T4.5/T4.6 moved with the Decision')"
+    expected: >-
+      Exits 0 printing `OK T4.5/T4.6 moved with the Decision`. On origin/main it exits 1 on the first leg -- the
+      rationale is present verbatim (the source YAML wraps it, which is why the regex uses \s+ between warehouse and
+      consumer). Fault-injected: reverting T4.5 intent fails leg 1; deleting the falsified sentence without adding
+      as-amended/residency wording fails leg 2; moving only T4.5 fails leg 3.
+    fix_if: >-
+      Amending the Decision without the items leaves the roadmap contradicting the corpus at the exact seam the
+      amendment exists to close.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Two item intents mid-transition; the text changes again when T4.5 is built.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      THE ROUTING TABLE IS COMPLETED, NOT DUPLICATED. Every leg binds to the work_item ROW itself. Round 3 tested a
+      disjunct -- any row mentioning tier_item and roadmap -- which the pre-existing operational_fact row at :393
+      already satisfies on origin/main, so an implementation that sprinkled migration vocabulary into the significance
+      block without adding the row would have passed. The row key is work_item; validate_decision_entry_conformance
+      reads routing keys dynamically, so a fifth row is admissible.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text()); sig=d['significance'];
+      rows=sig['routing']; assert 'work_item' in rows, f'no work_item routing row -- significance.routing carries only
+      {sorted(rows)}'; row=str(rows['work_item']); rule=str(sig.get('routing_rule','')); assert
+      re.search(r'(bootstrap|supersede|destination\s+form|migration)', row, re.I), 'the work_item ROW does not state
+      the migration direction; matching that vocabulary anywhere else in the significance block does not count';
+      assert re.search(r'(cross_tier_gate|cross-tier\s+gate|deferred_post_mvp|MVP\s+boundary|exit_criteri)', row,
+      re.I), 'the work_item ROW does not name what the roadmap uniquely provides today'; assert
+      re.search(r'(defer|not-now|declined)', row + ' ' + rule, re.I), 'neither the work_item row nor routing_rule
+      resolves a deliberate deferral with a reason'; assert 'work_item' in rule, 'routing_rule question set was not
+      extended to reach the work_item row'; print('OK routing table completed:', sorted(rows))"
+    expected: >-
+      Exits 0 printing `OK routing table completed:` and the row names. On origin/main it exits 1 with the work_item
+      row absent (routing carries only cd_state_flip, field_semantics, numbered_decision, operational_fact).
+      Fault-injected: deleting the row fails leg 1; a decoy that moves the migration and roadmap-unique vocabulary
+      into the operational_fact row and leaves work_item bare still fails, because the legs read the row, not
+      str(sig); dropping work_item from routing_rule fails the last leg.
+    fix_if: >-
+      Do NOT enumerate topics. Name the CAPABILITY the roadmap uniquely provides today -- gate evaluation,
+      MVP-boundary classification, per-criterion exit lifecycle -- so the boundary moves on its own as recs gain them.
+      ops_recommendations already carries dependencies VARCHAR[], so the graph primitive exists. Also update the two
+      "four keys"/"four rows" phrasings at decision-entry.yaml :364 and :382 when the fifth row lands.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The row's content is asserted here; validate_decision_entry_conformance owns the file's grammar as a standing
+      check, and a registry row would duplicate that reader.
   - step: 5
     phase: pre-deploy
     action: >-
-      NOTHING SELECTS, AND THE SPIKE IS DISCHARGEABLE. CD.27's preconditions must name the minted item
-      id -- round 2 asserted only that an item with "spike" in its name existed, never that CD.27
-      could discharge against it.
+      NOTHING SELECTS, AND THE SPIKE IS DISCHARGEABLE. CD.27 ESB-04 / ESB-06 / ESB-01 preconditions live in
+      discipline_points, NOT in detail -- round 3 asserted against detail, where the id could be dropped anywhere and
+      green the check while the precondition still could not discharge. The kill leg is the spike whole purpose and
+      was previously unasserted; the realism leg is symmetric, because nothing forced the INCUMBENT arm to be real
+      either.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; raw=pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text();
-      d=yaml.safe_load(raw); cds={c['id']: c for c in d['candidate_decisions']}; c43=str(cds['CD.43'].get('detail',''));
-      assert 'TBD_at_CD.43_ratification' in c43, 'CD.43 no longer defers -- the encoding pre-empted the spike';
-      spike=[x for x in d['tier_items'] if re.search(r'spike', str(x.get('name','')), re.I) and x['id'].startswith('T4.')];
-      assert spike, 'no tier item owns the layer-2 spike'; sid=spike[0]['id']; c27=str(cds['CD.27'].get('detail',''));
-      assert sid in c27, f'CD.27 preconditions do not name {sid} -- ESB-04/06/01 cannot discharge against it';
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); cds={c['id']: c for c in
+      d['candidate_decisions']}; t={x['id']: x for x in d['tier_items']}; assert 'TBD_at_CD.43_ratification' in
+      str(cds['CD.43'].get('detail','')), 'CD.43 no longer defers -- the encoding pre-empted the spike'; spike=[x for
+      x in d['tier_items'] if x['id'].startswith('T4.') and re.search(r'spike', str(x.get('name','')), re.I) and
+      re.search(r'(layer-2|layer\s+2|substrate)', str(x.get('name','')) + ' ' + str(x.get('intent','')), re.I)];
+      sids=[x['id'] for x in spike]; assert len(sids) == 1, f'expected exactly one T4 item whose name says spike and
+      whose name or intent says layer-2 or substrate; found {sids}'; sid=sids[0]; pre=[str(p) for p in
+      cds['CD.27'].get('discipline_points', []) if re.search(r'ratification\s+precondition\s+\(ESB-0[146]\)',
+      str(p))]; assert len(pre) == 3, f'CD.27 discipline_points no longer carry three ESB-04/06/01 ratification
+      preconditions (found {len(pre)}) -- ESB text lives in discipline_points, never in detail';
+      missing=[re.search(r'ESB-0[146]', p).group(0) for p in pre if sid not in p]; assert not missing, f'CD.27
+      preconditions {missing} do not name {sid} in discipline_points -- they cannot discharge against it';
       ec=str(spike[0].get('exit_criteria','')); assert re.search(r'workspace', ec, re.I), 'the spike has no
-      workspace-mutating leg -- a read-only persona cannot exercise P2'; assert re.search(r'(unstubbed|not stubbed|real
-      credential|MECH-1)', ec, re.I), 'the spike stubs the dispatch credential, hiding the candidate arm largest cost';
-      print('OK no selection;', sid, 'owns the spike and is named in CD.27')"
+      workspace-mutating leg -- a read-only persona cannot exercise P2'; assert
+      re.search(r'(unstubbed|un-stubbed|not\s+stubbed|real\s+credential|live\s+credential)', ec, re.I), 'the spike
+      stubs the dispatch credential, hiding the candidate arm largest cost'; assert
+      re.search(r'\b(kill|killed|kills|interrupt\w*|terminat\w*)\b', ec, re.I) and
+      re.search(r'(mid-loop|mid-run|mid-execution|mid-task|in-flight)', ec, re.I), 'the spike never forces a mid-loop
+      kill -- resumability is the property being compared, so criteria without it discriminate nothing'; assert
+      re.search(r'(neither\s+arm\s+is\s+stubbed|no\s+arm\s+is\s+stubbed|both\s+arms\s+(are\s+)?(equally\s+)?(real|unstubbed)|same\s+realism|equal\s+realism|symmetric\w*\s+realism|arm\s+symmetry)',
+      ec, re.I), 'the spike does not require SYMMETRIC realism -- name it (neither arm is stubbed / the same realism
+      on each arm). A bare both-arms phrase attached to one leg leaves a stubbed incumbent arm rigging the comparison
+      toward the candidate'; assert sid in [str(v) for v in t['T4.2'].get('depends_on', [])], f'{sid} is not sequenced
+      before T4.2 -- T4.2 depends_on does not name it'; print('OK no selection;', sid, 'owns the spike, is named in
+      all three CD.27 preconditions, and precedes T4.2')"
     expected: >-
-      Exits 0 printing `OK no selection; T4.NN owns the spike and is named in CD.27`. On origin/main
-      it exits 1 with `no tier item owns the layer-2 spike`.
+      Exits 0 printing `OK no selection;` then the item id. On origin/main it exits 1 on the ownership leg with found
+      []. Fault-injected: removing the spike fails ownership; planting the id in CD.27 detail instead of
+      discipline_points fails the precondition leg; naming only two of the three preconditions fails and says which;
+      kill-switch wording with no mid-loop kill fails the kill leg; realism claimed for the candidate arm only fails
+      the symmetry leg; routing MECH-1 onto the item (which step 10 does) no longer satisfies the credential leg;
+      dropping the T4.2 edge fails the sequencing leg; two spike items fail as ambiguous.
     fix_if: >-
-      decision_scout is read-only, so a kill test on it is trivially recoverable on every arm and
-      discriminates nothing. The workspace leg is what exercises P2, the highest-severity open finding.
+      decision_scout is read-only, so a kill test on it is trivially recoverable on every arm and discriminates
+      nothing. The workspace leg is what exercises P2, the highest-severity open finding. Say symmetric realism
+      explicitly -- neither arm is stubbed, or the same realism on each arm -- because a stubbed incumbent arm rigs
+      the comparison toward the candidate exactly as a stubbed candidate arm would rig it the other way.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "Transient pre-spike state; the spike changes it the moment it runs."
+    graduation_waiver_reason: >-
+      Transient pre-spike state; the spike changes it the moment it runs.
   - step: 6
     phase: pre-deploy
     action: >-
-      THE SUBSTRATE SWEEP, WIDENED. Round 2's regex missed the "Durable Lambdas" phrasing CD.37 and
-      CD.38 actually use, scanned only three fields, and filtered to T4 -- leaving T5.6 and every
-      `name` field unswept.
+      THE SUBSTRATE SWEEP, WIDENED AND PROXIMITY-SCOPED. Round 2 regex missed the "Durable Lambdas" phrasing CD.37 and
+      CD.38 actually use, scanned only three fields, and filtered to T4 -- leaving T5.6 and every name field unswept.
+      The pointer escape is now local: the incumbent/candidate/per-CD.27 pointer must sit within 200 chars of the
+      mention, because a field-wide escape let the word candidate anywhere in a 3,000-char detail excuse every mention
+      in it.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
-      stale=re.compile(r'([Dd]urable [Ff]unction|[Dd]urable [Ll]ambda|src/lambdas/(plan_agent|plan_critic|decision_scout|implement_agent|code_reviewer))');
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); stale=re.compile(r'([Dd]urable
+      [Ff]unction|[Dd]urable
+      [Ll]ambda|src/lambdas/(plan_agent|plan_critic|decision_scout|implement_agent|code_reviewer))');
+      ptr=re.compile(r'(per CD\.27|incumbent|candidate|as amended)', re.I);
       fields=('name','intent','exit_criteria','files_in_scope','decomposition_hints'); own=[x for x in d['tier_items']
-      if x['id'].startswith('T4.') or x['id']=='T5.6']; ptr=re.compile(r'(per CD\\.27|incumbent|candidate|as amended)',
-      re.I); hits={x['id']: [k for k in fields if stale.search(str(x.get(k,''))) and not ptr.search(str(x.get(k,'')))]
-      for x in own}; bad={i: v for i, v in hits.items() if v}; assert not bad, f'stale substrate asserted (not
-      pointered) in items that own the substrate: {bad}'; cds={c['id']: [k for k in ('title','detail') if
-      stale.search(str(c.get(k,'')))] for c in d['candidate_decisions']}; cbad={i: v for i, v in cds.items() if v and
-      not re.search(r'(incumbent|candidate|as amended)', str(next(c for c in d['candidate_decisions'] if c['id']==i)),
-      re.I)}; assert not cbad, f'candidate decisions assert the incumbent with no incumbent/candidate framing: {cbad}';
-      gbad=[g['id'] for g in d['cross_tier_gates'] if stale.search(str(g))]; assert not gbad, f'gates carry stale
-      substrate: {gbad}'; print('OK sweep clean across', len(d['tier_items']), 'items,', len(d['candidate_decisions']),
-      'CDs,', len(d['cross_tier_gates']), 'gates')"
+      if x['id'].startswith('T4.') or x['id'] == 'T5.6']; hits={x['id']: [k for k in fields if [m for m in
+      stale.finditer(str(x.get(k,''))) if not ptr.search(str(x.get(k,''))[max(0, m.start()-200):m.end()+200])]] for x
+      in own}; bad={i: v for i, v in hits.items() if v}; assert not bad, f'stale substrate asserted with no
+      incumbent/candidate/per-CD.27 pointer within 200 chars of the mention, in items that own the substrate: {bad}';
+      cds={c['id']: [k for k in ('title','detail') if [m for m in stale.finditer(str(c.get(k,''))) if not
+      ptr.search(str(c.get(k,''))[max(0, m.start()-200):m.end()+200])]] for c in d['candidate_decisions']}; cbad={i: v
+      for i, v in cds.items() if v}; assert not cbad, f'candidate decisions assert the incumbent with no
+      incumbent/candidate framing near the mention: {cbad}'; gbad=[g['id'] for g in d['cross_tier_gates'] if [m for m
+      in stale.finditer(str(g)) if not ptr.search(str(g)[max(0, m.start()-200):m.end()+200])]]; assert not gbad,
+      f'gates assert the incumbent substrate with no pointer within 200 chars of the mention: {gbad}'; print('OK sweep
+      clean across', len(d['tier_items']), 'items,', len(d['candidate_decisions']), 'CDs,',
+      len(d['cross_tier_gates']), 'gates')"
     expected: >-
-      Exits 0 printing `OK sweep clean across N items, M CDs, K gates`. On origin/main it exits 1
-      listing substrate-owning items. Scoped to T4.* plus T5.6 with a pointer escape, because a
-      descriptive mention elsewhere -- T2.11b names the substrate "(per CD.27)" while labelling scope
-      -- is a pointer, not an assertion, and forcing an edit there would be sweep overreach.
+      Exits 0 printing `OK sweep clean across` and the three counts. On origin/main it exits 1 listing T4.2 (name,
+      intent, files_in_scope, decomposition_hints) and T5.6 (intent); CD.11, CD.27, CD.37, CD.38 and gate G.9 follow
+      on the later legs. Scoped to T4.* plus T5.6 with the pointer escape, because a descriptive mention elsewhere --
+      T2.11b names the substrate "(per CD.27)" while labelling scope -- is a pointer, not an assertion.
+      Fault-injected: reverting T4.2 name fails; a decoy putting the escape word in the same field but >200 chars from
+      the mention still fails; unpointering G.9 name or CD.37 detail fails the gate and CD legs.
     fix_if: >-
-      This is the class-versus-site defect. Round 2 named seven sites in prose and detected three.
+      This is the class-versus-site defect. Round 2 named seven sites in prose and detected three. The remedy is to
+      pointer each mention in place -- "Durable Functions (per CD.27, the incumbent)" -- not to delete the word, and
+      not to drop an escape word at the far end of the field.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "The forbidden vocabulary changes the moment the spike rules; a graduated row would assert the wrong thing."
+    graduation_waiver_reason: >-
+      The forbidden vocabulary changes the moment the spike rules; a graduated row would assert the wrong thing.
   - step: 7
     phase: pre-deploy
     action: >-
-      LIFECYCLE FIELDS CARRY SUBSTRATE-NEUTRAL PROPERTY LANGUAGE. Round 2 purged the incumbent's
-      vocabulary and permitted the candidate's in the same fields -- ESB-05 with the sign flipped,
-      making a ruling for the incumbent cost a seven-surface re-sweep and a ruling for the candidate
-      cost nothing. Switching cost is bias.
+      LIFECYCLE FIELDS CARRY SUBSTRATE-NEUTRAL PROPERTY LANGUAGE. Round 2 purged the incumbent vocabulary and
+      permitted the candidate vocabulary in the same fields -- ESB-05 with the sign flipped, making a ruling for the
+      incumbent cost a seven-surface re-sweep and a ruling for the candidate cost nothing. Switching cost is bias. The
+      field list is now the same five step 6 sweeps: round 3 scanned only exit_criteria, files_in_scope and
+      decomposition_hints, so candidate mechanism written into name or intent escaped the guard entirely.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
-      t={x['id']: x for x in d['tier_items']}; cand=re.compile(r'(workflow_dispatch|repository_dispatch|GitHub-hosted
-      runner|actions/checkout|runs-on)'); leaked={i: [k for k in ('exit_criteria','files_in_scope','decomposition_hints')
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t={x['id']: x for x in
+      d['tier_items']}; cand=re.compile(r'(workflow_dispatch|repository_dispatch|GitHub-hosted
+      runner|actions/checkout|runs-on)');
+      fields=('name','intent','exit_criteria','files_in_scope','decomposition_hints'); leaked={i: [k for k in fields
       if cand.search(str(t[i].get(k,'')))] for i in t if i.startswith('T4.')}; leaked={i: v for i, v in leaked.items()
       if v}; assert not leaked, f'candidate-specific mechanism leaked into lifecycle-tracked fields -- a spike ruling
-      for the incumbent would cost a re-sweep, which is switching-cost bias: {leaked}'; neutral=str(t['T4.2'].get('exit_criteria',''));
-      assert re.search(r'\bP1\b', neutral) and re.search(r'\bP2\b', neutral) and re.search(r'\bP3\b', neutral), 'T4.2
-      criteria do not carry CD.27 substrate-neutral P1/P2/P3 property language'; print('OK lifecycle fields
-      substrate-neutral; candidate mechanism confined to the CD body')"
+      for the incumbent would cost a re-sweep, which is switching-cost bias: {leaked}';
+      neutral=str(t['T4.2'].get('exit_criteria','')); assert re.search(r'\bP1\b', neutral) and re.search(r'\bP2\b',
+      neutral) and re.search(r'\bP3\b', neutral), 'T4.2 criteria do not carry CD.27 substrate-neutral P1/P2/P3
+      property language'; print('OK lifecycle fields substrate-neutral across', len(fields), 'fields; candidate
+      mechanism confined to the CD body')"
     expected: >-
-      Exits 0 printing `OK lifecycle fields substrate-neutral; ...`. PASSES ON ORIGIN/MAIN BY DESIGN
-      -- a REGRESSION GUARD, not a differential. Main has no candidate mechanism to leak, and T4.2
-      already carries P1/P2/P3 (verified). Its whole job is to fail if THIS encoding writes workflow
-      paths or runner mechanics into exit_criteria, or strips the neutral property language while
-      re-specifying.
+      Exits 0 printing `OK lifecycle fields substrate-neutral across` and the field count. PASSES ON ORIGIN/MAIN BY
+      DESIGN -- a REGRESSION GUARD, not a differential. Main has no candidate mechanism to leak in any of the five
+      fields (verified), and T4.2 already carries P1/P2/P3. Its whole job is to fail if THIS encoding writes workflow
+      paths or runner mechanics into a lifecycle-tracked field, or strips the neutral property language while
+      re-specifying. Fault-injected: workflow_dispatch injected into intent and runs-on injected into name both fail
+      under the five-field list and both PASS under the round-3 three-field list -- that is the escape this widening
+      closes; stripping P1/P2/P3 from T4.2 fails the neutrality leg.
     fix_if: >-
-      The fields say WHAT MUST BE TRUE (P1/P2/P3); the candidate decision says HOW the candidate would
-      make it true. That keeps either spike outcome a small diff.
+      The fields say WHAT MUST BE TRUE (P1/P2/P3); the candidate decision says HOW the candidate would make it true.
+      That keeps either spike outcome a small diff.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "Asserts a mid-transition discipline that ends when the spike rules."
+    graduation_waiver_reason: >-
+      Asserts a mid-transition discipline that ends when the spike rules.
   - step: 8
     phase: pre-deploy
     action: >-
-      THE RBAC OBLIGATION HAS A NAMED CARRIER AND AN MVP-SIDE GUARANTEE. Three separate reviews
-      pointed at this. Round 2 left it as prose aimed at "the item that now precedes T4.2", never
-      naming the item, absent from every acceptance criterion and every VP step.
+      THE RBAC OBLIGATION HAS A LIVE CARRIER AND AN MVP-SIDE GUARANTEE. Three separate reviews pointed at this. The
+      carrier must be a live item: T4.5 and T4.6 already match insert_plan / set_plan_status / verb-RBAC in their
+      exit_criteria on origin/main and are both deferred_post_mvp, so round 3 first leg was satisfied before the edit
+      and could never verify the obligation landed MVP-side. The criterion must also route the split to T4.5/T4.6, and
+      the content pin must sit on a live item too.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
-      t={x['id']: x for x in d['tier_items']}; rbac=[i for i in t if re.search(r'(insert_plan|set_plan_status|verb-RBAC|
-      verb RBAC)', str(t[i].get('exit_criteria','')), re.I)]; assert rbac, 'no tier item carries the Decision 87 clause-5
-      verb-RBAC obligation as an exit criterion'; pin=[i for i in t if re.search(r'(content pin|content hash|writer-minted|
-      plan hash)', str(t[i].get('exit_criteria','')), re.I)]; assert pin, 'no MVP-side content-pin guarantee -- a verb
-      split cannot be enforced while every persona presents one identity'; print('OK verb-RBAC carried by', rbac, '|
-      content pin carried by', pin)"
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t={x['id']: x for x in
+      d['tier_items']}; live=[i for i in t if str(t[i].get('status','')) not in ('deferred_post_mvp',)]; rbac=[i for i
+      in live if re.search(r'(insert_plan|set_plan_status|verb-RBAC|verb\s+RBAC)', str(t[i].get('exit_criteria','')),
+      re.I)]; assert rbac, 'no LIVE tier item carries the Decision 87 clause-5 verb-RBAC obligation as an exit
+      criterion -- T4.5 and T4.6 already match on origin/main and are both deferred_post_mvp, so neither can discharge
+      an MVP-side obligation'; routed=[i for i in rbac if re.search(r'T4\.(5|6)', str(t[i].get('exit_criteria','')))];
+      assert routed, f'the live verb-RBAC criterion on {rbac} does not route the split to T4.5/T4.6, where per-persona
+      credentials exist'; pin=[i for i in live if
+      re.search(r'(content\s+pin|content\s+hash|writer-minted|plan\s+hash)', str(t[i].get('exit_criteria','')),
+      re.I)]; assert pin, 'no MVP-side content-pin guarantee on a live item -- a verb split cannot be enforced while
+      every persona presents one identity'; print('OK verb-RBAC carried by', routed, 'routing to T4.5/T4.6; content
+      pin carried by', pin)"
     expected: >-
-      Exits 0 printing `OK verb-RBAC carried by [...] | content pin carried by [...]`. On origin/main
-      it exits 1 with `no tier item carries the Decision 87 clause-5 verb-RBAC obligation`.
+      Exits 0 printing `OK verb-RBAC carried by` then the live carrier and the pin carrier. On origin/main it exits 1
+      on the first leg, no LIVE carrier -- the two matching items are deferred_post_mvp. Fault-injected: removing the
+      live criterion fails leg 1 (the same fixture PASSES under the round-3 unfiltered command, greened by deferred
+      T4.5/T4.6 -- that is the defect); a live criterion that never names T4.5/T4.6 fails the routing leg; parking
+      every content-pin phrase on deferred T4.5 fails the pin leg.
     fix_if: >-
-      A verb split is unenforceable at MVP: all personas share the runner's OIDC identity, so the
-      writer boundary cannot distinguish plan_critic from plan_agent. The enforceable substitute is
-      the design's own head-SHA idiom applied to the plan -- SFN carries (rec_id, revision,
-      ulid-or-hash) and every fetch plus the merge node verifies it, failing closed.
+      A verb split is unenforceable at MVP: all personas share the runner OIDC identity, so the writer boundary cannot
+      distinguish plan_critic from plan_agent. The enforceable substitute is the design own head-SHA idiom applied to
+      the plan -- SFN carries (rec_id, revision, ulid-or-hash) and every fetch plus the merge node verifies it,
+      failing closed. Write the obligation on the MVP-side item that precedes T4.2 and name T4.5/T4.6 as where the
+      split itself lands.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "Names the carrying items for one transition; they change when T4.5 lands."
+    graduation_waiver_reason: >-
+      Names the carrying items for one transition; they change when T4.5 lands.
   - step: 9
     phase: pre-deploy
     action: >-
-      THE READ VERB PINS CONTENT, NOT JUST THE REVISION. merge_key is rec_id alone and revision is
-      caller-supplied, so a re-dispatched writer can emit revision N twice with different bodies --
-      which makes the design's determinism claim false on the recovery path the substrate is being
-      selected for.
+      THE READ VERB PINS CONTENT, NOT JUST THE REVISION. merge_key is rec_id alone and revision is caller-supplied, so
+      a re-dispatched writer can emit revision N twice with different bodies -- which makes the design determinism
+      claim false on the recovery path the substrate is being selected for. The ownership leg is bound to exactly one
+      LIVE T4 item and reads exit_criteria only: round 3 matched str(x) over the whole item and was already satisfied
+      by T1.3 ("All named read verbs are discoverable from NAMED_READS keys") and by T4.5 decomposition_hints, then
+      POOLED criteria across every match, so the content pin could green from an unrelated item text.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
-      t=d['tier_items']; verb=[x['id'] for x in t if re.search(r'(execution_plan_by_rec|named read verb|plan-fetch verb)',
-      str(x), re.I)]; assert verb, 'no item owns the plan read verb'; spec=' '.join(str(x.get('exit_criteria','')) for x
-      in t if x['id'] in verb); assert re.search(r'(ulid|content hash|writer-minted|idempot)', spec, re.I), 'the verb
-      spec does not require pinning a writer-minted id or hash -- (rec_id, revision) is ambiguous under re-dispatch';
-      print('OK plan read verb owned by', verb, 'and pins content')"
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); verb=[x for x in d['tier_items'] if
+      x['id'].startswith('T4.') and str(x.get('status','')) not in ('complete','deferred_post_mvp') and
+      re.search(r'(execution_plan_by_rec|named\s+read\s+verb|plan-fetch verb)', str(x.get('exit_criteria','')),
+      re.I)]; vids=[x['id'] for x in verb]; assert len(vids) == 1, f'expected exactly one live T4 item owning the plan
+      read verb as an exit criterion; found {vids} (T1.3 and T4.5 match on origin/main and are excluded as complete /
+      deferred_post_mvp)'; spec=str(verb[0].get('exit_criteria','')); assert
+      re.search(r'(ulid|content\s+hash|writer-minted|idempot)', spec, re.I), f'{vids[0]} does not require pinning a
+      writer-minted id or content hash -- (rec_id, revision) is ambiguous under re-dispatch'; print('OK plan read verb
+      owned by', vids[0], 'and pins content')"
     expected: >-
-      Exits 0 printing `OK plan read verb owned by [...] and pins content`. On origin/main it exits 1
-      with `no item owns the plan read verb`.
+      Exits 0 printing `OK plan read verb owned by` and the single item id. On origin/main it exits 1 with found [] --
+      T1.3 is complete and T4.5 is deferred_post_mvp, so both are excluded. Fault-injected: removing the criterion
+      fails (the same fixture PASSES under the round-3 whole-item command, greened by T1.3 and T4.5); pinning only
+      (rec_id, revision) fails the spec leg; putting the ULID wording on a DIFFERENT live T4 item still fails, because
+      nothing is pooled; two claimants fail as ambiguous.
     fix_if: >-
-      Verified: field_semantics gives ops_execution_plans merge_key rec_id, and save_execution_plan
-      takes revision as a caller scalar with no uniqueness on the pair.
+      Verified: field_semantics gives ops_execution_plans merge_key rec_id, and save_execution_plan takes revision as
+      a caller scalar with no uniqueness on the pair.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "One verb's spec during one transition."
+    graduation_waiver_reason: >-
+      One verb's spec during one transition.
   - step: 10
     phase: pre-deploy
     action: >-
-      EVERY DESIGN IDENTIFIER AND EVERY DOSSIER UNSPECIFIED ENTRY HAS A TRACKED HOME. Round 2 covered
-      the seventeen identifiers and promised the dossier's eight entries with no execution step, no
-      assertion and no routing outcome for a deliberate deferral.
+      EVERY DESIGN IDENTIFIER AND EVERY DOSSIER UNSPECIFIED ENTRY HAS A TRACKED HOME. Round 3 probed the dossier with
+      eight substrings of which FIVE already occur on origin/main -- targets (10 hits), closure (50), A0 (41, it
+      matches the audit SHA 7d57a0d), RCA rec (13, it matches "source=ci_rca rec") and queue (51, e.g.
+      ops_priority_queue) -- and it searched the raw file, so prose anywhere satisfied it. It also listed "worker
+      identity", which is NOT one of the eight: that phrase belongs to the dossier Claiming-and-concurrency
+      subsection. The real eighth entry is the GitHub credential model for file_pr and merge (PAT versus App, scopes,
+      storage, rotation), which had no probe at all and is NOT covered by MECH-1 -- MECH-1 is the SFN-to-GitHub
+      dispatch credential, a different one. Every probe here was verified ABSENT on origin/main, and every entry must
+      land in a tracked field, not in prose.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; raw=pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text();
-      ids=[f'GOV-{i}' for i in (1,2,3)]+[f'MECH-{i}' for i in (1,2,3,4)]+[f'DATA-{i}' for i in (1,2,3,4)]+[f'OPS-{i}'
-      for i in (1,2,3,4,5,6)]; d=yaml.safe_load(raw); tracked=[(x['id'], str(x.get('exit_criteria',''))) for x in
-      d['tier_items']]+[(c['id'], str(c.get('detail',''))) for c in d['candidate_decisions']]; blob={i: [e for e, s in
-      tracked if i in s] for i in ids}; prose_only=sorted(i for i, v in blob.items() if not v); assert not prose_only,
-      f'identifiers with no exit criterion or CD body tracking them: {prose_only}'; uns=['eligibility predicate',
-      'failure budget', 'targets', 'closure', 'A0', 'RCA rec', 'queue', 'worker identity']; unhomed=[u for u in uns if
-      u.lower() not in raw.lower()]; assert not unhomed, f'dossier unspecified entries with no roadmap home: {unhomed}';
-      print('OK', len(ids), 'identifiers tracked;', len(uns), 'dossier entries homed')"
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); ids=[f'GOV-{i}' for i in
+      (1,2,3)]+[f'MECH-{i}' for i in (1,2,3,4)]+[f'DATA-{i}' for i in (1,2,3,4)]+[f'OPS-{i}' for i in (1,2,3,4,5,6)];
+      tracked=[(x['id'], str(x.get('exit_criteria',''))) for x in d['tier_items']]+[(c['id'], str(c.get('detail','')))
+      for c in d['candidate_decisions']]; prose_only=sorted(i for i in ids if not [e for e, s in tracked if i in s]);
+      assert not prose_only, f'identifiers with no exit criterion or CD body tracking them: {prose_only}'; uns={'queue
+      seeding for the first queue-fed run':
+      r'(seed\w*\s+the\s+priority\s+queue|queue\s+seeding|first\s+queue-fed\s+run)', 'which eligibility predicate is
+      authoritative': r'eligibility\s+predicate', 'what reliability-is-proven means numerically':
+      r'(reliability\s+is\s+proven|numeric\s+threshold\s+for\s+(each\s+)?autonomy\s+gate|A0.{0,3}A5\s+numeric)',
+      'where an executor-authored RCA rec surfaces': r'(executor-rca|executor-postmortem)', 'what counts as done
+      across the three closure points': r'(closure\s+adjudicat|closure\s+point|adjudicat\w+\s+between\s+closure)',
+      'whether a cross-run failure budget exists': r'(cross-run\s+)?failure\s+budget', 'the GitHub credential model
+      for file_pr and merge':
+      r'(PAT\s+vers?us\s+(GitHub\s+)?App|GitHub\s+credential\s+model|credential\s+model\s+for\s+file_pr)', 'whether
+      ops_recommendations gains a plural targets field': r'(plural\s+targets|targets\s+field|targets\s+VARCHAR)'};
+      unhomed=sorted(k for k, p in uns.items() if not [e for e, s in tracked if re.search(p, s, re.I)]); assert not
+      unhomed, f'dossier Also-unspecified entries with no tracked home -- each must land in a tier item exit criterion
+      or a candidate decision body, not in intent prose: {unhomed}'; print('OK', len(ids), 'identifiers tracked;',
+      len(uns), 'dossier entries homed')"
     expected: >-
-      Exits 0 printing `OK 17 identifiers tracked; 8 dossier entries homed`. On origin/main it exits 1
-      with every identifier absent.
+      Exits 0 printing `OK 17 identifiers tracked; 8 dossier entries homed`. On origin/main it exits 1 on the
+      identifier leg with all seventeen absent; each of the eight dossier probes is independently verified to match
+      zero times on origin/main, so the second leg is red for its own reason too. Fault-injected: dropping MECH-4
+      fails naming it; removing the failure-budget criterion fails naming that entry; writing an entry into intent
+      prose instead of a tracked field still fails; answering the eighth entry by pointing at MECH-1 plus a bare
+      file_pr mention fails, which is the point.
     fix_if: >-
-      A deliberate deferral is a legitimate outcome and the completed routing table must resolve it --
-      a rec carrying a deferred status and a reason, not silence.
+      A deliberate deferral is a legitimate outcome and the completed routing table must resolve it -- a rec carrying
+      a deferred status and a reason, referenced by id from the tracked field, not silence. The eighth entry is the
+      file_pr/merge credential model and is distinct from MECH-1; do not discharge one with the other.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "One design's question set; the next design would have to amend a graduated row."
+    graduation_waiver_reason: >-
+      One design's question set; the next design would have to amend a graduated row.
   - step: 11
     phase: pre-deploy
     action: >-
-      NEW RECS ARE FILED AND REFERENCED. Round 2 asserted a non-empty rec-id set against a roadmap
-      that already carries 52 distinct ids -- a check that could never fail. This diffs against
-      origin/main.
+      NEW RECS ARE FILED AND REFERENCED. Round 2 asserted a non-empty rec-id set against a roadmap that already
+      carries 52 distinct ids -- a check that could never fail. This diffs against origin/main, and guards the
+      baseline read itself: an empty git show would make the set difference vacuously satisfied.
     command: >-
-      bin/venv-python -c "import re,subprocess; head=set(re.findall(r'rec-\d+', open('docs/ROADMAP-PLATFORM.yaml').read()));
-      base=set(re.findall(r'rec-\d+', subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'],
-      capture_output=True, text=True).stdout)); added=sorted(head-base); assert added, f'no NEW rec ids referenced --
-      base had {len(base)}, head has {len(head)}; the out-of-file repairs were not filed'; print('OK', len(added), 'new
-      rec ids referenced:', added)"
+      bin/venv-python -c "import re,subprocess; head=set(re.findall(r'rec-\d+',
+      open('docs/ROADMAP-PLATFORM.yaml').read())); base=set(re.findall(r'rec-\d+',
+      subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'], capture_output=True,
+      text=True).stdout)); assert base, 'the origin/main baseline read back empty -- the diff would be vacuously
+      satisfied'; added=sorted(head-base); assert added, f'no NEW rec ids referenced -- base had {len(base)}, head has
+      {len(head)}; the out-of-file repairs were not filed'; print('OK', len(added), 'new rec ids referenced:', added)"
     expected: >-
-      Exits 0 printing `OK N new rec ids referenced:` and the ids. On origin/main it exits 1 with `no
-      NEW rec ids referenced` -- head and base are identical there, so the set difference is empty.
+      Exits 0 printing the count and `new rec ids referenced:` with the ids. On origin/main it exits 1 with no NEW rec
+      ids -- head and base are identical there (52 and 52), so the set difference is empty. Fault-injected in a
+      scratch git fixture: identical head and base fails; substituting a rec id that already exists in the base fails;
+      deleting the origin/main ref fails on the new baseline-non-empty leg rather than passing vacuously.
     fix_if: >-
-      known_gaps is not a substitute: nothing outside the Pydantic schema reads it, and OQ.1/OQ.2 sat
-      resolved on disk for weeks until an audit reconciled them.
+      known_gaps is not a substitute: nothing outside the Pydantic schema reads it, and OQ.1/OQ.2 sat resolved on disk
+      for weeks until an audit reconciled them.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "Asserts one encoding's filing discipline against one base commit."
+    graduation_waiver_reason: >-
+      Asserts one encoding's filing discipline against one base commit.
   - step: 12
     phase: pre-deploy
     action: >-
-      THE MERGE-NODE DIFF GUARD, T4-SCOPED. An earlier draft passed on main via an unrelated T2 item,
-      so this requires a T4 owner naming both surfaces.
+      THE MERGE-NODE DIFF GUARD, T4-SCOPED AND SINGLE-CRITERION. An earlier draft passed on main via an unrelated T2
+      item. Round 3 scoped it to T4 but still ANDed three regexes over the joined exit_criteria blob, so three
+      unrelated criteria each carrying one token would have satisfied it -- and T4.13/T4.14 already match diff while
+      T4.1 already matches the merge-node alternation on origin/main. All three tokens must now occur in ONE
+      criterion.
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());
-      t4=[x for x in d['tier_items'] if x['id'].startswith('T4.')]; guard=[x['id'] for x in t4 if re.search(r'\.github/workflows',
-      str(x.get('exit_criteria',''))) and re.search(r'\bdiff\b', str(x.get('exit_criteria','')), re.I) and
-      re.search(r'(merge node|at merge|boundary_patterns|Decision 117)', str(x.get('exit_criteria','')), re.I)]; assert
-      guard, 'no T4 item carries a merge-node diff-path guard naming both .github/workflows and the Decision 117
-      surface'; print('OK merge-node diff guard owned by', guard)"
-    expected: "Exits 0 printing `OK merge-node diff guard owned by ['T4.NN']`. Exits 1 on origin/main."
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t4=[x for x in d['tier_items'] if
+      x['id'].startswith('T4.')]; crits={x['id']: ([str(x.get('exit_criteria'))] if isinstance(x.get('exit_criteria'),
+      str) else [str(c) for c in (x.get('exit_criteria') or [])]) for x in t4}; guard=[i for i, cs in crits.items() if
+      [c for c in cs if re.search(r'\.github/workflows', c) and re.search(r'\bdiff', c, re.I) and re.search(r'(merge
+      node|at merge|boundary_patterns|Decision 117)', c, re.I)]]; assert guard, 'no T4 item carries a SINGLE exit
+      criterion naming .github/workflows, a diff, and the merge node or the Decision 117 boundary surface -- three
+      separate criteria each mentioning one of the three do not constitute the guard'; print('OK merge-node diff guard
+      owned by', guard)"
+    expected: >-
+      Exits 0 printing `OK merge-node diff guard owned by` and the owning ids. Exits 1 on origin/main -- no T4 exit
+      criterion names .github/workflows at all. Fault-injected: removing the criterion fails; a decoy that splits the
+      three tokens across three separate criteria on the same item still fails.
     fix_if: >-
-      ci.yml runs on pull_request, so a same-repo branch runs its own version of the workflow. The
-      guard belongs on the plane the agent cannot edit through its own merge loop.
+      ci.yml runs on pull_request, so a same-repo branch runs its own version of the workflow. The guard belongs on
+      the plane the agent cannot edit through its own merge loop, and it has to be ONE criterion so the diff, the
+      workflow path and the merge node are gated together.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "Transient placement of one control."
+    graduation_waiver_reason: >-
+      Transient placement of one control.
   - step: 13
     phase: pre-deploy
     action: The line ceiling survives, re-measured rather than quoted.
     command: >-
       bin/venv-python -c "import pathlib; n=len(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text().splitlines());
-      assert n <= 10000, f'roadmap is {n} lines, over the Decision 114 ceiling'; print(f'OK roadmap {n} lines, {10000-n}
-      of headroom')"
+      assert n <= 10000, f'roadmap is {n} lines, over the Decision 114 ceiling'; print(f'OK roadmap {n} lines,
+      {10000-n} of headroom')"
     expected: >-
-      Exits 0 printing `OK roadmap N lines, M of headroom`. Passes on origin/main too -- a regression
-      guard on the delta's size, not a differential.
+      Exits 0 printing `OK roadmap` then the line count and the headroom. Passes on origin/main too (8,616 lines) -- a
+      DECLARED regression guard on the delta size, not a differential. Fault-injected with synthetic fixtures: 10,001
+      lines fails naming the ceiling, 9,999 lines passes.
     fix_if: >-
-      Do not raise the ceiling. Compress, or move content to a rec per the completed routing table --
-      which is one reason that row exists.
+      Do not raise the ceiling. Compress, or move content to a rec per the completed routing table -- which is one
+      reason that row exists.
     hermetic: true
     graduation: waive
-    graduation_waiver_reason: "validate_platform_roadmap already enforces this ceiling."
+    graduation_waiver_reason: >-
+      validate_platform_roadmap already enforces this ceiling.
 
 test_obligations:
   - source: docs/ROADMAP-PLATFORM.yaml
-    behavior: "Schema-valid, acyclic, no live-to-deferred edges, within the ceiling, and free of stale-substrate references in every scanned field."
+    behavior: >-
+      Schema-valid, acyclic, no live-to-deferred edges, within the ceiling, and free of stale-substrate references in
+      every scanned field.
     verification_step: 1
     command: bin/venv-python -m scripts.validate
     waiver_reason: >-
       The roadmap is DATA. Schema, dependency graph, MVP-boundary edges and line ceiling are owned by
-      validate_platform_roadmap and the Decision 93 validator, both standing. Steps 3 and 5-13 assert
-      this plan's deltas mechanically from the parsed document.
+      validate_platform_roadmap and the Decision 93 validator, both standing. Steps 3 and 5-13 assert this plan deltas
+      mechanically from the parsed document, each one fault-injected against a subject-removed fixture and a decoy
+      fixture.
   - source: docs/DECISIONS.md
-    behavior: "Decision 87 carries a residency-scoped amendment leaving the authority flip timed to T4.6."
+    behavior: >-
+      Decision 87 carries a residency-scoped amendment leaving the authority flip timed to T4.6.
     verification_step: 2
     command: >-
       bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8');
       m=re.search(r'^## Decision 87:.*?(?=^## Decision |\Z)', t, re.M|re.S); assert m, 'Decision 87 missing';
       b=m.group(0); assert re.search(r'residenc', b, re.I), 'the amendment does not scope the inversion to residency';
-      assert re.search(r'prerequisite', b, re.I), 'the amendment does not state the prerequisite'; assert
-      re.search(r'authority', b, re.I) and re.search(r'T4\.6', b), 'the amendment does not state that the AUTHORITY
-      flip stays timed to T4.6'; assert re.search(r'circular', b, re.I), 'the amendment does not name the circularity';
-      print('OK Decision 87 residency-scoped,', len(b.encode()), 'bytes')"
+      assert re.search(r'prerequisite', b, re.I), 'the amendment does not state the prerequisite'; assert [p for p in
+      re.split(r'\n\s*\n', b) if re.search(r'authority', p, re.I) and re.search(r'T4\.6', p)], 'no single paragraph
+      states that the AUTHORITY flip stays timed to T4.6 -- the bare word authority is already present on origin/main,
+      so the two must co-occur'; assert re.search(r'circular', b, re.I), 'the amendment does not name the
+      circularity'; print('OK Decision 87 residency-scoped,', len(b.encode()), 'bytes')"
     red_green_expectation: >-
-      Red on origin/main (the word `residenc` is absent from Decision 87); green once the
-      residency-scoped amendment lands.
+      Red on origin/main: residency is absent from Decision 87, and the authority-and-T4.6 leg is paragraph-scoped
+      because the bare word authority is already present there. Green once the residency-scoped amendment lands.
   - source: docs/contracts/decision-entry.yaml
-    behavior: "significance.routing gains a work-item row stating the migration direction and resolving deliberate deferral."
+    behavior: >-
+      significance.routing gains a work_item row stating the migration direction and resolving deliberate deferral,
+      and routing_rule is extended to reach it.
     verification_step: 4
     command: >-
-      bin/venv-python -c "import yaml,pathlib,re; d=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text());
-      sig=d['significance']; rows=sig['routing']; assert 'work_item' in rows or any('tier_item' in str(v) and 'roadmap'
-      in str(v) for v in rows.values()), 'no work-item routing row'; blob=str(sig); assert re.search(r'(bootstrap|supersede|
-      destination form|migration)', blob, re.I), 'the row does not state the migration direction'; assert
-      re.search(r'(defer|not-now|declined)', blob, re.I), 'the routing table cannot resolve a deliberate deferral';
-      assert re.search(r'cross_tier_gate|deferred_post_mvp|exit_criteri', blob), 'the row does not name what the roadmap
-      uniquely provides today'; print('OK routing table completed:', sorted(rows))"
-    red_green_expectation: "Red on origin/main (no work-item row); green once the routing table is completed."
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text()); sig=d['significance'];
+      rows=sig['routing']; assert 'work_item' in rows, f'no work_item routing row -- significance.routing carries only
+      {sorted(rows)}'; row=str(rows['work_item']); rule=str(sig.get('routing_rule','')); assert
+      re.search(r'(bootstrap|supersede|destination\s+form|migration)', row, re.I), 'the work_item ROW does not state
+      the migration direction; matching that vocabulary anywhere else in the significance block does not count';
+      assert re.search(r'(cross_tier_gate|cross-tier\s+gate|deferred_post_mvp|MVP\s+boundary|exit_criteri)', row,
+      re.I), 'the work_item ROW does not name what the roadmap uniquely provides today'; assert
+      re.search(r'(defer|not-now|declined)', row + ' ' + rule, re.I), 'neither the work_item row nor routing_rule
+      resolves a deliberate deferral with a reason'; assert 'work_item' in rule, 'routing_rule question set was not
+      extended to reach the work_item row'; print('OK routing table completed:', sorted(rows))"
+    red_green_expectation: >-
+      Red on origin/main: routing carries only cd_state_flip, field_semantics, numbered_decision and operational_fact.
+      Green once the work_item row lands with the migration direction and the roadmap-unique capability in the ROW
+      itself -- planting that vocabulary in another row does not green it.
   - source: docs/decisions-index.json
-    behavior: "The committed index matches the amended corpus."
+    behavior: >-
+      The committed index matches the amended corpus.
     verification_step: 1
     command: bin/venv-python -m scripts.validate
     waiver_reason: >-
-      A generated projection. validate_decisions_index_freshness is a standing check that fails on
-      drift or absence, with a regenerate hint. A bespoke test would assert the generator against
-      itself.
+      A generated projection. validate_decisions_index_freshness is a standing check that fails on drift or absence,
+      with a regenerate hint. A bespoke test would assert the generator against itself.
 
 constraints:
   - >-
