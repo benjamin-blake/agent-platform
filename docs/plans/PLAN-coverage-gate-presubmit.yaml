@@ -6,8 +6,8 @@ slug: "coverage-gate-presubmit"
 intent: >-
   Restore scripts/platform_roadmap_state.py to its 100% coverage floor by un-shadowing the two
   negative-path fixtures PR #938's pre-filter silently bypassed, and close the escape class that
-  let the regression reach main by running the coverage floor inside the pinned pre-merge required
-  status check.
+  let the regression reach main by running the coverage floor -- scoped to fast-tier-runnable
+  source-to-test mappings -- inside the pinned pre-merge required status check.
 plan_type: IMPLEMENTATION
 verification_tier: V2
 plan_path: docs/plans/PLAN-coverage-gate-presubmit.yaml
@@ -38,11 +38,34 @@ scope:
     action: Create
     purpose: >-
       Cover the new flag's behaviour in its own module: single-check dispatch, exit 0 on a
-      source-free diff, non-zero on a below-floor file. Modelled on TestVerifierCoverageArgv and
+      source-free diff, non-zero on a below-floor file, and the tier-selection guard (no
+      validation_result.clear() under the flag). Modelled on TestVerifierCoverageArgv and
       TestUpdateSlocBudgetsArgv (tests/validate/test_scaffold_gates.py:361 and :401) -- the repo's
       actual flag-argv suites. A new file rather than an extension of test_scaffold_gates.py
       because that file sits at exactly 456 SLOC against the 500 limit, and Decision 128 makes
       decomposition the default response, never a budget raise.
+  - file: scripts/checks/misc/validate_test_coverage.py
+    action: Modify
+    purpose: >-
+      Scope the check's PRE-MERGE mode to fast-tier-runnable source-to-test mappings only. The
+      check currently spawns a raw `pytest <test_path> --cov=<dir>` subprocess per changed source
+      file with no deferral machinery, so under pr-validate's requirements-fast.txt +
+      requirements-dev.txt install a mapped test importing one of the 18 excluded heavy
+      distributions collection-errors and hard-reds the pinned required check for a DEPENDENCY
+      reason, not a coverage reason. Reuse
+      `scripts/checks/_pytest_diff.py::partition_changed_tests_by_collectability(changed_tests)
+      -> (runnable, deferred)` -- the same machinery --pre uses, fail-closed by design (anything
+      not clearly a heavy-dep defer routes to runnable). Full-tier (main-validate) behaviour is
+      unchanged: it keeps enforcing every mapping.
+  - file: tests/checks/misc/test_validate_test_coverage.py
+    action: Modify
+    purpose: >-
+      Add a class exercising BOTH partition arms of the new pre-merge scoping: a mapping that
+      partitions to `runnable` is enforced (a below-floor measurement still fails), and a mapping
+      that partitions to `deferred` is reported as deferred-to-post-merge and does NOT fail. The
+      file already exists (TestLoadCoverageChecker / TestValidateTestCoverage /
+      TestDeclaredAccounting), so this is a Modify, and the existing per-check colocation home is
+      reused rather than a second surface created (Decision 131).
   - file: .github/workflows/ci.yml
     action: Modify
     purpose: >-
@@ -55,6 +78,17 @@ scope:
       not, and this flag is diff-aware -- modelled on terraform-validate it would find no
       origin/main, fall back to `git diff HEAD` (empty on a clean checkout), and pass vacuously on
       every PR.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Ratify the pre-merge coverage gate as a numbered Decision amending Decision 73 clause 2's
+      pre-merge allocation. Moving coverage measurement into the pinned pre-merge check changes
+      WHAT runs pre-merge, which the adapter-vs-tier argument in the Decision 153 adjudication
+      constraint does not reach; the fast-tier-runnable scoping bounds the cost envelope but does
+      not by itself resolve the allocation question. Precedent: Decision 153 amended Decision 73's
+      enforcement and earned its own number rather than annotating 73 in place. The drafted text
+      is carried in this plan's `context` (the schema is extra="forbid", so there is no top-level
+      ratification block); an execution step transcribes it at implement time.
 bundled_recommendations:
   - rec-3211
   - rec-3212
@@ -74,6 +108,12 @@ acceptance_criteria:
     `--test-coverage-only` exits non-zero when a diff-touched source file measures below its floor
     (100%, or its config/coverage_baseline.yaml entry where one exists), demonstrated against a
     deliberately below-floor file rather than only against the happy path.
+  - >-
+    In pre-merge mode the floor is enforced ONLY for fast-tier-runnable mappings: a diff-touched
+    source file whose mapped test defers on a genuinely-absent excluded heavy dependency is
+    reported as explicitly deferred-to-post-merge and does NOT fail the pre-merge gate, while a
+    diff-touched source file whose mapped test IS fast-tier-runnable is enforced. Deferral is
+    reported, never silent, and the full tier (main-validate) still enforces every mapping.
   - >-
     The pr-validate job -- a pinned required_status_check in terraform/github/repo.tf -- runs the
     gate before its `--pre` step, so a coverage regression is refused before merge.
@@ -100,7 +140,7 @@ verification_plan:
     graduation_waiver_reason: >-
       Graduating this as a standing registry check would duplicate validate_test_coverage's own
       floor enforcement, which this plan is simultaneously promoting into the pre-merge required
-      check. The guard belongs in the gate, not beside it. It also costs ~141s measured, well
+      check. The guard belongs in the gate, not beside it. It also costs ~141-197s measured, well
       outside the cheap-standing-check bar.
   - step: 2
     phase: pre-deploy
@@ -130,28 +170,61 @@ verification_plan:
       dispatching the single check; a non-zero exit on a source-free diff means the no-change path
       is not short-circuiting.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: validate-test-coverage-only-dispatches-single-check
+    graduation: waive
+    graduation_waiver_reason: >-
+      Waived on the SAME cost basis as step 1, not on a separate ground. Its `expected` is
+      diff-conditional (the "No source file changes to check." half holds only on a source-free
+      diff), and on any diff that DOES carry source files it pays the same
+      ~141-197s-per-source-file measurement step 1's waiver calls "well outside the
+      cheap-standing-check bar". Step 4 already graduates the unit-level proof of the same
+      contract (single-check dispatch, exit 0 on a source-free diff, non-zero below floor)
+      deterministically and creds-free, so graduating this step would buy a costly, flakier
+      duplicate of a registry row that already exists.
   - step: 4
     phase: pre-deploy
     action: >-
       Exercise the flag's unit-level contract, including the DISCRIMINATION proof PROJECT_CONTEXT
       requires of any proposed verifier: with check_per_file_coverage stubbed to report a
-      below-floor file, the flag must exit non-zero. Deterministic and creds-free, unlike pointing
-      the real measurement path at a live file whose baseline may since have been raised.
+      below-floor file, the flag must exit non-zero. Also assert the tier-selection guard --
+      validation_result.clear must NOT be called under the flag. Deterministic and creds-free,
+      unlike pointing the real measurement path at a live file whose baseline may since have been
+      raised.
     command: bin/venv-python -m pytest tests/validate/test_coverage_only.py -q
     expected: >-
       All TestCoverageOnlyFlag cases pass, including the stubbed below-floor case asserting a
-      non-zero exit.
+      non-zero exit and the case asserting validation_result.clear is not called.
     fix_if: >-
       A missing below-floor case means the suite proves the flag RUNS but never that it REFUSES,
       which is the only behaviour that closes the escape class. Note that invoking
       scripts.test_coverage_checker directly is NOT a substitute -- it self-reports "DIAGNOSTIC
       VERDICT ... not an authoritative validation gate" and exits 0 regardless (verified this
-      session).
+      session). A missing clear-not-called case leaves HIGH 7 unproven.
     hermetic: false
     graduation: graduate
     graduation_check_id: validate-test-coverage-only-flag-suite
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Exercise BOTH arms of the pre-merge runnable/deferred partition under unit test: a mapping
+      that partitions to `runnable` is still enforced (a below-floor measurement fails), and a
+      mapping that partitions to `deferred` on a genuinely-absent excluded heavy dependency is
+      reported as deferred-to-post-merge and does NOT contribute a failure. Both arms are stubbed
+      at the partition boundary, so neither installs nor requires a heavy dependency.
+    command: bin/venv-python -m pytest tests/checks/misc/test_validate_test_coverage.py -q
+    expected: >-
+      All cases pass, including the new class's two arms: the runnable arm appends a coverage
+      failure, the deferred arm appends none and emits an explicit deferred-to-post-merge line
+      naming the source file, its mapped test, and the missing dependency.
+    fix_if: >-
+      A deferred arm that appends a failure means the partition result is not being consulted
+      before the measurement subprocess is forked. A runnable arm that appends nothing means the
+      scoping is over-broad and the gate is now vacuous -- the fail-closed direction of
+      partition_changed_tests_by_collectability (anything not clearly a heavy-dep defer routes to
+      runnable) must be preserved, never inverted. A deferred file that produces no output at all
+      is the silent-skip failure mode this step exists to refuse.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: validate-test-coverage-pre-merge-partition-arms
   - step: 5
     phase: pre-deploy
     action: >-
@@ -162,49 +235,93 @@ verification_plan:
     command: |-
       bin/venv-python -m scripts.validate --test-coverage-only 2>&1 | tee /dev/stderr | grep -qE 'mapping: scripts/validate\.py'
     expected: >-
-      The mapping line for scripts/validate.py appears, proving get_changed_source_files() resolved
-      a real diff base and the gate measured a file this PR touched. Contrast the vacuous state:
-      "No source file changes to check." with examined(0).
+      The mapping line for scripts/validate.py appears. Scope of the claim, precisely: this proves
+      get_changed_source_files() resolved a real diff base, the file partitioned to `runnable`, and
+      a source-to-test mapping was derived for a file this PR touched. It does NOT prove the
+      measurement completed -- coverage_baseline.measure_and_check prints the `mapping:` line
+      BEFORE forking the pytest subprocess, and `grep -q` closes the pipe on first match, so the
+      run may be torn down mid-measurement. Contrast the vacuous state this discriminates against:
+      "No source file changes to check." with examined(0). Measurement completion is proven by
+      step 7, not here.
     fix_if: >-
       "No source file changes to check." means the diff base did not resolve -- the exact
       failure a checkout without fetch-depth 0 produces, which is why this step exists and why the
       gate lives in pr-validate rather than a new job. Do not accept a green run that examined
-      nothing; that is the rec-3163 vacuity condition shipped rather than alarmed on.
+      nothing; that is the rec-3163 vacuity condition shipped rather than alarmed on. A
+      deferred-to-post-merge line for scripts/validate.py instead of a mapping line means the
+      partition mis-classified a fast-tier-runnable mapping -- fix the classifier, not the gate.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: test-coverage-only-non-vacuous-on-real-diff
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step passes only on a branch whose diff touches scripts/validate.py, so its expected
+      outcome is branch-diff-dependent and not expressible as a diff-independent standing check.
+      Registry rows are differentially admitted once and then never re-run against a new diff, so
+      a row asserting "the mapping line for scripts/validate.py appears" would rot the moment the
+      next branch does not touch that file -- admitting a permanently-red or branch-dependent row
+      is worse than no row. The non-vacuity property it proves is carried forward by step 10's
+      runnable arm, which is diff-independent.
   - step: 6
     phase: pre-deploy
     action: >-
-      Confirm the coverage-gate step is wired into the pr-validate job and precedes the --pre step
-      (CI wiring is grep-verified locally and CI-delegated per Decision 119).
+      Confirm the coverage-gate step is wired into the pr-validate job AND that its invocation line
+      precedes the `--pre` invocation line inside that job body -- the ordering AC5 asserts (CI
+      wiring is grep-verified locally and CI-delegated per Decision 119).
     command: |-
-      sed -n '/^  pr-validate:/,/^  main-validate:/p' .github/workflows/ci.yml | grep -q -- '--test-coverage-only'
-    expected: Exit 0 -- the --test-coverage-only invocation appears inside the pr-validate job body.
+      body=$(sed -n '/^  pr-validate:/,/^  main-validate:/p' .github/workflows/ci.yml)
+      cov=$(printf '%s\n' "$body" | grep -n 'validate --test-coverage-only$' | cut -d: -f1 | head -1)
+      pre=$(printf '%s\n' "$body" | grep -n 'validate --pre$' | cut -d: -f1 | head -1)
+      test -n "$cov" && test -n "$pre" && test "$cov" -lt "$pre"
+    expected: >-
+      Exit 0. Both invocation lines are found inside the extracted pr-validate job body, and the
+      `--test-coverage-only` line number is strictly less than the `--pre` line number -- so the
+      gate is not merely present in the job, it runs first.
     fix_if: >-
-      Absent, or present only after the main-validate boundary, means the gate was wired to the
-      post-merge job again and the escape class is untouched. This step proves presence only;
-      step 5 is what proves the gate discriminates.
+      An empty `cov` means the gate was wired to the post-merge job again (or past the
+      main-validate boundary) and the escape class is untouched. An empty `pre` means the anchor
+      drifted -- both greps are end-of-line anchored on the `run:` invocation precisely so the
+      job's `--pre` explanatory COMMENT (currently line 48 of the extracted body) cannot be
+      mistaken for the invocation; re-anchor rather than dropping the `$`. `cov` not less than
+      `pre` means the step was appended after `--pre` instead of before it, which forfeits the
+      Decision 153 clause 3 attribution property the placement constraint exists to preserve.
+      This step proves presence and ORDER only; step 5 and step 10 are what prove the gate
+      discriminates.
     hermetic: true
     graduation: graduate
     graduation_check_id: ci-pr-validate-invokes-test-coverage-only
   - step: 7
     phase: pre-deploy
     action: >-
-      Measure scripts/validate.py against its own coverage floor. It is pinned at 73.0 in
-      config/coverage_baseline.yaml (`# baseline-lowered: dec-169`), so an uncovered flag block
-      added here can fail the very check this plan is promoting -- the gate would red on its own
-      enabling PR.
-    command: bin/venv-python -m pytest tests/validate --cov=scripts --cov-report=term-missing --cov-fail-under=73 -q
-    expected: scripts/validate.py measures at or above 73.0%.
+      Confirm the gate does not red on its own enabling PR. scripts/validate.py is pinned at 73.0
+      in config/coverage_baseline.yaml (`# baseline-lowered: dec-169`) and this PR's diff touches
+      it, so it is one of the files the gate itself measures. Use the gate's own per-file compare
+      -- not a total-coverage threshold -- and assert it reports no below-floor finding for
+      validate.py.
+    command: |-
+      out=$(bin/venv-python -m scripts.validate --test-coverage-only 2>&1); printf '%s\n' "$out"
+      printf '%s\n' "$out" | grep -q 'scripts/validate\.py: .*line coverage (expected' && exit 1 || exit 0
+    expected: >-
+      Exit 0, and the printed output carries no `scripts/validate.py: NN.N% line coverage
+      (expected >= 73.0%)` line. scripts/validate.py measures 74% against its 73.0 pin as of this
+      session, so headroom exists; this step exists to prove the new uncovered dispatch block did
+      not consume it.
     fix_if: >-
-      Below 73.0 means the new dispatch block is untested. Cover it in
+      A below-floor line for validate.py means the new dispatch block is untested. Cover it in
       tests/validate/test_coverage_only.py. Do NOT lower the baseline entry: Decision 165 requires
       the `# baseline-lowered: dec-NNN` marker to name a Decision that AUTHORIZES the lowering, and
-      no such Decision exists for this plan.
+      no such Decision exists for this plan. Do NOT substitute a total-coverage command such as
+      `pytest tests/validate --cov=scripts --cov-fail-under=73`: `--cov-fail-under` is a TOTAL
+      threshold across all of `scripts/`, reports 8.46% and fails regardless of validate.py's own
+      number (verified this session). The gate compares per file; so must this step.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: validate-py-holds-73-coverage-floor
+    graduation: waive
+    graduation_waiver_reason: >-
+      Waived because the row would be permanently red or branch-dependent, and the registry admits
+      a row once and never re-runs it against a new diff. `--test-coverage-only` is diff-scoped, so
+      on any branch that does not touch scripts/validate.py this step measures nothing and proves
+      nothing; on a branch that does, it pays the same ~141-197s-per-source-file cost step 1's
+      waiver places well outside the cheap-standing-check bar. The standing enforcement of
+      validate.py's 73.0 floor is validate_test_coverage itself -- which this plan is promoting
+      into the pre-merge required check -- not a registry row beside it.
   - step: 8
     phase: pre-deploy
     action: >-
@@ -223,52 +340,106 @@ verification_plan:
       This step IS the fast tier; graduating it into the verification registry would make the tier
       a check inside itself. Its cost is the tier's own 300s budget, far outside the
       cheap-standing-check bar.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Run the BARE full tier before handoff. This plan declares
+      handoff_policy.full_validation_required_before_commit: true, and until this step existed the
+      obligation was discharged only through the Decision 163 matcher hole the constraints below
+      record -- `-m scripts.validate --test-coverage-only` SATISFIES _is_full_tier_segment while
+      running one diff-scoped check. A declared obligation discharged by a matcher artifact is
+      exactly the declared-vs-executed failure mode Decision 163 clause 2 names; this step
+      discharges it for real.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0 across the whole full-tier sequence, including validate_test_coverage over every
+      mapping (not just the fast-tier-runnable subset), validate_sloc_limits, and
+      validate_plan_documents over this plan.
+    fix_if: >-
+      A full-tier-only failure is by definition not reproducible under `--pre` or under
+      `--test-coverage-only`; read the reported check name and fix forward (Decision 55), never
+      re-run a narrower flag and call the obligation discharged. A full-tier failure that traces to
+      a heavy dependency absent from THIS container is an environment gap, not a code failure --
+      record it and route to main-validate rather than weakening the check.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step IS the full tier; graduating it into the verification registry would make the tier
+      a check inside itself, exactly as step 8's waiver reasons for the fast tier. Its cost is the
+      full tier's own honest 15-30-minute budget (Decision 73 point 1), far outside the
+      cheap-standing-check bar.
   - step: 9
     phase: post-deploy
     action: >-
       After merge, confirm the two bundled CI-RCA recs actually closed via the Resolves: trailer.
     command: |-
-      bin/venv-python -m scripts.sync.ops sync && grep -cE '"id": "rec-(3211|3212)".*"status": "closed"' logs/.recommendations-log.jsonl
+      bin/venv-python -m scripts.ops_data_portal --sync && grep -cE '"id": "rec-(3211|3212)".*"status": "closed"' logs/.recommendations-log.jsonl
     expected: Prints 2.
     fix_if: >-
       Fewer than 2 means rec-autoclose.yml did not fire; fall back to the documented
-      ops_data_portal --update-rec path per Decision 70. Note `sync.ops` accepts only the `sync`
-      subcommand (scripts/sync/ops.py:553) -- `pull` is not a valid choice and exits 2.
+      ops_data_portal --update-rec path per Decision 70. Use the portal's own `--sync` flag
+      (scripts/ops_portal/cli.py:109) -- AGENTS.md's Single Portal Invariant forbids an agent
+      calling `scripts.sync.ops` directly, so `-m scripts.sync.ops sync` is not an acceptable
+      substitute here even though it reaches the same reader.
 test_obligations:
   - source: scripts/validate.py
     behavior: >-
       --test-coverage-only dispatches validate_test_coverage alone, exits 0 on a source-free diff,
-      and exits non-zero on a diff-touched file below its floor.
+      exits non-zero on a diff-touched file below its floor, and does not call
+      validation_result.clear (the tier-selection guard).
     verification_step: 4
     test_selector: tests/validate/test_coverage_only.py::TestCoverageOnlyFlag
     red_green_expectation: >-
       Red before: neither the flag nor the module exists -- `bin/venv-python -m scripts.validate
       --test-coverage-only` exits 2 with "unrecognized arguments" (reproduced live this session).
-      Green after: all cases pass, including the below-floor non-zero exit.
+      Green after: all cases pass, including the below-floor non-zero exit and the
+      clear-not-called guard case.
+  - source: scripts/checks/misc/validate_test_coverage.py
+    behavior: >-
+      In pre-merge mode the check partitions each changed source file's MAPPED TEST via
+      partition_changed_tests_by_collectability and enforces the floor only for the `runnable`
+      arm; the `deferred` arm is reported as deferred-to-post-merge and contributes no failure.
+      Full-tier behaviour is unchanged -- every mapping is still enforced.
+    verification_step: 10
+    test_selector: tests/checks/misc/test_validate_test_coverage.py::TestPreMergeRunnablePartition
+    red_green_expectation: >-
+      Red before: the check has no partition step at all, so a stubbed deferred mapping still
+      forks the measurement subprocess and appends a coverage failure -- the new deferred-arm case
+      fails and the new runnable-arm case has no code path to assert against. Green after: the
+      deferred arm appends no failure and emits an explicit deferred-to-post-merge line, while the
+      runnable arm still appends the below-floor failure (fail-closed direction preserved).
   - source: tests/platform_roadmap_state/test_state_dict_and_feeds.py
     behavior: >-
       The two negative-path tests stay bound to the branch they name, so a future short-circuit
       above them fails the suite instead of silently un-reaching it.
     verification_step: 1
-    test_selector: tests/platform_roadmap_state/test_state_dict_and_feeds.py::TestComputeFollowonStateMalformedPlanShapes
+    test_selector: tests/platform_roadmap_state/test_state_dict_and_feeds.py
     red_green_expectation: >-
       Red before: coverage measures 98.58% with lines 115 and 125-126 missing (reproduced live this
       session). Green after: 100.0%, empty Missing column. The coverage number is itself the
-      discriminator -- re-shadowing these fixtures reproduces the red.
+      discriminator -- re-shadowing these fixtures reproduces the red. The selector is the FILE,
+      not a class: the two tests live in DIFFERENT classes (test_malformed_plan_skipped is in
+      TestComputeFollowonState at :432; only test_plan_yaml_top_level_not_dict_skipped is in
+      TestComputeFollowonStateMalformedPlanShapes at :500), and the file is the narrowest selector
+      that genuinely hosts both while still being selected by step 1's directory argument.
   - source: .github/workflows/ci.yml
     behavior: The pr-validate job runs the coverage gate before its --pre step.
     verification_step: 6
     command: |-
-      sed -n '/^  pr-validate:/,/^  main-validate:/p' .github/workflows/ci.yml | grep -q -- '--test-coverage-only'
+      body=$(sed -n '/^  pr-validate:/,/^  main-validate:/p' .github/workflows/ci.yml)
+      cov=$(printf '%s\n' "$body" | grep -n 'validate --test-coverage-only$' | cut -d: -f1 | head -1)
+      pre=$(printf '%s\n' "$body" | grep -n 'validate --pre$' | cut -d: -f1 | head -1)
+      test -n "$cov" && test -n "$pre" && test "$cov" -lt "$pre"
     waiver_reason: >-
       Workflow YAML is not unit-testable in-process; Decision 119 makes CI the authoritative
-      verifier for workflow wiring, with a local grep-shaped presence assertion standing in.
-      Discrimination of the gate itself is carried by VP step 5, not by this presence check.
+      verifier for workflow wiring, with a local grep-shaped presence-plus-ordering assertion
+      standing in. Discrimination of the gate itself is carried by VP steps 5 and 10, not by this
+      structural check.
 constraints:
   - >-
     Do NOT promote validate_test_coverage to the --pre tier via pre=True in
     scripts/checks/misc/_manifest.py. _FAST_TIER_BUDGET_SECONDS is 300 and a single file's
-    measurement takes ~141s measured (a pytest subprocess is forked per changed source file);
+    measurement takes ~141-197s measured (a pytest subprocess is forked per changed source file);
     rec-2987 records a real 5.5-min fast-tier breach on a branch attempting exactly this. The
     coverage step is a SEPARATE `run:` step in the same job, so it never enters
     _scaffold_budget_assertion's elapsed window.
@@ -284,8 +455,17 @@ constraints:
     timeout, from which Decision 153 clause 3 derives its 1500s forced-run ceiling. Running
     coverage first keeps a ceiling breach attributable to `--pre` on its own clock, as Decision 153
     designed. Known residual: a root-conftest PR (full_suite_forced) that ALSO changes many source
-    files could approach the 30-minute job timeout. The conjunction is rare and observable; if it
-    materialises it is Decision 153 reversal-condition (b) territory, not a silent regression.
+    files could approach the 30-minute job timeout; at ~141-197s per fast-tier-runnable source file
+    the conjunction is rare and observable, and the residual analysis below uses the conservative
+    (141s) figure. If it materialises it is Decision 153 reversal-condition (b) territory, not a
+    silent regression.
+  - >-
+    Reconciled measurement figures. Step 1's waiver and constraints 1 and 3 cite a RANGE,
+    ~141-197s, not a single number: 141s is this session's measurement of the per-source-file
+    coverage subprocess, and Decision 163 clause 3 measured the same check over
+    `scripts/validate.py` at 3m17s (~197s). Both are legitimate observations of the same operation
+    on different files; cite the range, and use the conservative (141s) end wherever a residual
+    analysis needs a single figure so the headroom claim is never flattered by the slower number.
   - >-
     scripts/validate.py stays the single source of truth for checks (AGENTS.md): ci.yml invokes a
     validate.py flag and defines no check of its own. This mirrors --terraform-only /
@@ -296,7 +476,15 @@ constraints:
     import re-introduces the check facade Decision 169 retired and breaks the import-closure gate.
     Keep the scripts/validate.py delta to the argparse entry plus a short delegation block --
     Decision 169's stated intent is that "scripts/validate.py is never touched again" when adding a
-    check, and a flag is inside clause 1's retained surface only if it stays that small.
+    check, and a flag is inside clause 1's retained surface only if it stays that small. The
+    pre-merge SCOPING logic therefore lives in scripts/checks/misc/validate_test_coverage.py, not
+    in validate.py.
+  - >-
+    The pre-merge scoping must reuse `partition_changed_tests_by_collectability` from
+    scripts/checks/_pytest_diff.py -- never a second, hand-rolled heavy-dep classifier. That
+    function is fail-closed by design (a real test failure, a non-heavy collection error, or a file
+    with no signal at all all route to `runnable`), which is the property that keeps the gate from
+    silently going quiet. Preserve that direction; never invert it to defer-by-default.
   - >-
     scripts/validate.py is pinned at 73.0 in config/coverage_baseline.yaml. Cover the new dispatch
     block; do NOT lower the pin. Decision 165 narrows marker validation from existence to
@@ -308,7 +496,8 @@ constraints:
     examined(n, unit="source_files"), converting a genuinely-enforced run into a "skipped" row; its
     docstring also reserves it for "could not examine", not "examined nothing". A skipped() call
     from validate.py after _dispatch_check returns would land outside the outcome_scope and never be
-    harvested at all.
+    harvested at all. The deferred-to-post-merge report is therefore printed output plus an
+    unchanged examined(n) declaration, not a skipped() call.
   - >-
     The unmeasurable-file question is deliberately OUT of scope and belongs to open rec-3163, which
     was filed to own exactly this vacuity condition. The behaviour lives in
@@ -321,20 +510,22 @@ constraints:
     `-m scripts.validate` whenever `--pre` is absent, so `-m scripts.validate --test-coverage-only`
     SATISFIES the pre-handoff full-tier guard while running one diff-scoped check. The hole
     pre-exists (--terraform-only, --verifier-coverage, --update-sloc-budgets all match), so this
-    widens rather than creates it, but it adds the most temptingly-named instance yet. This plan does
-    NOT relieve Decision 163 clause 3's pre-handoff full-tier obligation; file a follow-on rec to
-    tighten the matcher rather than fixing it inline here.
+    widens rather than creates it, but it adds the most temptingly-named instance yet. VP step 11
+    now discharges the obligation for real by running the bare full tier, so this plan no longer
+    relies on the matcher hole; the hole itself still needs closing, and a follow-on rec to tighten
+    the matcher is filed rather than fixed inline here.
   - >-
-    Decision 153 adjudication. Under the step design this flag adds no CI job, no event trigger and
-    no gating role -- it runs inside the existing pr-validate required check. It is a job adapter
-    over an existing full-tier check, the same pre-existing class as --terraform-only, which
-    Decision 153 was written alongside without counting as a tier (Decision 60's "two named
-    surfaces" already coexists with --terraform-only, --verifier-coverage and
-    --update-sloc-budgets). It does carry an invocation flag and a one-check sequence, so the claim
-    is NOT that it scores 0-of-5 on clause 4's test; the claim is that flag-plus-check-sequence
-    without trigger, role or independent budget contract is the adapter class, not the tier class.
-    If a reviewer rejects that, the correct route is a Decision amending 60/73/153 -- not a
-    plan-level call.
+    Decision 153 adjudication -- retained, but no longer load-bearing on its own. Under the step
+    design this flag adds no CI job, no event trigger and no gating role; it is a job adapter over
+    an existing full-tier check, the same pre-existing class as --terraform-only, which Decision 153
+    was written alongside without counting as a tier (Decision 60's "two named surfaces" already
+    coexists with --terraform-only, --verifier-coverage and --update-sloc-budgets). It does carry an
+    invocation flag and a one-check sequence, so the claim is NOT that it scores 0-of-5 on clause
+    4's test; the claim is that flag-plus-check-sequence without trigger, role or independent budget
+    contract is the adapter class, not the tier class. The adapter-vs-tier argument answers "is this
+    a third tier"; it does NOT answer Decision 73 clause 2's separate question, "what runs
+    pre-merge". That second axis is settled by the drafted Decision in `context` below, which this
+    plan ratifies rather than deciding at plan level.
   - >-
     Do not use config/check_accounting_baseline.yaml. validate_test_coverage is already an adopted
     (not baselined) check under Decision 170, and the guard's _BASELINE_SEED is frozen.
@@ -363,6 +554,31 @@ context:
     one of them, so the 100% floor is enforced ONLY post-merge (main-validate / Main Canary). Every
     coverage regression is structurally guaranteed to land on main first.
   - >-
+    Why the pre-merge gate is SCOPED to fast-tier-runnable mappings, and why that still catches the
+    motivating incident. pr-validate installs only requirements-fast.txt + requirements-dev.txt; 18
+    distributions are deliberately excluded (aiohttp, awswrangler, beautifulsoup4, boto3, duckdb,
+    numpy, pandas, psycopg2-binary, pyarrow, pyiceberg, pysr, python-ulid, radon, requests,
+    scikit-learn, sympy, torch, yfinance -- derived at runtime, not hardcoded). validate_test_coverage
+    spawns a raw `pytest <test_path> --cov=<dir>` subprocess per changed source file with NO
+    deferral machinery, so an unscoped pre-merge gate would collection-error and hard-red the
+    pinned required check whenever a PR touched a source file whose mapped test imports one of
+    those 18 -- a DEPENDENCY failure wearing a coverage failure's clothes, on the one check that
+    blocks merge. Reusing partition_changed_tests_by_collectability (the same machinery --pre uses,
+    fail-closed: anything not clearly a heavy-dep defer routes to runnable) bounds the pre-merge
+    cost envelope to mappings the fast tier can actually run. The motivating incident is still
+    caught: tests/platform_roadmap_state/ imports only stdlib, pytest and yaml -- pyyaml and
+    pydantic are both in requirements-fast.txt -- so its mapping partitions to `runnable` and the
+    100% floor is enforced pre-merge exactly as intended.
+  - >-
+    Graduation mechanics for steps 2 and 6. Both must graduate as `command_exit_zero` with a
+    `["bash","-c",...]` argv, NOT as `test_selector`. `TestSelectorCheck`
+    (scripts/verification_checks.py:214) takes a SINGLE `node_id` and runs `pytest <node_id> -v
+    --tb=short`; step 2 selects with `-k "malformed_plan_skipped or top_level_not_dict"` (a keyword
+    expression, not a node id) and step 6 is a four-line shell pipeline with command substitution
+    and an arithmetic comparison. Neither is expressible as one node id, so the test_selector slot
+    would silently narrow or break them. Step 4 and step 10, by contrast, ARE single-path pytest
+    invocations and may use either slot.
+  - >-
     This escape class has been filed four times. rec-2970 (2026-08-03) diagnosed it exactly and was
     closed on a non-discriminating probe (`grep -n validate_test_coverage scripts/checks/registry.py`
     -- satisfied by the pre-existing full-tier registration whether or not the check ever moved).
@@ -387,8 +603,8 @@ context:
     headroom), dec-60 (flag-surface consolidation), dec-170 (examined/skipped channel; fail-closed
     vacuity NOT committed), dec-163 (universal-in-name/discretionary-in-enforcement), dec-131
     (test-colocation mirror), dec-129 (closest precedent for a pre-merge coverage verifier --
-    pattern, not authority), dec-135 (affected-set selection), dec-119 (CI-delegated verification),
-    dec-103 (rec lifecycle -- resolution wording only).
+    pattern, not authority), dec-119 (CI-delegated verification), dec-104 (the heavy-dep deferral
+    mechanism this plan reuses), dec-103 (rec lifecycle -- resolution wording only).
   - >-
     Plan-critique round 1 findings and their disposition, all verified against the repo before
     acting. BLOCKER 1 (plan specified two mutually exclusive designs): FIXED -- the file was rewritten
@@ -405,7 +621,171 @@ context:
     --test-coverage-only. Graduation dispositions reclassified for steps 2, 4, 6, 7 and 8. The false
     `test_terraform_checks.py` precedent claim was corrected to TestVerifierCoverageArgv /
     TestUpdateSlocBudgetsArgv. Split recommendation declined by the human -- kept as one plan.
-  - "gates: decision-scout=FLAGS_FOUND (all dispositioned); plan-critique=REVISE round 1 (all findings actioned above)"
+  - >-
+    Plan-critique round 2 findings and their disposition, all verified against the repo before
+    acting. BLOCKER 1 (an unscoped pre-merge gate reds the pinned required check for a DEPENDENCY
+    reason -- 18 heavy deps absent from pr-validate, no deferral machinery in
+    validate_test_coverage): FIXED by design change -- pre-merge mode now partitions each changed
+    source file's mapped test via partition_changed_tests_by_collectability and enforces only the
+    `runnable` arm, with the `deferred` arm reported explicitly; new scope rows
+    scripts/checks/misc/validate_test_coverage.py and tests/checks/misc/test_validate_test_coverage.py,
+    new AC5, new VP step 10, new test_obligation. BLOCKER 2 (VP step 7's
+    `--cov=scripts --cov-fail-under=73` is a TOTAL threshold reporting 8.46% and failing
+    regardless, verified): FIXED -- replaced with the gate's own per-file compare via
+    `--test-coverage-only`, graduation flipped graduate -> waive (a permanently-red or
+    branch-dependent registry row must not be admitted). BLOCKER 3 (handoff_policy discharged only
+    through the Decision 163 matcher hole the plan itself documents): FIXED -- new VP step 11 runs
+    the bare full tier, waived because it IS the full tier. BLOCKER 4 (VP step 9 called
+    `scripts.sync.ops`, forbidden by AGENTS.md's Single Portal Invariant): FIXED to
+    `-m scripts.ops_data_portal --sync` (verified present at scripts/ops_portal/cli.py:109).
+    BLOCKER 5 (graduation dispositions): steps 3, 5 and 7 flipped graduate -> waive with
+    substantive reasons; the command_exit_zero-vs-test_selector mechanics for steps 2 and 6
+    recorded above. HIGH 6 (AC5 ordering unverifiable): FIXED -- VP step 6 now compares `grep -n`
+    line numbers inside the extracted job body, end-of-line anchored so the job's `--pre` COMMENT
+    cannot be mistaken for the invocation. HIGH 7 (tier-selection guard uncovered): FIXED --
+    execution step 3 now names the consequence (validation_result.clear() wipes
+    logs/debug/validation-result.json, the CI-RCA attribution substrate main-validate uploads) and
+    tests/validate/test_coverage_only.py gains a clear-not-called case. MEDIUM 8 (wrong
+    test-obligation selector -- test_malformed_plan_skipped is in TestComputeFollowonState at :432,
+    NOT TestComputeFollowonStateMalformedPlanShapes at :500): FIXED to the file-level selector,
+    which hosts both tests and is still selected by step 1's directory argument. MEDIUM 9 (Decision
+    73 clause 2 axis unaddressed): FIXED -- docs/DECISIONS.md added to scope, drafted Decision text
+    carried below, transcription added as an execution step. LOW 10: VP step 5's expected tightened
+    to claim only what the `mapping:` line proves, the ~141s figure reconciled to the ~141-197s
+    range against Decision 163 clause 3's 3m17s measurement, the 428-SLOC / 72-line headroom note
+    added to execution step 2, and the gates line updated. The human reaffirmed keeping this as ONE
+    plan after being shown BLOCKER 1.
+  - |-
+    DRAFTED DECISION -- NOT YET NUMBERED. Transcribe into docs/DECISIONS.md at implement time
+    (execution step 8), re-checking the next free number THEN: 172 is the highest live `## Decision`
+    header at drafting time, so 173 is the expected number, but numbers are not reserved at draft
+    time and DECISIONS.md is the numbering authority (Decision 84). This draft lives in `context`
+    rather than a top-level `ratification_block` because scripts/roadmap/plan_document.py's
+    PlanDocument is `extra="forbid"` -- any new top-level key fails schema validation. Verified,
+    not assumed.
+
+    Text to write (adjust `number:`, the header number, and `decided_date:` at transcription):
+
+    ## Decision 173: A bounded, fast-tier-runnable-scoped per-file coverage gate runs inside pr-validate ahead of --pre (amends Decision 73 clause 2's pre-merge allocation) (Decided)
+
+    ```yaml
+    number: 173
+    status: Decided
+    decided_date: "<transcription date>"
+    amends: [73]
+    significance:
+      value: numbered_decision
+      justification: >-
+        A durable architectural commitment that changes WHAT the pinned pre-merge required check
+        runs -- not merely how an existing check is invoked -- with reversal-relevant consequences
+        for the pre-merge cost envelope and for every future pre-merge gate proposal. (i) The
+        specific field_semantics home considered and REJECTED is docs/contracts/check-manifest.yaml,
+        which owns the per-domain manifest grammar including tier membership (`pre=` /
+        `full_segment=`): this change alters no manifest field's MEANING and leaves
+        validate_test_coverage's manifest entry untouched (no pre=True), so a note there would
+        describe a field that does not move while leaving the actual commitment -- which checks
+        gate merge -- unowned. (ii) amendment_forms (a dated in-place annotation on Decision 73)
+        does not suffice: an amendment trailer is an append-only clarification of existing text,
+        carrying no significance envelope and no reversal-conditions stanza of its own, so a reader
+        arriving from a red pr-validate run would have no citable, reversible anchor for the gate.
+        Decision 153 set the governing precedent -- it amended Decision 73's ENFORCEMENT and earned
+        its own number rather than annotating 73 in place.
+    ```
+
+    **Status:** Decided
+    **Date:** <transcription date>
+    **Warehouse ID:** dec-173 (keyed on the decision number; synced to ops_decisions via
+    `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:**
+    The per-file coverage floor (`validate_test_coverage`, 100% or a config/coverage_baseline.yaml
+    entry) is registered full-tier-only -- `scripts/checks/misc/_manifest.py` sets
+    `full_segment="full_after_lint"` and no `pre=True`, and `pre_sequence()`'s 83 checks do not
+    include it. Enforcement therefore happens only post-merge, on main-validate, which makes every
+    coverage regression structurally guaranteed to land on main before anything objects. The escape
+    class has now been filed four times: rec-2970 (2026-08-03, diagnosed exactly, closed on a
+    non-discriminating probe), rec-3043/3044 (08-05) and rec-3147 (08-15) (closed corrective-only),
+    rec-3163 (08-16, filed as the live owner), and rec-3211/3212 (the recurrence rec-3163 predicted).
+    Decision 159 clause 5 already names the full-tier-only tripwire an ACCEPTED RESIDUAL; four
+    recurrences is the evidence that the residual should no longer be accepted.
+
+    **Decision:**
+    1. **A bounded coverage gate runs inside pr-validate, ahead of `--pre`.** `.github/workflows/ci.yml`'s
+       pr-validate job -- one of exactly two checks `terraform/github/repo.tf` pins as
+       required_status_checks -- gains a `run:` step invoking `python -m scripts.validate
+       --test-coverage-only` BEFORE its existing `--pre` step. This amends Decision 73 clause 2's
+       allocation ("PR gating uses fast tier"): the pre-merge gate is now the fast tier PLUS one
+       bounded, separately-clocked per-file coverage step. Clause 2's other commitments are
+       untouched -- the full tier still runs on push to main and on the scheduled drift canary, and
+       the fast tier's own 300s budget assertion is unchanged and unshared.
+    2. **Scoped to fast-tier-runnable mappings -- this bound is load-bearing, not an optimisation.**
+       pr-validate installs only requirements-fast.txt + requirements-dev.txt; 18 distributions are
+       deliberately excluded. In pre-merge mode the check maps each changed source file to its test
+       path, partitions those paths through
+       `scripts/checks/_pytest_diff.py::partition_changed_tests_by_collectability` -- the SAME
+       fail-closed machinery `--pre` already uses -- enforces the floor only for the `runnable` arm,
+       and reports the `deferred` arm as explicitly deferred-to-post-merge. Without this bound the
+       gate would red the pinned required check for a DEPENDENCY reason, which is not a coverage
+       signal and would train sessions to distrust the gate. Deferral is always reported; a silent
+       skip is a defect, not a mode.
+    3. **Not a third tier.** Applying Decision 153 clause 4's five-property test (invocation flag,
+       check sequence, selection scope, trigger/role, budget contract, selected ex ante): the flag
+       and a one-check sequence are present, but that sequence is a strict SUBSET of the existing
+       full-tier sequence, not a new one; there is no independent selection scope (it reuses
+       validate_test_coverage's own diff scoping, narrowed by the same partition helper `--pre`
+       uses); no CI job and no event trigger are added and pr-validate's gating role is unchanged;
+       and there is no independent budget contract -- the step is bounded above by pr-validate's
+       existing 30-minute job timeout and never enters `_scaffold_budget_assertion`'s elapsed
+       window. This is the adapter class, alongside `--terraform-only` (which Decision 153 was
+       written beside without counting as a tier), not the tier class. Decision 60's two named
+       validate surfaces and Decision 73's two CI gating roles both survive intact.
+    4. **Cost envelope.** One pytest subprocess per changed source file with a fast-tier-runnable
+       mapping, measured at ~141-197s each (141s this session; Decision 163 clause 3 measured the
+       same check over `scripts/validate.py` at 3m17s). Deferred mappings cost only their share of
+       one batched `--collect-only` probe. The step runs on its own clock BEFORE `--pre`, so a
+       breach of the shared 30-minute pr-validate job timeout -- from which Decision 153 clause 3
+       derives its 1500s forced-run ceiling -- stays attributable to whichever step consumed it.
+       Residual, named and accepted: a root-conftest PR (`full_suite_forced`) that ALSO changes many
+       source files could approach the job timeout; the conjunction is rare and observable.
+
+    **Rationale:**
+    Post-merge-only enforcement of a floor that is cheap to check per file, on a repository whose
+    merge gate is a single pinned status check, guarantees the regression lands before the signal
+    fires -- and four recurrences show the corrective loop does not substitute for the preventive
+    one. The alternative of promoting the check to `--pre` via `pre=True` was rejected on measured
+    grounds: at ~141-197s per source file against a 300s fast-tier budget, rec-2987 already records
+    a real 5.5-minute fast-tier breach on a branch attempting exactly that. A separate CI job was
+    rejected because required_status_checks pins only `pr-validate` and `terraform-validate`, so a
+    new job would gate no merge without a human-gated terraform/github apply, and because
+    terraform-validate's checkout lacks `fetch-depth: 0`, which a diff-aware check requires to
+    resolve origin/main at all. A separately-clocked step inside the already-pinned job is the only
+    shape that gates merge, keeps the fast tier's budget contract intact, and needs no
+    infrastructure apply.
+
+    **Reversal conditions:**
+    (a) the coverage step's wall clock, in conjunction with a `full_suite_forced` `--pre` run,
+    repeatedly approaches pr-validate's 30-minute job timeout -- re-adjudicate: cap the per-PR
+    enforced-file count, or return the gate to post-merge, but do not silently raise the job
+    timeout; (b) the runnable/deferred partition FALSE-DEFERS a genuinely fast-tier-runnable
+    mapping more than once, letting the gate go quiet -- fix the classifier, never loosen the gate
+    (the fail-closed direction is the design); (c) a fifth recurrence of the coverage-regression
+    escape class lands despite the gate -- the gate is then the wrong instrument and the escape
+    class needs a different one; (d) the gate's scope is proposed to widen beyond fast-tier-runnable
+    mappings (e.g. installing heavy dependencies into pr-validate) -- that changes the fast tier's
+    own dependency contract and must be re-adjudicated against Decision 73 clause 2 afresh, not
+    absorbed under this entry. Full reversal is deleting the ci.yml step; post-merge enforcement
+    continues unchanged via main-validate.
+
+    **Related:** Decision 73 (clause 2's pre-merge allocation, amended here in this entry's body per
+    the Decision 134/145 amend-only convention -- Decision 73's own text is not edited), Decision 153
+    (the not-a-tier five-property test applied here, the 1500s forced-run ceiling derived from the
+    same job timeout, and the precedent of amending Decision 73's enforcement under a new number),
+    Decision 60 (two named validate surfaces -- unchanged), Decision 159 clause 5 (the accepted
+    residual this closes), Decision 104 (the heavy-dep deferral mechanism clause 2 reuses),
+    Decision 163 (the pre-handoff full-tier obligation and the 3m17s measurement), Decision 169
+    (registry.resolve dispatch), Decision 165 (baseline markers must name an authorizing Decision),
+    Decision 119 (CI-delegated verification of workflow wiring), Decision 55 (forward-fix).
+  - "gates: decision-scout=FLAGS_FOUND (all dispositioned); plan-critique=REVISE round 2 (all findings actioned)"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -425,36 +805,82 @@ execution_steps:
     the exception, or assert directly that parsing the fixture text raises) -- a spy proving only
     that safe_load was called would still pass if the fixture later became parseable, leaving
     125-126 dark. For the non-dict case assert safe_load returned a non-dict. Keep the existing
-    result assertions alongside the pins.
+    result assertions alongside the pins. Size budget: this file measures 428 SLOC against the 500
+    limit (72 lines of headroom, measured this session by validate_sloc_limits' own counter --
+    non-blank, non-comment lines). Both pins must fit inside that headroom; if they do not,
+    Decision 128 makes decomposition the response, never a budget raise.
   - >-
     scripts/validate.py -- add a `--test-coverage-only` argparse flag whose help text names it a
     CI-job-only adapter (mirroring --terraform-only's single-job framing), include it in the
     tier-selection guard at the
     `if not any((args.pre, args.verifier_coverage, args.terraform_only, args.update_sloc_budgets))`
-    site so it does not fall through to the full tier, and dispatch the check via
-    `registry.resolve("validate_test_coverage")` (Decision 169 clause 2 -- never a direct module
-    import), following --terraform-only's exact shape: build a `failed` list, print a scoped
-    Validation Summary, exit 0 when empty and 1 otherwise. Keep this block small.
+    site (scripts/validate.py:206) so it does not fall through to the full tier, and dispatch the
+    check via `registry.resolve("validate_test_coverage")` (Decision 169 clause 2 -- never a direct
+    module import), following --terraform-only's exact shape: build a `failed` list, print a scoped
+    Validation Summary, exit 0 when empty and 1 otherwise. Keep this block small. The guard is NOT
+    cosmetic: omitting the flag there makes `validation_result.clear()` (line 208) run on every
+    `--test-coverage-only` invocation, and the flag's own branch exits before
+    `write_completed_visible` (lines 412/421) is ever reached -- so each pre-merge gate run would
+    WIPE logs/debug/validation-result.json, the CI-RCA attribution substrate the main-validate job
+    uploads, and leave nothing in its place.
   - >-
     tests/validate/test_coverage_only.py -- create with TestCoverageOnlyFlag, modelled on
     TestVerifierCoverageArgv (tests/validate/test_scaffold_gates.py:361) and TestUpdateSlocBudgetsArgv
     (:401): assert single-check dispatch, exit 0 on a source-free diff, and a non-zero exit on a
     below-floor file. The below-floor case is the one that proves the gate refuses; do not ship
-    without it.
+    without it. Add a fourth case asserting `validation_result.clear` is NOT called under
+    `--test-coverage-only` (patch it and assert `not mock.called`) -- that is the only executable
+    proof of the tier-selection guard in the previous step, and its absence is how the
+    validation-result wipe would ship silently.
+  - >-
+    scripts/checks/misc/validate_test_coverage.py -- add PRE-MERGE mode scoping. Signal the mode
+    from the `--test-coverage-only` dispatch only, so the full-tier (main-validate) path is
+    untouched and keeps enforcing every mapping. In pre-merge mode: map each changed source file to
+    its test path (the same `map_source_to_test` the measurement already uses), pass those test
+    paths to `partition_changed_tests_by_collectability` from scripts/checks/_pytest_diff.py,
+    measure and enforce ONLY the source files whose mapped test landed in `runnable`, and print an
+    explicit deferred-to-post-merge line for each source file whose mapped test landed in
+    `deferred`, naming the source file, its mapped test and the missing dependency. Keep the
+    existing `registry.examined(n, unit="source_files")` declaration -- do NOT call
+    `registry.skipped()` for a deferred file (see the constraint above: it overwrites the single
+    per-dispatch declaration slot and converts an enforced run into a "skipped" row). Never
+    hand-roll a second heavy-dep classifier, and never invert the helper's fail-closed direction.
+  - >-
+    tests/checks/misc/test_validate_test_coverage.py -- add TestPreMergeRunnablePartition with both
+    arms, stubbed at the partition boundary so neither test installs nor requires a heavy
+    dependency: (a) a mapping stubbed into `runnable` whose measurement reports below floor still
+    appends a coverage failure; (b) a mapping stubbed into `deferred` appends NO failure and emits
+    the deferred-to-post-merge line. The file already hosts TestLoadCoverageChecker,
+    TestValidateTestCoverage and TestDeclaredAccounting -- extend it, do not create a second
+    surface (Decision 131).
   - >-
     .github/workflows/ci.yml -- add a coverage-gate step to the pr-validate job BEFORE the existing
     `--pre` step, running `python -m scripts.validate --test-coverage-only`, with a comment naming
     why it is a step rather than a job (required_status_checks pins pr-validate; signal-green's
     needs gates no merge; the step inherits fetch-depth: 0 which a diff-aware flag requires) and why
-    it is not in the fast tier (300s budget vs ~141s per file).
+    it is not in the fast tier (300s budget vs ~141-197s per fast-tier-runnable source file). Keep
+    the invocation on its own line ending exactly `validate --test-coverage-only` -- VP step 6's
+    ordering assertion is end-of-line anchored on that shape.
+  - >-
+    docs/DECISIONS.md -- transcribe the drafted Decision carried in this plan's `context` (the entry
+    labelled "DRAFTED DECISION -- NOT YET NUMBERED"). Re-check the next free number at this moment
+    rather than trusting the draft's 173: run `grep -n '^## Decision ' docs/DECISIONS.md` and take
+    max+1, since DECISIONS.md is the numbering authority (Decision 84) and numbers are not reserved
+    at draft time. Set `number:`, the header number and `decided_date:` accordingly, place the entry
+    at the top of the live file per its existing descending order, and keep the trailing `---` block
+    separator (docs/contracts/decision-entry.yaml forward-enforces it on new-in-diff entries).
   - >-
     File a follow-on rec for the Decision 163 residual -- validate_handoff_full_tier's
     _is_full_tier_segment matcher accepts any `-m scripts.validate` without `--pre`, so
-    single-purpose flags satisfy the pre-handoff full-tier obligation they do not discharge.
+    single-purpose flags satisfy the pre-handoff full-tier obligation they do not discharge. VP step
+    11 discharges the obligation for THIS plan by running the bare full tier; the matcher hole
+    itself is not fixed inline here.
   - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
   - 'Report: what was implemented, verification results'
 work_areas: []
 rollback: >-
   Revert the ci.yml step to restore the prior pre-merge behaviour (post-merge enforcement continues
-  unchanged via main-validate); the test-fixture and --test-coverage-only changes are independently
-  revertible and carry no runtime coupling.
+  unchanged via main-validate); the test-fixture, --test-coverage-only and pre-merge-scoping changes
+  are independently revertible and carry no runtime coupling. The docs/DECISIONS.md entry is
+  reverted by the standard supersession path (a superseding Decision), never by deleting a ratified
+  number.
