@@ -1,0 +1,287 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "coverage-gate-presubmit"
+intent: >-
+  Restore scripts/platform_roadmap_state.py to its 100% coverage floor by un-shadowing the two
+  negative-path fixtures PR #938's pre-filter silently bypassed, and pin each to the branch it
+  claims to exercise so the same silent shadowing cannot recur undetected.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-coverage-gate-presubmit.yaml
+phase: >-
+  CI-RCA corrective for rec-3211 and rec-3212. The preventive half (a pre-merge coverage gate) was
+  scoped out to rec-3221 after four plan-critique rounds; see Context. Adjacent to T3.7
+  (Validation-suite meta-validation, deferred_post_mvp, gated on CD.30 pending) but claims none of
+  its criteria.
+scope:
+  - file: tests/platform_roadmap_state/test_state_dict_and_feeds.py
+    action: Modify
+    purpose: >-
+      Un-shadow the two negative-path fixtures whose plan-file text stopped carrying the
+      `closes_criteria` substring after PR #938's pre-filter landed, and pin each to the outcome
+      that proves its own branch fired -- the malformed fixture must prove yaml.safe_load RAISED,
+      the non-dict fixture must prove safe_load RETURNED a non-dict. Asserting only
+      needs_followon_plan is what let both go dark while still passing.
+bundled_recommendations:
+  - rec-3211
+  - rec-3212
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/platform_roadmap_state.py measures 100.0% line coverage under tests/platform_roadmap_state.
+  - >-
+    test_malformed_plan_skipped proves yaml.safe_load RAISED (not merely that it was called), and
+    test_plan_yaml_top_level_not_dict_skipped proves safe_load RETURNED a non-dict. Each therefore
+    fails if its own branch stops being reached -- a spy that only proves the call happened would
+    still pass if a future edit made the malformed fixture parseable, which is the exact silent
+    re-shadowing this plan exists to prevent.
+  - "rec-3211 and rec-3212 are closed via the Resolves: trailer."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Measure the previously-failing file against its floor -- the direct corrective proof, and the
+      standing discriminator against re-shadowing (any future fixture that stops reaching its branch
+      drops this below 100 again).
+    command: bin/venv-python -m pytest tests/platform_roadmap_state --cov=scripts.platform_roadmap_state --cov-report=term-missing --cov-fail-under=100 -q
+    expected: >-
+      Exit 0; term-missing reports scripts/platform_roadmap_state.py at 100% with an empty Missing
+      column. Lines 115 and 125-126 specifically are no longer listed.
+    fix_if: >-
+      Still 98.6% with 115/125-126 missing means the fixture text still lacks the `closes_criteria`
+      substring, so the pre-filter at line 112 is still short-circuiting them. Do NOT follow
+      rec-3212's prescription (a fixture whose text OMITS the substring) -- that targets line
+      111-112, which was covered by PR #938's own TestKeylessPlanSkipsYamlParse class, and will not
+      move this number.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Cost: 139-142s measured. For calibration, the repo's own bar for a cheap standing check is
+      validate_vp_replay's 120s aggregate budget -- this single step exceeds it, and as a
+      `hermetic: false` step it never enters replay at all. The standing guard is not this row but
+      validate_test_coverage's 100% floor, which fires on any diff touching
+      scripts/platform_roadmap_state.py -- the only way a new short-circuit can be introduced above
+      these branches. Note it does NOT fire on this plan's own test-only diff (changed-source set
+      empty, verified live), which is why VP step 1 runs the measurement directly here.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the two un-shadowed tests and confirm each pins its OWN branch -- the malformed fixture
+      proves safe_load raised, the non-dict fixture proves safe_load returned a non-dict.
+    command: bin/venv-python -m pytest tests/platform_roadmap_state/test_state_dict_and_feeds.py -k "malformed_plan_skipped or top_level_not_dict" -q
+    expected: Both tests pass, each asserting on its own branch's distinguishing outcome.
+    fix_if: >-
+      A test asserting only that safe_load was CALLED is insufficient for the malformed case -- it
+      would still pass if the fixture became parseable, letting lines 125-126 go dark again. Assert
+      the raise.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible in principle, impractical now, on two verified grounds. (1) The
+      differential admission gate (validate_verification_registry -> run_differential) requires a
+      new row to FAIL on origin/main and PASS here; both node ids this step selects PASS on
+      origin/main today (measured: 2 passed, 44 deselected), so a row naming them is rejected as
+      tautological -- and a file-level node_id selecting both tests is equally tautological, so
+      there is no row shape that escapes this. Earning a graduation would mean renaming the tests
+      so their node ids are absent on origin/main, which admits the differential for a reason
+      unrelated to behaviour. Instead this step is now `hermetic: true` (3.1s measured, inside
+      validate_vp_replay's 30s per-step and 120s aggregate limits), so CI re-executes it
+      independently rather than trusting the implementing agent's self-report -- the substantive
+      protection a registry row would have provided. The standing guard against re-shadowing also
+      already exists and is not duplicated by a row:
+      validate_test_coverage's 100% floor fires whenever scripts/platform_roadmap_state.py itself
+      changes, which is the only way a new short-circuit can be introduced above these branches.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the whole roadmap-state suite still passes -- the fixture edits change what the tests
+      exercise, so a collection regression would otherwise surface only post-merge.
+    command: bin/venv-python -m pytest tests/platform_roadmap_state -q
+    expected: All tests pass; collected count is not lower than before the change.
+    fix_if: >-
+      A drop in collected count means a fixture edit broke collection rather than the branch it
+      targets.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Wholly subsumed by VP step 1, which runs the same suite under coverage with a hard floor; a
+      second registry row asserting the weaker property would be redundant.
+  - step: 4
+    phase: pre-deploy
+    action: Fast tier -- the authoritative pre-merge gate (Decision 73).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 within the 300s fast-tier budget.
+    fix_if: A budget breach here means the fixture edits pulled a slow path into the affected set.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the fast tier; a tier cannot be a registry check inside itself.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Bare full tier, discharging handoff_policy.full_validation_required_before_commit and
+      Decision 163. This step does NOT prove the coverage fix -- see expected.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0. validate_test_coverage will report "No source file changes to check" and declare
+      examined(0): get_changed_source_files() excludes test files, and this plan's diff touches
+      only a test file, so the coverage check is VACUOUS BY CONSTRUCTION here and passes
+      identically on the unfixed tree (verified live: the changed-source set is empty on this
+      branch). VP step 1 is the only place this plan's central claim is proven.
+    fix_if: >-
+      Do NOT read a green validate_test_coverage here as confirmation of the fix -- that is the
+      passes-on-the-pre-fix-tree shape rec-3220 exists to stop. Any failure in this step is
+      unrelated to this plan's scope and should be triaged before commit, never worked around.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the full tier; a tier cannot be a registry check inside itself.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      After merge, confirm the two bundled CI-RCA recs actually closed via the Resolves trailer.
+    command: |-
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c 'import json;print(sum(1 for l in open("logs/.recommendations-log.jsonl",encoding="utf-8") if (d:=json.loads(l)).get("id") in {"rec-3211","rec-3212"} and d.get("status")=="closed"))'
+    expected: Prints 2.
+    fix_if: >-
+      Fewer than 2 means rec-autoclose.yml did not fire; fall back to the documented
+      ops_data_portal --update-rec path per Decision 70. Use the portal, never scripts.sync.ops --
+      AGENTS.md's Single Portal Invariant forbids agents calling that entry point directly.
+test_obligations:
+  - source: tests/platform_roadmap_state/test_state_dict_and_feeds.py
+    behavior: >-
+      The two negative-path tests stay bound to the branch they name, so a future short-circuit
+      above them fails the suite instead of silently un-reaching it.
+    verification_step: 1
+    test_selector: tests/platform_roadmap_state/test_state_dict_and_feeds.py
+    red_green_expectation: >-
+      Red before: coverage measures 98.58% with lines 115 and 125-126 missing (reproduced live at
+      planning time). Green after: 100.0%, empty Missing column. The coverage number is itself the
+      discriminator -- re-shadowing these fixtures reproduces the red.
+constraints:
+  - >-
+    Do NOT add a pre-merge coverage gate in this plan. That work is rec-3221, which carries the
+    full design analysis from four plan-critique rounds. Re-opening it here re-opens a design that
+    failed critique four times.
+  - >-
+    Do NOT weaken either existing assertion. Both tests currently assert
+    `needs_followon_plan is True` and both currently pass; the defect is that they pass for the
+    wrong reason. The new pins are additive.
+  - >-
+    Do NOT lower the floor. config/coverage_baseline.yaml is a one-time Decision 159 grandfather
+    roster, and registering a new sub-100 entry requires a `# baseline-lowered: dec-NNN` marker
+    naming a Decision that AUTHORIZES it (Decision 165). No such Decision exists for this plan, and
+    registering scripts/platform_roadmap_state.py to make the red go away is the explicitly
+    forbidden path.
+  - >-
+    tests/platform_roadmap_state/test_state_dict_and_feeds.py is 428 SLOC against the 500 limit
+    (72 lines of headroom) and has no config/sloc_budgets.yaml entry. If the pins push it over,
+    decompose per Decision 128 -- never raise the budget.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Root cause is fixture shadowing, not a missing test. PR #938 (722df85) added a substring
+    pre-filter at scripts/platform_roadmap_state.py:111-112 (`if "closes_criteria" not in text:
+    continue`). Two pre-existing fixtures write plan text lacking that substring:
+    test_malformed_plan_skipped ("invalid: [yaml: {content", sole coverer of the `except Exception:
+    continue` at 125-126) and test_plan_yaml_top_level_not_dict_skipped ("- a\n- b\n", sole coverer
+    of the `continue` at 115). Both now short-circuit at line 112 before the code they were written
+    to exercise. They still PASS, because they assert only on the result, which the fast path
+    produces identically -- the suite went green while the branches went dark.
+  - >-
+    rec-3212's stated root cause is inverted and must not be followed. It claims line 111-112 is the
+    uncovered branch and prescribes adding a fixture whose text OMITS `closes_criteria`. In fact
+    111-112 is covered -- by those two fixtures plus the TestKeylessPlanSkipsYamlParse class, which
+    `git log -S` shows landed in 722df85 itself, the very commit rec-3212 blames. Implementing
+    rec-3212 as written adds a fourth redundant keyless fixture and leaves coverage at 98.58%.
+    Verified live by probe: substring-carrying variants of both shapes flip the miss set so
+    115/125-126 become covered.
+  - >-
+    Detection gap, scoped OUT to rec-3221: validate_test_coverage is registered in
+    scripts/checks/misc/_manifest.py with full_segment="full_after_lint" and no pre=True, so the
+    100% floor is enforced ONLY post-merge. This plan does NOT close that gap. rec-3163 remains the
+    open owner of the deferred vacuity alarm; rec-3221 now owns the pre-merge gate itself and
+    carries the full design analysis so it is not re-derived.
+  - >-
+    Why the preventive half was scoped out. It failed four plan-critique rounds, each finding a
+    different way the gate did not do what it claimed. (1) A separate coverage-gate job blocked no
+    merge, because terraform/github/repo.tf pins required_status_checks to exactly pr-validate and
+    terraform-validate while signal-green's needs list only suppresses a wake comment -- and it was
+    additionally vacuous, since terraform-validate's checkout lacks the fetch-depth 0 a diff-aware
+    check needs. (2) As a pr-validate step it reds the pinned check for dependency reasons, because
+    that job installs only the fast-tier subset and validate_test_coverage has none of
+    run_pytest_diff's deferral machinery. (3) Bounding it with
+    partition_changed_tests_by_collectability failed on the input contract -- map_source_to_test
+    returns absolute paths, and directories for 33 of 294 mapped sources, which never defer -- and
+    covered only the benign failure shape. (4) The reactive probe alone is blind to a third shape,
+    module-scope pytest.importorskip, because _runtime_heavy_dep_defer_reason omits -rs. The
+    corrective half was clean and unchanged throughout all four rounds. Splitting was recommended at
+    rounds 1 and 3 and declined; after round 4 the human elected to ship the correction and file the
+    gate as rec-3221.
+  - >-
+    This escape class has now been filed five times. rec-2970 (2026-08-03) diagnosed it exactly and
+    was closed on a non-discriminating probe (`grep -n validate_test_coverage
+    scripts/checks/registry.py` -- satisfied by the pre-existing full-tier registration whether or
+    not the check ever moved). rec-3043/3044 (08-05) and rec-3147 (08-15) closed corrective-only.
+    rec-3163 (08-16) is open. rec-3211/3212 (08-18) are this plan's. The probe-hygiene meta-cause --
+    acceptance commands that pass on the pre-fix tree -- is filed separately as rec-3220.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness 0 behind, 0
+    ahead), so no Main Divergence Assessment deferral applies.
+  - >-
+    Decision-scout verdict FLAGS_FOUND (125 of 125 decisions triaged) against the original, wider
+    scope. CITE list still live for this reduced scope: dec-48 (V2 tier), dec-73 (two-tier CI --
+    named as the gap this plan does NOT close), dec-159 (coverage-baseline roster, per-entry
+    floors), dec-165 (markers must name an AUTHORIZING Decision), dec-142 (Resolves trailer
+    auto-close), dec-72 and dec-55 (RCA-as-plan-source -- rec-3212's inverted root cause is refused
+    on the record, not silently deviated from), dec-128 (decompose, never raise), dec-131
+    (test-colocation mirror), dec-103 (rec lifecycle), dec-70 (update-rec fallback), dec-132
+    (verification graduation is an enforced pre-merge obligation -- the Decision that makes the
+    step-2 waiver load-bearing rather than cosmetic), dec-163 (pre-handoff full-tier obligation,
+    discharged by VP step 5). Flags dec-153,
+    dec-60, dec-169 and dec-170 attached exclusively to the preventive half and lapse with
+    it; all are recorded in rec-3221.
+  - >-
+    "gates: decision-scout=FLAGS_FOUND (preventive-half flags lapsed with the scope reduction);
+    plan-critique=REVISE rounds 1-4 on the wider scope, then REVISE round 5 at this reduced scope
+    (corrective fix verified correct on disk; F1-F7 actioned -- graduation flipped to waive on the
+    tautology and one-node-id grounds, VP step 5's vacuity stated, the fixture-decoupled assertion
+    form forbidden, the closure probe made key-order-free)."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md read -- only the plan-cited sections (48, 55, 70, 72, 73, 103, 128, 131, 132, 142, 159, 163, 165)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    tests/platform_roadmap_state/test_state_dict_and_feeds.py -- give
+    test_plan_yaml_top_level_not_dict_skipped's fixture text a `closes_criteria` token while keeping
+    it a non-dict at the top level (e.g. a YAML list whose first entry is the literal
+    `closes_criteria`), and give test_malformed_plan_skipped's fixture text the token while keeping
+    it unparseable (e.g. `closes_criteria: [T-1: {`). Do not weaken either existing assertion.
+  - >-
+    tests/platform_roadmap_state/test_state_dict_and_feeds.py -- pin each test to its OWN branch
+    using a SPY over the module's own yaml.safe_load, recording each call's outcome. Follow the
+    pattern TestKeylessPlanSkipsYamlParse already uses (same file, around line 557). Each test
+    asserts BOTH: (i) exactly one recorded outcome, proving the module actually reached its
+    safe_load call rather than short-circuiting at line 112; and (ii) the KIND of that outcome --
+    raised, for test_malformed_plan_skipped; returned-a-non-dict, for
+    test_plan_yaml_top_level_not_dict_skipped. The spy MUST re-raise rather than swallow: a
+    swallowing spy still records `raised` while safe_load appears to return None, which hits 115
+    instead and leaves 125-126 uncovered. Assertion (i) kills re-shadowing, (ii) kills the
+    weaker "the call happened" form. Do NOT substitute a direct assertion on the fixture text
+    (pytest.raises(yaml.YAMLError) on the literal, or isinstance on yaml.safe_load(text)): those
+    assert a property of the FIXTURE, decoupled from compute_followon_state, and would stay green
+    through the exact regression this plan prevents -- narrowing the pre-filter from
+    `"closes_criteria" not in text` to `"closes_criteria:" not in text` re-shadows the NON-DICT
+    fixture (`- closes_criteria\n- b`, which carries no colon after the token) while its
+    direct-form assertion still passes. The malformed fixture happens to survive that particular
+    narrowing because its text carries the colon, but the class of regression is identical and the
+    spy form is what closes it for both. Keep the existing result assertions alongside
+    the pins.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Revert the single test-file change; scripts/platform_roadmap_state.py is untouched, so there is no
+  runtime coupling and no infrastructure to unwind.
