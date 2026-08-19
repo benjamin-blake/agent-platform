@@ -1,0 +1,319 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "coverage-gate-presubmit"
+intent: >-
+  Restore scripts/platform_roadmap_state.py to its 100% coverage floor by un-shadowing the two
+  negative-path fixtures PR #938's pre-filter silently bypassed, and close the escape class that
+  let the regression reach main by giving the coverage floor a server-side pre-merge gate.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-coverage-gate-presubmit.yaml
+phase: >-
+  CI-RCA corrective + preventive for the coverage-gate escape class (rec-3211, rec-3212). Adjacent
+  to T3.7 (Validation-suite meta-validation, deferred_post_mvp, gated on CD.30 pending) but does not
+  claim or close it: this plan adds a pre-merge coverage gate, not mutation testing or dead-test
+  detection.
+scope:
+  - file: tests/platform_roadmap_state/test_state_dict_and_feeds.py
+    action: Modify
+    purpose: >-
+      Un-shadow the two negative-path fixtures whose plan-file text stopped carrying the
+      `closes_criteria` substring after PR #938's pre-filter landed, and pin each to the path it
+      claims to exercise (assert yaml.safe_load was actually reached) instead of asserting only the
+      outcome, which the fast path produces identically.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add a single-purpose `--coverage-only` tier flag that dispatches ONLY validate_test_coverage
+      against the diff and exits with its status. Modelled on the existing `--terraform-only` flag,
+      which exists for exactly this reason (serve one CI job without dragging in a whole tier).
+  - file: tests/validate/test_coverage_only.py
+    action: Create
+    purpose: >-
+      Cover the new flag's behaviour in its own module, exactly as --terraform-only has
+      tests/validate/test_terraform_checks.py: dispatches only validate_test_coverage, exits 0 on a
+      source-free diff, exits non-zero on a below-floor file, and reports an unmeasurable
+      diff-touched file distinctly rather than passing silently. A new file rather than an extension
+      of tests/validate/test_scaffold_gates.py because that file sits at 456 SLOC against the
+      500 limit and Decision 128 makes decomposition the default response, never a budget raise.
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: >-
+      Add a coverage-gate step to the existing pr-validate job invoking `--coverage-only`, so the
+      100% floor is enforced pre-merge. A step (not a new job) deliberately: signal-green's `needs`
+      list is a documented INVARIANT covering every required pull_request-triggered check, and a new
+      job would silently fall outside it.
+bundled_recommendations:
+  - rec-3211
+  - rec-3212
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/platform_roadmap_state.py measures 100.0% line coverage under tests/platform_roadmap_state.
+  - >-
+    test_malformed_plan_skipped and test_plan_yaml_top_level_not_dict_skipped each assert that
+    yaml.safe_load was reached, so either test fails if its intended branch stops being exercised --
+    the failure mode that produced this incident silently.
+  - >-
+    `bin/venv-python -m scripts.validate --coverage-only` dispatches validate_test_coverage and no
+    other check, and exits 0 when the diff touches no source files.
+  - >-
+    `--coverage-only` exits non-zero when a diff-touched source file measures below its floor
+    (100%, or its config/coverage_baseline.yaml entry where one exists).
+  - >-
+    A diff-touched source file that cannot be measured under the pr-validate dependency set is
+    reported distinctly and loudly in the step output; it is never silently treated as a pass.
+  - The pr-validate job invokes --coverage-only, so a coverage regression is refused before merge.
+  - "rec-3211 and rec-3212 are closed via the Resolves: trailer."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Measure the previously-failing file against its floor -- the direct corrective proof, and the
+      standing discriminator against re-shadowing (any future fixture that stops reaching its branch
+      drops this below 100 again).
+    command: bin/venv-python -m pytest tests/platform_roadmap_state --cov=scripts.platform_roadmap_state --cov-report=term-missing --cov-fail-under=100 -q
+    expected: >-
+      Exit 0; term-missing reports scripts/platform_roadmap_state.py at 100% with an empty Missing
+      column. Lines 115 and 125-126 specifically are no longer listed.
+    fix_if: >-
+      Still 98.6% with 115/125-126 missing means the fixture text still lacks the `closes_criteria`
+      substring, so the pre-filter at line 112 is still short-circuiting them. Do NOT follow
+      rec-3212's prescription (a fixture whose text OMITS the substring) -- that targets line
+      111-112, which is already covered, and will not move this number.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Graduating this as a standing registry check would duplicate validate_test_coverage's own
+      floor enforcement, which this plan is simultaneously promoting to the pre-merge tier. The
+      guard belongs in the gate, not beside it. It also costs ~145s per file, well outside the
+      cheap-standing-check bar.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the two un-shadowed tests and confirm the path-pinning assertion holds -- they must prove
+      they reached yaml.safe_load, not merely that the result was unchanged.
+    command: bin/venv-python -m pytest tests/platform_roadmap_state/test_state_dict_and_feeds.py -k "malformed_plan_skipped or top_level_not_dict" -q
+    expected: Both tests pass, each asserting the safe_load spy was called.
+    fix_if: >-
+      A test passing without the spy assertion means the pin was not added and the test is still
+      outcome-only -- it would survive re-shadowing exactly as it did in PR #938.
+    hermetic: false
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm --coverage-only dispatches ONLY validate_test_coverage, and that it is a genuine
+      no-op-and-exit-0 when the diff carries no source changes.
+    command: bin/venv-python -m scripts.validate --coverage-only
+    expected: >-
+      Prints the "=== Test coverage check ===" banner and no other check's banner; on a
+      docs/plans-only diff prints "No source file changes to check." and exits 0.
+    fix_if: >-
+      Other check banners appearing means the flag fell through to a full-tier path instead of
+      dispatching the single check; a non-zero exit on a source-free diff means the no-change path
+      is not short-circuiting.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: validate-coverage-only-flag-dispatches-single-check
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Exercise the flag's failure and unmeasurable paths under unit test -- a below-floor file must
+      exit non-zero, and an unmeasurable file must be reported distinctly rather than passing.
+    command: bin/venv-python -m pytest tests/validate/test_coverage_only.py -q
+    expected: >-
+      All new coverage_only cases pass, including the below-floor non-zero exit and the
+      unmeasurable-file distinct-report case.
+    fix_if: >-
+      An unmeasurable file silently passing reproduces the vacuity hole open rec-3163 tracks -- the
+      gate would then be present but toothless on exactly the files it cannot measure.
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm the pr-validate job actually invokes the flag (CI wiring is grep-verified locally and
+      CI-delegated per Decision 119).
+    command: |-
+      sed -n '/^  pr-validate:/,/^  main-validate:/p' .github/workflows/ci.yml | grep -q -- '--coverage-only'
+    expected: Exit 0 -- the --coverage-only invocation appears inside the pr-validate job body.
+    fix_if: >-
+      Absent, or present only after the main-validate boundary, means the gate was wired to the
+      post-merge job again and the escape class is untouched.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-pr-validate-invokes-coverage-only
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the new tier flag did not disturb check accounting (a new dispatch mode can change
+      the examined()/skipped() ledger Decision 170 governs).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0, including validate_check_accounting, within the 300s fast-tier budget.
+    fix_if: >-
+      An accounting failure means the new mode opened an outcome_scope without a matching
+      declaration; a budget breach means coverage work leaked into the fast tier, which this design
+      exists specifically to avoid.
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: post-deploy
+    action: >-
+      After merge, confirm the two bundled CI-RCA recs actually closed via the Resolves: trailer.
+    command: |-
+      bin/venv-python -m scripts.sync.ops pull && grep -cE '"id": "rec-(3211|3212)".*"status": "closed"' logs/.recommendations-log.jsonl
+    expected: Prints 2.
+    fix_if: >-
+      Fewer than 2 means rec-autoclose.yml did not fire; fall back to the documented
+      ops_data_portal --update-rec path per Decision 70.
+test_obligations:
+  - source: scripts/validate.py
+    behavior: >-
+      --coverage-only dispatches validate_test_coverage alone, exits non-zero on a below-floor
+      diff-touched file, and reports an unmeasurable file distinctly instead of passing it.
+    verification_step: 4
+    test_selector: tests/validate/test_coverage_only.py::TestCoverageOnlyFlag
+    red_green_expectation: >-
+      Red before: neither the flag nor the module exists -- `bin/venv-python -m scripts.validate
+      --coverage-only` exits 2 with "unrecognized arguments" (reproduced live this session). Green
+      after: all cases pass, including the below-floor non-zero exit.
+  - source: tests/platform_roadmap_state/test_state_dict_and_feeds.py
+    behavior: >-
+      The two negative-path tests stay bound to the branch they name, so a future short-circuit
+      above them fails the suite instead of silently un-reaching it.
+    verification_step: 1
+    test_selector: tests/platform_roadmap_state/test_state_dict_and_feeds.py::TestComputeFollowonStateMalformedPlanShapes
+    red_green_expectation: >-
+      Red before: coverage measures 98.58% with lines 115 and 125-126 missing (reproduced live this
+      session). Green after: 100.0%, empty Missing column. The coverage number is itself the
+      discriminator -- re-shadowing these fixtures reproduces the red.
+  - source: .github/workflows/ci.yml
+    behavior: The pr-validate job invokes the coverage gate before merge.
+    verification_step: 5
+    command: |-
+      sed -n '/^  pr-validate:/,/^  main-validate:/p' .github/workflows/ci.yml | grep -q -- '--coverage-only'
+    waiver_reason: >-
+      Workflow YAML is not unit-testable in-process; Decision 119 makes CI the authoritative
+      verifier for workflow wiring, with a local grep-shaped presence assertion standing in.
+constraints:
+  - >-
+    Do NOT promote validate_test_coverage to the --pre tier via pre=True in
+    scripts/checks/misc/_manifest.py. _FAST_TIER_BUDGET_SECONDS is 300 and a single file's
+    measurement takes ~145s (a pytest subprocess is forked per changed source file); rec-2987
+    records a real 5.5-min fast-tier breach on a branch attempting exactly this. That budget
+    conflict is why the fix has stalled three times -- the pr-validate job's 30-minute timeout is
+    the headroom this design uses instead.
+  - >-
+    scripts/validate.py stays the single source of truth for checks (AGENTS.md): ci.yml invokes a
+    validate.py tier flag and defines no check of its own. This mirrors --terraform-only /
+    terraform-validate exactly.
+  - >-
+    Add a STEP to the existing pr-validate job, not a new job. signal-green's `needs: [pr-validate,
+    terraform-validate]` carries a documented INVARIANT that every required pull_request-triggered
+    check appears in that list; a new job would sit outside the green-wake gate.
+  - >-
+    Do not lower the floor. config/coverage_baseline.yaml is a one-time Decision 159 grandfather
+    roster, and registering a new sub-100 entry requires a `# baseline-lowered: dec-NNN` marker
+    enforced by validate_coverage_baseline_edits. Registering platform_roadmap_state.py to make the
+    red go away is the explicitly forbidden path.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Deferred imports only in scripts/validate.py (Decision 169) -- a module-level import of a
+    check-defining module breaks the import-closure gate.
+context:
+  - >-
+    Root cause is fixture shadowing, not a missing test. PR #938 (722df85) added a substring
+    pre-filter at scripts/platform_roadmap_state.py:111-112 (`if "closes_criteria" not in text:
+    continue`). Two pre-existing fixtures write plan text lacking that substring:
+    test_malformed_plan_skipped ("invalid: [yaml: {content", sole coverer of the `except Exception:
+    continue` at 125-126) and test_plan_yaml_top_level_not_dict_skipped ("- a\n- b\n", sole coverer
+    of the `continue` at 115). Both now short-circuit at line 112 before the code they were written
+    to exercise. They still PASS, because they assert only on the result, which the fast path
+    produces identically -- the suite went green while the branches went dark.
+  - >-
+    rec-3212's stated root cause is inverted and must not be followed. It claims line 111-112 is the
+    uncovered branch and prescribes adding a fixture whose text OMITS `closes_criteria`. In fact
+    111-112 is well covered -- by those two fixtures plus the dedicated TestKeylessPlanSkipsYamlParse
+    class. Implementing rec-3212 as written adds a redundant fixture and leaves coverage at 98.58%.
+    Verified live this session by probe -- substring-carrying variants of both shapes flip the miss
+    set so 115/125-126 become covered.
+  - >-
+    Detection gap: validate_test_coverage is registered in scripts/checks/misc/_manifest.py with
+    full_segment="full_after_lint" and no pre=True. pre_sequence() carries 83 checks and this is not
+    one of them, so the 100% floor is enforced ONLY post-merge (main-validate / Main Canary). Every
+    coverage regression is structurally guaranteed to land on main first.
+  - >-
+    This escape class has been filed four times. rec-2970 (2026-08-03) diagnosed it exactly and was
+    closed on a non-discriminating probe (`grep -n validate_test_coverage scripts/checks/registry.py`
+    -- satisfied by the pre-existing full-tier registration whether or not the check ever moved).
+    rec-3043/3044 (08-05) and rec-3147 (08-15) closed corrective-only. rec-3163 (08-16, open) was
+    filed explicitly as the live owner so a third recurrence would have an artifact to point at;
+    rec-3211/3212 is that recurrence. The probe-hygiene meta-cause is filed separately as rec-3220
+    and is deliberately NOT in this plan's scope.
+  - >-
+    Known design tension, handled by acceptance criterion 5: pr-validate installs only
+    requirements-fast.txt + requirements-dev.txt, so a diff-touched source file whose mapped tests
+    need heavy deps may be unmeasurable there. scripts/checks/misc/coverage_baseline.py's
+    measure_and_check sets pct None and continues when no .coverage.json is produced, but appends a
+    hard "0% coverage (no tests exercise this file)" error when a report exists with no matching
+    entry -- so both a silent-pass hole and a false-red are reachable. The flag must report
+    unmeasurable files distinctly. This composes with open rec-3163's examined()-vacuity alarm
+    rather than competing with it; rec-3163 stays open and is not bundled.
+  - >-
+    Adjacent roadmap item T3.7 (mutation testing + deterministic dead-test detection + diff-coverage
+    ratchet) is deferred_post_mvp and gated on CD.30 (pending). T3.7 is the proper systemic owner of
+    the dead-test hazard; the path-pinning in this plan is a local instance of that idea, not a
+    substitute, and this plan claims no T3.7 criteria.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness: 0 behind, 0
+    ahead), so no Main Divergence Assessment deferral applies.
+  - "Decision-scout verdict + CITE list (verbatim decision ids)"
+  - "gates: decision-scout=<verdict>; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    tests/platform_roadmap_state/test_state_dict_and_feeds.py -- give
+    test_plan_yaml_top_level_not_dict_skipped's fixture text a `closes_criteria` token while keeping
+    it a non-dict at the top level (e.g. a YAML list whose first entry is the literal
+    `closes_criteria`), and give test_malformed_plan_skipped's fixture text the token while keeping
+    it unparseable (e.g. `closes_criteria: [T-1: {`). Do not weaken either existing assertion.
+  - >-
+    tests/platform_roadmap_state/test_state_dict_and_feeds.py -- pin each of those two tests to its
+    path: install a spy over yaml.safe_load for the duration of the call and assert it was invoked,
+    so the test fails if a future short-circuit above it stops the branch being reached. Keep the
+    existing result assertions alongside the pin.
+  - >-
+    scripts/validate.py -- add a `--coverage-only` argparse flag (help text mirroring
+    --terraform-only's single-job framing), include it in the tier-selection guard at the
+    `if not any((args.pre, args.verifier_coverage, args.terraform_only, args.update_sloc_budgets))`
+    site so it does not fall through to the full tier, and dispatch validate_test_coverage alone via
+    a deferred import (Decision 169), exiting non-zero iff it appended a failure.
+  - >-
+    scripts/validate.py -- ensure an unmeasurable diff-touched source file is surfaced distinctly in
+    the flag's output rather than folded into a silent pass (acceptance criterion 5), and that the
+    mode makes its Decision 170 examined()/skipped() declaration.
+  - >-
+    tests/validate/test_coverage_only.py -- create with TestCoverageOnlyFlag, modelled on
+    tests/validate/test_terraform_checks.py (the sibling single-purpose-flag suite) and on
+    test_verifier_coverage_flag_runs_report_and_exits_zero's monkeypatched-dispatch shape: assert
+    single-check dispatch, exit 0 on a source-free diff, non-zero on a below-floor file, and the
+    unmeasurable-file distinct report.
+  - >-
+    .github/workflows/ci.yml -- add a coverage-gate step to the pr-validate job after the existing
+    `--pre` step, invoking `python -m scripts.validate --coverage-only`, with a comment naming why
+    it is a step rather than a job (signal-green needs invariant) and why it is not in the fast tier
+    (300s budget vs ~145s per file).
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Revert the ci.yml step to restore the prior pre-merge behaviour (post-merge enforcement continues
+  unchanged via main-validate); the test-fixture and --coverage-only changes are independently
+  revertible and carry no runtime coupling.
