@@ -1,0 +1,1444 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "executor-two-plane-roadmap-encoding"
+intent: >-
+  Encode the operator's Two-Plane Executor design into the platform roadmap; amend Decision 87 to
+  break the plan-residency circularity the design exposes AND to collapse its proposed two-table
+  plans split onto the ONE plans table that already exists; and complete decision-entry.yaml's
+  routing table with the missing work-item row, so a roadmap entry can carry a rec id instead of a
+  paragraph.
+  The design stays in its hosted artifact (Decision 86). This plan selects NO substrate -- the
+  decision_scout spike does that, after this encoding, and this is what gives it a properly-specified
+  candidate to test.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-executor-two-plane-roadmap-encoding.yaml
+phase: >-
+  Platform T4 (executor). Roadmap-and-governance precursor to T4.1/T4.2 and to the layer-2 substrate
+  spike, which this plan gives an owner and sequences after itself.
+
+fallback_reevaluation:
+  reevaluated_on: "2026-08-18"
+  substrate_status: >-
+    CD.27's layer-2 incumbent remains the incumbent. This plan records the two-plane design as a
+    CANDIDATE and selects nothing. The decision_scout spike -- named as the resolving instrument by
+    CD.27's own ESB-04, ESB-06 and ESB-01 preconditions -- has not run.
+  verdict: continue_on_current_substrate
+  basis: >-
+    An earlier draft recorded obligation_lapsed while also retiring the spike. That was doubly wrong:
+    the lapse_condition fires only "if wave 5's Q5 spike pins a layer-2 substrate", so the claim
+    rested on a trigger whose instrument the same plan deleted, and CD.27 would have become formally
+    unratifiable because every declared precondition requires discharge. The spike is kept and owned.
+    Until it runs, the incumbent stands and no obligation lapses.
+
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      The encoding. Records the two-plane design as a CANDIDATE (no selection anywhere); gives the
+      layer-2 spike an owning tier item sequenced before T4.2; adds the MVP-critical items the design
+      needs with reverse dependency edges; routes the design's open register onto exit_criteria; and
+      sweeps the stale-substrate class across every sibling site in lifecycle-tracked fields. Also
+      amends T4.5, T4.6 and T4.7, whose LIFECYCLE-TRACKED FIELDS restate the Decision 87 clauses this
+      plan corrects -- round 2 amended the Decision and left the items contradicting it, and T4.5
+      additionally names two tables that do not exist, so its intent is re-pointed at EXTENDING the one
+      live plans table rather than building new entities. The consolidation reaches further than the two
+      intents: verified on origin/main, `ops_plans` also survives in T4.6's exit_criteria AND
+      decomposition_hints and in T4.7's exit_criteria -- an item this plan named nowhere before round 4. Line budget: 8,616 lines of 10,000 on origin/main -- 1,384 lines of
+      headroom, which this plan's roadmap edits consume; re-measure after any rebase.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      AMEND DECISION 87, SCOPED TO RESIDENCY. Clause 2 times the git-to-warehouse flip to the
+      autonomous producer's existence; the producer cannot function until its plans are
+      warehouse-readable, so residency and producer are circular. The amendment makes warehouse
+      RESIDENCY of executor plans a prerequisite for T4.2 -- and explicitly leaves the AUTHORITY flip
+      for the human PLAN-*.yaml surface timed to T4.6. Round 2 conflated the two; a wholesale
+      inversion would supersede Decision 85's git-authoritative clause pre-producer and break diff
+      review of human plans for no gain. Executor plans are born warehouse-native and never had a git
+      life, so there is nothing to flip for them.
+      ALSO AMEND CLAUSE 4, SCOPED TO THE PLANS TABLE: clause 4 splits plan state across `ops_plans`
+      and `ops_plan_revisions`, NEITHER OF WHICH EXISTS (verified: absent from
+      config/lambda/ducklake/field_semantics.yaml's ops_tables, absent from
+      docs/contracts/storage-substrate.yaml, referenced by zero lines of code). The live table is
+      `ops_execution_plans`, which already carries plan_text, steps, revision, status and
+      critique_history. Per the operator's ruling there is ONE plans table: clause 4 is amended to
+      name a single plans table, the two-table split is retired as retired-before-built, and the
+      surviving NAME IS DECIDED -- it is `ops_execution_plans`. The operator preferred `ops_plans` on
+      the merits and subordinated that preference to the tiebreaker "whatever is easiest to
+      standardise to is the correct answer"; measured at 469e19d, `ops_execution_plans` has 278 matching
+      lines across 80 files, 32 of them load-bearing, and is the only name with any
+      enforcement surface (terraform, field_semantics, .importlinter, the verification and data-quality registries, the portal and sync modules, 12
+      test modules), while `ops_plans` has 30 prose-only lines across 8
+      files, none load-bearing, and appears in no schema, terraform, code, config or test
+      file. THE RETIREMENT RATIONALE MUST NAME THE RIGHT
+      TARGET: `ops_plan_revisions` was never a history table, so "SCD2 already gives per-revision
+      history" argues past it. Clause 4 calls it "machine-actionable revision directives (the
+      imperative: change X -> Y), authored by the critique agent for planning-agent consumption", its
+      verb is `insert_revision`, and T4.6's own intent names its consumer as "plan_agent reads its
+      open-revision inbox" -- a critic-authored DIRECTIVE INBOX. The consolidation still holds, but
+      because `critique_history` on the single plan row is the directive's home under the
+      critic/gate authorship boundary this plan installs. An amended Decision carrying a visibly wrong
+      rationale invites exactly the re-litigation Decision 87 exists to prevent.
+      CLAUSE 5 IS THEREFORE NOT UNTOUCHED, as earlier rounds asserted: it grants critique personas
+      `insert_revision`, a verb whose target table this amendment retires. Clause 5's verb-RBAC PRINCIPLE
+      (writer-layer role scoping) survives intact, but the verb itself is re-pointed at the
+      critique-append verb on the single plans table.
+  - file: docs/contracts/decision-entry.yaml
+    action: Modify
+    purpose: >-
+      COMPLETE THE ROUTING TABLE rather than add a second router. significance.routing already carries
+      four rows deciding where content goes -- numbered_decision, cd_state_flip, operational_fact,
+      field_semantics -- and operational_fact already routes to "a recommendation via file_rec, or a
+      tier_item progress_note". The gap is a row for durable sequencing work. Round 2 proposed a
+      standalone contract, which cannot land: the `none_grandfathered` evaluator kind no longer
+      exists, so every new depth-1 Class D contract needs a RESOLVING evaluator with no debt-record
+      escape hatch, and no in-scope surface could serve as one -- declaring a check would have been a
+      second new mechanism. Extending this file inherits its working evaluator
+      (validate_decision_entry_conformance) and removes the two-routers contradiction in the same
+      edit. NOTE THE ATTRIBUTION: Decision 168 clause 3 PERMITTED `absent -> none_grandfathered` on
+      baseline-present files; the kind was RETIRED by rec-3059 wave 2 on 2026-08-16
+      (PLAN-class-d-enforcers-wave-2), recorded in docs/contracts/contract-population.yaml's
+      2026-08-16 amendment_log entry and retirement_notes.evaluator_none_grandfathered. Editing this
+      file also OBLIGES a new `amendment_log[]` entry: decision-entry.yaml is Class D (see its
+      `contract:` block) with an existing amendment_log at :34, and contract-population.yaml's
+      change_detection.amendment_log rule fails validate_contract_drift when a Class D file's
+      canonical dump changes with no new entry.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: >-
+      Regenerate. Amending Decision 87 stales the committed index and
+      validate_decisions_index_freshness fails on drift. Mechanical consequence of the amendment, not
+      a separate change.
+
+bundled_recommendations: []
+closes_criteria: []
+implementation_declared: true
+
+infrastructure_dependencies:
+  - >-
+    Ops-portal reachability for every recommendation filing in the execution steps -- the out-of-file
+    repairs, the dossier entries routed to recs, and the out-of-scope four-rows sites. Referenced by
+    NAME, not by step number: this plan adds steps, and a numeric range stales on the next edit.
+    Portal calls, not file edits -- which is why single-file scope never excused parking out-of-file
+    repairs in an unread register. A write that cannot complete FAILS LOUD; there is no offline
+    outbox, so re-file after restoring connectivity rather than deferring the reference.
+
+acceptance_criteria:
+  - "Decision 87's amendment scopes the inversion to RESIDENCY and states that the AUTHORITY flip for the human planning surface stays timed to T4.6."
+  - "T4.5 and T4.6's own intents are amended to match -- round 2 amended the Decision and left the items restating the superseded clause."
+  - "The one-plans-table consolidation reaches every LIFECYCLE-TRACKED field that carries the retired split, not just the two intents: T4.6's exit_criteria and decomposition_hints and T4.7's exit_criteria included. The out-of-scope tail (docs/DECISIONS.md :1874/:1876, docs/contracts/exit-criteria-ledger.yaml:46) is filed as a rec referenced by id, never fixed inline."
+  - "Clause 4's retirement rationale names the right target: ops_plan_revisions was a critic-authored DIRECTIVE INBOX, not a history table, and the consolidation holds because critique_history is the directive home -- not because SCD2 supplies per-revision history."
+  - "Clause 5's insert_revision grant is re-pointed at the critique-append verb on the single plans table; the plan no longer asserts clause 5 is untouched by the consolidation."
+  - "T4.5 carries the business-key generalization: the live table's merge_key is rec_id alone and human plans have no rec_id, so its builder is told not to assume rec_id suffices as the business key."
+  - "decision-entry.yaml's significance.routing gains a work-item row, and routing_rule's QUESTION (3) row enumeration is extended to include work_item -- keeping THREE questions, so the question-counts at :403, :406 and :412 do not stale."
+  - "The routing row states the migration direction: recommendations are the destination form, the roadmap is the bootstrap, and the row names what the roadmap uniquely provides TODAY so the boundary moves as recs gain those capabilities."
+  - "The routing table resolves 'deliberate deferral with a reason' -- round 2's three buckets could not, while the plan's own acceptance criteria required it."
+  - "No roadmap field asserts a selected layer-2 substrate."
+  - "A tier item owns the layer-2 spike, and CD.27's precondition text names that item's id, so ESB-04 / ESB-06 / ESB-01 can discharge against something that exists."
+  - "The spike's exit criteria require a workspace-mutating leg and an unstubbed dispatch credential on the candidate arm."
+  - "Lifecycle-tracked T4 fields carry CD.27's substrate-neutral P1/P2/P3 property language; candidate-specific mechanism is confined to the candidate decision body."
+  - "The stale-substrate sweep detects every declared site, including the 'Durable Lambdas' phrasing and the name and intent fields, not only exit_criteria."
+  - "The verb-RBAC obligation names its carrying item and lands as an exit criterion; a content pin is the MVP-side guarantee and the verb split routes to T4.5/T4.6."
+  - "The read verb's spec requires pinning a writer-minted id or content hash, because merge_key is rec_id alone and a re-dispatched writer can emit the same revision twice."
+  - "The dossier's eight 'Also unspecified' entries each resolve to a tier item, a rec id, or a recorded deferral."
+  - "Every GOV/MECH/DATA/OPS identifier resolves to a lifecycle-tracked field, not intent prose."
+  - "Newly filed rec ids are referenced from the roadmap -- asserted against origin/main's set, not against a non-empty count."
+  - "A merge-node diff-path guard covers .github/workflows/** and the Decision 117 boundary patterns."
+  - "The roadmap stays under the 10,000-line ceiling."
+  - "Decision 87 clause 4 names exactly ONE plans table, `ops_execution_plans`, and the retired name is swept out of the WHOLE entry rather than clause 4 alone -- clause 3's read-projection sentence at :4581, clause 4's bullet at :4583, clause 6's grain sentence at :4590 and the Rationale at :4593, each RE-POINTED rather than deleted. The two-table split (a separate plans table plus ops_plan_revisions) is recorded as retired-before-built, with no migration and nothing to delete because neither table was ever created, and the retired token itself is not written back into the entry."
+  - "T4.5's intent is re-pointed at EXTENDING the one live plans table; it no longer instructs a builder to create ops_plans and ops_plan_revisions as new entities."
+  - "The plans-table NAME is DECIDED and bound: the single plans table is `ops_execution_plans`, and the prevalence measurement that decided it (278 matching lines across 80 files, 32 of them load-bearing, the implemented name and the only one carrying terraform, field_semantics, .importlinter, registry and 12-test-module enforcement, against 30 prose-only lines across 8 files for the REJECTED alternative name, none load-bearing) is recorded as the rationale, phrased WITHOUT writing the retired token back into the Decision 87 entry, which VP step 2's absence leg forbids. No surface leaves the name open, and the refuted empty-table `a rename is free today` argument appears nowhere."
+  - "The encoding states that the warehouse row is the SOLE plan artifact -- the design's stage-04 S3 plan document is recorded as considered-and-rejected, not transcribed. The plan_s3_uri / plan-document-to-S3 vocabulary ALREADY RESIDENT in the roadmap (CD.27 detail, T4.1 intent, T4.2 intent) is re-pointed as considered-and-rejected in place; refraining from importing it is not sufficient. BOTH HALVES of each carrier field are re-pointed: the state machine carries identifiers only and no LLM-authored payload crosses it, so T4.1's `plan_summary` and T4.2's `plan summary` are re-pointed with payload-specific wording alongside the URI half."
+  - "The encoding states that a critique verdict is written by the critic or the gate, never by the critiqued persona, and that the content pin's hash is scoped to the plan body EXCLUDING critique_history."
+  - "The new work_item routing row carries the literal string `Never a numbered Decision`, so significance.value: work_item cannot be claimed on a numbered Decision entry."
+  - "Every routing-COUNT statement inside decision-entry.yaml is corrected when the fifth row lands -- in BOTH directions: the four `four rows` / `four keys` undercounts at :364, :377, :382 and :408 AND :387's `for symmetry with the other three`, which a `four` search never reaches. Each out-of-scope site (AGENTS.md :197/:201, the Decision 150 body at :1164 and :1171, Decision 167's Problem line at :220 and clause 2 at :224, the planning skill at :376 and :382) is filed as a rec referenced by id."
+  - "The three design items that carry no open-register identifier -- the read-path Neon cold-resume retry posture, the plans-table NAME ruling (`ops_execution_plans`), and the critique-authorship boundary with its critique_history-excluding content pin -- each land in a TIER-ITEM EXIT CRITERION, and the critique-authorship one in a SINGLE exit criterion, so neither the GOV/MECH/DATA/OPS routing step, nor a token split across criteria, nor the mandated candidate-decision write-up can silently discharge them. Stating them in the candidate decision as well is required elsewhere and is NOT sufficient here: VP step 10's design corpus is exit criteria only, precisely because the execution steps mandate this vocabulary into the candidate decision's detail and a CD detail is one unsplit blob."
+  - "docs/contracts/decision-entry.yaml gains a new amendment_log[] entry in the same edit that changes any other top-level key."
+  - "Every hermetic verification command has a RECORDED per-assertion fault-injection result -- origin/main (waived only for the declared regression guards), subject-removed fixture, decoy fixture."
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Full presubmit tier. Schema, dependency graph, contract conformance, decisions index and placement all gate here.
+    command: bin/venv-python -m scripts.validate
+    expected: "Exit 0, `All checks passed`."
+    fix_if: >-
+      A stale docs/decisions-index.json fails validate_decisions_index_freshness with a regenerate
+      hint. A timeout is timeout_disposition blocked: resume the named check and rerun from the start.
+    hermetic: false
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      THE AMENDMENT IS RESIDENCY-SCOPED, CLAUSE 4 IS CONSOLIDATED, AND THE PLANS-TABLE NAME IS SWEPT INSIDE THE
+      DECISION ITSELF. Round 2 asserted markers already present in Decision 87 (sixteen [Amendment markers exist, and
+      T4.5 already appears in Related), so two of its four legs were dead. This asserts only what is genuinely new,
+      and asserts the SCOPE. The AUTHORITY leg is paragraph-scoped on purpose: the bare word authority already occurs
+      in Decision 87 on origin/main, so authority and T4.6 must co-occur in one paragraph or the leg proves nothing.
+      The next three legs are the clause-4 consolidation, which round 3 bound through PROSE ONLY -- ops_plans,
+      ops_plan_revisions, clause 4, retired-before-built and critique_history appeared ZERO times in the whole
+      verification_plan, which is the exact shape that failed three consecutive rounds. The ops_plan_revisions leg is
+      proximity-scoped at 200 chars for the same reason step 6's is: retirement framing dropped in the Rationale does
+      not retire a clause-4 bullet 400 chars away, and a fixture proved it did not. THE LAST FOUR LEGS ARE NEW THIS
+      ROUND, and they exist because everything above is FRAMING -- round 5 asserted the amendment's vocabulary and
+      never once asserted its substance. (i) THE HEADLINE RULING, that the single plans table is ops_execution_plans,
+      was machine-checked in the ROADMAP by step 3's two-sided sweep and NOWHERE in docs/DECISIONS.md: an
+      implementation could amend clause 4 perfectly, leave clauses 3 and 6 naming the table the same entry had just
+      retired, never write ops_execution_plans into Decision 87 at all, and stay green. That is round 2's defect --
+      amend the Decision, leave the restatements -- reproduced two clauses over, INSIDE the Decision. So the sweep is
+      two-sided here exactly as it is in step 3. Absence half: \bops_plans\b, a word-boundary regex that does NOT
+      match ops_execution_plans, must be gone from the entry, and the message reports the docs/DECISIONS.md line
+      number of every survivor. Presence half: ops_execution_plans must appear in the entry, so a sweep that DELETES
+      the name instead of re-pointing it cannot green the leg. Both halves are ENTRY-SCOPED, not file-scoped, and that
+      is fault-injected rather than asserted: Decision 136 carries bare ops_plans at :1874/:1876 which this plan files
+      as a rec rather than edits, the pass fixture keeps them and the absence half stays green, and the
+      elsewhere-decoy plants ops_execution_plans in Decision 136 alone and the presence half stays red. (ii) THE
+      RETIREMENT RATIONALE leg. ops_plan_revisions was a critic-authored DIRECTIVE INBOX, not a history table, so an
+      amendment reasoned as "SCD2 already gives per-revision history" is visibly wrong and invites the re-litigation
+      Decision 87 exists to prevent. critique_history must therefore appear within 600 chars of the
+      retired-before-built framing -- proximity-scoped, because the right word parked in the Problem paragraph is not
+      the retirement's reason. (iii) THE CLAUSE-5 leg. Clause 5 grants critique personas insert_revision, a verb whose
+      target table this amendment retires, and insert_revision appeared ZERO times in the whole verification_plan
+      before this round. Every insert_revision occurrence in the entry must sit within 300 chars of retirement or
+      re-point framing, so leaving clause 5 bare fails even when clause 4 is perfect.
+    command: >-
+      bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8');
+      m=re.search(r'^## Decision 87:.*?(?=^## Decision |\Z)', t, re.M|re.S); assert m, 'Decision 87 missing';
+      b=m.group(0); ln=lambda q: t.count(chr(10), 0, m.start())+b.count(chr(10), 0, q)+1; assert
+      re.search(r'residenc', b, re.I), 'the amendment does not scope the inversion to residency'; assert
+      re.search(r'prerequisite', b, re.I), 'the amendment does not state the prerequisite'; assert [p for p in
+      re.split(r'\n\s*\n', b) if re.search(r'authority', p, re.I) and re.search(r'T4\.6', p)], 'no single paragraph
+      states that the AUTHORITY flip stays timed to T4.6 -- the bare word authority is already present on origin/main,
+      so the two must co-occur'; assert re.search(r'circular', b, re.I), 'the amendment does not name the
+      circularity'; assert re.search(r'retired-before-built|retired\s+before\s+built', b, re.I), 'clause 4 carries no
+      retired-before-built framing -- the two-table split was not retired'; assert
+      re.search(r'(single|one)\s+plans\s+table', b, re.I), 'clause 4 does not name a SINGLE plans table';
+      unret=[m.start() for m in re.finditer(r'ops_plan_revisions', b) if not re.search(r'(retired|retirement|no
+      longer|superseded|consolidat|single plans table|one plans table)', b[max(0, m.start()-200):m.end()+200], re.I)];
+      assert not unret, f'Decision 87 still names ops_plan_revisions at {unret} with no retirement framing within 200
+      chars -- clause 4 still instructs a two-table build'; bare=sorted(ln(x.start()) for x in
+      re.finditer(r'\bops_plans\b', b)); assert not bare, f'the retired name ops_plans still stands INSIDE the
+      Decision 87 entry at docs/DECISIONS.md lines {bare} -- the amendment names ONE plans table and the operator
+      ruled it is ops_execution_plans, so EVERY in-entry site is re-pointed, not just clause 4 (the four carried on
+      origin/main are clause 3 read-projection :4581, clause 4 bullet :4583, clause 6 grain :4590, Rationale :4593)';
+      assert 'ops_execution_plans' in b, 'the Decision 87 entry names NO plans table at all -- ops_plans was swept out
+      of the entry but ops_execution_plans was never written in, so the sweep DELETED the name instead of re-pointing
+      it'; rbb=[x for x in re.finditer(r'retired-before-built|retired\s+before\s+built', b, re.I)]; assert
+      any(re.search(r'critique_history', b[max(0, x.start()-600):x.end()+600]) for x in rbb), 'the
+      retired-before-built framing does not name critique_history within 600 chars -- ops_plan_revisions was a
+      critic-authored DIRECTIVE INBOX, not a history table, so the consolidation must hold because critique_history on
+      the single plan row is the directive home, NOT because SCD2 already gives per-revision history';
+      unpt=sorted(ln(x.start()) for x in re.finditer(r'insert_revision', b) if not
+      re.search(r'(retire|re-point|repoint|no longer|superseded|consolidat|critique-append|single plans table|one
+      plans table)', b[max(0, x.start()-300):x.end()+300], re.I)); assert not unpt, f'Decision 87 still grants
+      insert_revision at docs/DECISIONS.md lines {unpt} with no retirement or re-point framing within 300 chars --
+      clause 5 grants a verb whose target table this amendment retires'; print('OK Decision 87 residency-scoped and
+      swept onto ops_execution_plans,', len(b.encode()), 'bytes')"
+    expected: >-
+      Exits 0 printing `OK Decision 87 residency-scoped and swept onto ops_execution_plans,` and a byte count. On
+      origin/main it exits 1 on the FIRST leg, residency absent -- verified, not assumed. Fault-injected both ways
+      against /tmp fixtures: with the amendment paragraph removed it fails on residency; with a decoy carrying
+      residency, prerequisite and circular but leaving authority only in the paragraph that already holds it on main,
+      it fails on the authority-and-T4.6 co-occurrence leg. Clause-4 legs fault-injected on their own fixtures: with
+      the clause-4 consolidation deleted it fails naming the missing retired-before-built framing; with a DECOY that
+      plants retired-before-built and single plans table in the Rationale while clause 4 still carries its
+      ops_plan_revisions directive bullet, it still fails, naming the offset of the unpointered mention. THE FOUR NEW
+      LEGS WERE FAULT-INJECTED AND THE RESULTS ARE RECORDED HERE, not promised. Seven scratch copies of
+      docs/DECISIONS.md, each an otherwise-final tree with one thing changed, run against the command above verbatim
+      (only the DECISIONS.md path substituted). Measured ON-TREE first, each new leg evaluated in isolation because
+      the residency leg fires before any of them: all four are RED on origin/main -- bare ops_plans at file lines
+      4581, 4583, 4590 and 4593; zero occurrences of ops_execution_plans anywhere in the entry; zero
+      retired-before-built sites, so no critique_history proximity; and one unframed insert_revision at :4589. (a)
+      SUBJECT-REMOVED, the amendment lands but the in-entry name is never swept: exit 1, "the retired name ops_plans
+      still stands INSIDE the Decision 87 entry at docs/DECISIONS.md lines [4581, 4583, 4590, 4593]". (b) WRONG-LEG
+      DECOY, only the clause-4 bullet re-pointed with clause 3, clause 6 and the Rationale left bare: exit 1, naming
+      exactly those three and no others -- "lines [4581, 4590, 4593]". (c) ELSEWHERE DECOY, ops_execution_plans
+      planted in Decision 136 but never written into Decision 87: exit 1 on the PRESENCE half, "the Decision 87 entry
+      names NO plans table at all" -- proving both halves read the Decision 87 block and not the whole file. (d)
+      DELETE-NOT-REPOINT DECOY, ops_plans removed from the entry but ops_execution_plans never introduced: the absence
+      half passes and the PRESENCE half fails, exit 1, same message. (e) SCD2-RATIONALE DECOY, the amendment written
+      with the wrong "SCD2 already gives per-revision history" reason: exit 1, "the retired-before-built framing does
+      not name critique_history within 600 chars". (f) FAR-critique_history DECOY, critique_history present in the
+      entry but parked in the Problem paragraph outside the window: exit 1, same message -- the leg is
+      proximity-scoped, not presence-scoped. (g) CLAUSE-5-UNTOUCHED DECOY, everything else lands and clause 5 still
+      grants the verb bare: exit 1, "Decision 87 still grants insert_revision at docs/DECISIONS.md lines [4589] with
+      no retirement or re-point framing within 300 chars". (h) PASS fixture, fully amended and swept: exit 0. The
+      seven pre-existing legs are held constant and GREEN across every one of (a) through (h) -- re-run alone as a
+      control on each fixture -- so each result isolates a NEW leg rather than being masked by an existing leg firing
+      first.
+    fix_if: >-
+      If the amendment inverts wholesale, human PLAN-*.yaml lose diff review for nothing. Executor plans are born
+      warehouse-native; there is nothing to flip for them. Put the authority sentence and T4.6 in the same paragraph
+      -- the leg is paragraph-scoped because the word alone is already there. If the ABSENCE half fails, the sweep
+      stopped at clause 4: re-point every surviving in-entry site -- clause 3's read-projection sentence at :4581,
+      clause 4's bullet at :4583, clause 6's grain sentence at :4590 and the Rationale at :4593 -- at
+      `ops_execution_plans`. Do not reintroduce an open-naming pointer, the name is ruled, and do not write the
+      retired name back into the entry even to say it is retired: describe the retired split as a separate plans table
+      plus `ops_plan_revisions`, which the retirement-framing leg already covers. If the PRESENCE half fails, the
+      entry was emptied rather than re-pointed: a Decision that told a builder to construct `ops_plans` must now tell
+      that builder to EXTEND `ops_execution_plans`, and saying nothing is not the same as saying that. If the
+      critique_history leg fails, the retirement rationale is aimed at the wrong target -- `ops_plan_revisions` was a
+      critic-authored DIRECTIVE INBOX, so write that `critique_history` on the single plan row IS the directive's
+      home, next to the retired-before-built framing rather than elsewhere in the entry; the SCD2 grain fact may stay
+      as a supporting fact but is not the reason. If the insert_revision leg fails, clause 5 still grants a verb
+      against a retired table: re-point it at the critique-append verb on the single plans table in the same edit.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts one Decision's amendment text; graduating it pins one entry's wording forever.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      T4.5, T4.6 AND T4.7 MOVE WITH THE DECISION. Round 2 amended the corpus and left the items restating the superseded
+      clause -- T4.5 intent still ends "no warehouse consumer of plans exists until the T4.6 loop", the exact sentence
+      this design falsifies. The acknowledgement leg is per-item and demands as-amended or residency wording, not a
+      bare Decision 87 reference: T4.6 already cites Decision 87 on origin/main, so a pooled Decision-87 grep would be
+      satisfied before the edit. The last two legs sweep the one-plans-table consolidation across the LIFECYCLE-TRACKED
+      fields, not just the intents -- this plan's own narrated round-2 failure, one field over. Verified on
+      origin/main: ops_plans survives in T4.6's exit_criteria AND decomposition_hints and in T4.7's exit_criteria (an
+      item the plan named nowhere until this round), so an implementation that fixed only the two intents would leave
+      three tracked fields instructing a builder to construct the entity the amendment just retired. The
+      ops_plan_revisions leg targets the RETIRED table, which is unambiguous. The NAME leg is INVERTED this round,
+      because the surviving name is DECIDED (`ops_execution_plans`, operator ruling on the prevalence measurement)
+      rather than open: it is a two-sided sweep assertion. Absence half -- `\bops_plans\b`, a word-boundary regex
+      that does NOT match `ops_execution_plans`, must be gone from all four tracked fields of all three items.
+      Presence half -- `ops_execution_plans` must appear in each of the EIGHT fields that carried `ops_plans` on
+      origin/main (T4.5 name, intent, exit_criteria and decomposition_hints; T4.6 intent, exit_criteria and
+      decomposition_hints; T4.7 exit_criteria), enumerated rather than counted so a sweep that DELETES the text
+      instead of re-pointing it cannot green the leg. Both halves are red on origin/main -- the absence half because
+      all eight fields carry the token, the presence half because none of the eight carries `ops_execution_plans` --
+      and both name the exact item.field that failed, so a one-field-over miss is reported as that field.
+      THE BUSINESS-KEY LEG IS NEW THIS ROUND and it exists because acceptance criterion 6 -- "T4.5 carries the
+      business-key generalization" -- was bound by an acceptance criterion and a constraint paragraph with NO
+      execution instruction and NO assertion anywhere. Measured before this round: business, generaliz, nullable and
+      plan-identity each matched ZERO times across the whole execution_steps block AND the whole verification_plan.
+      That is precisely the shape this plan's own history says failed three consecutive rounds, carried this far
+      unnoticed because the criterion reads as though the one-plans-table sweep covers it, and it does not. The
+      substance is load-bearing rather than cosmetic: config/lambda/ducklake/field_semantics.yaml gives
+      ops_execution_plans merge_key rec_id ALONE -- not (rec_id, revision) -- so a re-dispatched writer can emit
+      revision N twice with different bodies, and human plans have no rec_id at all (this very plan carries
+      bundled_recommendations: []). The leg demands ONE T4.5 tracked field carrying the merge-key/business-key
+      vocabulary, rec_id, and a generalization token TOGETHER, for the same reason step 10's design probes and step
+      12's guard demand single-criterion co-occurrence: three fields each holding one token instruct nobody. It
+      demands the NOTE, not the design -- the replacement key is deliberately NOT designed in this plan, it is T4.5's
+      data-model work.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t={x['id']: x for x in
+      d['tier_items']}; t45=str(t['T4.5'].get('intent','')); t46=str(t['T4.6'].get('intent','')); assert not
+      re.search(r'no warehouse\s+consumer of plans exists', t45), 'T4.5 still carries the deferral rationale this
+      design falsifies'; assert re.search(r'(as amended|residenc)', t45, re.I), 'T4.5 intent does not acknowledge the
+      amended clause -- a bare Decision 87 reference is already there on origin/main'; assert re.search(r'(as
+      amended|residenc)', t46, re.I), 'T4.6 intent does not acknowledge the amended clause -- a bare Decision 87
+      reference is already there on origin/main'; fields=('name','intent','exit_criteria','decomposition_hints');
+      ret=re.compile(r'(retired-before-built|retired|retirement|no longer|superseded|consolidat|single plans
+      table|one plans table)', re.I); bad=lambda pat, esc: {i: [k for k in fields if [m for m in
+      pat.finditer(str(t[i].get(k,''))) if not esc.search(str(t[i].get(k,''))[max(0, m.start()-200):m.end()+200])]]
+      for i in ('T4.5','T4.6','T4.7')}; rev={i: v for i, v in bad(re.compile(r'ops_plan_revisions'), ret).items() if
+      v}; assert not rev, f'the retired ops_plan_revisions still stands as a live entity in T4.5/T4.6/T4.7 tracked
+      fields with no retirement framing within 200 chars: {rev}'; left=sorted(f'{i}.{k}' for i in
+      ('T4.5','T4.6','T4.7') for k in fields if re.search(r'\bops_plans\b', str(t[i].get(k,'')))); assert not left,
+      f'the retired name ops_plans still stands in {left} -- Decision 87 clause 4 names ONE plans table and the
+      operator ruled it is ops_execution_plans (the implemented name: 278 lines / 80 files, 32 load-bearing across terraform,
+      field_semantics, .importlinter and 12 test modules; ops_plans is prose-only), so every tracked mention is
+      re-pointed'; carried={'T4.5': ('name','intent','exit_criteria','decomposition_hints'), 'T4.6':
+      ('intent','exit_criteria','decomposition_hints'), 'T4.7': ('exit_criteria',)}; miss=sorted(f'{i}.{k}' for i, ks
+      in carried.items() for k in ks if 'ops_execution_plans' not in str(t[i].get(k,''))); assert not miss, f'{miss}
+      carried ops_plans on origin/main and now names no plans table at all -- the sweep DELETED the text instead of
+      re-pointing it at ops_execution_plans'; bk=[k for k in fields if
+      re.search(r'(merge[_\s]key|business[_\s]key)', str(t['T4.5'].get(k,'')), re.I) and 'rec_id' in
+      str(t['T4.5'].get(k,'')) and re.search(r'(generaliz|no longer identifies|does not survive|not
+      sufficient|insufficient)', str(t['T4.5'].get(k,'')), re.I)]; assert bk, 'no SINGLE T4.5 tracked field carries
+      the business-key generalization: one field must name the merge key or business key, name rec_id, AND say the
+      key generalizes. The live table merge_key is rec_id ALONE and human plans have no rec_id, so once the one plans
+      table holds human plans as well as executor ones, rec_id stops identifying a row and a re-dispatched writer can
+      emit revision N twice with different bodies. Tokens split across three fields, or the same sentence parked on
+      T4.6, tell the T4.5 builder nothing. Do NOT design the replacement key here -- that is T4.5 data-model work';
+      print('OK T4.5/T4.6/T4.7 moved with the Decision and the plans
+      consolidation swept onto ops_execution_plans')"
+    expected: >-
+      Exits 0 printing `OK T4.5/T4.6/T4.7 moved with the Decision and the plans consolidation swept onto
+      ops_execution_plans`. On origin/main it exits 1 on the first leg -- the rationale is present verbatim (the
+      source YAML wraps it, which is why the regex uses \s+ between warehouse and consumer). Fault-injected:
+      reverting T4.5 intent fails leg 1; deleting the falsified sentence without adding as-amended/residency wording
+      fails leg 2; moving only T4.5 fails leg 3; restoring T4.5's name with (ops_plans, ops_plan_revisions) fails the
+      retirement leg naming T4.5 name; and a decoy that puts retired-before-built in the SAME field but past the
+      200-char window still fails.
+      THE INVERTED NAME LEG WAS FAULT-INJECTED AND THE RESULTS ARE RECORDED HERE, not promised. Four scratch copies
+      of docs/ROADMAP-PLATFORM.yaml, each an otherwise-final tree with one thing changed, run against the command
+      above verbatim (only the roadmap path substituted). (a) SUBJECT-REMOVED, the ops_plans sweep not done at all:
+      exit 1, "the retired name ops_plans still stands in ['T4.5.decomposition_hints', 'T4.5.exit_criteria',
+      'T4.5.intent', 'T4.5.name', 'T4.6.decomposition_hints', 'T4.6.exit_criteria', 'T4.6.intent',
+      'T4.7.exit_criteria']". (b) WRONG-LEG DECOY, swept in T4.5 only with T4.6's exit_criteria, T4.6's
+      decomposition_hints and T4.7's exit_criteria still carrying bare ops_plans: exit 1, naming exactly those three
+      and no others -- "['T4.6.decomposition_hints', 'T4.6.exit_criteria', 'T4.7.exit_criteria']". (c)
+      DELETE-NOT-REPOINT DECOY, ops_plans removed from every tracked field but ops_execution_plans never introduced:
+      the absence half passes and the PRESENCE half fails, exit 1, "['T4.5.decomposition_hints',
+      'T4.5.exit_criteria', 'T4.5.intent', 'T4.5.name', 'T4.6.decomposition_hints', 'T4.6.exit_criteria',
+      'T4.6.intent', 'T4.7.exit_criteria'] carried ops_plans on origin/main and now names no plans table at all".
+      (d) PASS fixture, fully swept and re-pointed: exit 0. The retirement leg is held constant across all four, so
+      each result isolates the NAME leg rather than being masked by the ops_plan_revisions leg firing first.
+      THE BUSINESS-KEY LEG IS NEW THIS ROUND AND ITS INJECTION RESULTS ARE RECORDED HERE, not promised. Red on the
+      current tree for its own reason, measured in isolation: across T4.5's four tracked fields, merge_key, business
+      key, rec_id and every generalization token match ZERO times, and the same holds on T4.6 and T4.7. Four scratch
+      copies of docs/ROADMAP-PLATFORM.yaml, each an otherwise-final tree -- T4.5/T4.6/T4.7 fully swept onto
+      ops_execution_plans, both intents acknowledging the amended clause, every ops_plan_revisions mention inside
+      retirement framing, so every earlier leg is held constant and GREEN and each result isolates the business-key
+      leg -- run against the command above verbatim (only the roadmap path substituted). PASS, one T4.5 exit criterion
+      naming the merge key, rec_id and the generalization together: exit 0, "OK T4.5/T4.6/T4.7 moved with the Decision
+      and the plans consolidation swept onto ops_execution_plans". SUBJECT-REMOVED, that criterion deleted and nothing
+      else changed: exit 1, "no SINGLE T4.5 tracked field carries the business-key generalization". WRONG-ITEM DECOY,
+      the identical criterion parked on T4.6 instead: exit 1, same message -- the leg reads T4.5 and does not pool.
+      SPLIT-ACROSS-THREE-FIELDS DECOY, merge key in T4.5's name, rec_id in its intent and the generalization in its
+      decomposition_hints: exit 1, same message -- the three tokens must co-occur in ONE field, for the same reason
+      step 10's design probes and step 12's guard demand single-criterion co-occurrence.
+    fix_if: >-
+      Amending the Decision without the items leaves the roadmap contradicting the corpus at the exact seam the
+      amendment exists to close. If the NAME leg fails on the ABSENCE half, re-point that field at
+      `ops_execution_plans` -- do not reintroduce `name TBD` or any open-naming pointer, the name is ruled. If it
+      fails on the PRESENCE half, the field was emptied rather than re-pointed: a tracked field that told a builder
+      to construct `ops_plans` must now tell that builder to EXTEND `ops_execution_plans`, and saying nothing is not
+      the same as saying that.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Two item intents mid-transition; the text changes again when T4.5 is built.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      THE ROUTING TABLE IS COMPLETED, NOT DUPLICATED. Every leg binds to the work_item ROW itself. Round 3 tested a
+      disjunct -- any row mentioning tier_item and roadmap -- which the pre-existing operational_fact row at :393
+      already satisfies on origin/main, so an implementation that sprinkled migration vocabulary into the significance
+      block without adding the row would have passed. The row key is work_item; validate_decision_entry_conformance
+      reads routing keys dynamically, so a fifth row is admissible. The LAST leg is the one with teeth against the
+      standing check: validate_decision_entry_conformance.py:206 rejects a claimed routing row ONLY when that row's
+      own text CONTAINS the literal Never a numbered Decision, so a row that omits it produces no failure anywhere --
+      every VP step and the full validate tier pass green while the guard never engages and significance.value:
+      work_item becomes silently claimable on a numbered Decision entry. A constraint alone carried that literal until
+      this round; nothing machine-readable did.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text()); sig=d['significance'];
+      rows=sig['routing']; assert 'work_item' in rows, f'no work_item routing row -- significance.routing carries only
+      {sorted(rows)}'; row=str(rows['work_item']); rule=str(sig.get('routing_rule','')); assert
+      re.search(r'(bootstrap|supersede|destination\s+form|migration)', row, re.I), 'the work_item ROW does not state
+      the migration direction; matching that vocabulary anywhere else in the significance block does not count';
+      assert re.search(r'(cross_tier_gate|cross-tier\s+gate|deferred_post_mvp|MVP\s+boundary|exit_criteri)', row,
+      re.I), 'the work_item ROW does not name what the roadmap uniquely provides today'; assert
+      re.search(r'(defer|not-now|declined)', row + ' ' + rule, re.I), 'neither the work_item row nor routing_rule
+      resolves a deliberate deferral with a reason'; assert 'work_item' in rule, 'routing_rule was not extended to
+      reach the work_item row -- extend QUESTION (3) row enumeration to include work_item and KEEP THREE questions,
+      so the Three-questions counts at :403, :406 and :412 do not stale; do not add a fourth question'; assert 'Never a numbered Decision' in row, 'the work_item ROW body omits
+      the exact literal Never a numbered Decision -- validate_decision_entry_conformance rejects a claimed routing row
+      ONLY when the row text contains that literal, so without it significance.value: work_item is silently claimable
+      on a numbered Decision entry and NOTHING fails anywhere'; print('OK routing table completed:', sorted(rows))"
+    expected: >-
+      Exits 0 printing `OK routing table completed:` and the row names. On origin/main it exits 1 with the work_item
+      row absent (routing carries only cd_state_flip, field_semantics, numbered_decision, operational_fact).
+      Fault-injected: deleting the row fails leg 1; a decoy that moves the migration and roadmap-unique vocabulary
+      into the operational_fact row and leaves work_item bare still fails, because the legs read the row, not
+      str(sig); dropping work_item from routing_rule fails that leg. The literal leg fault-injected on its own
+      fixture: a work_item row with every other leg satisfied but the literal omitted fails; a DECOY that carries the
+      literal in routing_rule and in the pre-existing operational_fact and field_semantics rows -- exactly where it
+      already lives on origin/main -- while leaving the work_item row without it STILL fails.
+    fix_if: >-
+      Do NOT enumerate topics. Name the CAPABILITY the roadmap uniquely provides today -- gate evaluation,
+      MVP-boundary classification, per-criterion exit lifecycle -- so the boundary moves on its own as recs gain them.
+      ops_recommendations already carries dependencies VARCHAR[], so the graph primitive exists. A fifth row also
+      stales FIVE count-bearing statements in decision-entry.yaml, miscounting in BOTH directions. Four undercount and
+      a `four` search finds them: :364 ("One of significance.routing's four keys below"), :377 ("the four routing rows
+      are a citable classification vocabulary in their own right"), :382 ("routes per one of the four rows below
+      instead of minting a new number") and :408 ("one of the four routing keys"). The fifth, :387, miscounts the
+      OTHER way and no `four` search reaches it -- the numbered_decision row's own "for symmetry with the other three"
+      becomes "the other four". Update all five when the row lands; this field and the matching execution step name
+      the same five and neither supersedes the other.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The row's content is asserted here; validate_decision_entry_conformance owns the file's grammar as a standing
+      check, and a registry row would duplicate that reader.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      NOTHING SELECTS, AND THE SPIKE IS DISCHARGEABLE. CD.27 ESB-04 / ESB-06 / ESB-01 preconditions live in
+      discipline_points, NOT in detail -- round 3 asserted against detail, where the id could be dropped anywhere and
+      green the check while the precondition still could not discharge. The kill leg is the spike whole purpose and
+      was previously unasserted; the realism leg is symmetric, because nothing forced the INCUMBENT arm to be real
+      either.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); cds={c['id']: c for c in
+      d['candidate_decisions']}; t={x['id']: x for x in d['tier_items']}; assert 'TBD_at_CD.43_ratification' in
+      str(cds['CD.43'].get('detail','')), 'CD.43 no longer defers -- the encoding pre-empted the spike'; spike=[x for
+      x in d['tier_items'] if x['id'].startswith('T4.') and re.search(r'spike', str(x.get('name','')), re.I) and
+      re.search(r'(layer-2|layer\s+2|substrate)', str(x.get('name','')) + ' ' + str(x.get('intent','')), re.I)];
+      sids=[x['id'] for x in spike]; assert len(sids) == 1, f'expected exactly one T4 item whose name says spike and
+      whose name or intent says layer-2 or substrate; found {sids}'; sid=sids[0]; pre=[str(p) for p in
+      cds['CD.27'].get('discipline_points', []) if re.search(r'ratification\s+precondition\s+\(ESB-0[146]\)',
+      str(p))]; assert len(pre) == 3, f'CD.27 discipline_points no longer carry three ESB-04/06/01 ratification
+      preconditions (found {len(pre)}) -- ESB text lives in discipline_points, never in detail';
+      missing=[re.search(r'ESB-0[146]', p).group(0) for p in pre if sid not in p]; assert not missing, f'CD.27
+      preconditions {missing} do not name {sid} in discipline_points -- they cannot discharge against it';
+      ec=str(spike[0].get('exit_criteria','')); assert re.search(r'workspace', ec, re.I), 'the spike has no
+      workspace-mutating leg -- a read-only persona cannot exercise P2'; assert
+      re.search(r'(unstubbed|un-stubbed|not\s+stubbed|real\s+credential|live\s+credential)', ec, re.I), 'the spike
+      stubs the dispatch credential, hiding the candidate arm largest cost'; assert
+      re.search(r'\b(kill|killed|kills|interrupt\w*|terminat\w*)\b', ec, re.I) and
+      re.search(r'(mid-loop|mid-run|mid-execution|mid-task|in-flight)', ec, re.I), 'the spike never forces a mid-loop
+      kill -- resumability is the property being compared, so criteria without it discriminate nothing'; assert
+      re.search(r'(neither\s+arm\s+is\s+stubbed|no\s+arm\s+is\s+stubbed|both\s+arms\s+(are\s+)?(equally\s+)?(real|unstubbed)|same\s+realism|equal\s+realism|symmetric\w*\s+realism|arm\s+symmetry)',
+      ec, re.I), 'the spike does not require SYMMETRIC realism -- name it (neither arm is stubbed / the same realism
+      on each arm). A bare both-arms phrase attached to one leg leaves a stubbed incumbent arm rigging the comparison
+      toward the candidate'; assert sid in [str(v) for v in t['T4.2'].get('depends_on', [])], f'{sid} is not sequenced
+      before T4.2 -- T4.2 depends_on does not name it'; print('OK no selection;', sid, 'owns the spike, is named in
+      all three CD.27 preconditions, and precedes T4.2')"
+    expected: >-
+      Exits 0 printing `OK no selection;` then the item id. On origin/main it exits 1 on the ownership leg with found
+      []. Fault-injected: removing the spike fails ownership; planting the id in CD.27 detail instead of
+      discipline_points fails the precondition leg; naming only two of the three preconditions fails and says which;
+      kill-switch wording with no mid-loop kill fails the kill leg; realism claimed for the candidate arm only fails
+      the symmetry leg; routing MECH-1 onto the item (which step 10 does) no longer satisfies the credential leg;
+      dropping the T4.2 edge fails the sequencing leg; two spike items fail as ambiguous.
+    fix_if: >-
+      decision_scout is read-only, so a kill test on it is trivially recoverable on every arm and discriminates
+      nothing. The workspace leg is what exercises P2, the highest-severity open finding. Say symmetric realism
+      explicitly -- neither arm is stubbed, or the same realism on each arm -- because a stubbed incumbent arm rigs
+      the comparison toward the candidate exactly as a stubbed candidate arm would rig it the other way.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient pre-spike state; the spike changes it the moment it runs.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      THE DEAD-VOCABULARY SWEEP -- THREE CLASSES, WIDENED AND PROXIMITY-SCOPED. Round 2 regex missed the "Durable Lambdas" phrasing CD.37 and
+      CD.38 actually use, scanned only three fields, and filtered to T4 -- leaving T5.6 and every name field unswept.
+      The pointer escape is now local: the incumbent/candidate/per-CD.27 pointer must sit within 200 chars of the
+      mention, because a field-wide escape let the word candidate anywhere in a 3,000-char detail excuse every mention
+      in it. The SECOND class is new this round and is the more dangerous one, because it is ALREADY RESIDENT rather
+      than merely importable: the plan guards against importing the design's S3 dual write into a new candidate
+      decision, but plan_s3_uri is in the corpus TODAY at CD.27's detail (the Step Functions payload contract), at
+      T4.1's intent ("writes PLAN-{slug}.md to S3; returns {plan_s3_uri, plan_summary}") and at T4.2's intent.
+      Neither pre-existing sweep reaches it -- this step hunted Durable-Functions vocabulary and step 7 hunts runner
+      mechanics -- so post-encoding the corpus would contradict itself in the node contract a builder reads first.
+      Importing nothing is not enough; the residents must be re-pointed as considered-and-rejected.
+      THE THIRD CLASS IS THE PAYLOAD HALF OF THE SAME TWO FIELDS, NEW THIS ROUND. The S3 class rules on the URI and
+      leaves the payload. The design's governing rule is stated three ways in the operator's artifact -- "Step
+      Functions passes identifiers and permissions. Agents fetch content"; "Fine for identifiers; not a payload
+      channel"; "You get the determinism at the cost of an identifier, not a payload" -- and the two resident sites
+      the S3 leg forces the implementer to edit each carry BOTH halves: T4.1's intent returns
+      {plan_s3_uri, plan_summary} and T4.2's intent returns a plan summary. plan_summary is LLM-authored prose
+      returned THROUGH the state machine: content, not an identifier, and not deterministic on re-fetch. The S3 regex
+      cannot see it, so a compliant implementation re-points the URI half, leaves the payload half, and ships a corpus
+      that describes the state machine carrying a payload in exactly the node contract a builder reads first -- which
+      is the plan's own stated reason for the S3 class existing. The payload leg reads the same two carrier fields
+      with the same 200-char proximity discipline, so it costs the implementer nothing beyond finishing the edit the
+      S3 leg already starts. ITS ESCAPE SET DELIBERATELY EXCLUDES considered-and-rejected, and that exclusion is the
+      whole reason the leg discriminates. Measured on the current tree, the S3 mention and the payload mention sit 24
+      characters apart in T4.1's intent and 10 characters apart in T4.2's -- far inside the 200-char window -- so an
+      escape set containing considered-and-rejected would be satisfied by the S3 re-point ALONE, in both carrier
+      fields, and the payload leg would be vacuous by construction on every tree that satisfies the S3 leg. That was
+      measured, not assumed: the first cut of this leg carried considered-and-rejected, and its bare-payload fixture
+      came back exit 0. The escape is therefore payload-specific -- identifiers only, not a payload, no payload,
+      payload channel -- which is exactly the governing rule the design states three ways.
+      THE CD LEG IS DELIBERATELY SCOPED TO title AND detail, and that scope is recorded here rather than left to a
+      reader to infer. CD.27's discipline_points carry FIVE unpointered `Durable Function` mentions (measured on the
+      current tree: five hits, none with an incumbent/candidate/per-CD.27 pointer within 200 chars). They stay OUT OF
+      SCOPE on purpose: CD.27 is the INCUMBENT decision itself, and those five mentions are its own stability and
+      fallback body -- the place the incumbent is supposed to be named plainly. Widening the CD field tuple to reach
+      them would force five cosmetic pointer edits INSIDE the decision that DEFINES the incumbent, which is
+      make-work, not a guard. Step 5 reads the same discipline_points field for a different purpose (the three
+      ESB-04/06/01 ratification preconditions), and the asymmetry between the two steps is intentional and recorded
+      here so it is not read as an oversight the way it was in round 4.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); stale=re.compile(r'([Dd]urable
+      [Ff]unction|[Dd]urable
+      [Ll]ambda|src/lambdas/(plan_agent|plan_critic|decision_scout|implement_agent|code_reviewer))');
+      ptr=re.compile(r'(per CD\.27|incumbent|candidate|as amended)', re.I);
+      fields=('name','intent','exit_criteria','files_in_scope','decomposition_hints'); own=[x for x in d['tier_items']
+      if x['id'].startswith('T4.') or x['id'] == 'T5.6']; hits={x['id']: [k for k in fields if [m for m in
+      stale.finditer(str(x.get(k,''))) if not ptr.search(str(x.get(k,''))[max(0, m.start()-200):m.end()+200])]] for x
+      in own}; bad={i: v for i, v in hits.items() if v}; assert not bad, f'stale substrate asserted with no
+      incumbent/candidate/per-CD.27 pointer within 200 chars of the mention, in items that own the substrate: {bad}';
+      cds={c['id']: [k for k in ('title','detail') if [m for m in stale.finditer(str(c.get(k,''))) if not
+      ptr.search(str(c.get(k,''))[max(0, m.start()-200):m.end()+200])]] for c in d['candidate_decisions']}; cbad={i: v
+      for i, v in cds.items() if v}; assert not cbad, f'candidate decisions assert the incumbent with no
+      incumbent/candidate framing near the mention: {cbad}'; gbad=[g['id'] for g in d['cross_tier_gates'] if [m for m
+      in stale.finditer(str(g)) if not ptr.search(str(g)[max(0, m.start()-200):m.end()+200])]]; assert not gbad,
+      f'gates assert the incumbent substrate with no pointer within 200 chars of the mention: {gbad}';
+      s3=re.compile(r'(plan_s3_uri|\.md\s+to\s+S3|plan\s+document\s+to\s+S3)'); rej=re.compile(r'(reject|sole
+      plan artifact|plan_text|superseded|considered-and-rejected)', re.I); s3i={x['id']: [k for k in fields if [m for
+      m in s3.finditer(str(x.get(k,''))) if not rej.search(str(x.get(k,''))[max(0, m.start()-200):m.end()+200])]] for
+      x in d['tier_items']}; s3i={i: v for i, v in s3i.items() if v}; s3c={c['id']: [k for k in ('title','detail') if
+      [m for m in s3.finditer(str(c.get(k,''))) if not rej.search(str(c.get(k,''))[max(0,
+      m.start()-200):m.end()+200])]] for c in d['candidate_decisions']}; s3c={i: v for i, v in s3c.items() if v};
+      assert not s3i and not s3c, f'the S3 plan-document dual write is still asserted as live vocabulary with no
+      considered-and-rejected pointer within 200 chars -- items {s3i}, candidate decisions {s3c}. It is ALREADY
+      resident in the corpus, so importing nothing is not enough: the residents must be re-pointed';
+      pay=re.compile(r'(plan_summary|plan\s+summary)');
+      pesc=re.compile(r'(identifiers?\s+only|not\s+a\s+payload|no\s+payload|payload\s+channel)', re.I);
+      pyi={x['id']: [k for k in fields if [m for m in pay.finditer(str(x.get(k,''))) if not
+      pesc.search(str(x.get(k,''))[max(0, m.start()-200):m.end()+200])]] for x in d['tier_items']}; pyi={i: v for i, v
+      in pyi.items() if v}; pyc={c['id']: [k for k in ('title','detail') if [m for m in pay.finditer(str(c.get(k,'')))
+      if not pesc.search(str(c.get(k,''))[max(0, m.start()-200):m.end()+200])]] for c in d['candidate_decisions']};
+      pyc={i: v for i, v in pyc.items() if v}; assert not pyi and not pyc, f'the state machine is still described as
+      returning an LLM-authored PAYLOAD with no identifiers-only / not-a-payload pointer within 200 chars -- items
+      {pyi}, candidate decisions {pyc}. The governing rule is that the state machine carries IDENTIFIERS ONLY and no
+      LLM-authored payload crosses it, so a plan summary returned through the state machine is content, not an
+      identifier, and is not deterministic on re-fetch. The escape set deliberately EXCLUDES considered-and-rejected:
+      the S3 half of both carrier fields sits 24 and 10 characters away, so admitting that token would let the S3
+      re-point green this leg by construction and re-create the half-fix the leg exists to catch'; print('OK sweep
+      clean across', len(d['tier_items']), 'items,', len(d['candidate_decisions']), 'CDs,',
+      len(d['cross_tier_gates']), 'gates')"
+    expected: >-
+      Exits 0 printing `OK sweep clean across` and the three counts. On origin/main it exits 1 listing T4.2 (name,
+      intent, files_in_scope, decomposition_hints) and T5.6 (intent); CD.11, CD.27, CD.37, CD.38 and gate G.9 follow
+      on the later legs. Scoped to T4.* plus T5.6 with the pointer escape, because a descriptive mention elsewhere --
+      T2.11b names the substrate "(per CD.27)" while labelling scope -- is a pointer, not an assertion.
+      Fault-injected: reverting T4.2 name fails; a decoy putting the escape word in the same field but >200 chars from
+      the mention still fails; unpointering G.9 name or CD.37 detail fails the gate and CD legs. The S3 leg is red on
+      origin/main for its own reason -- verified, it reports T4.1 intent, T4.2 intent and CD.27 detail -- and is
+      fault-injected on its own fixtures: removing the considered-and-rejected pointer fails naming the field; a decoy
+      carrying the pointer in the SAME field but past the 200-char window still fails; a decoy carrying it on a
+      DIFFERENT item while the S3-bearing one stays bare still fails; a CD-only mention fails on the candidate-decision
+      half.
+      THE PAYLOAD LEG IS NEW THIS ROUND AND ITS INJECTION RESULTS ARE RECORDED HERE, not promised. Red on the current
+      tree for its own reason, measured in isolation: T4.1 intent and T4.2 intent each return an LLM-authored plan
+      summary with no identifiers-only pointer anywhere near it. Five scratch copies of docs/ROADMAP-PLATFORM.yaml,
+      each an otherwise-final tree -- every stale-substrate mention pointered and every S3 mention re-pointed, so
+      legs 1 through 4 are held constant and GREEN and each result isolates the payload leg -- run against the command
+      above verbatim (only the roadmap path substituted). PASS fixture, both halves of both carrier fields re-pointed:
+      exit 0, "OK sweep clean across 162 items, 43 CDs, 4 gates". SUBJECT-REMOVED, the S3 half re-pointed and the
+      payload half left bare -- the exact half-fix a compliant implementation would ship: exit 1 naming
+      "items {'T4.1': ['intent'], 'T4.2': ['intent']}". FAR-POINTER DECOY, the identifiers-only wording present in the
+      same field but past the 200-char window: exit 1, same list. WRONG-ITEM DECOY, the identifiers-only rule written
+      onto T4.3's intent while T4.1 and T4.2 stay bare: exit 1, same list, naming neither T4.3 nor anything else.
+      CD-ONLY DECOY, a candidate decision returning a plan summary through the state machine while every item is
+      clean: exit 1 on the candidate-decision half, "candidate decisions {'CD.44': ['detail']}". The
+      considered-and-rejected exclusion was itself injection-derived rather than reasoned: with that token in the
+      escape set the SUBJECT-REMOVED fixture returned exit 0.
+    fix_if: >-
+      This is the class-versus-site defect. Round 2 named seven sites in prose and detected three. The remedy is to
+      pointer each mention in place -- "Durable Functions (per CD.27, the incumbent)" -- not to delete the word, and
+      not to drop an escape word at the far end of the field.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The forbidden vocabulary changes the moment the spike rules; a graduated row would assert the wrong thing.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      LIFECYCLE FIELDS CARRY SUBSTRATE-NEUTRAL PROPERTY LANGUAGE. Round 2 purged the incumbent vocabulary and
+      permitted the candidate vocabulary in the same fields -- ESB-05 with the sign flipped, making a ruling for the
+      incumbent cost a seven-surface re-sweep and a ruling for the candidate cost nothing. Switching cost is bias. The
+      field list is now the same five step 6 sweeps: round 3 scanned only exit_criteria, files_in_scope and
+      decomposition_hints, so candidate mechanism written into name or intent escaped the guard entirely.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t={x['id']: x for x in
+      d['tier_items']}; cand=re.compile(r'(workflow_dispatch|repository_dispatch|GitHub-hosted
+      runner|actions/checkout|runs-on)');
+      fields=('name','intent','exit_criteria','files_in_scope','decomposition_hints'); leaked={i: [k for k in fields
+      if cand.search(str(t[i].get(k,'')))] for i in t if i.startswith('T4.')}; leaked={i: v for i, v in leaked.items()
+      if v}; assert not leaked, f'candidate-specific mechanism leaked into lifecycle-tracked fields -- a spike ruling
+      for the incumbent would cost a re-sweep, which is switching-cost bias: {leaked}';
+      neutral=str(t['T4.2'].get('exit_criteria','')); assert re.search(r'\bP1\b', neutral) and re.search(r'\bP2\b',
+      neutral) and re.search(r'\bP3\b', neutral), 'T4.2 criteria do not carry CD.27 substrate-neutral P1/P2/P3
+      property language'; print('OK lifecycle fields substrate-neutral across', len(fields), 'fields; candidate
+      mechanism confined to the CD body')"
+    expected: >-
+      Exits 0 printing `OK lifecycle fields substrate-neutral across` and the field count. PASSES ON ORIGIN/MAIN BY
+      DESIGN -- a REGRESSION GUARD, not a differential. Main has no candidate mechanism to leak in any of the five
+      fields (verified), and T4.2 already carries P1/P2/P3. Its whole job is to fail if THIS encoding writes workflow
+      paths or runner mechanics into a lifecycle-tracked field, or strips the neutral property language while
+      re-specifying. Fault-injected: workflow_dispatch injected into intent and runs-on injected into name both fail
+      under the five-field list and both PASS under the round-3 three-field list -- that is the escape this widening
+      closes; stripping P1/P2/P3 from T4.2 fails the neutrality leg.
+    fix_if: >-
+      The fields say WHAT MUST BE TRUE (P1/P2/P3); the candidate decision says HOW the candidate would make it true.
+      That keeps either spike outcome a small diff.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts a mid-transition discipline that ends when the spike rules.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      THE RBAC OBLIGATION HAS A LIVE CARRIER AND AN MVP-SIDE GUARANTEE. Three separate reviews pointed at this. The
+      carrier must be a live item: T4.5 and T4.6 already match insert_plan / set_plan_status / verb-RBAC in their
+      exit_criteria on origin/main and are both deferred_post_mvp, so round 3 first leg was satisfied before the edit
+      and could never verify the obligation landed MVP-side. The criterion must also route the split to T4.5/T4.6, and
+      the content pin must sit on a live item too. The exclusion set is now ('complete','deferred_post_mvp'), aligned
+      with sibling step 9, which had it right all along. Round 3 excluded only deferred_post_mvp, and a reviewer
+      greened this step with a decoy that parked BOTH criteria on T1.3, a complete item -- a completed item can
+      discharge nothing forward, so the asymmetry between two adjacent steps reading the same field was itself the
+      defect.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t={x['id']: x for x in
+      d['tier_items']}; live=[i for i in t if str(t[i].get('status','')) not in ('complete','deferred_post_mvp')]; rbac=[i for i
+      in live if re.search(r'(insert_plan|set_plan_status|verb-RBAC|verb\s+RBAC)', str(t[i].get('exit_criteria','')),
+      re.I)]; assert rbac, 'no LIVE tier item carries the Decision 87 clause-5 verb-RBAC obligation as an exit
+      criterion -- T4.5 and T4.6 already match on origin/main and are both deferred_post_mvp, and a complete item such
+      as T1.3 is excluded too because it can discharge nothing forward'; routed=[i for i in rbac if re.search(r'T4\.(5|6)', str(t[i].get('exit_criteria','')))];
+      assert routed, f'the live verb-RBAC criterion on {rbac} does not route the split to T4.5/T4.6, where per-persona
+      credentials exist'; pin=[i for i in live if
+      re.search(r'(content\s+pin|content\s+hash|writer-minted|plan\s+hash)', str(t[i].get('exit_criteria','')),
+      re.I)]; assert pin, 'no MVP-side content-pin guarantee on a live item -- a verb split cannot be enforced while
+      every persona presents one identity'; print('OK verb-RBAC carried by', routed, 'routing to T4.5/T4.6; content
+      pin carried by', pin)"
+    expected: >-
+      Exits 0 printing `OK verb-RBAC carried by` then the live carrier and the pin carrier. On origin/main it exits 1
+      on the first leg, no LIVE carrier -- the matching items are deferred_post_mvp, and T1.3 is complete.
+      Fault-injected: removing the live criterion fails leg 1 (the same fixture PASSES under the round-3 unfiltered
+      command, greened by deferred T4.5/T4.6 -- that is the original defect); a live criterion that never names
+      T4.5/T4.6 fails the routing leg; parking every content-pin phrase on deferred T4.5 fails the pin leg. The
+      COMPLETE-status decoys, the ones nobody injected until this round: parking both criteria on T1.3 (complete)
+      GREENS the pre-round-4 command and RED-fails this one; parking only the content pin on T1.3 greens the old
+      command on the pin leg and red-fails this one there.
+    fix_if: >-
+      A verb split is unenforceable at MVP: all personas share the runner OIDC identity, so the writer boundary cannot
+      distinguish plan_critic from plan_agent. The enforceable substitute is the design own head-SHA idiom applied to
+      the plan -- SFN carries (rec_id, revision, ulid-or-hash) and every fetch plus the merge node verifies it,
+      failing closed. Write the obligation on the MVP-side item that precedes T4.2 and name T4.5/T4.6 as where the
+      split itself lands.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Names the carrying items for one transition; they change when T4.5 lands.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      THE READ VERB PINS CONTENT, NOT JUST THE REVISION. merge_key is rec_id alone and revision is caller-supplied, so
+      a re-dispatched writer can emit revision N twice with different bodies -- which makes the design determinism
+      claim false on the recovery path the substrate is being selected for. The ownership leg is bound to exactly one
+      LIVE T4 item and reads exit_criteria only: round 3 matched str(x) over the whole item and was already satisfied
+      by T1.3 ("All named read verbs are discoverable from NAMED_READS keys") and by T4.5 decomposition_hints, then
+      POOLED criteria across every match, so the content pin could green from an unrelated item text.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); verb=[x for x in d['tier_items'] if
+      x['id'].startswith('T4.') and str(x.get('status','')) not in ('complete','deferred_post_mvp') and
+      re.search(r'(execution_plan_by_rec|named\s+read\s+verb|plan-fetch verb)', str(x.get('exit_criteria','')),
+      re.I)]; vids=[x['id'] for x in verb]; assert len(vids) == 1, f'expected exactly one live T4 item owning the plan
+      read verb as an exit criterion; found {vids} (T1.3 and T4.5 match on origin/main and are excluded as complete /
+      deferred_post_mvp)'; spec=str(verb[0].get('exit_criteria','')); assert
+      re.search(r'(ulid|content\s+hash|writer-minted|idempot)', spec, re.I), f'{vids[0]} does not require pinning a
+      writer-minted id or content hash -- (rec_id, revision) is ambiguous under re-dispatch'; print('OK plan read verb
+      owned by', vids[0], 'and pins content')"
+    expected: >-
+      Exits 0 printing `OK plan read verb owned by` and the single item id. On origin/main it exits 1 with found [] --
+      T1.3 is complete and T4.5 is deferred_post_mvp, so both are excluded. Fault-injected: removing the criterion
+      fails (the same fixture PASSES under the round-3 whole-item command, greened by T1.3 and T4.5); pinning only
+      (rec_id, revision) fails the spec leg; putting the ULID wording on a DIFFERENT live T4 item still fails, because
+      nothing is pooled; two claimants fail as ambiguous.
+    fix_if: >-
+      Verified: field_semantics gives ops_execution_plans merge_key rec_id, and save_execution_plan takes revision as
+      a caller scalar with no uniqueness on the pair.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      One verb's spec during one transition.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      EVERY DESIGN IDENTIFIER AND EVERY DOSSIER UNSPECIFIED ENTRY HAS A TRACKED HOME. Round 3 probed the dossier with
+      eight substrings of which FIVE already occur on origin/main -- targets (10 hits), closure (50), A0 (41, it
+      matches the audit SHA 7d57a0d), RCA rec (13, it matches "source=ci_rca rec") and queue (51, e.g.
+      ops_priority_queue) -- and it searched the raw file, so prose anywhere satisfied it. It also listed "worker
+      identity", which is NOT one of the eight: that phrase belongs to the dossier Claiming-and-concurrency
+      subsection. The real eighth entry is the GitHub credential model for file_pr and merge (PAT versus App, scopes,
+      storage, rotation), which had no probe at all and is NOT covered by MECH-1 -- MECH-1 is the SFN-to-GitHub
+      dispatch credential, a different one. Every probe here was verified ABSENT on origin/main, and every entry must
+      land in a tracked field, not in prose. The final leg homes the two DESIGN items that carry no open-register
+      identifier at all, so the GOV/MECH/DATA/OPS leg above can never reach them: the read-path Neon cold-resume retry
+      posture (the design declares it a precondition for unattended operation) and the plans-table NAME RULING
+      (recorded in this plan's constraints as prose with no rec, tier item or exit criterion owning it -- and the MVP
+      read-verb item binds a PHYSICAL name into NAMED_READS, which is precisely where the ruling has to be legible,
+      so the probe demands the ruled name `ops_execution_plans`, the one-plans-table framing and a ruled/bound token
+      together in ONE criterion; a criterion that merely mentions the table in passing does not record the ruling).
+      The THIRD is the critique-authorship boundary: critique_history matched
+      ZERO tracked fields on origin/main and zero lines of the round-3 verification_plan, so the whole
+      critic-or-gate-never-the-critiqued-persona ruling and the pin-excludes-critique_history scoping bound through
+      prose alone -- the shape this plan's own history says failed three consecutive rounds. That probe demands all
+      three tokens in ONE CRITERION -- the design legs read exit criteria INDIVIDUALLY, not the joined blob the
+      identifier and dossier legs read, because a first cut of this probe was greened by a decoy that split
+      critique_history, the critic/gate token and the exclusion token across three separate criteria on one item. That
+      is the same defect step 12 was rewritten to close, reproduced here and caught by fault injection before handoff
+      rather than by a fourth review. All three design probes were verified to match ZERO tracked fields on
+      origin/main.
+      THE DESIGN CORPUS IS EXIT-CRITERIA-ONLY, AND THAT IS THE ROUND-6 CORRECTION. Until this round the three design
+      probes read the SAME corpus as the identifier and dossier legs -- tier-item exit criteria PLUS every candidate
+      decision's detail -- which made all three vacuous BY CONSTRUCTION rather than vacuous on main, and that is why
+      nine lens passes walked past them. The execution steps MANDATE this exact vocabulary into the new candidate
+      decision's detail: the clause-4 step carries the prevalence rationale for the ruled name into the candidate
+      decision, the transcription step puts the sole-plan-artifact ruling there, and the critique-authorship step says
+      in so many words to state the boundary "in the candidate decision and on the carrying tier item". A candidate
+      decision's detail is ONE unsplit blob, so that mandated edit alone satisfied all three probes on any tree that
+      HAS a CD.44 -- i.e. on every tree that can exist after implementation. Three things rode on the probes
+      discriminating and none of them were enforced: the acceptance criterion requiring the critique-authorship item
+      in a SINGLE exit criterion, the execution step's reason for homing the NAME ruling on the read-verb item that
+      binds a physical name into NAMED_READS, and this step's own recorded injection results, which held only on a
+      no-CD.44 tree. The design corpus therefore DROPS the candidate-decision term and reads tier-item exit criteria
+      only. The GOV/MECH/DATA/OPS identifier leg and the eight dossier probes KEEP reading candidate-decision bodies:
+      for those, "a tier item exit criterion or a candidate decision body" is the deliberate and correct contract, and
+      no execution step mandates those seventeen identifiers or eight entries into the CD detail wholesale.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); ids=[f'GOV-{i}' for i in
+      (1,2,3)]+[f'MECH-{i}' for i in (1,2,3,4)]+[f'DATA-{i}' for i in (1,2,3,4)]+[f'OPS-{i}' for i in (1,2,3,4,5,6)];
+      tracked=[(x['id'], str(x.get('exit_criteria',''))) for x in d['tier_items']]+[(c['id'], str(c.get('detail','')))
+      for c in d['candidate_decisions']]; prose_only=sorted(i for i in ids if not [e for e, s in tracked if i in s]);
+      assert not prose_only, f'identifiers with no exit criterion or CD body tracking them: {prose_only}'; uns={'queue
+      seeding for the first queue-fed run':
+      r'(seed\w*\s+the\s+priority\s+queue|queue\s+seeding|first\s+queue-fed\s+run)', 'which eligibility predicate is
+      authoritative': r'eligibility\s+predicate', 'what reliability-is-proven means numerically':
+      r'(reliability\s+is\s+proven|numeric\s+threshold\s+for\s+(each\s+)?autonomy\s+gate|A0.{0,3}A5\s+numeric)',
+      'where an executor-authored RCA rec surfaces': r'(executor-rca|executor-postmortem)', 'what counts as done
+      across the three closure points': r'(closure\s+adjudicat|closure\s+point|adjudicat\w+\s+between\s+closure)',
+      'whether a cross-run failure budget exists': r'(cross-run\s+)?failure\s+budget', 'the GitHub credential model
+      for file_pr and merge':
+      r'(PAT\s+vers?us\s+(GitHub\s+)?App|GitHub\s+credential\s+model|credential\s+model\s+for\s+file_pr)', 'whether
+      ops_recommendations gains a plural targets field': r'(plural\s+targets|targets\s+field|targets\s+VARCHAR)'};
+      unhomed=sorted(k for k, p in uns.items() if not [e for e, s in tracked if re.search(p, s, re.I)]); assert not
+      unhomed, f'dossier Also-unspecified entries with no tracked home -- each must land in a tier item exit criterion
+      or a candidate decision body, not in intent prose: {unhomed}'; design={'the read-path Neon cold-resume retry
+      posture': r'(cold[- ]?(start|resume))[\s\S]{0,160}(retry|backoff|reconnect)|(retry|backoff|reconnect)[\s\S]{0,160}cold[- ]?(start|resume)',
+      'the plans-table NAME ruling (ops_execution_plans)':
+      r'(?=[\s\S]*ops_execution_plans)(?=[\s\S]*(single plans table|one plans table|sole plans
+      table))(?=[\s\S]*(ruled|ruling|decided|bound|binds))', 'the critique-authorship boundary and the
+      critique_history-excluding content pin':
+      r'(?=[\s\S]*critique_history)(?=[\s\S]*(critic|gate))(?=[\s\S]*exclud)'}; crits=[(x['id'], c) for x in
+      d['tier_items'] for c in ([str(x.get('exit_criteria'))] if isinstance(x.get('exit_criteria'), str) else [str(c)
+      for c in (x.get('exit_criteria') or [])])]; dhome=sorted(k for k, p in design.items() if not [e for e, s in
+      crits if re.search(p, s, re.I)]);
+      assert not dhome, f'design items carrying no open-register id, so the routing step never reaches them, and no
+      tracked exit-criterion home either -- this corpus is tier-item exit criteria ONLY, deliberately excluding
+      candidate-decision bodies, because the execution steps MANDATE all three of these items into the candidate
+      decision detail, which is one unsplit blob and would satisfy all three probes by construction: {dhome}';
+      print('OK', len(ids), 'identifiers tracked;', len(uns), 'dossier entries homed;',
+      len(design), 'design entries homed')"
+    expected: >-
+      Exits 0 printing `OK 17 identifiers tracked; 8 dossier entries homed; 3 design entries homed`. On origin/main it
+      exits 1 on the identifier leg with all seventeen absent; each of the eight dossier probes and both design probes
+      are independently verified to match zero tracked fields on origin/main, so the later legs are red for their own
+      reasons too. Fault-injected: dropping MECH-4 fails naming it; removing the failure-budget criterion fails naming
+      that entry; writing an entry into intent prose instead of a tracked field still fails; answering the eighth
+      entry by pointing at MECH-1 plus a bare file_pr mention fails, which is the point.
+      THE THREE DESIGN PROBES WERE RE-FAULT-INJECTED THIS ROUND AGAINST A REPRESENTATIVE TREE -- one that HAS a CD.44
+      whose detail states all three design items, because that edit is MANDATED by the execution steps and the earlier
+      recorded results silently assumed a tree with no CD.44, i.e. a tree that cannot exist after implementation.
+      Six scratch copies of docs/ROADMAP-PLATFORM.yaml, each an otherwise-final tree with one thing changed, run
+      against the command above verbatim (only the roadmap path substituted). In all six the seventeen identifiers and
+      the eight dossier entries are homed on tier-item exit criteria, so the identifier and dossier legs are held
+      constant and GREEN and every result below isolates the design leg. (d) PASS, three single exit criteria each
+      carrying its item's tokens together, CD.44 present: exit 0. (a) CD-DETAIL-ONLY / SUBJECT-REMOVED, CD.44 states
+      all three and no exit criterion carries any: exit 1 naming all three unhomed -- "the critique-authorship
+      boundary and the critique_history-excluding content pin", "the plans-table NAME ruling (ops_execution_plans)"
+      and "the read-path Neon cold-resume retry posture". (b) SPLIT DECOY, Neon and NAME land as single criteria while
+      critique_history, the critic/gate token and the exclusion token are split across three separate criteria on one
+      item, CD.44 present: exit 1 naming exactly the critique-authorship item and no other. (c) INTENT DECOY, all
+      three written into the item's intent, CD.44 present: exit 1 naming all three. (e) CONTROL, (b) and (c) re-run
+      with CD.44 REMOVED: both still exit 1 with the same lists -- so the legs are not regex-broken and the defect
+      being closed really was the candidate-decision escape. The pre-fix command was run over the same fixtures to
+      confirm the escape rather than assert it: with CD.44 present it exits 0 on (a), on (b) AND on (c), and it goes
+      red on the two CD.44-removed controls -- three vacuous greens, reproduced, on a tree the plan itself mandates.
+      Each design probe is also red on the current tree in isolation, all three unhomed.
+    fix_if: >-
+      A deliberate deferral is a legitimate outcome and the completed routing table must resolve it, but NOT as a
+      deferred-status rec: _VALID_STATUSES at scripts/executor/jsonl_store.py:90 admits only open, closed, failed,
+      declined and superseded, enforced at scripts/ops_data_portal.py:449 and mirrored in scripts/ops_portal/cli.py:188,
+      so that write loud-fails at the portal. deferred exists only in the contract vocabulary at
+      docs/contracts/ops_recommendations.yaml:184 -- the very skew this plan files a rec about, not a status to write
+      against. Route by the tie-break the constraints now carry: an MVP-boundary or gate-semantics deferral goes to the
+      roadmap, which owns gate evaluation and boundary classification today; a one-off not-now goes to a declined rec
+      carrying the reason. Either way it is referenced by id from the tracked field, not silence. The eighth entry is the
+      file_pr/merge credential model and is distinct from MECH-1; do not discharge one with the other.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      One design's question set; the next design would have to amend a graduated row.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      NEW RECS ARE FILED AND REFERENCED. Round 2 asserted a non-empty rec-id set against a roadmap that already
+      carries 52 distinct ids -- a check that could never fail. This diffs against origin/main, and guards the
+      baseline read itself: an empty git show would make the set difference vacuously satisfied.
+    command: >-
+      bin/venv-python -c "import re,subprocess; head=set(re.findall(r'rec-\d+',
+      open('docs/ROADMAP-PLATFORM.yaml').read())); base=set(re.findall(r'rec-\d+',
+      subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'], capture_output=True,
+      text=True).stdout)); assert base, 'the origin/main baseline read back empty -- the diff would be vacuously
+      satisfied'; added=sorted(head-base); assert added, f'no NEW rec ids referenced -- base had {len(base)}, head has
+      {len(head)}; the out-of-file repairs were not filed'; print('OK', len(added), 'new rec ids referenced:', added)"
+    expected: >-
+      Exits 0 printing the count and `new rec ids referenced:` with the ids. On origin/main it exits 1 with no NEW rec
+      ids -- head and base are identical there (52 and 52), so the set difference is empty. Fault-injected in a
+      scratch git fixture: identical head and base fails; substituting a rec id that already exists in the base fails;
+      deleting the origin/main ref fails on the new baseline-non-empty leg rather than passing vacuously.
+    fix_if: >-
+      known_gaps is not a substitute: nothing outside the Pydantic schema reads it, and OQ.1/OQ.2 sat resolved on disk
+      for weeks until an audit reconciled them.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts one encoding's filing discipline against one base commit.
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      THE MERGE-NODE DIFF GUARD, T4-SCOPED AND SINGLE-CRITERION. An earlier draft passed on main via an unrelated T2
+      item. Round 3 scoped it to T4 but still ANDed three regexes over the joined exit_criteria blob, so three
+      unrelated criteria each carrying one token would have satisfied it -- and T4.13/T4.14 already match diff while
+      T4.1 already matches the merge-node alternation on origin/main. All three tokens must now occur in ONE
+      criterion.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t4=[x for x in d['tier_items'] if
+      x['id'].startswith('T4.')]; crits={x['id']: ([str(x.get('exit_criteria'))] if isinstance(x.get('exit_criteria'),
+      str) else [str(c) for c in (x.get('exit_criteria') or [])]) for x in t4}; guard=[i for i, cs in crits.items() if
+      [c for c in cs if re.search(r'\.github/workflows', c) and re.search(r'\bdiff', c, re.I) and re.search(r'(merge
+      node|at merge|boundary_patterns|Decision 117)', c, re.I)]]; assert guard, 'no T4 item carries a SINGLE exit
+      criterion naming .github/workflows, a diff, and the merge node or the Decision 117 boundary surface -- three
+      separate criteria each mentioning one of the three do not constitute the guard'; print('OK merge-node diff guard
+      owned by', guard)"
+    expected: >-
+      Exits 0 printing `OK merge-node diff guard owned by` and the owning ids. Exits 1 on origin/main -- no T4 exit
+      criterion names .github/workflows at all. Fault-injected: removing the criterion fails; a decoy that splits the
+      three tokens across three separate criteria on the same item still fails.
+    fix_if: >-
+      ci.yml runs on pull_request, so a same-repo branch runs its own version of the workflow. The guard belongs on
+      the plane the agent cannot edit through its own merge loop, and it has to be ONE criterion so the diff, the
+      workflow path and the merge node are gated together.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient placement of one control.
+  - step: 13
+    phase: pre-deploy
+    action: The line ceiling survives, re-measured rather than quoted.
+    command: >-
+      bin/venv-python -c "import pathlib; n=len(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text().splitlines());
+      assert n <= 10000, f'roadmap is {n} lines, over the Decision 114 ceiling'; print(f'OK roadmap {n} lines,
+      {10000-n} of headroom')"
+    expected: >-
+      Exits 0 printing `OK roadmap` then the line count and the headroom. Passes on origin/main too (8,616 lines) -- a
+      DECLARED regression guard on the delta size, not a differential. Fault-injected with synthetic fixtures: 10,001
+      lines fails naming the ceiling, 9,999 lines passes.
+    fix_if: >-
+      Do not raise the ceiling. Compress, or move content to a rec per the completed routing table -- which is one
+      reason that row exists.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_platform_roadmap already enforces this ceiling.
+
+test_obligations:
+  - source: docs/ROADMAP-PLATFORM.yaml
+    behavior: >-
+      Schema-valid, acyclic, no live-to-deferred edges, within the ceiling, and free of stale-substrate references in
+      every scanned field.
+    verification_step: 1
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      The roadmap is DATA. Schema, dependency graph, MVP-boundary edges and line ceiling are owned by
+      validate_platform_roadmap and the Decision 93 validator, both standing. Steps 3 and 5-13 assert this plan deltas
+      mechanically from the parsed document, each one fault-injected against a subject-removed fixture and a decoy
+      fixture.
+  - source: docs/DECISIONS.md
+    behavior: >-
+      Decision 87 carries a residency-scoped amendment leaving the authority flip timed to T4.6, AND a clause-4
+      consolidation onto one plans table in which every ops_plan_revisions mention sits inside retirement framing, the
+      retired name ops_plans is gone from every site inside the entry with ops_execution_plans written in its place,
+      the retirement rationale names critique_history as the directive's home rather than SCD2 per-revision history,
+      and clause 5's insert_revision grant sits inside re-point framing.
+    verification_step: 2
+    command: >-
+      bin/venv-python -c "import re,pathlib; t=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8');
+      m=re.search(r'^## Decision 87:.*?(?=^## Decision |\Z)', t, re.M|re.S); assert m, 'Decision 87 missing';
+      b=m.group(0); ln=lambda q: t.count(chr(10), 0, m.start())+b.count(chr(10), 0, q)+1; assert
+      re.search(r'residenc', b, re.I), 'the amendment does not scope the inversion to residency'; assert
+      re.search(r'prerequisite', b, re.I), 'the amendment does not state the prerequisite'; assert [p for p in
+      re.split(r'\n\s*\n', b) if re.search(r'authority', p, re.I) and re.search(r'T4\.6', p)], 'no single paragraph
+      states that the AUTHORITY flip stays timed to T4.6 -- the bare word authority is already present on origin/main,
+      so the two must co-occur'; assert re.search(r'circular', b, re.I), 'the amendment does not name the
+      circularity'; assert re.search(r'retired-before-built|retired\s+before\s+built', b, re.I), 'clause 4 carries no
+      retired-before-built framing -- the two-table split was not retired'; assert
+      re.search(r'(single|one)\s+plans\s+table', b, re.I), 'clause 4 does not name a SINGLE plans table';
+      unret=[m.start() for m in re.finditer(r'ops_plan_revisions', b) if not re.search(r'(retired|retirement|no
+      longer|superseded|consolidat|single plans table|one plans table)', b[max(0, m.start()-200):m.end()+200], re.I)];
+      assert not unret, f'Decision 87 still names ops_plan_revisions at {unret} with no retirement framing within 200
+      chars -- clause 4 still instructs a two-table build'; bare=sorted(ln(x.start()) for x in
+      re.finditer(r'\bops_plans\b', b)); assert not bare, f'the retired name ops_plans still stands INSIDE the
+      Decision 87 entry at docs/DECISIONS.md lines {bare} -- the amendment names ONE plans table and the operator
+      ruled it is ops_execution_plans, so EVERY in-entry site is re-pointed, not just clause 4 (the four carried on
+      origin/main are clause 3 read-projection :4581, clause 4 bullet :4583, clause 6 grain :4590, Rationale :4593)';
+      assert 'ops_execution_plans' in b, 'the Decision 87 entry names NO plans table at all -- ops_plans was swept out
+      of the entry but ops_execution_plans was never written in, so the sweep DELETED the name instead of re-pointing
+      it'; rbb=[x for x in re.finditer(r'retired-before-built|retired\s+before\s+built', b, re.I)]; assert
+      any(re.search(r'critique_history', b[max(0, x.start()-600):x.end()+600]) for x in rbb), 'the
+      retired-before-built framing does not name critique_history within 600 chars -- ops_plan_revisions was a
+      critic-authored DIRECTIVE INBOX, not a history table, so the consolidation must hold because critique_history on
+      the single plan row is the directive home, NOT because SCD2 already gives per-revision history';
+      unpt=sorted(ln(x.start()) for x in re.finditer(r'insert_revision', b) if not
+      re.search(r'(retire|re-point|repoint|no longer|superseded|consolidat|critique-append|single plans table|one
+      plans table)', b[max(0, x.start()-300):x.end()+300], re.I)); assert not unpt, f'Decision 87 still grants
+      insert_revision at docs/DECISIONS.md lines {unpt} with no retirement or re-point framing within 300 chars --
+      clause 5 grants a verb whose target table this amendment retires'; print('OK Decision 87 residency-scoped and
+      swept onto ops_execution_plans,', len(b.encode()), 'bytes')"
+    red_green_expectation: >-
+      Red on origin/main: residency is absent from Decision 87, and the authority-and-T4.6 leg is paragraph-scoped
+      because the bare word authority is already present there. The clause-4 legs are red on main for their own
+      reasons -- no retired-before-built framing, no single-plans-table statement, and three unpointered
+      ops_plan_revisions mentions (clause 4's bullet, clause 4's telemetry bullet, and the Rationale). The four
+      substance legs are independently red on main as well, each measured in isolation because the residency leg fires
+      before them: four bare ops_plans inside the entry (:4581 clause 3, :4583 clause 4, :4590 clause 6, :4593
+      Rationale), zero occurrences of ops_execution_plans in the entry, zero retired-before-built sites so no
+      critique_history within 600 chars of any, and one unframed insert_revision at :4589. Green once the
+      residency-scoped amendment AND the clause-4 consolidation AND the in-entry name sweep all land; a consolidation
+      announced only in the Rationale leaves the clause-4 bullet outside the 200-char window and stays red, and a
+      sweep that stops at clause 4 stays red naming :4581, :4590 and :4593.
+  - source: docs/contracts/decision-entry.yaml
+    behavior: >-
+      significance.routing gains a work_item row stating the migration direction and resolving deliberate deferral,
+      carrying the literal `Never a numbered Decision` in the ROW BODY, and routing_rule is extended to reach it.
+    verification_step: 4
+    command: >-
+      bin/venv-python -c "import yaml,pathlib,re;
+      d=yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text()); sig=d['significance'];
+      rows=sig['routing']; assert 'work_item' in rows, f'no work_item routing row -- significance.routing carries only
+      {sorted(rows)}'; row=str(rows['work_item']); rule=str(sig.get('routing_rule','')); assert
+      re.search(r'(bootstrap|supersede|destination\s+form|migration)', row, re.I), 'the work_item ROW does not state
+      the migration direction; matching that vocabulary anywhere else in the significance block does not count';
+      assert re.search(r'(cross_tier_gate|cross-tier\s+gate|deferred_post_mvp|MVP\s+boundary|exit_criteri)', row,
+      re.I), 'the work_item ROW does not name what the roadmap uniquely provides today'; assert
+      re.search(r'(defer|not-now|declined)', row + ' ' + rule, re.I), 'neither the work_item row nor routing_rule
+      resolves a deliberate deferral with a reason'; assert 'work_item' in rule, 'routing_rule was not extended to
+      reach the work_item row -- extend QUESTION (3) row enumeration to include work_item and KEEP THREE questions,
+      so the Three-questions counts at :403, :406 and :412 do not stale; do not add a fourth question'; assert 'Never a numbered Decision' in row, 'the work_item ROW body omits
+      the exact literal Never a numbered Decision -- validate_decision_entry_conformance rejects a claimed routing row
+      ONLY when the row text contains that literal, so without it significance.value: work_item is silently claimable
+      on a numbered Decision entry and NOTHING fails anywhere'; print('OK routing table completed:', sorted(rows))"
+    red_green_expectation: >-
+      Red on origin/main: routing carries only cd_state_flip, field_semantics, numbered_decision and operational_fact.
+      Green once the work_item row lands with the migration direction, the roadmap-unique capability AND the literal
+      `Never a numbered Decision` in the ROW itself -- planting any of that vocabulary in another row, or the literal
+      in routing_rule, does not green it. The literal leg is the only machine check standing between this plan and a
+      new contradiction: validate_decision_entry_conformance.py:206 engages ONLY on that exact literal, so a row
+      without it fails nothing anywhere while making significance.value: work_item claimable on a numbered entry.
+  - source: docs/decisions-index.json
+    behavior: >-
+      The committed index matches the amended corpus.
+    verification_step: 1
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A generated projection. validate_decisions_index_freshness is a standing check that fails on drift or absence,
+      with a regenerate hint. A bespoke test would assert the generator against itself.
+
+constraints:
+  - >-
+    THE ROUTING RULE IS A MIGRATION DIRECTION, NOT A STATIC BOUNDARY. The operator's long-term vision
+    is that recommendations SUPERSEDE the roadmap -- they are the same thing, and the roadmap is the
+    bootstrap. ops_recommendations already carries dependencies VARCHAR[], so the dependency-graph
+    primitive exists today. Therefore write the row to name what the ROADMAP UNIQUELY PROVIDES NOW --
+    cross-tier gate evaluation, MVP-boundary classification, per-criterion exit lifecycle -- and
+    default everything else to a rec. As recs gain those capabilities the boundary moves on its own,
+    with no rewrite. Do NOT enumerate topics; a topic list would freeze the boundary exactly where the
+    vision says it must not stay.
+  - >-
+    EXTEND decision-entry.yaml; DO NOT ADD A CONTRACT. The `none_grandfathered` evaluator kind is
+    gone, so every new depth-1 Class D contract needs a RESOLVING evaluator and there is no debt
+    record to fall back on. ATTRIBUTION, corrected: Decision 168 clause 3 PERMITTED
+    `absent -> none_grandfathered` on baseline-present files -- it did NOT retire the kind. rec-3059
+    wave 2 (PLAN-class-d-enforcers-wave-2, 2026-08-16) converted the last two carriers
+    (composite-action-shape, iam-simulate-fixture) to resolving `{check: <name>}` evaluators and then
+    retired the kind itself: the EnforcementRoute model and the EvaluatorSpec.none_grandfathered
+    field no longer exist, so it is unrepresentable rather than merely discouraged. See
+    contract-population.yaml's 2026-08-16 amendment_log entry and
+    retirement_notes.evaluator_none_grandfathered. The conclusion is STRONGER under the correct
+    attribution, not weaker. No in-scope surface can serve as a resolving evaluator, and declaring a
+    check would be a second new mechanism. Extending inherits validate_decision_entry_conformance and
+    removes the two-routers contradiction with the operational_fact row (which starts at :393, not the
+    :397 an earlier round cited -- :397 is that row's closing `Never a numbered Decision` line) in the
+    same edit.
+    Because decision-entry.yaml is itself a Class D contract, the same edit MUST add a new
+    `amendment_log[]` entry (contract-population.yaml change_detection.amendment_log) -- the
+    obligation is symmetric with the decisions-index regeneration the scope already names.
+  - >-
+    THIS PLAN SELECTS NO SUBSTRATE. The spike does, after this encoding. Leave CD.43 criteria-only.
+    VP step 5 fails if a selection appears.
+  - >-
+    AMEND DECISION 87 SCOPED TO RESIDENCY. Warehouse RESIDENCY of executor plans is the prerequisite;
+    the AUTHORITY flip for the human PLAN-*.yaml surface stays timed to T4.6. A wholesale inversion
+    would supersede Decision 85's git clause pre-producer and cost human plans their diff review for
+    nothing.
+  - >-
+    THE VERB SPLIT CANNOT BE ENFORCED AT MVP. Every persona presents one identity at the writer
+    boundary, so server-side role scoping distinguishes nothing. The MVP guarantee is a CONTENT PIN --
+    SFN carries (rec_id, revision, ulid-or-hash) and every fetch plus the merge node verifies it. The
+    verb split routes to T4.5/T4.6 where per-persona credentials exist.
+  - >-
+    KEEP LIFECYCLE FIELDS SUBSTRATE-NEUTRAL. Use CD.27's P1/P2/P3 property language in exit_criteria;
+    confine candidate mechanism to the candidate decision body. Purging the incumbent's vocabulary
+    while admitting the candidate's makes ruling for the incumbent cost a re-sweep and ruling for the
+    candidate cost nothing -- switching-cost bias, and ESB-05 with the sign flipped.
+  - >-
+    NO VACUOUS ASSERTIONS -- AND THE STANDARD IS THREE FAULT INJECTIONS, NOT ONE ORIGIN/MAIN RUN.
+    Rounds 1, 2 and 3 each shipped checks that could not fail (enumerated in the vacuous-assertions
+    context bullet). The earlier form of this constraint demanded that EVERY hermetic command be
+    confirmed RED on origin/main; that is both self-contradictory and the wrong standard -- steps 7
+    and 13 are DECLARED regression guards that pass on main by design, two reviewers ruled that
+    legitimate, so the constraint could never be discharged as written; and a single red-on-main run
+    proves only that the subject is absent from main, not that the assertion DISCRIMINATES. The bar
+    is now three proofs per assertion leg: (1) RED on origin/main for the reason its `expected`
+    names; (2) RED against a SUBJECT-REMOVED fixture -- the subject of that leg deleted from an
+    otherwise-final tree; and (3) RED against a DECOY fixture that satisfies a WRONG leg -- the
+    vocabulary planted in a neighbouring row, field, item or paragraph the check must not accept.
+    EXEMPTION, named explicitly: verification_plan steps 7 and 13 are DECLARED REGRESSION GUARDS and
+    PASS on origin/main by design; leg (1) is waived for those two steps and for no others. They are
+    NOT exempt from legs (2) and (3) and must still be fault-injected in the removed direction --
+    step 7 with candidate mechanism injected into each of the five scanned fields and with P1/P2/P3
+    stripped from T4.2, step 13 with a 10,001-line fixture. The results are RECORDED per assertion,
+    per the matching execution step; a constraint on its own has now failed three times.
+  - >-
+    DO NOT TOUCH THE FROZEN EXECUTOR. scripts/executor/ is Life 1, retiring by deletion. Roadmap-side
+    only, and the sweep includes the siblings round 1 missed -- T4.9a and T4.8 both declare NEW files
+    inside that tree, alongside T3.10.
+  - >-
+    V2, AND THE FLOOR IS ARGUED. Two YAML documents, one markdown amendment, one regenerated index,
+    and portal calls. No resource-affecting scope, so the deterministic V-tier floor is not reached.
+  - >-
+    ONE PLANS TABLE -- OPERATOR RULING. `ops_plans` and `ops_plan_revisions` DO NOT EXIST. Verified:
+    absent from config/lambda/ducklake/field_semantics.yaml's `ops_tables` (which holds ops_decisions,
+    ops_execution_plans, ops_priority_queue, ops_recommendations, ops_session_log, ops_smoke_events),
+    absent from docs/contracts/storage-substrate.yaml, and referenced by zero lines of code. WHERE THE
+    NAMES DO LIVE, corrected -- an earlier round claimed they live "only in Decision 87 clause 4,
+    T4.5/T4.6 intents, and prose", which is false by this plan's own vocabulary, because exit criteria
+    and decomposition hints are LIFECYCLE-TRACKED fields, not prose. The verified inventory is:
+    inside Decision 87's entry body (docs/DECISIONS.md :4569-4604) the retired name occurs at FOUR
+    sites, not the single clause range earlier rounds counted -- :4581 (clause 3, the read-projection
+    clause), :4583 (clause 4's bullet), :4590 (clause 6, the grain clause) and :4593 (the Rationale) --
+    with clause 4's body running :4582-4588 and clause 5's `insert_revision` grant sitting at :4589,
+    so an amendment that perfects clause 4 and leaves clauses 3 and 6 naming the table it just retired
+    is not a sweep; VP step 2's two-sided in-entry leg asserts all four. T4.5's name,
+    intent, exit_criteria and decomposition_hints; T4.6's intent, exit_criteria (two criteria) and
+    decomposition_hints; T4.7's exit_criteria; and -- OUT OF THIS PLAN'S FILE SCOPE -- Decision 136 at
+    docs/DECISIONS.md :1874 and :1876 and docs/contracts/exit-criteria-ledger.yaml :46, which are filed
+    as a rec rather than edited here. Meanwhile `ops_execution_plans` is `status: live` on DuckLake-on-Neon and already
+    carries plan_text, steps, revision, status and critique_history. The operator has ruled: there
+    must be only ONE plans table, and the two names were most likely a mistake. So: amend Decision 87
+    clause 4 to name a SINGLE plans table; retire the two-table split as
+    retired-before-built (no migration, no deprecation window, nothing to delete -- neither table was
+    ever created); SWEEP ALL FOUR in-entry sites above onto `ops_execution_plans` rather than only the
+    clause-4 one, and do NOT write the retired name `ops_plans` back into the entry even to say it is
+    retired -- name the retired split as a separate plans table plus `ops_plan_revisions`, which
+    carries its own retirement framing; and re-point T4.5's intent at EXTENDING the live table rather
+    than constructing new entities. AIM THE RETIREMENT RATIONALE AT THE RIGHT TARGET. "SCD2 already gives per-revision
+    history" is the WRONG argument and must not be written into the amendment: `ops_plan_revisions` was
+    never a history table. Clause 4 defines it as "machine-actionable revision directives (the
+    imperative: change X -> Y), authored by the critique agent for planning-agent consumption"; its
+    verb is `insert_revision` (clause 5); its consumer, in T4.6's own intent, is "plan_agent reads its
+    open-revision inbox, emits revision N+1, marks rows resolved". It is a critic-authored DIRECTIVE
+    INBOX. The consolidation survives, but for a different reason: `critique_history` is a column on
+    the single plan row, and under the critic/gate authorship boundary this plan installs it IS the
+    directive's home -- the critic appends the verdict and its imperative there, and the planner reads
+    them from the row it already fetches. Write THAT. A visibly wrong rationale on an amended Decision
+    invites the re-litigation Decision 87 exists to prevent. (The scd2 grain fact is still true and
+    still worth recording -- it just answers a question nobody asked.)
+    CLAUSE 5 IS NOT UNTOUCHED. Its verb-RBAC PRINCIPLE is a writer concern and survives -- do not fold
+    the principle into clause 4 -- but the grant itself names `insert_revision`, whose target table
+    this amendment retires. Re-point that one verb at the critique-append verb on the single plans
+    table, in the same edit, and say so; leaving clause 5 granting a verb against a retired table is
+    the same defect as leaving T4.5 instructing a builder to construct it.
+    BUSINESS KEY, for T4.5's builder: the live table's `merge_key` is `rec_id` ALONE, and human plans
+    have no rec_id -- this very plan carries `bundled_recommendations: []`. Once the one table holds
+    human plans as well as executor ones, `rec_id` no longer identifies a row, so the merge key
+    generalizes (a plan-identity key, with rec_id as one nullable attribute among others). Note the
+    generalization on T4.5 so its builder does not assume `rec_id` suffices; do NOT design the
+    replacement key here -- that is T4.5's data-model work.
+  - >-
+    THE PLANS-TABLE NAME IS DECIDED: `ops_execution_plans`. OPERATOR RULING -- DO NOT RE-OPEN IT.
+    The operator preferred `ops_plans` on the merits and explicitly subordinated that preference to a
+    tiebreaker: "whatever is easiest to standardise to is the correct answer". The measurement, taken
+    at 469e19d, selects `ops_execution_plans` unambiguously.
+    MEASUREMENT METHOD, so a reviewer reproduces the figures rather than re-deriving different
+    ones: git-tracked files at 469e19d, matching LINES not occurrences, EXCLUDING this plan
+    file and the two derivative read-cache JSONLs. Both exclusions matter -- this plan edits
+    its own subject, so an unpinned re-grep at a later SHA returns different numbers, and a
+    read cache is never evidence.
+    `ops_execution_plans` -- 278 matching lines across 80 files, 32 of them load-bearing. It is the IMPLEMENTED name and the only one
+    with any enforcement surface: terraform/iceberg_tables.tf (5) and terraform/personal/prod_lambdas.tf;
+    config/lambda/ducklake/field_semantics.yaml and field_semantics.static.yaml (9); .importlinter;
+    config/agent/verification_registry/registry.yaml and config/agent/data_quality/ (which holds a file
+    literally named ops_execution_plans.yaml); scripts/ops_portal/execution_plans.py (7),
+    scripts/sync/ops.py (5), scripts/ops_writer.py, scripts/s3_log_store.py, scripts/executor/plan.py,
+    scripts/data_quality_execute.py, scripts/schema_to_field_semantics.py,
+    scripts/checks/contracts/validate_portal_drift.py, src/common/outbox_retirement.py,
+    src/lambdas/ops-compaction/manifest.yaml, AGENTS.md, and 12 test modules.
+    `ops_plans` (word boundary) -- 30 lines across 8 files, none load-bearing, and ZERO in any schema, terraform, code,
+    config or test file. Every hit is prose: docs/ROADMAP-PLATFORM.yaml T4.5/T4.6/T4.7 (11),
+    docs/DECISIONS.md Decision 87 and Decision 136 (6), docs/contracts/exit-criteria-ledger.yaml (1
+    forward reference), four plan docs and one audit -- 2+6+11+1+1+2+6+1 = 30 lines over 8
+    files. The read-cache JSONLs are excluded by the method above, not overlooked.
+    So a rename costs the 32 load-bearing files -- terraform state, a live DuckLake table, an
+    importlinter contract and 12 test modules -- plus the 13 live docs among the other 48; the
+    remaining 35 are plan documents and audits a rename would never rewrite, so DO NOT quote the
+    bare 80 as the rename cost. Keeping costs 8 prose-only files describing a table nobody
+    built. Under the operator's own tiebreaker that is not close.
+    THE SUPERSEDED ARGUMENT, recorded so it is not re-run: an earlier round argued a rename was "free
+    today" because storage-substrate.yaml records `graduation_blocker: CD.17 reversal + executor
+    resume (table lands empty until then)`. That argument is REFUTED by the measurement -- emptiness
+    bounds the DATA migration only and says nothing about the SYMBOL surface -- 32 load-bearing
+    files -- which is the entire cost. Do not restate it anywhere.
+    Write "the single plans table `ops_execution_plans`" and carry the prevalence rationale with it,
+    in the roadmap, in the Decision 87 amendment and in the candidate decision -- noting that the
+    candidate-decision copy discharges NOTHING in VP step 10, whose design corpus is tier-item exit
+    criteria only for exactly this reason. INSIDE the Decision 87
+    entry, phrase the measurement against "the rejected alternative name" rather than the token: VP
+    step 2's absence leg fails on any bare `ops_plans` in that block, so the retired symbol does not
+    survive there even as a citation. The ruling adds NO
+    files to this plan's four-file scope: `ops_execution_plans` already exists, so nothing in
+    terraform, config or code changes, and no verb, contract entry or test moves.
+    GIVE THE RULING A TRACKED OWNER, not just this paragraph. Recorded in a constraint and nowhere
+    else, it has no rec, no tier item and no exit criterion holding it -- and the MVP read-verb item
+    binds a PHYSICAL table name into NAMED_READS, which is precisely where the ruling has to be
+    legible. Land it as an exit criterion on the item that owns the read verb (or a rec referenced
+    from it), naming `ops_execution_plans` as the single plans table and recording that it is ruled,
+    not defaulted. VP step 10 asserts it.
+  - >-
+    THE WAREHOUSE ROW IS THE SOLE PLAN ARTIFACT -- DO NOT IMPORT THE DESIGN'S DUAL WRITE. The design's
+    stage 04 publishes both the plan document to S3 AND the queryable projection to
+    ops_execution_plans. That dual write is REJECTED: the table carries `plan_text`, so the plan BODY
+    is already in the row, and an S3 document would be a second copy behind a second read path with no
+    reconciliation story. The execution step that authors the candidate decision says to record the
+    two-plane design, and a FAITHFUL transcription would import the dual write with nothing failing --
+    which is exactly why this is written as an instruction rather than left to the transcriber's
+    judgement. Transcribe selectively: the warehouse row is the sole plan artifact; if S3 is mentioned
+    at all, it is mentioned as considered-and-rejected, with the plan_text reason.
+    AND THE ARTIFACT IS ALREADY RESIDENT -- guarding only against IMPORT is half the job. Verified on
+    origin/main, `plan_s3_uri` and the plan-document-to-S3 phrasing are in the roadmap TODAY at three
+    sites: CD.27's detail (the Step Functions payload contract -- "the state machine carries rec_id,
+    branch_slug, plan_s3_uri"), T4.1's intent ("plan_agent ... writes PLAN-{slug}.md to S3; returns
+    {plan_s3_uri, plan_summary}") and T4.2's intent ("emits PLAN-{slug}.md to S3; returns plan
+    summary") -- each of those two item fields carrying the URI half AND the payload half. Neither existing
+    sweep reaches them -- the substrate sweep hunts Durable-Functions vocabulary and the neutrality
+    guard hunts runner mechanics -- so an encoding that merely declines to import the dual write would
+    leave the corpus contradicting itself in the node contract a builder reads FIRST. Treat
+    plan_s3_uri and the S3-plan-document phrasing as a SECOND dead-vocabulary class and re-point all
+    three sites in place, with the considered-and-rejected framing within the same field. VP step 6
+    asserts it.
+    AND THE GOVERNING RULE IS THE PAYLOAD RULE, NOT THE URI RULE: THE STATE MACHINE CARRIES IDENTIFIERS
+    ONLY; NO LLM-AUTHORED PAYLOAD CROSSES IT. The operator's artifact states it three ways -- "Step
+    Functions passes identifiers and permissions. Agents fetch content"; "Fine for identifiers; not a
+    payload channel"; "You get the determinism at the cost of an identifier, not a payload". The S3
+    class rules on the URI and leaves the payload, and the SAME TWO FIELDS carry both halves: T4.1's
+    intent returns `{plan_s3_uri, plan_summary}` and T4.2's returns `plan summary`. `plan_summary` is
+    LLM-authored prose returned THROUGH the state machine -- content, not an identifier, and not
+    deterministic on re-fetch, which is the property the substrate is being selected for. So re-point
+    BOTH halves of both fields: the payload half needs payload-specific wording (identifiers only, not
+    a payload, no payload, payload channel) and NOT `considered-and-rejected`, because the S3 half
+    already supplies that token 24 and 10 characters away and it would green the payload guard without
+    the payload having been addressed at all. VP step 6's payload leg asserts it, on the same two
+    carrier fields the S3 leg already forces the implementer to edit.
+  - >-
+    A CRITIQUE VERDICT IS NEVER WRITTEN BY THE CRITIQUED PARTY. `critique_history` is a COLUMN on the
+    plan row (field_semantics.yaml `ops_tables.ops_execution_plans.columns.critique_history`), and its
+    only write path is `save_execution_plan` (scripts/ops_portal/execution_plans.py), which takes a
+    whole ExecutionPlan dict -- the PLANNER's write path. Taken literally that leaves exactly two
+    shapes and both are forbidden: either the critic re-submits the entire plan body (a critic that
+    can rewrite the plan it critiqued), or the planner records the critique against itself. Decision
+    87 clause 5 exists to forbid precisely that pair. The encoding must therefore state that critique
+    verdicts are written by the CRITIC or by the GATE, never by the critiqued persona -- and that the
+    content pin's hash is scoped to the plan BODY EXCLUDING `critique_history`, because a pin taken
+    over the whole row is invalidated by every critique append and would fail closed on the loop's
+    normal path. Naming the boundary is in scope here; BUILDING the split verb is not -- that routes
+    to T4.5/T4.6 with the rest of the verb split.
+  - >-
+    THE work_item ROW MUST CARRY THE LITERAL `Never a numbered Decision`.
+    scripts/checks/decisions/validate_decision_entry_conformance.py rejects a claimed routing row ONLY
+    when that row's own contract text contains the exact literal string `Never a numbered Decision`
+    (`_NEVER_NUMBERED_DECISION_TEXT`, tested in `_significance_issues`). The `operational_fact` and
+    `field_semantics` rows carry it; `numbered_decision` and `cd_state_flip` deliberately do not. A
+    work_item row that omits it silently makes `significance.value: work_item` CLAIMABLE on a numbered
+    Decision entry -- the exact contradiction the check exists to catch, and a new one this plan would
+    have introduced. Write the literal into the ROW BODY verbatim; do not paraphrase it, do not put it
+    only in routing_rule, and do not rely on the check inferring intent.
+  - >-
+    `deferred` IS NOT A WRITABLE REC STATUS. `scripts/executor/jsonl_store.py:90` sets
+    `_VALID_STATUSES = {open, closed, failed, declined, superseded}`, enforced at
+    `scripts/ops_data_portal.py` (and matched by `--status` choices in scripts/ops_portal/cli.py).
+    `deferred` exists only in CONTRACT vocabulary (docs/contracts/ops_recommendations.yaml:184 lists
+    `open, closed, in_progress, deferred, ...`) -- it is precisely the contract-versus-code skew this
+    plan files a rec about, so do not discharge a deferral by writing a status the portal rejects. A
+    deliberate deferral is `--update-rec <id> --status declined` with a resolution stating why-not-now
+    and what would reopen it, OR a roadmap tier item / exit criterion. TIE-BREAK, because
+    `we will not decide X yet` currently routes BOTH ways: this plan's own routing constraint makes
+    MVP-boundary classification a capability the ROADMAP uniquely provides today, and deferring
+    executor work IS an MVP-boundary classification. So -- a deferral that classifies work relative to
+    the MVP boundary, or that needs gate/exit-criterion lifecycle, goes to the ROADMAP; a deferral
+    that is a one-off not-now-for-this-reason with no boundary and no gate semantics goes to a
+    `declined` rec. VP step 10's fix_if already carries this tie-break in its own words; there is no
+    `deferred`-status phrasing left anywhere in the verification_plan to supersede. Nothing in this
+    plan is frozen against correction: where a `fix_if` and an execution step disagree, BOTH are
+    wrong until reconciled, and the reconciliation is an edit, not a footnote.
+
+context:
+  - >-
+    THE DESIGN -- REQUIRED READING:
+    https://claude.ai/code/artifact/a591749c-cc12-4b5e-b582-ac03595e04dc ("Two-Plane Executor"). Step
+    Functions keeps the state machine and carries IDENTIFIERS ONLY; GitHub Actions runs every persona
+    and every verification gate, all LiteLLM in-process; the plan artifact lives in
+    ops_execution_plans and is fetched by named verb. Open register: GOV-1..3, MECH-1..4, DATA-1..4,
+    OPS-1..6.
+  - >-
+    THE DOSSIER -- the second required reading:
+    https://claude.ai/code/artifact/a290d222-4200-4f2e-a74c-2f9cf07c370f. Two systems share the name
+    "executor": Life 1, frozen and retiring by deletion, and Life 2, zero of sixteen T4 items started.
+    Explicitly not authoritative over the roadmap -- which is why its claims need encoding here.
+  - >-
+    THE LONG-TERM VISION THIS ENCODING MUST NOT FORECLOSE, stated by the operator: recommendations
+    eventually SUPERSEDE the roadmap. They are the same thing; the roadmap bootstraps the rec system,
+    and the destination is dependency graphs built from rec edges. ops_recommendations already carries
+    dependencies VARCHAR[]. That is why the routing row is written as a capability test rather than a
+    topic list -- a topic list would freeze the boundary, and this boundary is meant to move.
+  - >-
+    WHY DECISION 87 IS AMENDED, AND WHY ROUND 2's AMENDMENT WAS TOO BROAD. Clause 2 times the
+    git-to-warehouse flip to the autonomous producer's existence, while T4.5's deferral rationale is
+    "no warehouse consumer of plans exists until the T4.6 loop" -- a consumer this design creates at
+    MVP. Round 2 inverted the whole flip. But the cycle is only in RESIDENCY: the producer needs its
+    plans queryable. It does not need AUTHORITY -- executor plans are born warehouse-native and never
+    had a git life, so there is nothing to flip for them, while human PLAN-*.yaml keep git/PR diff
+    review, which is exactly what clause 2 protected.
+  - >-
+    THE THREE-LENS RESULT, ROUND 2. Design merit: SOUND_WITH_RESERVATIONS, and it withdrew its
+    round-1 S3-primary reservation after verifying that ops_execution_plans carries plan_text -- the
+    body is in the table, so an S3 document would be a second copy. Placement: BLOCK, but six of nine
+    round-1 findings verified closed red-on-main. Consistency: BLOCK, three blocking, one of which
+    (the co-shipped spike plan) is resolved by dropping that plan at the operator's direction.
+  - >-
+    VACUOUS ASSERTIONS ACROSS THREE ROUNDS -- AN OPEN PATTERN, NOT SETTLED HISTORY, AND THE FIX IS A
+    METHOD. Rounds 1-2 shipped five: a `slug` grep satisfied by pre-existing text; an `[Amendment`
+    marker already present sixteen times; a `T4.5` match already in Related; a rec-id set already
+    holding 52 ids; and a CD.17 leg targeting `unplanned_resume_rate`, which lives in CD.27 and never
+    appeared in CD.17. ROUND 3 FOUND MORE, NOT FEWER -- at least four further legs that were already
+    satisfied on origin/main before any edit: the routing disjunct greened by the pre-existing
+    operational_fact row at :393; the verb-RBAC leg greened by deferred T4.5/T4.6, which could never
+    verify an MVP-side obligation; the plan-read-verb leg greened by T1.3 and T4.5 under a whole-item
+    `str(x)` match; and the merge-node guard satisfiable by three unrelated criteria each carrying one
+    of its three tokens. On top of those, five of the eight dossier probes (`targets`, `closure`,
+    `A0`, `RCA rec`, `queue`) matched on origin/main on their own, and a sixth listed entry
+    (`worker identity`) was not even one of the eight. That is NINE OR MORE distinct
+    non-discriminating legs across THREE rounds, and the count rose every round. Every one was an
+    assertion that was TRUE rather than one that DISCRIMINATED. The fix is NOT another constraint --
+    three rounds of constraints have now failed to stop it. The fix is FAULT INJECTION AS A METHOD,
+    with a per-assertion result recorded before handoff: see the no-vacuous-assertions constraint and
+    the execution step that makes recording it a deliverable.
+  - >-
+    THE PLANS TABLE ALREADY EXISTS, AND THERE IS ONLY ONE. Verified against the tree, not against
+    Decision 87's prose: `ops_plans` and `ops_plan_revisions` appear in no schema, no contract and no
+    code. They DO appear in lifecycle-tracked fields, which an earlier round wrongly filed under
+    "prose": Decision 87 clause 4 and its Rationale; T4.5's name, intent, exit_criteria and
+    decomposition_hints; T4.6's intent, exit_criteria AND decomposition_hints; T4.7's exit_criteria;
+    and, outside this plan's file scope, Decision 136 (docs/DECISIONS.md :1874/:1876) and
+    docs/contracts/exit-criteria-ledger.yaml :46. Exit criteria and decomposition hints are
+    lifecycle-tracked by this plan's own vocabulary -- calling them prose is what let the round-2
+    failure repeat one field over. `ops_execution_plans` is `status: live` on DuckLake-on-Neon
+    (docs/contracts/storage-substrate.yaml), write_mode scd2, merge_key rec_id, grain `one row per
+    plan revision (rec_id, revision); current = latest revision per rec_id`, and its columns already
+    include plan_text, steps, revision, status and critique_history. The operator has ruled that there
+    is ONE plans table. This encoding therefore retires a two-table split that was never built, which
+    costs nothing today and removes a second surface T4.5 would otherwise have had to construct. The
+    surviving NAME is ruled in the same breath: it is `ops_execution_plans`, selected by prevalence --
+    278 matching lines across 80 files, 32 of them load-bearing, the implemented name and the only one with an enforcement surface,
+    against 30 prose-only lines across 8 files, none load-bearing for `ops_plans`. So the sweep RE-POINTS every tracked
+    mention at the live name rather than leaving a pointer to an open choice, and the ruling adds no
+    files to the four-file scope, because the table it names already exists.
+  - >-
+    TWO DESIGN CONCERNS THE EARLIER DRAFTS ADDRESSED NOWHERE. (a) The design's stage 04 publishes the
+    plan document to S3 AND a projection to ops_execution_plans. The table carries plan_text, so the
+    body is already in the row and the S3 copy is a second artifact with a second read path -- the
+    round-2 design-merit lens withdrew its own S3-primary reservation for exactly this reason, yet an
+    execution step still tells the implementer to record the two-plane design, and a faithful
+    transcription would re-import the dual write with nothing failing. (b) `critique_history` is a
+    column on the PLAN row whose only write path is `save_execution_plan`, the planner's path -- so a
+    literal reading forces either a critic that can rewrite the plan it critiqued, or a planner that
+    records the verdict against itself. Both are what Decision 87 clause 5 exists to forbid. Round 3
+    left BOTH bound through prose alone, and the claim that neither was machine-detectable was itself
+    the defect rather than a fact about the world. Round 4 makes both detectable: the S3 concern is VP
+    step 6's second dead-vocabulary class -- which also surfaced that the rejected artifact is already
+    RESIDENT at CD.27 detail, T4.1 intent and T4.2 intent, not merely importable, and, from round 6, that
+    the S3 class ruled on the URI and left the PAYLOAD standing in the same two fields, which is VP step
+    6's third class -- and the
+    critique-authorship concern is a VP step 10 design probe demanding critique_history, the
+    critic/gate token and the exclusion token in ONE tier-item EXIT CRITERION -- exit criteria only, because the
+    execution steps mandate the same wording into the candidate decision's detail and reading CD bodies would have
+    made the probe vacuous by construction. The constraints and execution-step
+    instructions remain, but they are no longer the only thing holding either.
+    WHAT THIS PLAN STILL DOES NOT DO. It selects no substrate, ratifies nothing, and builds
+    nothing. It does not resolve MECH-1's credential model or MECH-3's continuation -- it gives them
+    owners. It does not fix AGENTS.md's ops_execution_plans backend claim, the missing NAMED_READS
+    verb, the contract status-vocabulary skew (three-way: ops_recommendations.yaml:184
+    lists `in_progress` and `deferred`, which _VALID_STATUSES rejects, AND omits `failed`, which it
+    accepts) or the boundary-pattern drift; those are filed as recs and
+    referenced by id. And it does not touch the frozen Life-1 executor.
+
+pre_implementation_checklist:
+  - "Read both artifacts in full before editing."
+  - "Re-measure the roadmap line count after any rebase; two earlier drafts quoted stale figures."
+  - "Run every hermetic VP command against origin/main and confirm it is RED for the reason its expected names."
+  - "Read decision-entry.yaml's significance block (:372-409) before extending it; the operational_fact row at :393 already routes to recs and progress_notes."
+  - "Confirm the next free T4 ids and candidate-decision id at authoring time. VERIFIED at origin/main (8,616-line roadmap): T4.14 is the highest T4 id, so the next free one is T4.15, and CD.43 is the highest candidate decision, so the new one is CD.44. An earlier session's fixtures assumed T4.15 (the layer-2 spike), T4.16 (the MVP-side item) and CD.44; NO verification assertion depends on those exact ids, so a shift costs a re-number, not a re-design. Re-confirm anyway -- main moves."
+  - "Roadmap headroom: 8,616 lines of 10,000 on origin/main = 1,384 lines. Budget every roadmap edit against that figure, and re-measure after any rebase rather than quoting this one."
+  - "Confirm the one-plans-table ruling before touching Decision 87 clause 4, and carry the NAME ruling with it: the single plans table is `ops_execution_plans`, selected by prevalence (278 matching lines across 80 files, 32 of them load-bearing, the implemented name and the only one with an enforcement surface, against 30 prose-only lines across 8 files for the REJECTED alternative name, none load-bearing). Record that rationale in the entry WITHOUT the retired token itself -- VP step 2 fails on any bare occurrence inside the Decision 87 block; record no open choice, and do not restate the refuted empty-table `a rename is free today` argument."
+  - "Confirm decision-entry.yaml's Class D envelope and its existing amendment_log at :34 BEFORE editing any other top-level key; the same edit owes a new amendment_log[] entry or validate_contract_drift fails on contract-population.yaml's change_detection.amendment_log rule."
+  - "Confirm the work_item row body carries the literal `Never a numbered Decision` -- grep the written row for the exact string, not for a paraphrase. Nothing else in the repository will tell you it is missing."
+  - "Before sweeping the one-plans-table consolidation, enumerate the sites from the tree rather than from this plan's prose. Verified at 467eb01: Decision 87 clause 3 (:4581), clause 4 (:4583), clause 6 (:4590) and the Rationale (:4593) -- FOUR in-entry sites, not the clause-4-plus-Rationale pair earlier rounds counted; T4.5 name/intent/exit_criteria/decomposition_hints; T4.6 intent/exit_criteria/decomposition_hints; T4.7 exit_criteria; and out of file scope, docs/DECISIONS.md :1874/:1876 and docs/contracts/exit-criteria-ledger.yaml:46. Re-confirm -- main moves."
+  - "Before authoring the candidate decision, grep the roadmap for `plan_s3_uri`, `to S3` AND `plan_summary` / `plan summary`: the rejected S3 plan document is already resident at CD.27 detail, T4.1 intent and T4.2 intent, and the SAME two item fields also return an LLM-authored payload through the state machine, so this is a two-halves re-pointing job, not only an abstention."
+  - "Confirm ops-portal reachability before the filings; a failed write fails loud with no outbox. Confirm too that `deferred` is NOT among the portal's accepted statuses before routing any deferral."
+
+execution_steps:
+  - "Amend Decision 87 in place, scoped to RESIDENCY: warehouse-resident executor plans are a prerequisite for T4.2; the AUTHORITY flip for the human planning surface stays timed to T4.6; name the circularity and the items whose ordering it corrects."
+  - "Amend Decision 87 clause 4 in the same edit, scoped to the PLANS TABLE: name a SINGLE plans table; record the two-table split (a separate plans table plus `ops_plan_revisions`) as RETIRED-BEFORE-BUILT (neither table was ever created -- no migration, no deprecation window, nothing to delete); SWEEP THE RETIRED NAME OUT OF THE WHOLE ENTRY, NOT JUST CLAUSE 4: `ops_plans` stands at FOUR in-entry sites on origin/main -- :4581 (clause 3's read-projection sentence), :4583 (clause 4's bullet), :4590 (clause 6's grain sentence) and :4593 (the Rationale) -- and every one is re-pointed at `ops_execution_plans`, because amending clause 4 while clauses 3 and 6 keep naming the table the same entry just retired is round 2's amend-the-Decision-leave-the-restatements defect two clauses over. Do not write `ops_plans` back into the entry even to say it is retired, and do not merely delete it: VP step 2's sweep is two-sided, so an entry that names no plans table at all fails as loudly as one that keeps the retired name. State WHY the separate revisions table is unnecessary, AIMED AT THE RIGHT TARGET -- `ops_plan_revisions` was never a history table, so do NOT write `scd2 already gives per-revision history` as the reason. Clause 4 defines it as a critic-authored DIRECTIVE INBOX (`machine-actionable revision directives (the imperative: change X -> Y), authored by the critique agent for planning-agent consumption`), `insert_revision` is its verb and T4.6's `plan_agent reads its open-revision inbox` is its consumer. The reason the consolidation holds is that `critique_history` on the single plan row IS the directive's home under the critic/gate authorship boundary this plan installs. The scd2 grain fact (`one row per plan revision (rec_id, revision)`) may be recorded as a supporting fact; it is not the rationale. AND RE-POINT CLAUSE 5 IN THE SAME EDIT: clause 5 grants critique personas `insert_revision`, a verb whose target table this amendment retires, so the verb is re-pointed at the critique-append verb on the single plans table. Clause 5's verb-RBAC PRINCIPLE (writer-layer role scoping, a writer concern rather than a schema one) survives and is not folded into clause 4 -- but the plan no longer claims clause 5 is untouched, because it is not. Name the single plans table `ops_execution_plans` -- the surviving NAME is RULED, not open -- and carry the prevalence rationale with it (278 matching lines across 80 files, 32 of them load-bearing, the implemented name and the only one with an enforcement surface, against 30 prose-only lines across 8 files for the REJECTED alternative name, none load-bearing) -- written into the entry WITHOUT the retired token itself, because VP step 2's absence leg fails on any bare occurrence inside the block. Do not write `name TBD`, an open-naming pointer, or the refuted empty-table argument. The ruling adds no files to the four-file scope: the table already exists."
+  - "Amend T4.5, T4.6 AND T4.7 to match the amended clauses, sweeping EVERY lifecycle-tracked field that carries the retired split -- not just the intents. This is the plan's own narrated round-2 failure (`amended the Decision and left the items restating the superseded clause`) one field over, so the site inventory is given explicitly rather than left to a grep. T4.5: intent (replace the falsified `no warehouse consumer of plans exists until the T4.6 loop` rationale and re-point from `build ops_plans and ops_plan_revisions` to `extend the one live plans table`), name (`... warehouse entities (ops_plans, ops_plan_revisions) ...`), exit_criteria (`ops_plans and ops_plan_revisions tables exist ...`, `insert_plan / set_plan_status / insert_revision verbs ...`, `git->warehouse ETL projects PLAN-{slug}.yaml into ops_plans ...`) and decomposition_hints (two atomic_plans naming each table). T4.6: intent, exit_criteria (`... emits revision N+1 as a new ops_plans SCD2 row` and `Authority-flip executed: ops_plans is source of truth ...`) AND decomposition_hints (`Authority-flip cutover: ops_plans becomes SoT ...`). T4.7: exit_criteria (`ops_plans carries a base_commit_sha captured at plan authoring time`) -- T4.7 appeared nowhere in this plan before round 4 and is a deferred sibling in the same closed unit. Every rewritten mention of a plans table NAMES `ops_execution_plans`, because the surviving NAME is ruled: no rewritten field carries an open-naming pointer, and none is left naming no table at all -- re-point the text, never merely delete it. VP step 3 asserts both halves across all three items. AND NOTE THE BUSINESS-KEY GENERALIZATION ON T4.5 IN THE SAME EDIT, in ONE tracked field, with the tokens TOGETHER: config/lambda/ducklake/field_semantics.yaml gives the live table `merge_key: rec_id` ALONE -- not `(rec_id, revision)` -- so a re-dispatched writer can emit revision N twice with different bodies, and human plans have no `rec_id` at all (this very plan carries `bundled_recommendations: []`). Once the ONE plans table holds human plans as well as executor ones, `rec_id` stops identifying a row, so the business key generalizes and T4.5's builder must not assume `rec_id` suffices. Write the NOTE, not the design: do NOT design the replacement key here -- that is T4.5's own data-model work (grain first, then merge key, per docs/contracts/data-modeling-standard.yaml). One T4.5 tracked field must carry the merge-key/business-key vocabulary, `rec_id` and a generalization token together; the same sentence parked on T4.6, or the three tokens split across name/intent/decomposition_hints, instructs nobody. VP step 3's business-key leg asserts it. This closes acceptance criterion 6, which until this round was bound by an acceptance criterion and a constraint with NO execution instruction and NO assertion anywhere."
+  - "Regenerate docs/decisions-index.json."
+  - "Extend decision-entry.yaml's significance.routing with the work-item row, and extend QUESTION (3)'s ROW ENUMERATION inside routing_rule to include `work_item` -- KEEPING THREE QUESTIONS, so the `Three questions gate` count at :403, the `All three` at :406 and standing_commitment's `re-applies all three questions` at :412 do not stale. Do NOT add a fourth question. routing_rule carries QUESTION-counts that are distinct from the ROW-counts the five-site sweep in the next step covers, and no `four` search reaches any of the three, so read as an instruction to add a fourth question this step would stale all three statements with nothing catching it. Question (3) reads `Does no existing routing row (cd_state_flip / operational_fact / field_semantics) already own this content?` -- the edit is to that parenthesised row list and nowhere else. State the migration direction, name what the roadmap uniquely provides today, and resolve the deliberate-deferral case. The row body MUST contain the literal string `Never a numbered Decision` -- validate_decision_entry_conformance rejects a claimed row only on that exact literal, so without it `significance.value: work_item` becomes claimable on a numbered Decision entry. Route the deferral case to `declined`-with-reason or to the roadmap, never to a `deferred` status the portal cannot write."
+  - "Correct decision-entry.yaml's own routing-COUNT arithmetic in the same edit -- FIVE sites, and they miscount in BOTH directions, which is why a single four->five substitution does not finish the job. Four UNDERCOUNT the row set and are reachable by a `four` search: :364 (metadata_envelope.field_shapes.significance.value, `One of significance.routing's four keys below`), :377 (the significance section comment, `the four routing rows are a citable classification vocabulary in their own right`), :382 (significance.bar, `routes per one of the four rows below instead of minting a new number`) and :408 (routing_rule, `one of the four routing keys`). The FIFTH, :387, miscounts the OTHER way and no `four` search reaches it: the numbered_decision row's own body reads `(restates the bar above as a routing row, for symmetry with the other three)` -- siblings-minus-itself, which becomes `the other four`. VP step 4's fix_if names the same five; this step and that field AGREE, and neither supersedes the other. Prefer count-free phrasing (`one of significance.routing's keys below`, `for symmetry with the other rows`) so a sixth row does not stale any of them again."
+  - "Add the new amendment_log[] entry to decision-entry.yaml in the same commit as the routing-row edit -- date, semantic_break, change_class, summary -- matching the shape of the existing entries at :34. contract-population.yaml's change_detection.amendment_log fails validate_contract_drift when a Class D file's canonical dump changes with no new entry; this is the symmetric mechanical consequence to the decisions-index regeneration, and the plan previously named only the latter."
+  - "Author the candidate decision recording the two-plane design. Rule GOV-1 by compute reclassification, narrowed to no durable state, no correlation identifiers, no retry or routing policy between personas -- not the falsifiable 'performs no orchestration'. State GOV-2. Record SFN Activities as considered-and-rejected for MECH-1. Annotate ESB-04's surviving literal wording. Select nothing. TRANSCRIBE SELECTIVELY, NOT FAITHFULLY: the design's stage 04 publishes the plan document to S3 as well as the projection to the plans table -- that dual write is REJECTED and must NOT be imported. State that the warehouse ROW is the SOLE plan artifact (the table already carries plan_text, so an S3 document is a second copy behind a second read path); if S3 appears at all, it appears as considered-and-rejected with that reason."
+  - "State the critique-authorship boundary in the candidate decision and on the carrying tier item: a critique verdict is written by the CRITIC or by the GATE, never by the critiqued persona. `critique_history` is a column on the plan row whose only write path is `save_execution_plan` -- the planner's path -- so an unqualified encoding forces either a critic that rewrites the plan it critiqued or a planner that records the verdict against itself, the pair Decision 87 clause 5 forbids. State in the same place that the content pin's hash is scoped to the plan BODY EXCLUDING `critique_history`, because a pin over the whole row is invalidated by every critique append and would fail closed on the loop's normal path. Name the boundary only -- building the split verb routes to T4.5/T4.6. Put the tier-item form in ONE exit criterion carrying `critique_history`, the critic-or-gate authorship token and the exclusion token together -- VP step 10 reads TIER-ITEM EXIT CRITERIA ONLY, and reads them individually, because three separate criteria each holding one token are the same non-guard VP step 12 was rewritten to reject. The candidate-decision half of this instruction is still required, but it DISCHARGES NOTHING in VP step 10: the design corpus deliberately excludes candidate-decision bodies, since this very step mandates the wording into one and a CD detail is a single unsplit blob that would satisfy the probe by construction."
+  - "Add the tier item owning the layer-2 spike, sequenced before T4.2, with exit criteria requiring a workspace-mutating leg and an unstubbed dispatch credential on the candidate arm. Name its id in CD.27's precondition text."
+  - "Add the MVP-critical items with reverse depends_on edges from their consumers, including the plan read verb whose spec pins a writer-minted id or content hash."
+  - "Place the verb-RBAC obligation as an exit criterion on a NAMED item, and the content-pin guarantee as an exit criterion on the MVP-side item."
+  - "Sweep the substrate class across name, intent, exit_criteria, files_in_scope and decomposition_hints, all tiers, both phrasings; and across candidate decisions and gates."
+  - "Sweep the SECOND dead-vocabulary class in the same pass: the rejected S3 plan document. It is ALREADY RESIDENT, so declining to import it is not enough -- verified on origin/main at three sites, CD.27's detail (`the state machine carries rec_id, branch_slug, plan_s3_uri`), T4.1's intent (`writes PLAN-{slug}.md to S3; returns {plan_s3_uri, plan_summary}`) and T4.2's intent (`emits PLAN-{slug}.md to S3; returns plan summary`). Neither existing sweep reaches them: the substrate sweep hunts Durable-Functions vocabulary and the neutrality guard hunts runner mechanics. Re-point each in place with the considered-and-rejected framing IN THE SAME FIELD and within 200 characters of the mention (the table already carries plan_text, so the warehouse row is the sole plan artifact and an S3 document is a second copy behind a second read path). Left alone, the corpus would contradict itself in the state-machine node contract a builder reads first. RE-POINT BOTH HALVES OF EACH CARRIER FIELD, NOT ONLY THE URI. The two resident sites each return a URI AND an LLM-authored payload: T4.1's intent returns `{plan_s3_uri, plan_summary}` and T4.2's intent returns `plan summary`. The design's governing rule is stated three ways -- `Step Functions passes identifiers and permissions. Agents fetch content`, `Fine for identifiers; not a payload channel`, `You get the determinism at the cost of an identifier, not a payload` -- so `plan_summary` is content crossing the state machine, not an identifier, and it is not deterministic on re-fetch. The S3 regex cannot see it, so re-pointing only the URI half ships a corpus that still describes the state machine carrying a payload, in the very node contract this instruction exists to fix. Re-point the payload half in the SAME field within 200 characters of the mention, using payload-specific wording (`identifiers only`, `not a payload`, `no payload`, `payload channel`) -- NOT `considered-and-rejected`, which the S3 half already supplies 24 and 10 characters away and which therefore proves nothing about the payload. The merge node and every persona fetch the plan body by named verb from the warehouse row; the state machine carries (rec_id, revision, ulid-or-hash) and nothing else. VP step 6's payload leg asserts it, and it costs no field the S3 leg was not already forcing open."
+  - "Rewrite lifecycle-tracked criteria in CD.27's P1/P2/P3 property language; confine candidate mechanism to the candidate decision body."
+  - "Route the design's open register onto exit_criteria. Re-home MECH-4 off T4.3 and OPS-4 onto T4.1's existing kill-switch criterion."
+  - "Add the merge-node diff-path guard exit criterion."
+  - "Give the design items that carry NO open-register identifier a tracked home, because the GOV/MECH/DATA/OPS routing step reaches only things with an id and would skip every one of them in silence. (a) The read-path Neon cold-resume retry posture: the design declares it a precondition for unattended operation, so land an exit criterion requiring the plan-fetch/read path to survive a Neon cold resume with bounded-backoff retry before failing the step, on the live item that owns the read verb. (b) The plans-table NAME ruling: it lives only in this plan's constraints today, with no rec, tier item or exit criterion owning it -- and the MVP read-verb item BINDS A PHYSICAL NAME into NAMED_READS, which is precisely where the ruling has to be legible. Land it as an exit criterion (or a rec referenced from one) naming `ops_execution_plans` as the single plans table and recording the prevalence rationale; the operator has already ruled, so the criterion records a decision instead of waiting on one, and `keep ops_execution_plans` is now the ruled answer rather than a silent default. (c) The critique-authorship boundary and its critique_history-excluding pin, per the critique-authorship execution step above. VP step 10 asserts all three, AND IT ASSERTS THEM AGAINST TIER-ITEM EXIT CRITERIA ONLY. Writing any of the three into the new candidate decision's detail -- which other execution steps require -- does not discharge this step: a CD detail is one unsplit blob carrying all three at once, so a corpus that read it would green all three probes on the strength of an edit this plan mandates anyway. Each of (a), (b) and (c) needs its own exit criterion on a live item, with its tokens together in that one criterion."
+  - "Record the dossier's eight unspecified entries, each as a tier item, a rec id, or a recorded deferral; and the consistency defects including T4.9a and T4.8 declaring new files in the frozen tree."
+  - "File recs through the ops portal for the out-of-file repairs, and reference each id from the roadmap entry that would otherwise carry the paragraph. TWO of those repairs are the one-plans-table consolidation's out-of-scope tail, verified this round and deliberately NOT fixed inline (this plan's file scope is four files, and Decision 136 is a ratified entry outside the residency/clause-4 amendment scope): docs/DECISIONS.md :1874 and :1876 -- Decision 136's Reversal-conditions and Related lines, which name `ops_plans / ops_plan_revisions warehouse entities, gated on CD.17` and `a future ops_plans foreign key` -- and docs/contracts/exit-criteria-ledger.yaml :46, `Forward-compatible as a future ops_plans foreign key (T4.5 / Decision 87)`. One rec covering both surfaces is sufficient; reference its id from the roadmap and edit neither file here."
+  - "File recs through the ops portal for the four-rows sites OUTSIDE this plan's scope, and reference each id rather than fixing any of them inline: AGENTS.md :197 (`its four routing rows`) and :201 (the DD-B convention's `other three routing rows`); docs/DECISIONS.md :220 (Decision 167's PROBLEM line, `without ever declaring which of the four significance.routing rows applies` -- :220, not the :224 an earlier round cited for it) and :224 (Decision 167 clause 2, `one of decision-entry.yaml's four significance.routing tokens`); docs/DECISIONS.md :1164 and :1171, BOTH inside Decision 150 clause 1's body and NOT Decision 167's -- :1164 reads `three other classes of durable content route elsewhere` (a siblings-minus-numbered_decision count, which becomes four and which no `four rows` search reaches) and :1171 reads `The section's four routing rows are a citable classification vocabulary`; and .claude/skills/planning/SKILL.md :376 (`routes per that section's four rows instead`) and :382 (`naming one of the four routing keys`). Every line number above was re-verified against the tree this round; two of the earlier citations were off. Flag the planning skill as the highest-priority of the set: decision-entry.yaml's own significance comment names it as the block's primary consumer (`Cited by the planning skill's decision-authoring step`), so leaving it saying `four rows` misinforms the exact reader who must apply the new row."
+  - "Fault-inject every hermetic verification command and RECORD the per-assertion result before handoff. For each step and each assertion leg: the origin/main result (WAIVED only for steps 7 and 13, the declared regression guards), the subject-removed-fixture result, and the decoy-fixture result -- each with the assertion message the run actually printed. Steps 7 and 13 still owe the removed-direction injections named in the no-vacuous-assertions constraint. Put the table in the PR body. A constraint alone demonstrably did not work: three rounds of review shipped assertions that could not fail, and the count rose each round. If any leg cannot be made to fail, the ASSERTION is wrong, not the fixture."
+  - "Re-measure the line count; run every VP step; confirm the fault-injection table is complete; then run the full tier before commit."
+
+rollback: >-
+  Four files and a set of portal writes. The YAML documents, the Decision 87 amendment and the
+  regenerated index revert cleanly with `git revert`; nothing is deployed, no table changes, and this
+  plan graduates nothing. The filed recommendations do NOT revert with the commit -- they are
+  warehouse rows, and the correct undo is `--update-rec <id> --status declined` with a resolution
+  naming this rollback, never a direct edit to the read cache. Two things should survive a revert
+  rather than being lost with it: the Decision 87 residency amendment, because the circularity it
+  corrects is real whether or not this encoding lands, and the decision-entry routing row, because it
+  is a general rule that outlives this design and serves the rec-supersedes-roadmap direction. A
+  THIRD survives on the same grounds: the Decision 87 clause-4 consolidation onto one plans table.
+  The two-table split describes entities that were never built, so reverting the consolidation would
+  restore a proposal for two tables where one live table already does the work -- the correction is
+  true whether or not the two-plane encoding lands. Its revert cost is likewise nil, and NOT because
+  the live table is empty: the consolidation retires entities that were never created and keeps the
+  name that is already implemented (`ops_execution_plans`, per the operator's ruling), so no rows, no
+  verbs, no schema, no terraform and no contract entries move in either direction. The
+  decision-entry.yaml amendment_log entry reverts with its file and needs no separate handling. If
+  the encoding is abandoned, re-home all three rather than reverting them.
