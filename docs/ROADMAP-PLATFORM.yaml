@@ -301,44 +301,124 @@ cost_projection:
   executor_substrate_billing:
     provenance: Folded from audits/executor-substrate-and-billing-shape-ad02653.yaml billing_model (ESB-09); per-substrate envelope at concurrency=1 (T4.1's current cap), recorded scale 100-300 recs/month
     gross_free_tier_stance: Figures are GROSS. Lambda's 400k GB-s / 1M requests, the 4000 free SFN transitions and CloudWatch's 5 GB free tier are ignored, because a 2026-created account may sit on the post-2025 credit plan rather than the perpetual free tier (unverified)
-    non_discrimination_conclusion: At concurrency=1, every candidate substrate (durable_functions, sfn_over_stateless_workers, self_checkpointed_lambda_dynamodb, long_running_container, plus the near-zero-marginal-dollar hosted_cli_runner) costs single-digit-to-low-double-digit dollars per month at recorded scale; envelope deltas between AWS-priced candidates are <= approximately $10-15/month -- economics do NOT discriminate the layer-2 substrate choice
+    non_discrimination_conclusion: >-
+      NARROWED at concurrency=1: economics now discriminate AGAINST the codebuild-class candidate
+      only (aws_native_codebuild_runner, ASSESSED ELIMINATED, never a member of CD.27's pinned
+      candidate set); CD.27's pinned five (durable_functions, sfn_over_stateless_workers,
+      self_checkpointed_lambda_dynamodb, long_running_container, hosted_cli_runner) are UNCHANGED
+      and remain economically indistinguishable AT ANY FIXED SCALE POINT. Per
+      executor_substrate_billing.provenance's block-level "recorded scale 100-300 recs/month",
+      reading a band low as the 100-rec point and a band high as the 300-rec point: at the
+      100-rec band low the pinned four span 1/1/1/5 (max delta 4.0/month); at the 300-rec band
+      high they span 8/10/8/20 (max delta 12.0/month) -- both figures fall inside the prior
+      approximately $10-15/month non-discrimination reading once compared AT THE SAME scale
+      point rather than across scale points.
     per_substrate_envelope_usd_per_month:
       durable_functions:
         envelope: "1-8"
         note: per-operation $8.00/M ops at 250-1000 ops/rec (0.20-0.80) plus data-written and retention terms
         region: eu-west-2
         rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+        provenance_class: aws_price_list
+        in_pinned_candidate_set: true
       sfn_over_stateless_workers:
         envelope: "1-10"
         note: transitions dominate at higher per-iteration counts (I~20-30 iterations x 5 personas)
         region: eu-west-2
         rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+        provenance_class: aws_price_list
+        in_pinned_candidate_set: true
       self_checkpointed_lambda_dynamodb:
         envelope: "1-8"
         note: DynamoDB on-demand write/read plus storage; state lives in owned storage
         region: eu-west-2
         rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+        provenance_class: aws_price_list
+        in_pinned_candidate_set: true
       long_running_container:
-        envelope: "~5"
-        note: Fargate x86 0.04656 usd per vCPU-hr plus 0.00511 usd per GB-hr at roughly 1 task-hour/rec
+        envelope: "5-20"
+        note: >-
+          Fargate x86 0.04656 usd per vCPU-hr plus 0.00511 usd per GB-hr; ~1 task-hour/rec at 100
+          recs/month (band low, 2026-08-01 Price List basis) widening to ~1.2 task-hours/rec at
+          300 recs/month (band high, OE-07/OE-08 operator estimate, 2026-08-21 session).
         region: eu-west-2
         rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
+        provenance_class: aws_price_list
+        in_pinned_candidate_set: true
+        utilisation_basis: >-
+          RATE remains Price-List-provenanced (AWS Price List bulk offer files, region eu-west-2,
+          fetched 2026-08-01, unchanged); the UTILISATION producing the band high is an operator
+          estimate (OE-07/OE-08, 2026-08-21 session), explicitly not measurement.
+      aws_native_codebuild_runner:
+        envelope: "~108"
+        assessment: "ASSESSED, ELIMINATED at current shape"
+        in_pinned_candidate_set: false
+        provenance_class: published_pricing_page_regional
+        region: eu-west-2
+        rate_basis: "AWS published pricing page (regional), region eu-west-2, fetched 2026-08-21"
+        note: >-
+          Best orchestration integration in the set -- the optimized Step Functions
+          codebuild:startBuild.sync integration returns the full Build object (status, phases,
+          resolvedSourceVersion, log group) with a StopBuild kill switch, a 36h timeout ceiling,
+          64-128 GB disk, custom ECR images to 50 GB, private-by-default logs. Eliminated on
+          price plus region plus quota, NOT on integration: eu-west-2 on-demand bills full
+          wall-clock per-minute rounded up with no idle discount (general1.small 0.005 usd/min =
+          0.30 usd/h, ~2.6x the equivalently-sized 2vCPU/4GB Fargate shape -- against 1vCPU/2GB
+          the ratio is 5.3x); both escape hatches (Lambda compute per-second, reserved fleets)
+          are absent from eu-west-2; the concurrent-build quota is self-contradictory in AWS's
+          own docs (table says 1 per compute type, prose says 20 default for some platforms)
+          exactly where OE-08's 5-wide scout swarms sit. If ever revisited: eu-west-1 restores
+          both escape hatches (the region trade was rejected for data-lake and Neon co-location
+          in London); StartBuild's buildspecOverride/serviceRoleOverride/imageOverride are a
+          lateral-movement surface AWS itself flags, needing condition keys.
+      agentcore_managed_runtime:
+        envelope: "~13"
+        assessment: "ASSESSED, VIABLE BUT UNJUSTIFIED at current scale"
+        in_pinned_candidate_set: false
+        provenance_class: published_pricing_page_unqualified
+        region: not_region_qualified
+        region_caveat: >-
+          AWS publishes no eu-west-2 price list for Bedrock AgentCore Runtime while runtime
+          microVMs are GA in eu-west-2; the published rate is region-unqualified.
+        rate_basis: "AWS published pricing page (region-unqualified), fetched 2026-08-21"
+        note: >-
+          The no-CPU-during-idle property is REAL, verified for CPU (pricing page: I/O wait and
+          idle time free if no background process runs; AWS's example confirms it
+          arithmetically) at 0.0895 usd/vCPU-h plus 0.00945 usd/GB-h. CAVEAT: memory appears
+          billed on wall-clock INCLUDING waits (peak-memory-consumed-up-to-that-second formula;
+          reverse-engineering AWS's example reconciles only on full session seconds) -- a
+          HYPOTHESIS needing AWS confirmation before any cost model relies on it. Model-agnostic
+          (any foundation model, in or outside Bedrock; no dec-122/CD.28 conflict). Eliminated at
+          current scale by STRUCTURE not billing: a 2 GB image cap, 1 GB session storage and 750
+          MB zip (none adjustable) cannot hold the 5.4 GB dependency env; the only escape (EFS/S3
+          Files) forces VPC mode: no internet by default, hence NAT gateway egress plus
+          site-packages over NFS; ARM64 containers mandatory; personas become HTTP servers with a
+          non-blocking ping heartbeat against a 15-min idle kill; session storage wiped each
+          runtime version update; no .sync SFN integration (optimized integration wraps
+          InvokeHarness only, Bedrock-Converse-shaped; needs SDK integration plus
+          waitForTaskToken). At OE-05 duty the advantage over Fargate is ~7 usd/month at 300
+          recs, which does not buy the rebuild. Q2's async-mode generalization is PARTIALLY
+          FALSIFIED: the no-CPU-during-wait mechanism exists in-region, but the ~1.9x Fargate
+          vCPU premium eats most of it below the ~42 percent duty break-even.
     durable_execution_corrected_rates:
       per_operation_usd:
         value: 0.0000134
         region: eu-west-2
         rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
         note: corrects the audit's understated 8e-6 figure, 1.7x low
+        provenance_class: aws_price_list
       data_written_usd_per_gb:
         value: 0.41
         region: eu-west-2
         rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
         note: corrects the audit's understated 0.25/GB figure, 1.6x low
+        provenance_class: aws_price_list
       retention_usd_per_gb_month:
         value: 0.25
         region: eu-west-2
         rate_basis: AWS Price List bulk offer files, region eu-west-2, fetched 2026-08-01
         note: corrects the audit's understated 0.15/GB-month figure, 1.7x low
+        provenance_class: aws_price_list
     nat_contingency:
       applies_to: EFS-for-Lambda workspace backing store, IF selected at wave 2 (ESB-01); not incurred under the incumbent or the container/hosted-CLI candidates
       standing_usd_per_month: "33-35"
@@ -346,10 +426,34 @@ cost_projection:
       region: eu-west-2
       rate_basis: Published EFS plus VPC plus NAT Gateway tier pricing plus one third-party aggregator estimate, cross-checked against the audit's independent approximately 32 usd/month note; NOT the AWS Price List bulk offer files this block's other lines cite -- that basis does not cover NAT Gateway or EFS, which is exactly why this line is a bracket at confidence medium rather than an exact figure
     substrate_reevaluation_triggers:
-      - A2+ concurrency raise (T4.4 autonomy-gate ratchet) -- the concurrency=1 non-discrimination conclusion no longer holds
-      - 100x scale (recs/month grows an order of magnitude beyond the 100-300 recorded baseline)
-      - Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term)
+      - A2+ concurrency raise (T4.4 autonomy-gate ratchet) -- the concurrency=1 non-discrimination conclusion no longer holds; also re-triggers the GitHub Actions usage-policy fit (T4.15 c10), since clause 4's disproportionate-burden reading assumed concurrency=1
+      - 100x scale (recs/month grows an order of magnitude beyond the 100-300 recorded baseline) -- also re-triggers the GitHub Actions usage-policy fit (T4.15 c10), since the measured burden posture assumed this baseline
+      - Repo-visibility change (a private flip removes hosted_cli_runner's free-minutes term AND changes the clause-4 disproportionate-burden calculus for the GitHub Actions usage-policy fit, T4.15 c10, since GitHub's public-repo minute allowance no longer applies)
       - Egress shape change per Decision 88 clause 2 (the Neon catalog egress measurement lands a real figure)
+  operator_estimates:
+    source: >-
+      operator estimate, 2026-08-21 session; judgment from interactive /plan + /implement
+      observation, NOT measurement; automated-executor tasks expected simpler than interactive
+      sessions
+    entries:
+      - {id: "OE-01", input: "persona wall-clock", assumed_value: "plan_agent first draft <=20 min, plan_critic ~6, decision_scout ~4, revision cycles ~10+6, simple rec ~10 all-planning-included",
+         why: "unstated; derived from this session's own observed persona timings", sensitivity: "HIGH; dominant cost term everywhere"}
+      - {id: "OE-02", input: "convergence cycles", assumed_value: "avg 2 plan-critique cycles, worst observed 5 interactively, non-convergence worst case ~1.5 h of planning wall-clock",
+         why: "unstated; observed distribution across this session's planning rounds", sensitivity: "medium; multiplies OE-01 directly"}
+      - {id: "OE-03", input: "implement_agent edit time", assumed_value: "5-30 min of edit time once verification and validation are excluded per c9; interactively those add ~30 min verification plus ~30 min full validate.py",
+         why: "unstated; c9 excludes verifier wall-clock from the persona's own measured time", sensitivity: "medium; the exclusion is what keeps this line small"}
+      - {id: "OE-04", input: "code_reviewer time", assumed_value: "5 min avg / 10 max, critical+high fix incorporation <=5 min, medium/low rec filing ~1 min",
+         why: "unstated; derived from this session's own review-round timings", sensitivity: "low; smallest persona line"}
+      - {id: "OE-05", input: "CPU duty cycle", assumed_value: "thinking-dominated and LLM-blocked, plan_agent ~5 of 30 min on tools, plan_critic highest tool share, decision_scout minimal, blended planning-time duty ~20 percent",
+         why: "unstated; observed tool-call share across this session's personas", sensitivity: "decides agentcore-vs-Fargate ordering only at a ~42 percent break-even, not the headline"}
+      - {id: "OE-06", input: "memory footprint", assumed_value: "2 GB per persona assumed, 4 GB safe ceiling, CC-web interactive container 16 GB / 4 vCPU at ~0.6 GB observed idle, pytest the driver and full-suite runs excluded",
+         why: "unstated; observed idle footprint of this session's own container", sensitivity: "low; well under any candidate's memory ceiling"}
+      - {id: "OE-07", input: "composed per-rec billed persona time", assumed_value: "typical ~72 min, simple ~21, bad ~140 at 5 cycles and 30 min implement; billed time is the SUM of persona invocations because waitForTaskToken states are non-billed",
+         why: "unstated; composed from OE-01/OE-02/OE-03/OE-04 under the non-billed-wait composition rule", sensitivity: "HIGH; drives the long_running_container envelope band directly"}
+      - {id: "OE-08", input: "throughput", assumed_value: "60 recs/month initial at 2/day supervised, 300/month the scale case, rec-level concurrency stays 1, persona-level concurrency up to 5",
+         why: "unstated; operator's own stated supervised-rollout schedule", sensitivity: "medium; sets the 100-300 recs/month scale band this block reads against"}
+      - {id: "OE-09", input: "failure and re-run rate", assumed_value: "rare once a session is established, clustered at connection setup, DeepSeek personas assumed less reliable than interactive Claude, drives checkpoint frequency",
+         why: "unstated; observed connection-setup clustering in this session's own failures", sensitivity: "medium; sets checkpoint-frequency assumptions, not billing"}
   projected_100tb_scale:
     total_per_month_usd: "910-1880"
     dominant_cost: S3 storage (~$800-1500/mo with Intelligent-Tiering)
@@ -8099,6 +8203,48 @@ tier_items:
         text: >-
           The record selects the executor's workspace backing store from CD.43's option_set against W1-W8 and
           replaces CD.43's TBD_at_CD.43_ratification marker, discharging ESB-01 in the same act
+        status: open
+      - id: c9
+        text: >-
+          SUBSTRATE-NEUTRAL VERIFICATION SPLIT. Verification (V1/V2/V3 scripts) and validation
+          (validate.py --pre on push, full suite on merge) execute on GitHub Actions under the
+          sole-verifier authority carried by the LIVE T4.9a c1, REGARDLESS of the layer-2
+          substrate selected; persona compute on any arm performs edit/think/tool loops only and
+          NEVER runs validate.py or verifier scripts as part of the persona's own execution -- on
+          an arm whose substrate IS GitHub Actions the boundary is that the persona job and the
+          CI job are DISTINCT WORKFLOW RUNS, not one blended job, which is the formulation that
+          keeps the criterion meaningful on every arm; the spike's per-arm cost and duration
+          measurements must EXCLUDE verification and validation wall-clock, and any arm's record
+          that includes it is measuring the wrong boundary; verification steps are converted to
+          deterministically-runnable scripts dispatched via the T4.9a callback pattern (--pre ~5
+          min cap on push, 1-2 per rec; full suite 30 min cap on merge only; V3 tiers remain rare
+          and agent-supervised as the named exception, routed per their own tier rules). Decision
+          163 CLAUSE 3 already scopes the pre-handoff full-tier run to the interactive CC-web
+          session and explicitly does NOT extend it to the executor, so the executor's full tier
+          runs ONCE at merge and is not run twice; handoff_policy.full_validation_required_before_commit
+          is Literal[True] on every plan including executor-authored ones, so its "before commit"
+          wording is discharged at merge on the executor and reconciling the flag itself is
+          T4.9a / CD.17 work, not this criterion's. This is a conscious, reversal-conditioned
+          carry-forward (Decision 75) whose trigger is Decision 112's own reversal condition (CI
+          moving off GitHub-hosted runners plus OIDC federation). T4.9 c1 and T4.9a c1 are both
+          NOT rehomed by this criterion.
+        status: open
+      - id: c10
+        text: >-
+          GITHUB ACTIONS USAGE-POLICY FIT. The spike's ratifying record quotes the GitHub Terms
+          for Additional Products and Features, Actions section (retrieved 2026-08-21) and states
+          the usage-policy fit: clause 5 ("If using GitHub-hosted runners, any other activity
+          unrelated to the production, testing, deployment, or publication of the software
+          project associated with the repository") is SATISFIED by executor personas, which
+          produce and test this repository -- the clause tests purpose, not authorship; the
+          BINDING constraint is clause 4 (burden "disproportionate to the benefits", example "as
+          part of a serverless application"), to which the dispatch-and-callback shape is
+          structurally adjacent, so the record must state the measured burden posture (rec
+          concurrency, recs/day, job-minutes/month) and show it proportionate; re-evaluation
+          triggers are the A2+ concurrency raise, a repo-visibility flip, and recs/month growing
+          an order of magnitude past the 100-300 baseline; and a BUSL-1.1 relicensing note that
+          clause 3 (reselling Actions) is not engaged by developing commercial software ON
+          Actions and would engage only if customer workloads ever executed on Actions minutes.
         status: open
     related_candidate_decisions: [CD.27, CD.43, CD.44]
     effort: L
