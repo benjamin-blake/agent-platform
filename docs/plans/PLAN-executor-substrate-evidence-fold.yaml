@@ -64,9 +64,13 @@ scope:
       "AWS Price List bulk offer files" + "2026-08-01" needle pair with a CLOSED ENUMERATION of
       provenance classes, each carrying its own mandatory needle, retrieval date and region rule;
       an unrecognised or absent provenance_class FAILS, and the fault injection is PER CLASS so a
-      second class cannot be admitted while enforcing nothing. Also carries bundled rec-2946: the
-      SFN transition guard parses tx_per_rec and rate out of the roadmap line it checks instead of
-      hardcoding them as Python literals.
+      second class cannot be admitted while enforcing nothing. ALSO fixes a live selection gap: the
+      affected_tests channel-2 data edge is a PER-FILE text scan, and this module carries no
+      literal "docs/ROADMAP-PLATFORM.yaml" token, so it is not selected into --pre on a
+      roadmap-only PR today -- the guard this plan is amending would not run on the very edit it
+      exists to police. Add the literal. Also carries bundled rec-2946: the SFN transition guard
+      parses tx_per_rec and rate out of the roadmap line it checks instead of hardcoding them as
+      Python literals.
   - file: tests/esb_text_fix/test_substrate_evidence_fold.py
     action: Create
     purpose: >-
@@ -76,9 +80,13 @@ scope:
       narrowed conclusion and its reconciled per-scale-point delta arithmetic, T4.15 c9, T4.15 c10,
       and the in-place trigger extension. A separate module rather than more bulk in
       test_cost_projection.py: that module's subject is the priced-row guard contract, this one's
-      is the evidence fold, and splitting keeps both well under the SLOC limit. Imports from
-      tests/esb_text_fix/_anchors.py so the affected_tests channel-2 data edge selects this file
-      on any docs/ROADMAP-PLATFORM.yaml change, exactly as it selects its siblings.
+      is the evidence fold, and splitting keeps both well under the SLOC limit. It must carry the
+      literal token "docs/ROADMAP-PLATFORM.yaml" in its own text so the affected_tests channel-2
+      data edge selects it into --pre on any roadmap change: that channel is a PER-FILE text scan
+      (scripts/checks/deps/affected_tests.py::_data_edge_channel reads each tests/**/*.py and looks
+      for the changed data file's literal relpath or quoted basename), so importing _anchors
+      propagates NOTHING -- only three sibling modules carry the literal today and are selected;
+      test_cost_projection.py does not.
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
@@ -103,31 +111,44 @@ acceptance_criteria:
   - >-
     executor_substrate_billing.per_substrate_envelope_usd_per_month carries the two new ASSESSED
     rows, each declaring provenance_class and in_pinned_candidate_set false. The four pinned rows
-    remain present and remain members of the pinned set; they are EDITED in exactly two respects
-    and no others -- every priced row gains provenance_class, and long_running_container's envelope
-    widens to its recomputed band. No pinned row's rate_basis, region or note-borne rate figure
-    changes.
+    remain present and remain members of the pinned set; they are EDITED in exactly three respects
+    and no others -- every priced row gains provenance_class, the four pinned envelope rows gain
+    in_pinned_candidate_set true, and long_running_container's envelope widens to its recomputed
+    band (plus its utilisation_basis, per criterion 13). No pinned row's rate_basis, region or
+    note-borne rate figure changes.
   - >-
     EVERY priced row the guard scans -- all four envelope rows plus all three
     durable_execution_corrected_rates rows, plus the two new rows -- declares a recognised
-    provenance_class. No row relies on a default.
+    provenance_class. EVERY row of per_substrate_envelope_usd_per_month additionally declares
+    in_pinned_candidate_set explicitly, true or false. No row relies on a default for either field,
+    and the delta arithmetic selects its rows by the explicit flag rather than by absence -- a
+    future row added without it must fail, not be silently counted as pinned.
   - >-
     No arn:aws: literal reaches cost_projection; the Step Functions optimized integration is named
     as codebuild:startBuild.sync without the ARN prefix (Decision 101 + the standing public-repo
     boundary guard).
   - >-
-    The priced-row guard is a closed enumeration proven non-vacuous PER CLASS: for EACH declared
-    provenance class, a row carrying that class with a wrong needle is REJECTED and a row carrying
-    that class with the correct needle but a wrong retrieval date is REJECTED; a row declaring an
-    unrecognised class is REJECTED; a row declaring no class is REJECTED; and a well-formed row of
-    each class is ACCEPTED. A class whose region rule waives the eu-west-2 requirement additionally
-    requires a substantive region_caveat naming the service and the reason, not merely a non-empty
-    string.
+    The priced-row guard is a closed enumeration of THREE classes -- the incumbent AWS-Price-List
+    class and two published-pricing-page classes, one regional and one region-unqualified, split
+    because the region rule is a property of the CLASS and the two new rows need opposite region
+    rules (codebuild is eu-west-2, agentcore's published rates are region-unqualified); collapsing
+    them into one class makes one of the two real rows an unintended decoy. Proven non-vacuous PER
+    CLASS: for EACH of the three, a row carrying that class with a wrong needle is REJECTED and a
+    row carrying that class with the correct needle but a wrong retrieval date is REJECTED; a row
+    declaring an unrecognised class is REJECTED; a row declaring no class is REJECTED; and a
+    well-formed row of each class is ACCEPTED. The region-unqualified class additionally requires
+    region == not_region_qualified AND a substantive region_caveat naming the service and the
+    reason, not merely a non-empty string. The region rule is never a per-row opt-out.
   - >-
     non_discrimination_conclusion records that it NARROWED -- economics now discriminate against
     the codebuild-class candidate only -- states that CD.27's pinned five are unchanged, and
-    reconciles its delta clause to a FIXED-SCALE-POINT reading whose arithmetic actually holds
-    against the published bands.
+    reconciles its delta clause to a FIXED-SCALE-POINT reading, citing
+    executor_substrate_billing.provenance's block-level "recorded scale 100-300 recs/month" as what
+    licenses reading a band low as the 100-rec point and a band high as the 300-rec point. The
+    clause PUBLISHES both maxima as figures, and the guard PARSES those figures out of the clause
+    and asserts EQUALITY with the maxima it computes from the pinned bands -- not a constant
+    ceiling, which would stay green while the published figure silently went false (the same
+    hardcoded-expectation defect bundled rec-2946 exists to remove).
   - >-
     T4.15 gains exit criterion c9 (status open) binding verification and validation to GitHub
     Actions regardless of the selected substrate, excluding verification wall-clock from the
@@ -152,6 +173,11 @@ acceptance_criteria:
     Every content assertion this plan makes about the roadmap is landed as a pytest test function
     and admitted to the verification registry as a primitive_slot test_selector row, so the new
     content carries standing regression coverage rather than one-shot checks.
+  - >-
+    long_running_container declares a utilisation_basis distinguishing its Price-List RATE
+    provenance (2026-08-01, unchanged) from the operator-estimate UTILISATION that produces its
+    band high, so the machine-readable provenance_class does not read the whole row as
+    Price-List-provenanced.
   - >-
     docs/ROADMAP-PLATFORM.yaml stays within the 10,000-line ceiling and the full presubmit tier
     exits 0.
@@ -239,12 +265,12 @@ verification_plan:
       restated per-scale-point and the arithmetic is asserted numerically, not by keyword.
     command: |-
       bin/venv-python -m pytest tests/esb_text_fix/test_substrate_evidence_fold.py::test_non_discrimination_conclusion_narrowed_and_deltas_reconcile -q
-    expected: 1 passed -- max pinned delta 4.0 at the band low, 12.0 at the band high, both within the restated clause.
+    expected: 1 passed -- the maxima parsed from the clause (4.0 at the band low, 12.0 at the band high) equal the maxima computed from the pinned bands.
     fix_if: >-
       A conclusion naming only the elimination reads as a partial selection and breaches CD.44
-      discipline point 1 -- restore the surviving pinned-set claim. A delta exceeding the restated
-      clause at either band end means the clause and the bands still disagree; fix the clause, do
-      not silence the assertion.
+      discipline point 1 -- restore the surviving pinned-set claim. An inequality means the clause
+      publishes a figure the bands no longer produce: fix the clause to match the bands, never
+      relax the assertion to a ceiling that both would pass.
     hermetic: false
     graduation: graduate
     graduation_check_id: non-discrimination-conclusion-narrowed
@@ -309,11 +335,14 @@ verification_plan:
       still returns 30 and 0.000025 for a line stating 40 is still hardcoded -- and by asserting
       the graduated registry check_spec no longer carries the literals.
     command: |-
-      bin/venv-python -m pytest "tests/esb_text_fix/test_cost_projection.py::test_sfn_transition_line_recomputes_exactly" "tests/esb_text_fix/test_cost_projection.py::test_sfn_assumptions_follow_the_stated_line" -q
-    expected: All SFN cases pass, including the mutation probe and the registry check_spec assertion.
+      bin/venv-python -m pytest "tests/esb_text_fix/test_cost_projection.py::test_sfn_transition_line_recomputes_exactly" "tests/esb_text_fix/test_cost_projection.py::test_sfn_assumptions_follow_the_stated_line" -q && ! grep -q "tx_per_rec, rate = 30, 0.000025" tests/esb_text_fix/test_cost_projection.py && echo "OK rec-2946 acceptance grep satisfied"
+    expected: All SFN cases pass, then "OK rec-2946 acceptance grep satisfied".
     fix_if: >-
       A parser that ignores the mutation is still hardcoded. A registry check_spec still carrying
-      the literals leaves the rec half-open -- fix both or do not claim the rec.
+      the literals leaves the rec half-open -- fix both or do not claim the rec. The trailing grep
+      is rec-2946's OWN acceptance string, negated as the rec states it: if that exact literal
+      survives anywhere in the file -- including as an expected tuple in a non-mutated case --
+      rec-autoclose.yml will fail to close the rec on merge even though the logic is fixed.
     hermetic: false
     graduation: graduate
     graduation_check_id: sfn-assumptions-parsed-not-hardcoded
@@ -321,8 +350,9 @@ verification_plan:
     phase: pre-deploy
     action: >-
       THE WHOLE ESB GUARD PACKAGE IS GREEN, THE EIGHT NEW REGISTRY ROWS RESOLVE TO REAL NODE IDS,
-      AND THE LINE CEILING SURVIVES -- re-measured rather than quoted. Baseline at authoring time
-      was 7 passed / 8,995 lines. A test_selector row pointing at a node id that does not exist is
+      AND THE LINE CEILING SURVIVES -- re-measured rather than quoted. Baseline at authoring time,
+      measured for THIS command's scope rather than for one module: 69 passed across
+      tests/esb_text_fix/, and 8,995 roadmap lines. A test_selector row pointing at a node id that does not exist is
       a guard that can never fail, which is the vacuous-pass shape Decision 170 names.
     command: |-
       bin/venv-python -m pytest tests/esb_text_fix/ -q && bin/venv-python -c "import pathlib,subprocess,yaml; ids=[e['check_spec']['node_id'] for e in yaml.safe_load(open('config/agent/verification_registry/registry.yaml'))['entries'] if e.get('plan_slug')=='executor-substrate-evidence-fold' and e.get('primitive_slot')=='test_selector']; assert len(ids)>=8, 'expected at least 8 graduated test_selector rows for this plan, found %d'%(len(ids),); r=subprocess.run(['bin/venv-python','-m','pytest','--collect-only','-q']+ids, capture_output=True, text=True); assert r.returncode==0, 'a graduated node id does not resolve:\n'+r.stdout[-1500:]; n=len(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text(encoding='utf-8').splitlines()); assert n <= 10000, 'roadmap is %d lines, over the Decision 114 ceiling'%(n,); print('OK %d graduated node ids resolve; roadmap %d lines, %d of headroom'%(len(ids), n, 10000-n))"
@@ -408,9 +438,12 @@ constraints:
     deliberately EXCLUDED from this wave at the operator's direction -- the estimates derive from
     interactive sessions and are not a basis for ruling out lambda-class arms.
   - >-
-    The pinned rows may be edited ONLY to add provenance_class and, for long_running_container, to
-    widen the envelope band. No pinned row's rate_basis, region, or underlying rate figure changes;
-    the 2026-08-01 AWS Price List basis stays intact on all of them.
+    The pinned rows may be edited ONLY to add provenance_class, to add in_pinned_candidate_set:
+    true, and -- for long_running_container alone -- to widen the envelope band and add its
+    utilisation_basis. No pinned row's rate_basis, region, or underlying rate figure changes; the
+    2026-08-01 AWS Price List basis stays intact on all of them. Membership is declared on BOTH
+    sides of the partition rather than inferred from absence of the flag, so a future row added
+    without it fails the guard instead of being silently counted as pinned.
   - >-
     CD.44 discipline point 2 / ESB-05: candidate-specific mechanism and evidence live in
     cost_projection only. Deliverables 3 and 4 are substrate-neutral by construction -- c9 and c10
@@ -425,9 +458,12 @@ constraints:
     hold each why to one line (200-char cap, asserted) and each new substrate note to a bounded
     record (1500-char cap, asserted), routing extended derivation to the PR body.
   - >-
-    Decision 165: the guard amendment must not degrade to existence-only. A second provenance class
-    is admitted as a CLOSED ENUMERATION with its own mandatory needle and date, fault-injected PER
-    CLASS, never as a per-row opt-out. A region rule that waives eu-west-2 requires a substantive
+    Decision 165: the guard amendment must not degrade to existence-only. The new provenance
+    classes are admitted as a CLOSED ENUMERATION, each with its own mandatory needle, retrieval
+    date and region rule, fault-injected PER CLASS, never as a per-row opt-out. The region rule is
+    a property of the class, which is why the published-pricing-page provenance needs TWO classes
+    rather than one: a single class cannot carry both codebuild's eu-west-2 requirement and
+    agentcore's region-unqualified waiver. A class that waives eu-west-2 requires a substantive
     caveat, not merely a non-empty string.
   - >-
     Decision 136: new exit criteria are {id, text, status} objects, never bare strings --
@@ -543,16 +579,23 @@ context:
     that slot. Worse, six of those waivers cited a standing pytest guard the plan never actually
     wrote. Both defects are fixed: the assertions land as pytest functions in a new module, and the
     eight content steps graduate as test_selector rows. rec-2948 itself is NOT bundled and its own
-    instance is left in place -- its remedy is gated on VF-06 tooling for re-graduating an already
-    admitted row, which is a different operation from minting a new row in the correct shape.
+    instance is left in place on scope-discipline grounds alone: the earlier draft justified that
+    by a VF-06 tooling gate on re-graduating an already-admitted row, which does not exist --
+    _added_entries diffs by check_id, so a modified entry never re-enters the differential
+    admission path, and the flip would be ungated and smaller than the bash-parser rewrite this
+    plan does specify. Deferring it is a scope call, not a blocked one, and is recorded as such.
   - >-
     rec-2946 REACHES TWO SURFACES. The bundled rec names tests/esb_text_fix/test_cost_projection.py,
     but the graduated registry check sfn-transition-line-arithmetic-consistent carries a verbatim
     bash copy of the same tx_per_rec=30 / rate=0.000025 hardcoding, so fixing only the pytest guard
-    would leave the rec half-open. Both are in scope. Note that rec-2946 is discharged on the
-    LOGIC; its acceptance string additionally greps for primitive_slot: test_selector on that row,
-    which is rec-2948's VF-06-gated re-graduation and is deliberately not attempted here -- flag
-    this at closure time rather than claiming an untrue acceptance match.
+    would leave the rec half-open. Both are in scope. An earlier draft of this plan mis-stated
+    rec-2946's acceptance as a grep for primitive_slot: test_selector and built a closure caveat on
+    it; that grep is rec-2948's acceptance, not rec-2946's. rec-2946's own acceptance is the
+    NEGATED grep `! grep -q "tx_per_rec, rate = 30, 0.000025"` against the test module, which
+    passes cleanly once the literal is gone -- so no caveat is needed. The real and opposite risk
+    is that the implementer leaves that exact literal somewhere in the file (an expected tuple in a
+    non-mutated case would do it), which fails autoclose while the logic is correct; VP step 9
+    asserts the negated grep directly for that reason.
   - >-
     ROUTING, FOR THE PR BODY (AGENTS.md DD-B convention). No new numbered Decision. Deliverables 3
     and 4 route to decision-entry.yaml's work_item row, which explicitly claims per-criterion
@@ -562,11 +605,32 @@ context:
     them as an in-place update to the carrying cost_projection block on the ESB-09 fold precedent,
     NOT claim operational_fact routing.
   - >-
+    LAMBDA AFFECTED-ARTIFACT RESULT, RECORDED RATHER THAN OMITTED.
+    compute_affected_artifacts on this plan's scope returns the data-pipeline artifact, because
+    docs/ROADMAP-PLATFORM.yaml appears in src/lambdas/data-pipeline/manifest.yaml's assets list and
+    that manifest is status: active. No build/deploy/smoke-test step follows, on three grounds: the
+    gating check is advisory and never fails the build; roadmap-only plans have consistently
+    shipped at V1/V2 with no deploy step (PLAN-agent-context-refresh, PLAN-audit-remediation-wave-1
+    and -4, PLAN-audit-wave-6-vp-replay); and the affected functions' schedule is disabled per the
+    manifest's own notes. Recorded here so the hit is a stated judgement rather than an unexamined
+    omission.
+  - >-
+    AFFECTED-TESTS SELECTION IS PER FILE, NOT PER PACKAGE -- AND THE GUARD BEING AMENDED IS NOT
+    SELECTED TODAY. channel 2 (scripts/checks/deps/affected_tests.py::_data_edge_channel) reads
+    every tests/**/*.py and hits only when the changed data file's literal relpath or quoted
+    basename appears in THAT FILE's own text; imports propagate nothing. Only _anchors.py,
+    test_fallback_spec.py, test_persona_routing_rationale.py and test_workspace_store_criteria.py
+    carry the roadmap literal -- test_cost_projection.py does not, so the priced-row guard this
+    plan amends would not run on a roadmap-only PR. Both the amended module and the new module
+    therefore carry the literal, which is a correctness requirement for this wave's guards and not
+    housekeeping.
+  - >-
     PLANNING-TIME STATE. Branch 0 behind / 0 ahead of origin/main, no uncommitted changes, no
     scope-file overlap with main since divergence, so the Main Divergence Assessment is a no-op.
-    Baseline measured this session: tests/esb_text_fix/test_cost_projection.py 7 passed;
-    docs/ROADMAP-PLATFORM.yaml 8,995 lines; the guard's priced-row scan covers 7 rows, none
-    carrying provenance_class. Preflight also reports data_quality with zero checks defined and no
+    Baselines measured this session: tests/esb_text_fix/ 69 passed as a package (of which
+    test_cost_projection.py contributes 7); docs/ROADMAP-PLATFORM.yaml 8,995 lines; the guard's
+    priced-row scan covers 7 rows, none carrying provenance_class and none carrying
+    in_pinned_candidate_set. Preflight also reports data_quality with zero checks defined and no
     run on record, and non_automatable_softcap_breached (949 open, soft cap 250) -- both
     informational under Decision 73 and untouched by this plan.
   - >-
@@ -628,13 +692,16 @@ execution_steps:
     self_checkpointed_lambda_dynamodb, long_running_container) and the three
     durable_execution_corrected_rates rows (per_operation_usd, data_written_usd_per_gb,
     retention_usd_per_gb_month). All seven take the AWS-Price-List class, which is exactly what
-    their existing rate_basis strings already assert; change nothing else on them.
+    their existing rate_basis strings already assert. Additionally add in_pinned_candidate_set:
+    true to the FOUR envelope rows (not to the three corrected-rate rows, which are rate lines and
+    not candidates), so pinned membership is declared rather than inferred from the flag's absence.
+    Change nothing else on any of them.
   - >-
     docs/ROADMAP-PLATFORM.yaml -- add aws_native_codebuild_runner to
     executor_substrate_billing.per_substrate_envelope_usd_per_month with envelope "~108",
     assessment "ASSESSED, ELIMINATED at current shape", in_pinned_candidate_set: false,
-    provenance_class naming the published-pricing-page class, region eu-west-2, and a rate_basis
-    carrying the 2026-08-21 retrieval date. The note records: best orchestration integration in the
+    provenance_class naming the REGIONAL published-pricing-page class, region eu-west-2, and a
+    rate_basis carrying that class's needle and the 2026-08-21 retrieval date. The note records: best orchestration integration in the
     set (the optimized Step Functions codebuild:startBuild.sync integration returns the full Build
     object -- status, phases, resolvedSourceVersion, log group -- with a StopBuild kill switch, a
     36 h timeout ceiling, 64-128 GB disk, custom ECR images to 50 GB, private-by-default logs);
@@ -653,10 +720,12 @@ execution_steps:
   - >-
     docs/ROADMAP-PLATFORM.yaml -- add agentcore_managed_runtime to the same table with envelope
     "~13", assessment "ASSESSED, VIABLE BUT UNJUSTIFIED at current scale", in_pinned_candidate_set:
-    false, provenance_class naming the published-pricing-page class, region not_region_qualified
-    plus a substantive region_caveat naming the service and stating that AWS publishes no eu-west-2
-    price list for it while runtime microVMs are GA in eu-west-2, and a 2026-08-21-dated
-    rate_basis. The note records: the billing property is REAL and verified for CPU (the pricing
+    false, provenance_class naming the REGION-UNQUALIFIED published-pricing-page class -- a
+    DIFFERENT class from codebuild's, because the region rule belongs to the class and these two
+    rows need opposite rules -- region not_region_qualified plus a substantive region_caveat naming
+    the service and stating that AWS publishes no eu-west-2 price list for it while runtime
+    microVMs are GA in eu-west-2, and a rate_basis carrying that class's needle and the 2026-08-21
+    retrieval date. The note records: the billing property is REAL and verified for CPU (the pricing
     page states I/O wait and idle time is free if no other background process is running, and AWS's
     own worked example arithmetically confirms the exclusion) at 0.0895 usd/vCPU-h + 0.00945
     usd/GB-h; a CAVEAT that memory appears billed on wall-clock INCLUDING waits (the
@@ -680,13 +749,23 @@ execution_steps:
     docs/ROADMAP-PLATFORM.yaml -- widen long_running_container's envelope from "~5" to the band
     "5-20", extending its existing note to name both endpoints (~1 task-hour/rec at 100 recs/month
     on the 2026-08-01 Price List basis; 1.2 task-hours/rec at 300 recs/month from OE-07/OE-08).
-    Leave its region and rate_basis untouched. Then narrow non_discrimination_conclusion in place:
-    economics now discriminate AGAINST the codebuild-class candidate only; CD.27's pinned five are
-    unchanged and remain economically indistinguishable AT ANY FIXED SCALE POINT; and RESTATE the
-    delta clause per-scale-point rather than as a bare range, because comparing one row's band low
-    to another's band high is a cross-scale-point artifact -- measured at a fixed point the pinned
-    four span a maximum delta of 4.0 at the 100-rec band low and 12.0 at the 300-rec band high.
-    Keep the linearity claim (~0.07 usd/rec on Fargate, no superlinear term in any candidate).
+    Leave its region and rate_basis untouched, but ADD a utilisation_basis field recording that the
+    RATE remains Price-List-provenanced at 2026-08-01 while the UTILISATION producing the band high
+    is an operator estimate (OE-07/OE-08, 2026-08-21, explicitly not measurement) -- without it the
+    row's provenance_class would read the whole row as Price-List-provenanced, which is the
+    existence-only provenance claim this wave exists to stop. Then narrow
+    non_discrimination_conclusion in place: economics now discriminate AGAINST the codebuild-class
+    candidate only; CD.27's pinned five are unchanged and remain economically indistinguishable AT
+    ANY FIXED SCALE POINT; and RESTATE the delta clause per-scale-point rather than as a bare
+    range, because comparing one row's band low to another's band high is a cross-scale-point
+    artifact. The restatement must CITE executor_substrate_billing.provenance's block-level
+    "recorded scale 100-300 recs/month" as what licenses reading a band low as the 100-rec point
+    and a band high as the 300-rec point -- the per-row notes do not all index on recs
+    (durable_functions brackets on ops/rec, sfn_over_stateless_workers on iterations), so without
+    the block-level citation the reading is a convenient re-index rather than a grounded one. The
+    clause PUBLISHES both maxima as figures -- 4.0 at the band low, 12.0 at the band high -- which
+    the guard parses back out and asserts equality against. Keep the linearity claim (~0.07 usd/rec
+    on Fargate, no superlinear term in any candidate).
   - >-
     docs/ROADMAP-PLATFORM.yaml -- extend THREE existing substrate_reevaluation_triggers rows IN
     PLACE, adding no rows and removing none (the count must stay 4). The A2+ concurrency-raise row
@@ -735,18 +814,29 @@ execution_steps:
     tests/esb_text_fix/test_cost_projection.py -- replace the hardcoded needle pair in
     test_every_cost_line_names_region_and_rate_basis with a module-level PROVENANCE_CLASSES closed
     enumeration mapping each class name to {needle, date, region_required}, plus a
-    priced_row_issues(name, entry) -> list[str] helper returning one string per problem. Rules: a
-    row declaring no provenance_class is rejected; a row declaring an unrecognised class is
-    rejected; a declared class requires its own needle AND its own retrieval date in rate_basis; a
-    class with region_required set requires exactly that region; a class with region_required None
-    requires region == "not_region_qualified" AND a SUBSTANTIVE region_caveat (at least 40
-    characters and naming the service), never merely a non-empty string. Keep nat_contingency's
+    priced_row_issues(name, entry) -> list[str] helper returning one string per problem. THREE
+    classes, not two: the incumbent AWS-Price-List class (needle "AWS Price List bulk offer files",
+    date 2026-08-01, region_required eu-west-2) carrying the seven backfilled rows; a REGIONAL
+    published-pricing-page class (date 2026-08-21, region_required eu-west-2) carrying codebuild;
+    and a REGION-UNQUALIFIED published-pricing-page class (date 2026-08-21, region_required None)
+    carrying agentcore. The two new classes must have DISTINCT needles so a row cannot claim the
+    unqualified class while attesting the regional basis. The split is forced, not stylistic: the
+    region rule is class-level, so one shared class would reject whichever of the two real rows it
+    did not fit. Rules: a row declaring no provenance_class is rejected; a row declaring an
+    unrecognised class is rejected; a declared class requires its own needle AND its own retrieval
+    date in rate_basis; a class with region_required set requires exactly that region; a class with
+    region_required None requires region == "not_region_qualified" AND a SUBSTANTIVE region_caveat
+    (at least 40 characters and naming the service), never merely a non-empty string. Keep nat_contingency's
     existing carve-out working. Add fault-injection cases PER CLASS: for every class in
     PROVENANCE_CLASSES a wrong-needle row and a correct-needle-wrong-date row must both be
     rejected, plus the unrecognised-class and class-less rows, plus a well-formed row per class
     accepted. Parametrize over PROVENANCE_CLASSES so adding a class without a decoy is impossible.
     Name the fault-injection function test_priced_row_provenance_fault_injection_per_class -- VP
-    step 4 and the graduated registry row both select it by that exact node id.
+    step 4 and the graduated registry row both select it by that exact node id. Parametrize over
+    all THREE classes. Finally, add the literal token "docs/ROADMAP-PLATFORM.yaml" to this module's
+    text (a docstring line is enough): affected_tests channel 2 is a per-file text scan, this
+    module carries no such literal today, and without it the amended guard is not selected into
+    --pre on a roadmap-only PR -- it would not run on the very edits it polices.
   - >-
     tests/esb_text_fix/test_cost_projection.py -- discharge rec-2946 by adding
     parse_sfn_assumptions(line) -> (lo, hi, tx_per_rec, rate), which extracts the published bracket
@@ -759,8 +849,10 @@ execution_steps:
     both select it by that exact node id.
   - >-
     tests/esb_text_fix/test_substrate_evidence_fold.py -- CREATE, importing load_roadmap and
-    tier_item from tests/esb_text_fix/_anchors.py so the affected_tests channel-2 data edge selects
-    it on any roadmap change. Six test functions, named exactly as VP steps 2/3/5/6/7/8 select
+    tier_item from tests/esb_text_fix/_anchors.py, and carrying the literal token
+    "docs/ROADMAP-PLATFORM.yaml" in its own text (a docstring line is enough) because the
+    affected_tests channel-2 data edge is a PER-FILE text scan and the import propagates no
+    selection. Six test functions, named exactly as VP steps 2/3/5/6/7/8 select
     them: test_operator_estimates_block_is_complete_and_disclaimed (nine ordered ids, five fields
     each, source disclaims measurement and names the date, every why <= 200 chars, at least one
     HIGH sensitivity); test_new_envelope_rows_declare_set_membership_and_verdicts (both new rows
@@ -769,8 +861,12 @@ execution_steps:
     notes <= 1500 chars, no arn:aws: anywhere in cost_projection, codebuild:startBuild.sync named);
     test_non_discrimination_conclusion_narrowed_and_deltas_reconcile (conclusion names codebuild,
     records the narrowing, states the pinned set is unchanged, frames the delta clause
-    per-scale-point, AND parses the four pinned bands to assert max delta <= 15 at the band low and
-    at the band high independently); test_t415_c9_verification_split (criteria are dicts not bare
+    per-scale-point and cites the block-level provenance, AND selects the pinned rows by an
+    explicit in_pinned_candidate_set true flag -- failing on any envelope row that omits the flag
+    entirely, never treating absence as pinned -- then parses the two published maxima back out of
+    the clause text and asserts EQUALITY with the maxima it computes from those bands at the band
+    low and at the band high independently, so a later band edit cannot leave a published figure
+    silently false the way a constant ceiling would); test_t415_c9_verification_split (criteria are dicts not bare
     strings, c9 open, binds regardless, names validate.py and GitHub Actions, excludes verification
     wall-clock, cites "clause 3" specifically, cites Decision 112, names BOTH T4.9 c1 and T4.9a c1
     as not rehomed, and carries the distinct-workflow-runs formulation);
@@ -784,12 +880,20 @@ execution_steps:
     sfn-transition-line-arithmetic-consistent so its bash one-liner parses tx_per_rec and the rate
     out of the roadmap line instead of assigning them as literals, matching the amended pytest
     guard. Change no other field on that entry -- its check_id, primitive_slot, guard_target,
-    plan_slug and graduated_at all stay as they are; re-materialising it as a test_selector row is
-    rec-2948's VF-06-gated work and is NOT attempted here. Then admit this wave's eight graduated
+    plan_slug and graduated_at all stay as they are. Re-materialising it as a test_selector row is
+    rec-2948's work and is deliberately NOT attempted here on SCOPE-DISCIPLINE grounds -- rec-2948
+    is not bundled. Do not restate the earlier draft's claim that a VF-06 tooling gate blocks it:
+    _added_entries diffs by check_id, so a MODIFIED entry never re-enters the differential
+    admission path at all, and the flip would in fact be ungated. Then admit this wave's eight graduated
     checks as NEW primitive_slot: test_selector entries, each carrying plan_slug
     executor-substrate-evidence-fold and a check_spec.node_id that must resolve EXACTLY (VP step 10
     collects every one of them; a row pointing at a node id that does not exist is a guard that can
-    never fail). The eight pairs, check_id -> node_id, all node ids rooted at tests/esb_text_fix/:
+    never fail). Each row must carry the FULL required field set the registry schema validator
+    enforces -- check_id, primitive_slot, guard_target, plan_slug and graduated_at -- not just
+    plan_slug and node_id; a missing field is a schema FAIL, not a lint. guard_target is
+    docs/ROADMAP-PLATFORM.yaml for the six content rows, and
+    tests/esb_text_fix/test_cost_projection.py for the two rows whose guarded artifact is the guard
+    itself. The eight pairs, check_id -> node_id, all node ids rooted at tests/esb_text_fix/:
     operator-estimates-block-complete ->
     test_substrate_evidence_fold.py::test_operator_estimates_block_is_complete_and_disclaimed;
     substrate-rows-declare-set-membership ->
