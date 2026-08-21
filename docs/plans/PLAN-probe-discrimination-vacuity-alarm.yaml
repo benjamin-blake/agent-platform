@@ -1,0 +1,678 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "probe-discrimination-vacuity-alarm"
+intent: >-
+  Close the two green-signal-that-proves-nothing holes that let the coverage-gate escape class
+  recur five times: acceptance probes that already pass on the pre-fix tree (so a structural rec
+  auto-closes unfixed), and a coverage check that declares examined(0) while the diff did contain
+  source it should have examined (so the floor passes vacuously).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-probe-discrimination-vacuity-alarm.yaml
+phase: >-
+  Preventive half of the coverage-gate escape class. Bundles rec-3220 (probe-hygiene meta-cause)
+  and rec-3163 (vacuity alarm). Deliberately does NOT close pre-merge coverage enforcement --
+  rec-3221 remains the sole live owner of that gap (Decision 162 precedent; see Context).
+scope:
+  - file: scripts/executor/acceptance_lint.py
+    action: Modify
+    purpose: >-
+      Add a PURE-STRING discrimination classifier plus a keyword-only `require_discrimination`
+      arm on lint_acceptance_command. Default False, so the three existing callers keep their
+      exact current behaviour and no migration wave lands on already-filed literals.
+  - file: tests/test_executor_acceptance_lint.py
+    action: Modify
+    purpose: >-
+      Red/green tests for both discrimination shapes. Decision 124 leaves scripts/executor/**
+      unmapped by map_source_to_test, so the per-file coverage floor does NOT enforce this half --
+      this file is the ONLY proof the new arms fire.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Pass require_discrimination=True at the file_rec write boundary (line ~358) so the rule
+      binds new recs only. Do NOT opt in validate_acceptance_literals' static AST scan.
+  - file: tests/ops_data_portal/test_acceptance_discrimination.py
+    action: Create
+    purpose: >-
+      Portal-boundary mirror test. Verified live: map_source_to_test(Path("scripts/ops_data_portal.py"))
+      returns tests/ops_data_portal -- unlike scripts/executor/**, this source IS coverage-mapped, so
+      the Decision 131 mirror rule genuinely binds and the portal behaviour cannot be proved from
+      tests/test_executor_acceptance_lint.py.
+  - file: config/agent/data_quality/ops.yaml
+    action: Modify
+    purpose: >-
+      Update the acceptance field's `semantics` string (line ~146), the canonical field-semantic
+      authority per Decision 65. It currently reads "Prefer grep/pytest commands" with no
+      discrimination requirement -- the authority actively steers agents toward the failing shape.
+  - file: tests/test_rec_write_guidance.py
+    action: Modify
+    purpose: >-
+      Prove the ops.yaml semantics edit actually propagates into composed guidance. NOTE:
+      scripts/executor/rec_write_guidance.py is deliberately NOT in scope -- get_rec_write_guidance()
+      is a PURE PROJECTION of ops.yaml's per-column description/semantics (verified at
+      rec_write_guidance.py:91-108; only the source=='ci_rca' branch hardcodes), so the ops.yaml
+      edit alone discharges Decision 66. Hardcoding the rule there would create a second semantics
+      authority that can drift from the Decision 65 canonical source.
+  - file: scripts/checks/hygiene/validate_vacuity_justified.py
+    action: Create
+    purpose: >-
+      New registered check: fail when validate_test_coverage's own changed-source derivation
+      returns empty while a BASE-FREE independent derivation of the same diff does not.
+      Deliberately narrow (a frozen in-module single-check roster), fail-closed, NOT the general
+      vacuity enforcement Decision 170 declined. MUST itself declare registry.examined(n, unit=)
+      or registry.skipped(reason) on EVERY reachable exit path -- surface 7 of the seven
+      registration surfaces enumerated at scripts/checks/registry.py:10-20 (Decision 170 clauses
+      3-4). Omitting it reds VP step 5: validate_check_accounting is pre=True with
+      pre_globs=("scripts/checks/**", ...), it AST-scans every registered check's defining module,
+      and config/check_accounting_baseline.yaml is a frozen shrink-only roster this module can
+      never join.
+  - file: scripts/checks/hygiene/_manifest.py
+    action: Modify
+    purpose: >-
+      Register the new check with full_segment="full_after_lint" and NO pre=True -- it adjudicates
+      a full-tier check's declaration, so it belongs in that check's own segment; promoting
+      coverage enforcement pre-merge is rec-3221's territory, not this plan's. module=/attr= must
+      be BARE STRING LITERALS (Decision 169) or scripts.dependency_graph's AST edge scan silently
+      severs the driver->check edge.
+  - file: tests/checks/hygiene/test_validate_vacuity_justified.py
+    action: Create
+    purpose: Mirror test at the Decision 131 colocation path; precedent validate_no_cross_test_imports.
+  - file: tests/checks/hygiene/test__manifest.py
+    action: Modify
+    purpose: >-
+      Add the registration case for the new Entry, following the existing
+      TestValidateCheckAccountingDispatchedInBothTiers pattern in this file. This check is
+      full-tier only, so the case asserts full_sequence membership and pre_sequence ABSENCE.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      function_to_category row for the new check. MANDATORY, not optional -- validate_ci_rca_taxonomy
+      iterates registry.all_checks() and fails on any registered check absent from this file
+      (Decision 142 / Decision 169). Independently flagged by scripts.roadmap.plan_obligations.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: Graduation rows for VP steps 1 and 2 (Decision 132).
+  - file: docs/contracts/ops_recommendations.yaml
+    action: Modify
+    purpose: >-
+      Amend the SECOND acceptance `semantics` block (line ~294) so the Class A contract does not
+      keep serving the pre-discrimination guidance. THIS EDIT CARRIES A RITUAL OBLIGATION: the file
+      is class: A (line 13), validate_contract_drift is pre=True, and
+      contracts_enforcement.check_amendment_for_diff raises category 6 when a field's
+      description/semantics changes with no NEW fields.acceptance.amendment_log[] entry. The
+      pairing rule is prose_improvement XOR semantic_break, so this edit needs
+      change_class: accepted_values_narrow with semantic_break: true -- narrowing which acceptance
+      commands are admissible is a redefinition, not prose polish. Without the entry, VP step 5
+      reds. NOTE an unresolved authority-direction inconsistency in the repo: this file's own
+      header (lines 7-8) claims IT plus src/schemas/rec.py are canonical and that ops.yaml retires
+      via T1.6, which is the inverse of Decision 65's body. This plan does not adjudicate that --
+      it updates BOTH surfaces so the rule holds whichever direction wins, and does not rewrite the
+      header.
+bundled_recommendations:
+  - rec-3220
+  - rec-3163
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    lint_acceptance_command(..., require_discrimination=True) REJECTS both presumptively
+    non-discriminating shapes -- (a) a lone grep/rg for a plain literal carrying no negation, count
+    assertion or chained second assertion, and (b) a pytest invocation naming a test path THAT
+    ALREADY EXISTS ON DISK and carries no ::node_id. It ACCEPTS a probe carrying a ::node_id, a
+    negation, a count assertion, OR a pytest path that does NOT exist on the pre-fix tree -- a
+    bare path against a not-yet-created test file is perfectly discriminating (red before via
+    collection error, green after), so refusing it would be wrong. Called without the keyword the
+    function behaves exactly as it does today.
+  - >-
+    The rec-2970 probe `grep -n validate_test_coverage scripts/checks/registry.py` -- the literal
+    command that closed the original correct diagnosis of this gap unfixed -- is refused under the
+    new arm.
+  - >-
+    validate_vacuity_justified FAILS when the coverage checker's changed-source derivation is empty
+    while the BASE-FREE oracle (git diff --name-only HEAD~1 HEAD, filtered to coverage-eligible
+    sources) is non-empty. When the base-free oracle itself cannot be computed it declares
+    registry.skipped(reason) -- never a silent pass. "Fail-closed" here means: absence of evidence
+    is recorded as skipped, never as green.
+  - >-
+    validate_vacuity_justified declares registry.examined(n, unit=) or registry.skipped(reason) on
+    every reachable exit path (surface 7, Decision 170 clauses 3-4), is registered on all seven
+    surfaces enumerated at scripts/checks/registry.py:10-20, and carries a ci_rca_taxonomy row.
+  - >-
+    The discrimination rule reaches an agent through the ops.yaml projection: get_rec_write_guidance()
+    returns it for the acceptance column WITHOUT scripts/executor/rec_write_guidance.py being edited,
+    proving the Decision 65 canonical source is the single authority (Decision 66).
+  - "rec-3220 and rec-3163 are closed via the Resolves: trailer."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the discrimination arm fires on both shapes AND on the real historical probe, and that
+      the default-off path is unchanged.
+    command: bin/venv-python -m pytest "tests/test_executor_acceptance_lint.py::TestAcceptanceDiscrimination" "tests/ops_data_portal/test_acceptance_discrimination.py::TestFileRecRefusesNonDiscriminating" -q
+    expected: >-
+      Exit 0. Both selected classes must EXIST -- on origin/main neither does, so this command
+      exits non-zero there, which is what makes it discriminating under validate_vp_replay's
+      exit-code-only matching. Cases: lone-grep rejected; bare pytest path that EXISTS rejected;
+      bare pytest path that does NOT exist ACCEPTED (the carve-out); ::node_id accepted;
+      negation/count accepted; the rec-2970 literal rejected; require_discrimination omitted leaves
+      today's 23 verdicts intact; and file_rec raises ValueError on a lone-grep acceptance.
+      NOTE: no backticked literal appears in this expected, deliberately. validate_vp_replay
+      extracts every backtick-delimited substring from this field and requires it in the replayed
+      stdout+stderr; pytest never prints the word ValueError on a green run, so backticking it here
+      would diverge replay and red VP step 5. Step 3's backticked literal is the only intentional
+      one in this plan -- plan_obligations really does print it.
+    fix_if: >-
+      A new case passing before the classifier exists means it asserts a property of the fixture
+      rather than of lint_acceptance_command -- the non-discriminating shape this plan exists to
+      refuse. Re-pin it to the function's return value.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: acceptance-probe-discrimination-refused
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the vacuity alarm distinguishes justified from unjustified examined(0) using a
+      GENUINELY base-free oracle, and that it never converts absence of evidence into green.
+    command: bin/venv-python -m pytest "tests/checks/hygiene/test_validate_vacuity_justified.py::TestVacuityMatrix" -q
+    expected: >-
+      Exit 0. All FOUR combinations are asserted, plus the uncomputable case -- no combination is
+      left unnamed: (oracle non-empty, checker empty) -> FAIL; (non-empty, non-empty) -> pass with
+      examined(n); (empty, empty) with a computable oracle -> pass with examined(0), a genuinely
+      test-only diff being legitimately vacuous; (empty, checker non-empty) -> pass with
+      examined(n) on the checker's count, since the checker seeing MORE than the last commit is the
+      normal multi-commit branch case and is never evidence of vacuity; oracle NOT computable
+      (no HEAD~1) -> registry.skipped(reason), never a pass.
+    fix_if: >-
+      Do NOT use _common.get_changed_files() as the independent oracle. Verified at planning time:
+      it calls the SAME _common.push_context_base(), defaults to the same origin/main base, and
+      falls back to the same `git diff --name-only HEAD` as
+      test_coverage_checker.get_changed_source_files(). On a shallow clone with origin/main
+      unresolvable BOTH degrade identically to an empty set, landing on the both-empty branch --
+      the alarm would pass vacuously in exactly the scenario it exists to catch. Use
+      `git diff --name-only HEAD~1 HEAD`, which touches no base ref. Soundness: HEAD~1..HEAD is a
+      SUBSET of the merge-base diff in the ordinary linear-history case, so oracle-non-empty with
+      checker-empty is a genuine defect there; it may miss defects whose source change landed in an
+      earlier commit, an accepted alarm-grade limitation. That subset claim is NOT universal and
+      must not be relied on as one -- it breaks for a within-branch revert, a merge commit at HEAD
+      whose first-parent diff pulls in main's changes, and most importantly a DELETED source file,
+      which raw `git diff --name-only` lists but get_changed_source_files drops via its
+      `p.resolve().exists()` filter (scripts/test_coverage_checker.py:526). The oracle's filter
+      MUST therefore replicate get_changed_source_files' exclusions exactly -- `.py` only, under
+      `src/` or `scripts/`, excluding `__init__.py` and `conftest.py`, AND dropping paths that no
+      longer exist -- or a delete-only commit fires a false fail-closed alarm.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: vacuity-unjustified-fails-closed
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the new check is genuinely wired on the SEVEN registration surfaces enumerated at
+      scripts/checks/registry.py:10-20 (not three -- Decision 170 clauses 3-4 added surface 7, the
+      examined()/skipped() declaration) and carries its mandatory taxonomy row. Registration that
+      misses one surface dispatches nothing, or reds the fast tier.
+    command: bin/venv-python -m pytest "tests/checks/hygiene/test__manifest.py::TestValidateVacuityJustifiedDispatched" -q && bin/venv-python -m scripts.roadmap.plan_obligations --plan docs/plans/PLAN-probe-discrimination-vacuity-alarm.yaml
+    expected: >-
+      Exit 0 on both legs: the named registration class EXISTS (it does not on origin/main, so the
+      leg is discriminating) and asserts full_sequence membership with pre_sequence absence, and the
+      obligation reporter prints `no unmet registration obligations`.
+    fix_if: >-
+      A named missing companion means the Entry, the taxonomy row or the mirror test is absent.
+      Add the real registration -- never silence the reporter.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The obligation reporter is itself the standing guard and already runs against every
+      schema_version 4 plan; a registry row wrapping the same invocation would assert the identical
+      property one indirection later. Registration is separately and unconditionally enforced by
+      two standing checks regardless of this plan: validate_ci_rca_taxonomy over
+      registry.all_checks() fails CI on any registered check missing its row, and
+      validate_check_accounting (pre=True, pre_globs scripts/checks/**) fails any registered check
+      whose module declares no examined()/skipped(). TWO disclosures against interest: (i)
+      plan_obligations does NOT model surface 7, so a green step 3 does not prove the declaration
+      exists; (ii) validate_check_accounting's _module_declares is MODULE-LEVEL by its own
+      docstring -- it proves a declaration exists SOMEWHERE in the module, never that every
+      reachable exit path reaches one. So step 5 enforces existence-somewhere, and only VP step 2's
+      case matrix enforces the per-path property acceptance criterion 4 states.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the ops.yaml edit PROPAGATES through the projection into composed guidance, by
+      asserting on the FUNCTION OUTPUT rather than grepping the file -- a grep for a literal is the
+      exact shape this plan refuses, so the plan must not use one on itself.
+    command: bin/venv-python -m pytest "tests/test_rec_write_guidance.py::TestAcceptanceSemanticsProjection" -q
+    expected: >-
+      Exit 0; the test asserts get_rec_write_guidance()["acceptance"]["semantics"] states the
+      discrimination rule, with scripts/executor/rec_write_guidance.py unmodified.
+    fix_if: >-
+      If this is implemented as `grep -q discriminat config/agent/data_quality/ops.yaml` it is
+      self-refuting -- it would pass on any tree where the word already appears. Assert on the
+      composed guidance string. Placing the test in tests/test_executor_acceptance_lint.py instead
+      would violate the Decision 131 colocation mirror: tests/test_rec_write_guidance.py is the
+      canonical home and already exists.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The property is already structurally guaranteed by the projection: get_rec_write_guidance()
+      reads ops.yaml's semantics verbatim, so a standing row asserting the string appears in the
+      projection would re-assert what validate_field_semantics_drift and the projection code
+      already make true by construction. The test is worth having as a propagation regression guard
+      but not worth a replayed standing slot.
+  - step: 5
+    phase: pre-deploy
+    action: Fast tier -- the authoritative pre-merge gate (Decision 73).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 within the 300s fast-tier budget (Decision 153).
+    fix_if: >-
+      A budget breach means the new check pulled a subprocess or network call into the fast tier.
+      It must be filesystem-only.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the fast tier; a tier cannot be a registry check inside itself.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Bare full tier, discharging handoff_policy.full_validation_required_before_commit and
+      Decision 163.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0, with validate_vacuity_justified appearing in the run and declaring either
+      examined(n) or skipped(reason) -- never undeclared. This plan's own diff touches scripts/
+      source, so on a resolvable base both derivations are non-empty and the check passes with
+      examined(n). If it instead FAILS here, the checker's derivation went empty while the
+      base-free oracle did not -- that is the real defect the check exists to surface, and it is
+      triaged, never suppressed.
+    fix_if: >-
+      Any failure here is triaged before commit, never worked around (Decision 55).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the full tier; a tier cannot be a registry check inside itself.
+  - step: 7
+    phase: post-deploy
+    action: After merge, confirm both bundled recs actually closed via the Resolves trailer.
+    command: |-
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c 'import json;print(sum(1 for l in open("logs/.recommendations-log.jsonl",encoding="utf-8") if (d:=json.loads(l)).get("id") in {"rec-3220","rec-3163"} and d.get("status")=="closed"))'
+    expected: Prints 2.
+    fix_if: >-
+      Fewer than 2 means rec-autoclose.yml did not fire; fall back to ops_data_portal --update-rec.
+      Closure-proof semantics are governed by Decision 103, NOT Decision 70 (which governs
+      bootstrap-record deletion) -- Decision 103's 2026-07-03 amendment flags that exact mis-cite.
+      Use the portal, never scripts.sync.ops (Single Portal Invariant).
+test_obligations:
+  - source: scripts/executor/acceptance_lint.py
+    behavior: >-
+      Both presumptively non-discriminating probe shapes stay refused under
+      require_discrimination=True, and the default-off path stays byte-for-byte compatible.
+    verification_step: 1
+    test_selector: tests/test_executor_acceptance_lint.py::TestAcceptanceDiscrimination
+    red_green_expectation: >-
+      Red before: the new cases fail because no discrimination arm exists (verified live at
+      planning time -- the current suite is 23 passed in 2.60s with no discrimination coverage).
+      Green after: all pass. This file is the ONLY guard here: Decision 124 deliberately leaves
+      scripts/executor/** unmapped by map_source_to_test, so the 100% coverage floor does not
+      reach this change.
+  - source: scripts/ops_data_portal.py
+    behavior: The file_rec boundary passes require_discrimination=True, so the rule binds new recs.
+    verification_step: 1
+    test_selector: tests/ops_data_portal/test_acceptance_discrimination.py::TestFileRecRefusesNonDiscriminating
+    red_green_expectation: >-
+      Red before: a test filing a rec whose acceptance is a lone grep succeeds. Green after: it
+      raises ValueError from the portal's lint gate. The selector lives under tests/ops_data_portal/
+      because map_source_to_test maps this source there (verified live) -- this source IS
+      coverage-mapped, so unlike the executor half the Decision 131 mirror rule binds.
+  - source: scripts/checks/hygiene/validate_vacuity_justified.py
+    behavior: >-
+      Unjustified examined(0) stays fail-closed over its deliberately narrow domain, the oracle
+      stays base-free, and an uncomputable oracle stays skipped() rather than green.
+    verification_step: 2
+    test_selector: tests/checks/hygiene/test_validate_vacuity_justified.py::TestVacuityMatrix
+    red_green_expectation: >-
+      Red before: the module does not exist, so the selector errors at collection. Green after: all
+      four cases pass, including the disagreement case that fires the alarm and the
+      oracle-uncomputable case that declares skipped.
+  - source: scripts/checks/hygiene/_manifest.py
+    behavior: >-
+      The new Entry dispatches, with module=/attr= as bare string literals so dependency_graph's
+      AST edge scan keeps the driver->check edge.
+    verification_step: 3
+    test_selector: tests/checks/hygiene/test__manifest.py::TestValidateVacuityJustifiedDispatched
+    red_green_expectation: >-
+      Red before: the check is absent from registry.all_checks(), so validate_ci_rca_taxonomy
+      cannot see it and plan_obligations reports the missing companion. Green after: registered,
+      taxonomy row present, obligations clean.
+  - source: config/agent/data_quality/ops.yaml
+    behavior: >-
+      The canonical acceptance semantics states the discrimination rule, and the projection carries
+      it into composed guidance.
+    verification_step: 4
+    test_selector: tests/test_rec_write_guidance.py::TestAcceptanceSemanticsProjection
+    red_green_expectation: >-
+      Red before: get_rec_write_guidance()["acceptance"]["semantics"] carries the old "Prefer
+      grep/pytest commands" text with no discrimination requirement, so the assertion fails. Green
+      after: the edited ops.yaml string is projected verbatim. This is a genuine unit proof, not a
+      tier appeal -- the projection is the behaviour under test.
+  - source: docs/contracts/ops_recommendations.yaml
+    behavior: >-
+      The Class A contract's acceptance semantics stays in step with ops.yaml AND carries its
+      required amendment_log entry, so the ritual is discharged rather than bypassed.
+    verification_step: 5
+    command: bin/venv-python -m scripts.validate --pre
+    red_green_expectation: >-
+      Red before: validate_contract_drift (pre=True) raises category 6 --
+      contracts_enforcement.check_amendment_for_diff sees the fields.acceptance.semantics diff with
+      no NEW amendment_log[] entry, or one whose change_class/semantic_break pairing violates
+      prose_improvement XOR semantic_break. Green after: the accepted_values_narrow +
+      semantic_break: true entry is present and the diff is admitted. The evidence is the tier
+      because the enforcing verifier is a registered check, not a unit test.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: The new registered check has a failure-category row, so ci-rca can classify its failures.
+    verification_step: 5
+    command: bin/venv-python -m scripts.validate --pre
+    red_green_expectation: >-
+      Red before: validate_ci_rca_taxonomy iterates registry.all_checks() and fails on
+      validate_vacuity_justified having no function_to_category row. Green after: the
+      code_regression row is present. Registering the check WITHOUT this row is the specific way
+      this plan could red CI, which is why the row is a scope entry rather than an implementation
+      detail.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      The two graduated VP steps have their standing registry rows, so the graduation obligation is
+      discharged rather than declared.
+    verification_step: 5
+    command: bin/venv-python -m scripts.validate --pre
+    red_green_expectation: >-
+      Red before: validate_graduation_completeness's implement leg fails because VP steps 1 and 2
+      declare graduation: graduate with check_ids acceptance-probe-discrimination-refused and
+      vacuity-unjustified-fails-closed that have no new-in-diff row matching plan_slug ==
+      probe-discrimination-vacuity-alarm. Green after: both rows exist.
+constraints:
+  - >-
+    STATIC ONLY -- the discrimination check must never EXECUTE the acceptance command. Decision 103
+    binds: "The deterministic probe is the rec's existing acceptance shell-command oracle. No new
+    acceptance machinery is introduced." Classify probe SHAPES by pure string analysis. Do not
+    resurrect _check_acceptance_on_main (acceptance_lint.py:223) -- it checks out main, is reachable
+    only from scripts/execute_recommendation.py:160 (the executor, frozen under Decision 67), and
+    has 9 live call sites in tests/execute_recommendation/test_main_safety.py that must keep passing.
+  - >-
+    NARROW AND FAIL-CLOSED, never broad and advisory. Decision 170 explicitly did NOT commit to
+    fail-closed vacuity enforcement and named a deferred trigger ("revisit once a path-aware
+    declaring-coverage metric clears a stated threshold"). Scope the new check to
+    validate_test_coverage alone via a frozen in-module roster (Decision 162's thin-adapter ratchet
+    shape) and say in-module that this is NOT the general enforcement Decision 170 declined. An
+    advisory WARN is forbidden by Decision 163: universal-in-name but discretionary-in-enforcement
+    is strictly worse than either a genuinely optional or a genuinely mandatory check.
+  - >-
+    Do NOT add a pre-merge coverage gate, and do NOT set pre=True on validate_test_coverage.
+    rec-3221 owns that work and carries the design analysis from four failed plan-critique rounds.
+    Decision 162's precedent is explicit: bundling the highest-blast-radius refactor into incident
+    remediation is how remediation changes cause the next incident.
+  - >-
+    Do NOT opt validate_acceptance_literals (scripts/checks/ops_governance/) into the new arm. It
+    is a static AST walk over every scripts/**/*.py acceptance literal; enabling discrimination
+    there reds a wave of already-filed literals and would need its own grandfather roster. Keep
+    require_discrimination default False and enable it only at the ops_data_portal.py:358 direct
+    call.
+  - >-
+    There are FIVE production callers of lint_acceptance_command, not three:
+    scripts/ops_portal/write_validators.py:96, scripts/checks/ops_governance/validate_acceptance_literals.py:73,
+    scripts/ops_data_portal.py:358, scripts/cost_reconciliation.py:380 and
+    scripts/execute_recommendation.py:305. Default False keeps all five behaviourally identical.
+    Two of them sit on the file_rec path (the :358 direct call and the write_validators declarative
+    validator dispatched by the _load_write_time_validators loop just above it); enabling the arm
+    at the direct call alone is sufficient to bind new recs.
+  - >-
+    scripts/cost_reconciliation.py:371's docstring claims it validates "with the exact write-time
+    validator surface file_rec applies". That becomes inaccurate the moment file_rec diverges.
+    Nothing reds today (its own acceptance matches neither rejected shape), but update that
+    docstring or record in the PR body why the divergence is acceptable -- do not leave it silently
+    false.
+  - >-
+    Do NOT add validate_vacuity_justified to config/check_accounting_baseline.yaml. That roster is
+    a ONE-TIME shrink-only grandfather set bounded by validate_check_accounting's frozen
+    _BASELINE_SEED constant, with no marker escape grammar (Decision 165); a new check joins by
+    DECLARING, never by being baselined.
+  - >-
+    Do NOT extend map_source_to_test to cover scripts/executor/**. Decision 124 states the
+    coverage-gate mapping is DELIBERATELY not extended there.
+  - >-
+    The plan's own VP steps must satisfy the standard the plan introduces -- no step may be a bare
+    grep for a literal it expects to find, and no step may be a bare pytest path against a file
+    that already exists. Steps 1-4 therefore each carry an explicit ::node_id selecting a class
+    that does NOT exist on origin/main. This matters mechanically, not just rhetorically:
+    validate_vp_replay matches replayed hermetic steps on EXIT CODE, and extracts substrings only
+    from backtick-delimited literals in `expected` -- non-backtick prose is never auto-extracted.
+    A bare path against an already-passing suite would therefore replay green even if the
+    implementation added no new test at all.
+  - >-
+    Decision 128 decompose-never-raise: acceptance_lint.py is 337 raw lines against the 500 limit
+    with no config/sloc_budgets.yaml entry. If the classifier pushes it over, extract a submodule --
+    never register a raise.
+  - >-
+    The new tests/ops_data_portal/ test must NOT import fixtures from
+    tests/ops_data_portal/test_rec_write.py, however convenient its _VALID_FIELDS and
+    _ducklake_write patch look. validate_no_cross_test_imports is pre=True over tests/** and fails
+    any import whose final module component starts with test_. Define the fixture locally or in a
+    conftest.py.
+  - >-
+    Keep VP step 1's portal leg genuinely creds-free so its hermetic: true assertion is honest --
+    file_rec's only pre-lint network path is the ci_rca block (ops_data_portal.py:292-344), gated
+    on source == "ci_rca" and context_v2_json is not None, so a non-ci_rca fixture stays offline.
+    validate_vp_replay trusts the hermetic flag rather than enforcing it.
+  - >-
+    VP replay budget: PER_STEP_TIMEOUT_SECONDS is 30 and MAX_AGGREGATE_SECONDS 120 across the four
+    replayed steps, and a TimeoutExpired is an automatic divergence with no partial credit. Step
+    2's matrix builds throwaway git repos -- share one repo across the cases rather than building
+    five.
+  - >-
+    check_spec.node_id in the verification registry is a SINGLE string, but VP step 1's command
+    selects two node ids. Pick the acceptance_lint class for the graduated row's node_id; the
+    portal class is covered by its own test_obligations entry.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND, 125 of 125 decisions
+    triaged. CITE -- dec-169 (three registration surfaces; bare string literals), dec-65 (ops.yaml
+    is the canonical acceptance field-semantic authority), dec-103 (no new acceptance machinery;
+    also the closure-proof authority), dec-124 and dec-131 (executor tree unmapped; mirror-test
+    path), dec-162 (thin-adapter ratchet shape; do-not-bundle precedent), dec-142 (taxonomy row
+    mandatory; Resolves trailer), dec-153 (fast-tier budget: filesystem-only), dec-132 (graduation
+    is an enforced pre-merge obligation), dec-73 (two-tier presubmit), dec-55 (RCA-as-plan-source),
+    dec-128 (decompose never raise), dec-67 (executor freeze), dec-117 (binds the executor, not
+    this CC-web session -- editing scripts/executor/** here is in bounds), dec-159/dec-148 (diff-base
+    conventions the new check should follow), dec-165 (marker grammar home, if a roster marker is
+    added), dec-66 and dec-163 and dec-170 (the three flags, resolved in Constraints).
+  - >-
+    "gates: decision-scout=FLAGS_FOUND (dec-65 resolved; dec-66 resolved by REMOVING the
+    rec_write_guidance edit once the projection was understood; dec-163 resolved by converting the
+    both-empty green into skipped(); dec-170 clauses 3-4 resolved by adopting surface 7, while
+    Decision 170's named deferred trigger is knowingly diverged from -- see the divergence entry
+    above); plan-critique=REVISE round 1 (surface-7 declaration omitted and reddening the fast
+    tier; non-independent oracles; over-broad shape (b)) then REVISE round 2 (missing
+    amendment_log ritual on the newly-scoped Class A contract edit; VP steps 1/3/4 bare-path and
+    therefore unenforced under validate_vp_replay's exit-code-only matching; ops_data_portal
+    obligation mis-routed away from its real coverage-mapped mirror) -- all six fixed, plus the
+    oracle delete-filter parity, the unnamed fourth case, and the module-level-vs-per-path
+    disclosure on the step-3 waiver. Round 2's Decision 162 mis-cite finding was checked and
+    REJECTED as incorrect; see the citation entry above."
+  - >-
+    Why this bundle. rec-3220 and rec-3163 are the same defect at two layers -- a green signal that
+    proves nothing. rec-3220 is a rec-closure probe that cannot tell the fixed tree from the
+    unfixed one; rec-3163 is a check that ran and examined nothing. Fixing the meta-cause FIRST is
+    load-bearing, not cosmetic: rec-2970 (2026-08-03) correctly diagnosed this exact coverage gap
+    and was closed on the probe `grep -n validate_test_coverage scripts/checks/registry.py`,
+    satisfied by the then-inline registration whether or not the check ever moved tiers. Until
+    rec-3220 lands, rec-3221 can die the same death when someone works it.
+  - >-
+    Escape-class ledger: rec-2970 (08-03, closed on the non-discriminating probe above),
+    rec-3043/rec-3044 (08-05) and rec-3147 (08-15) closed corrective-only, rec-3163 (08-16, open,
+    this plan), rec-3211/rec-3212 (08-18, open, Critical). Five filings, one unfixed structural gap.
+  - >-
+    What this plan does NOT close, stated plainly. validate_test_coverage carries no pre=True in
+    scripts/checks/misc/_manifest.py -- verified live: pre_sequence() holds 83 entries (77 checks plus 6
+    scaffolds) and this is not among them -- so the per-file coverage floor stays post-merge-only. rec-3221 is the sole
+    live owner of that gap and stays open deliberately. Per Decision 103 an open rec needs a live
+    relevance verdict, not merely status=open; rec-3221 evaluated `unknown` at planning time (no
+    signals), which is a proceed verdict, so it remains legitimately open.
+  - >-
+    rec-3211 and rec-3212 -- the two open Critical ci-rca recs -- are NOT bundled here. Their
+    corrective already has an approved plan merged to main at #939,
+    docs/plans/PLAN-coverage-gate-presubmit.yaml, which is unimplemented as of this planning
+    session (verified live: tests/platform_roadmap_state measures 98.58% with lines 115 and 125-126
+    missing, and no open PR claims it). That plan should be implemented independently; duplicating
+    its scope here would re-open a design that already passed five critique rounds.
+  - >-
+    Related-Work condition satisfied for the ci-rca HARD BLOCK: condition 3, same failure category.
+    rec-3163 addresses the validate.py-false-negative category that rec-3211/rec-3212's own
+    preventive_action names -- a coverage floor that passes without enforcing.
+  - >-
+    Why the alarm's oracle must be BASE-FREE, and the trap an earlier draft fell into.
+    validate_test_coverage declares examined(len(get_changed_source_files())), so vacuity is exactly
+    "that call returned empty". Re-calling the same function as the alarm's oracle agrees with
+    itself and can never fire -- the obvious tautology. The NON-obvious one, caught at critique:
+    _common.get_changed_files() is not independent either. Verified on disk at
+    scripts/checks/_common.py:102-119 against scripts/test_coverage_checker.py:466-509 -- both call
+    the same _common.push_context_base(), both default to origin/main, and both fall back to the
+    same `git diff --name-only HEAD`. On a shallow clone with origin/main unresolvable they degrade
+    identically to empty, so an alarm built on that pairing passes vacuously in precisely the
+    scenario it was built for. That scenario is live, not hypothetical: this session's own
+    session_start_deepen_history hook failed with "cannot lock ref refs/remotes/origin/main" and
+    warned that git answers may be wrong on a shallow clone. The oracle is therefore
+    `git diff --name-only HEAD~1 HEAD`, which touches no base ref, with skipped(reason) when even
+    that is uncomputable.
+  - >-
+    Decision 170 divergence, stated plainly rather than presented as compliance. Decision 170
+    explicitly did NOT commit to fail-closed vacuity enforcement and named its revisit condition as
+    "once a path-aware declaring-coverage metric clears a stated threshold". This plan does NOT
+    clear that threshold and states none. It substitutes SCOPE NARROWING -- a single-check frozen
+    roster covering validate_test_coverage alone -- as a deliberate divergence from the named
+    trigger. That is a judgement call the critique gate and the human were asked to ratify on the
+    record, not a technicality the plan satisfies. RATIFIED by the human at planning time
+    (2026-08-21), after plan-critique round 3 assessed the substitution as a legitimate narrower
+    action -- Decision 170 declined to commit ITSELF to general fail-closed enforcement rather than
+    prohibiting a scoped successor, and Decision 163 point 1 rules out the advisory-WARN
+    alternative. If the narrowing is later judged insufficient, the reversal is to unregister the
+    check (one Entry) and reopen rec-3163 against Decision 170's original threshold.
+  - >-
+    Withdrawn overclaim, recorded so it is not re-derived. An earlier draft justified this check as
+    "the first consumer of the vacuous_checks bucket", defending Decision 170's reversal condition
+    (a). The narrow fact is true -- vacuous_checks appears in scripts/ only at
+    validation_result.py:83 -- but the check as designed re-derives its own evidence and never
+    reads that bucket, so after this plan lands vacuous_checks STILL has zero consumers. The claim
+    is withdrawn. What the check does do is participate in the channel from the producer side: it
+    declares examined()/skipped() per surface 7, and it converts one silent examined(0) into either
+    a fail or an explicit skip. Wiring a genuine check_outcomes consumer remains unclaimed work.
+  - >-
+    Where the alarm is weak, on the record. On the post-merge main run -- the place the full tier,
+    and therefore validate_test_coverage, actually executes -- _common.push_context_base() returns
+    GITHUB_EVENT_BEFORE or HEAD~1 (scripts/checks/_common.py:84-93), so the checker's base and the
+    base-free oracle coincide and the two derivations agree almost by construction. The alarm's
+    real discriminating power is on feature branches and on shallow or unresolvable-base runs; on
+    main it is close to a no-op. That is an accepted limitation of the cheap instrument rec-3163
+    chose, not a defect to fix here -- the expensive instrument is rec-3221.
+  - >-
+    Citation challenged and upheld, recorded so it is not re-litigated. Plan-critique round 2
+    called the Decision 162 do-not-bundle citation a mis-cite, on the basis that Decision 162's
+    body spans lines 442-470 and contains no such proposition. Verified on disk: Decision 162's
+    header is at line 442 and the NEXT header (Decision 161) is at line 480, so its body runs to
+    479, and the quoted sentence -- "Bundling the highest-blast-radius refactor into incident
+    remediation is how remediation changes cause the next incident" -- is at line 472, inside it.
+    The citation is accurate and is retained unchanged.
+  - >-
+    Branch was 0 commits behind and 0 ahead of origin/main at planning time (preflight
+    main_freshness), so no Main Divergence Assessment deferral applies.
+  - >-
+    Recommendation Relevance Gate run at planning time with run_acceptance_probe=False (Decision 55):
+    rec-3220, rec-3163 and rec-3221 all returned `unknown` ("no signals available to assess
+    relevance"), which the gate treats as proceed.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    docs/DECISIONS.md read -- only the plan-cited sections (55, 65, 66, 67, 73, 103, 117, 124, 128,
+    131, 132, 142, 148, 153, 159, 162, 163, 165, 169, 170)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/executor/acceptance_lint.py -- add a classifier returning whether a probe is
+    presumptively non-discriminating, on two shapes: (a) a lone grep/rg invocation searching a
+    plain literal, carrying no negation, no count assertion and no chained second assertion;
+    (b) a pytest invocation naming a test path with no ::node_id WHOSE PATH ALREADY EXISTS on disk
+    -- a bare path against a not-yet-created test file is discriminating (red before via collection
+    error, green after) and must be ACCEPTED. Shape (a) is pure string analysis; shape (b) needs a
+    single Path.exists() stat, which is permitted -- Decision 103 forbids EXECUTING the acceptance
+    command (new acceptance machinery), not reading the filesystem, and Decision 153's fast-tier
+    rule explicitly allows filesystem-only work. Add a keyword-only
+    `require_discrimination: bool = False` parameter to lint_acceptance_command that rejects those
+    shapes with an actionable message naming the fix (add a ::node_id, or assert a count or a
+    negation). Default False keeps all five existing callers byte-for-byte identical. Never run the
+    probe.
+  - >-
+    scripts/ops_data_portal.py -- pass require_discrimination=True at the file_rec lint call
+    (line ~358, `lint_ok, lint_msg = lint_acceptance_command(fields["acceptance"])`). Leave
+    scripts/ops_portal/write_validators.py and validate_acceptance_literals on the default.
+  - >-
+    config/agent/data_quality/ops.yaml -- replace the acceptance `semantics` line so the canonical
+    authority states the discrimination rule; it currently says only "Prefer grep/pytest commands
+    over prose descriptions", which steers toward the failing shape. Do NOT edit
+    scripts/executor/rec_write_guidance.py: get_rec_write_guidance() already projects each column's
+    semantics verbatim from ops.yaml, so the edit propagates for free and a hardcoded copy would be
+    a second authority that can drift (Decision 65/66). Amend the second semantics block at
+    docs/contracts/ops_recommendations.yaml:294-297 for consistency, AND add a new
+    fields.acceptance.amendment_log[] entry in the same edit with change_class:
+    accepted_values_narrow and semantic_break: true. AmendmentLogEntry is extra="forbid" and
+    REQUIRES `date` (plus semantic_break and change_class); copy the shape of the sibling entry ten
+    lines above it. validate_contract_drift (pre=True) raises category 6 on a Class A
+    description/semantics diff with no accompanying entry, and the pairing rule is
+    prose_improvement XOR semantic_break. Add the propagation assertion to
+    tests/test_rec_write_guidance.py as class TestAcceptanceSemanticsProjection.
+  - >-
+    scripts/checks/hygiene/validate_vacuity_justified.py -- new registered check. Derive the
+    coverage-eligible changed-source set from `git diff --name-only HEAD~1 HEAD` (BASE-FREE; do NOT
+    use _common.get_changed_files(), which shares push_context_base()/origin/main with the checker
+    and degrades identically) and compare against test_coverage_checker.get_changed_source_files().
+    FAIL when the base-free set is non-empty and the checker's is empty. Filter the oracle with
+    EXACTLY get_changed_source_files' exclusions -- `.py` only, under `src/` or `scripts/`, not
+    `__init__.py`/`conftest.py`, and drop paths that no longer exist on disk -- otherwise a
+    delete-only commit fires a false alarm. Declare
+    registry.examined(n, unit="source_files") on the adjudicated paths and
+    registry.skipped(reason) when HEAD~1 is unavailable -- a declaration on EVERY reachable exit
+    path, surface 7 of the seven surfaces at scripts/checks/registry.py:10-20. Never return without
+    declaring; never treat an uncomputable oracle as a pass. Hold the covered check names in a
+    FROZEN in-module constant containing validate_test_coverage alone, and say in the module
+    docstring that this is deliberately narrow and is NOT the general fail-closed vacuity
+    enforcement Decision 170 declined.
+  - >-
+    scripts/checks/hygiene/_manifest.py -- add the Entry with module= and attr= as BARE STRING
+    LITERALS (Decision 169), full_segment="full_after_lint", no pre=True.
+    config/ci_rca_taxonomy.yaml -- add `validate_vacuity_justified: code_regression`, matching the
+    validate_test_coverage sibling row at line 41. Do NOT use gate_escape: it is listed under
+    agent_only_categories and is not available to this surface.
+  - >-
+    tests/test_executor_acceptance_lint.py and tests/checks/hygiene/test_validate_vacuity_justified.py
+    plus tests/ops_data_portal/test_acceptance_discrimination.py and the new
+    TestValidateVacuityJustifiedDispatched case in tests/checks/hygiene/test__manifest.py -- write
+    the cases named in VP steps 1, 2 and 3, using EXACTLY the class names the VP commands select
+    (TestAcceptanceDiscrimination, TestFileRecRefusesNonDiscriminating, TestVacuityMatrix,
+    TestValidateVacuityJustifiedDispatched, TestAcceptanceSemanticsProjection) -- the VP steps
+    select them by ::node_id, so a renamed class silently breaks replay. Every assertion pins a
+    function RETURN VALUE, never the presence of a literal in a file. Include the rec-2970 command
+    verbatim as a fixture, and include the shape-(b) carve-out case (a bare pytest path that does
+    not exist -> accepted). The vacuity tests need a repo seam: follow the
+    validate_graduation_completeness / validate_vp_replay precedent (a throwaway repo plus injected
+    changed_files/root/reader parameters) rather than mocking get_changed_source_files itself,
+    which would assert on the fixture rather than the adjudicated derivation.
+  - >-
+    config/agent/verification_registry/registry.yaml -- add the two graduation rows named by VP
+    steps 1 and 2 (acceptance-probe-discrimination-refused, vacuity-unjustified-fails-closed).
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Both halves are additive and independently revertible. Reverting scripts/executor/acceptance_lint.py
+  and the one-line ops_data_portal.py call site restores the current lint behaviour exactly (the new
+  arm is off by default, so none of the five callers depends on it). Removing the hygiene check
+  module plus its _manifest.py Entry, taxonomy row and mirror test unregisters the alarm with no
+  residue. The ops.yaml semantics edit reverts as text, and because get_rec_write_guidance() only
+  projects it, no code change has to be unwound alongside. No infrastructure, no data migration, no
+  schema change.
