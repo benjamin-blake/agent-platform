@@ -1,25 +1,85 @@
-"""ESB-09 guards (PLAN-esb-text-fix-bundle).
+"""ESB-09 guards (PLAN-esb-text-fix-bundle, amended by PLAN-executor-substrate-evidence-fold for
+docs/ROADMAP-PLATFORM.yaml).
 
 The SFN transition line recomputes from its own stated assumptions at the cited eu-west-2 rate at
-exact equality (no cents rounding). The current_scale headline recomputes from an explicit
-`headline_basis` (boolean include-flag, enumerated subtotal, add-on) rather than being asserted
-against a magic ceiling. A named Neon catalog egress line exists. The NAT figure is a bracket
-carrying confidence medium. The gross/free-tier stance is explicit. Exactly four
+exact equality (no cents rounding), with tx_per_rec and the per-transition rate PARSED out of the
+same roadmap line rather than hardcoded (rec-2946). The current_scale headline recomputes from an
+explicit `headline_basis` (boolean include-flag, enumerated subtotal, add-on) rather than being
+asserted against a magic ceiling. A named Neon catalog egress line exists. The NAT figure is a
+bracket carrying confidence medium. The gross/free-tier stance is explicit. Exactly four
 `substrate_reevaluation_triggers` are present under that name. Every enumerated breakdown line is
 either summed into the subtotal or explicitly excluded. The PUBLIC-repository guard: no 12-digit
 AWS account id, no arn:aws: string, no ExternalId pattern, no internal hostname anywhere in the
-cost text. Every cost line in executor_substrate_billing names region: eu-west-2 and a rate_basis.
+cost text. Every priced cost line in executor_substrate_billing declares a recognised
+provenance_class from a CLOSED enumeration, each with its own mandatory needle, retrieval date and
+region rule (Decision 165) -- never an existence-only rate_basis check.
 """
 
 from __future__ import annotations
 
 import re
 
+import pytest
 import yaml
 
 from tests.esb_text_fix._anchors import load_roadmap
 
 RATE_BASIS_NEEDLE = "AWS Price List bulk offer files"
+
+# Closed enumeration of recognised priced-row provenance classes (Decision 165: no per-row
+# opt-out, no existence-only fallback). The region rule is a property of the CLASS: the two
+# published-pricing-page classes need OPPOSITE region rules (codebuild is eu-west-2, agentcore's
+# published rate is region-unqualified), so they cannot share one class without one of the two
+# real rows becoming an unintended decoy for the other.
+PROVENANCE_CLASSES = {
+    "aws_price_list": {
+        "needle": "AWS Price List bulk offer files",
+        "date": "2026-08-01",
+        "region_required": "eu-west-2",
+    },
+    "published_pricing_page_regional": {
+        "needle": "AWS published pricing page (regional)",
+        "date": "2026-08-21",
+        "region_required": "eu-west-2",
+    },
+    "published_pricing_page_unqualified": {
+        "needle": "AWS published pricing page (region-unqualified)",
+        "date": "2026-08-21",
+        "region_required": None,
+    },
+}
+
+
+def priced_row_issues(name: str, entry: dict) -> list[str]:
+    """Return one string per problem with a priced row's provenance declaration. Empty list means
+    the row is well-formed. A row declaring no class, an unrecognised class, a class missing its
+    needle or retrieval date, or a wrong region for its class all produce an issue -- there is no
+    default class and no per-row opt-out from the rule (Decision 165)."""
+    issues: list[str] = []
+    pc = entry.get("provenance_class")
+    if not pc:
+        issues.append(f"{name}: missing provenance_class")
+        return issues
+    spec = PROVENANCE_CLASSES.get(pc)
+    if spec is None:
+        issues.append(f"{name}: unrecognised provenance_class {pc!r}")
+        return issues
+    rate_basis = str(entry.get("rate_basis", ""))
+    if spec["needle"] not in rate_basis:
+        issues.append(f"{name}: rate_basis missing the {pc!r} needle {spec['needle']!r}")
+    if spec["date"] not in rate_basis:
+        issues.append(f"{name}: rate_basis missing the {pc!r} retrieval date {spec['date']!r}")
+    region = entry.get("region")
+    if spec["region_required"] is not None:
+        if region != spec["region_required"]:
+            issues.append(f"{name}: region must be {spec['region_required']!r} for class {pc!r}, got {region!r}")
+    else:
+        if region != "not_region_qualified":
+            issues.append(f"{name}: region must be 'not_region_qualified' for class {pc!r}, got {region!r}")
+        caveat = str(entry.get("region_caveat", ""))
+        if len(caveat) < 40:
+            issues.append(f"{name}: region_caveat must be substantive (>=40 chars) for class {pc!r}, got {caveat!r}")
+    return issues
 
 
 def _cost_projection() -> dict:
@@ -32,15 +92,45 @@ def _bracket(s) -> list[float]:
     return [float(x) for x in m.groups()]
 
 
+def parse_sfn_assumptions(line: str) -> tuple[float, float, int, float]:
+    """Extract the published (lo, hi) bracket AND the stated transitions-per-rec / per-transition
+    rate from the roadmap's step_functions_transitions line, so the guard recomputes from what the
+    line itself asserts rather than duplicating those two numbers as Python literals (rec-2946)."""
+    lo, hi = [float(x) for x in re.match(r"^\$([0-9.]+)-([0-9.]+)", line).groups()]
+    rate_m = re.search(r"\$([0-9.eE+-]+)/transition", line)
+    assert rate_m, f"line does not state a per-transition rate: {line!r}"
+    tx_m = re.search(r"([0-9]+)\s*transitions/rec", line)
+    assert tx_m, f"line does not state transitions/rec: {line!r}"
+    tx_per_rec, rate = int(tx_m.group(1)), float(rate_m.group(1))
+    return lo, hi, tx_per_rec, rate
+
+
 def test_sfn_transition_line_recomputes_exactly():
     cp = _cost_projection()
     line = cp["projected_100tb_scale"]["breakdown"]["step_functions_transitions"]
     assert "1-10" not in line, "the overstated $1-10 figure survives"
-    lo, hi = [float(x) for x in re.match(r"^\$([0-9.]+)-([0-9.]+)", line).groups()]
-    tx_per_rec, rate = 30, 0.000025
+    lo, hi, tx_per_rec, rate = parse_sfn_assumptions(line)
     exp_lo, exp_hi = round(tx_per_rec * 100 * rate, 4), round(tx_per_rec * 300 * rate, 4)
     assert (lo, hi) == (exp_lo, exp_hi), f"published {lo}-{hi} != recomputed {exp_lo}-{exp_hi}"
     assert "eu-west-2" in line or "eu-west-2" in str(cp), "region unstated"
+
+
+def test_sfn_assumptions_follow_the_stated_line():
+    """rec-2946 acceptance: a MUTATED line stating a different transitions/rec figure must yield
+    a correspondingly different expectation -- a parser that ignores the mutation and still
+    returns 30/0.000025 regardless of the text is still hardcoded."""
+    real_line = _cost_projection()["projected_100tb_scale"]["breakdown"]["step_functions_transitions"]
+    _, _, real_tx, real_rate = parse_sfn_assumptions(real_line)
+
+    mutated = re.sub(r"[0-9]+(?=\s*transitions/rec)", str(real_tx + 10), real_line, count=1)
+    assert mutated != real_line, "mutation did not change the line text"
+    _, _, mutated_tx, mutated_rate = parse_sfn_assumptions(mutated)
+    assert mutated_tx == real_tx + 10, "parser ignored the mutated transitions/rec figure"
+    assert mutated_rate == real_rate, "rate should be unaffected by the transitions/rec mutation"
+
+    exp_lo_real = round(real_tx * 100 * real_rate, 4)
+    exp_lo_mutated = round(mutated_tx * 100 * real_rate, 4)
+    assert exp_lo_mutated != exp_lo_real, "mutated assumptions produced the same expectation as before"
 
 
 def test_public_repository_boundary_no_confidential_identifiers():
@@ -134,28 +224,72 @@ def test_executor_substrate_billing_block():
 
 
 def test_every_cost_line_names_region_and_rate_basis():
-    """ESB-09c: EVERY priced key under executor_substrate_billing names a region and a
-    rate_basis -- not just the two AWS-Price-List-sourced categories (M3, code-review round 2:
-    the original guard scoped itself around nat_contingency, the one line that would have
-    failed it)."""
+    """ESB-09c / Decision 165: EVERY priced key under executor_substrate_billing (the four
+    per_substrate_envelope_usd_per_month rows plus the three durable_execution_corrected_rates
+    rows plus this wave's two new ASSESSED rows) declares a recognised provenance_class from the
+    CLOSED PROVENANCE_CLASSES enumeration -- never an existence-only rate_basis check (the
+    original guard's category error, M3/code-review round 2 amended further here)."""
     cp = _cost_projection()
     esb = cp["executor_substrate_billing"]
     aws_priced_lines = {}
     aws_priced_lines.update(esb.get("per_substrate_envelope_usd_per_month") or {})
     aws_priced_lines.update(esb.get("durable_execution_corrected_rates") or {})
     assert aws_priced_lines, "no priced cost lines found in executor_substrate_billing"
+    all_issues: list[str] = []
     for name, entry in aws_priced_lines.items():
         assert isinstance(entry, dict), f"{name} cost line must be a mapping carrying region/rate_basis"
-        assert entry.get("region") == "eu-west-2", f"{name} missing region: eu-west-2"
-        assert RATE_BASIS_NEEDLE in str(entry.get("rate_basis", "")), f"{name} missing rate_basis"
-        assert "2026-08-01" in str(entry.get("rate_basis", "")), f"{name} rate_basis missing fetch date"
+        all_issues.extend(priced_row_issues(name, entry))
+    assert not all_issues, all_issues
 
-    # nat_contingency is priced too, but its rate_basis is deliberately NOT the AWS Price List
-    # (EFS/NAT Gateway pricing sits outside those bulk offer files -- see the plan's context) --
-    # it still must carry an explicit region and a non-empty, distinct rate_basis.
+    # nat_contingency's existing carve-out stays working: it is deliberately NOT part of the
+    # closed enumeration (its EFS/NAT Gateway pricing basis sits outside all three
+    # PROVENANCE_CLASSES) -- it still must carry an explicit region and a non-empty, distinct
+    # rate_basis.
     natc = esb.get("nat_contingency") or {}
     assert natc.get("region") == "eu-west-2", "nat_contingency missing region: eu-west-2"
     assert str(natc.get("rate_basis", "")).strip(), "nat_contingency missing rate_basis"
+
+
+def _well_formed_row(pc: str) -> dict:
+    spec = PROVENANCE_CLASSES[pc]
+    entry = {"rate_basis": f"{spec['needle']}, fetched {spec['date']}", "provenance_class": pc}
+    if spec["region_required"] is not None:
+        entry["region"] = spec["region_required"]
+    else:
+        entry["region"] = "not_region_qualified"
+        entry["region_caveat"] = (
+            "AWS publishes no region-specific price list for this service; naming the service "
+            "and the reason a region-qualified figure does not exist."
+        )
+    return entry
+
+
+@pytest.mark.parametrize("pc", sorted(PROVENANCE_CLASSES))
+def test_priced_row_provenance_fault_injection_per_class(pc):
+    """Decision 165: prove the enumeration is non-vacuous PER CLASS. A well-formed row of the
+    class is accepted; a wrong-needle row, a correct-needle-wrong-date row, an unrecognised
+    class, and a class-less row are each rejected -- so a class declared with an empty or
+    generic needle cannot slip through riding on a sibling class's decoy."""
+    spec = PROVENANCE_CLASSES[pc]
+
+    well_formed = _well_formed_row(pc)
+    assert priced_row_issues("well_formed", well_formed) == [], "a well-formed row of this class must be accepted"
+
+    wrong_needle = dict(well_formed)
+    wrong_needle["rate_basis"] = wrong_needle["rate_basis"].replace(spec["needle"], "an unrelated pricing citation")
+    assert priced_row_issues("wrong_needle", wrong_needle), f"a wrong-needle row must be rejected for class {pc!r}"
+
+    wrong_date = dict(well_formed)
+    wrong_date["rate_basis"] = wrong_date["rate_basis"].replace(spec["date"], "1999-01-01")
+    assert priced_row_issues("wrong_date", wrong_date), f"a correct-needle-wrong-date row must be rejected for class {pc!r}"
+
+    unrecognised = dict(well_formed)
+    unrecognised["provenance_class"] = "totally_unrecognised_class"
+    assert priced_row_issues("unrecognised", unrecognised), "an unrecognised provenance_class must be rejected"
+
+    classless = dict(well_formed)
+    del classless["provenance_class"]
+    assert priced_row_issues("classless", classless), "a row declaring no provenance_class must be rejected"
 
 
 def test_durable_execution_rates_corrected_not_reinvented():
