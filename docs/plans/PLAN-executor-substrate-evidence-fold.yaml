@@ -111,11 +111,11 @@ acceptance_criteria:
   - >-
     executor_substrate_billing.per_substrate_envelope_usd_per_month carries the two new ASSESSED
     rows, each declaring provenance_class and in_pinned_candidate_set false. The four pinned rows
-    remain present and remain members of the pinned set; they are EDITED in exactly three respects
+    remain present and remain members of the pinned set; they are EDITED in exactly four respects
     and no others -- every priced row gains provenance_class, the four pinned envelope rows gain
-    in_pinned_candidate_set true, and long_running_container's envelope widens to its recomputed
-    band (plus its utilisation_basis, per criterion 13). No pinned row's rate_basis, region or
-    note-borne rate figure changes.
+    in_pinned_candidate_set true, long_running_container's envelope widens to its recomputed band,
+    and long_running_container gains its utilisation_basis (criterion 12). No pinned row's
+    rate_basis, region or note-borne rate figure changes.
   - >-
     EVERY priced row the guard scans -- all four envelope rows plus all three
     durable_execution_corrected_rates rows, plus the two new rows -- declares a recognised
@@ -177,7 +177,11 @@ acceptance_criteria:
     long_running_container declares a utilisation_basis distinguishing its Price-List RATE
     provenance (2026-08-01, unchanged) from the operator-estimate UTILISATION that produces its
     band high, so the machine-readable provenance_class does not read the whole row as
-    Price-List-provenanced.
+    Price-List-provenanced. This field is ASSERTED, not merely written: it carries the plan's own
+    anti-existence-only thesis, so shipping it unguarded would be the declared-vs-executed shape
+    Decision 163 clause 2 names. The assertion lands inside
+    test_new_envelope_rows_declare_set_membership_and_verdicts, which is already graduated as
+    substrate-rows-declare-set-membership -- no ninth registry row is needed.
   - >-
     docs/ROADMAP-PLATFORM.yaml stays within the 10,000-line ceiling and the full presubmit tier
     exits 0.
@@ -224,15 +228,18 @@ verification_plan:
       THE TWO NEW ENVELOPE ROWS LAND WITHOUT DISTURBING THE PINNED SET OR THE PUBLIC BOUNDARY, AND
       EVERY PRICED ROW DECLARES ITS PROVENANCE. Both new rows carry an assessment verdict and
       in_pinned_candidate_set: false so a later reader can tell assessed-but-unpinned from pinned
-      (CD.44 GOV-2); the four pinned rows survive; all nine priced rows declare a recognised class
-      (the seven-row backfill included); and no ARN literal reaches cost_projection.
+      (CD.44 GOV-2); the four pinned rows survive and declare in_pinned_candidate_set true; all
+      nine priced rows declare a recognised class (the seven-row backfill included);
+      long_running_container declares a utilisation_basis separating its Price-List rate provenance
+      from its operator-estimate utilisation; and no ARN literal reaches cost_projection.
     command: |-
       bin/venv-python -m pytest tests/esb_text_fix/test_substrate_evidence_fold.py::test_new_envelope_rows_declare_set_membership_and_verdicts -q
-    expected: 1 passed.
+    expected: 1 passed -- both new rows present with verdicts and set membership, all nine priced rows classed, utilisation_basis present, no ARN literal.
     fix_if: >-
-      A missing row, a missing in_pinned_candidate_set declaration, a priced row without a
-      provenance_class (the backfill was skipped), a dropped pinned row, or an arn:aws: literal.
-      Name the integration codebuild:startBuild.sync without the prefix.
+      A missing row, a missing in_pinned_candidate_set declaration on either side of the partition,
+      a priced row without a provenance_class (the backfill was skipped), a missing
+      utilisation_basis, a dropped pinned row, or an arn:aws: literal. Name the integration
+      codebuild:startBuild.sync without the prefix.
     hermetic: false
     graduation: graduate
     graduation_check_id: substrate-rows-declare-set-membership
@@ -858,7 +865,9 @@ execution_steps:
     HIGH sensitivity); test_new_envelope_rows_declare_set_membership_and_verdicts (both new rows
     present with their verdicts and in_pinned_candidate_set false, all four pinned rows present,
     EVERY priced row across both scanned tables declares a recognised provenance_class, both new
-    notes <= 1500 chars, no arn:aws: anywhere in cost_projection, codebuild:startBuild.sync named);
+    notes <= 1500 chars, long_running_container declares a utilisation_basis naming both the
+    2026-08-01 Price-List rate provenance and the 2026-08-21 operator-estimate utilisation, no
+    arn:aws: anywhere in cost_projection, codebuild:startBuild.sync named);
     test_non_discrimination_conclusion_narrowed_and_deltas_reconcile (conclusion names codebuild,
     records the narrowing, states the pinned set is unchanged, frames the delta clause
     per-scale-point and cites the block-level provenance, AND selects the pinned rows by an
