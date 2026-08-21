@@ -7,6 +7,14 @@ mirror location that genuinely binds for the file_rec() write-boundary wiring.
 Defines its own minimal valid-fields fixture locally rather than importing
 tests/fixtures/ops_portal_records.VALID_FIELDS, so the discriminating/non-discriminating
 acceptance value under test is never accidentally shadowed by the shared fixture's own value.
+
+No `duckdb = pytest.importorskip("duckdb")` guard: unlike other tests/ops_data_portal/ files,
+these tests never touch a real DuckLake connection (_ducklake_write/_sync_table are mocked
+throughout) and scripts.ops_data_portal itself has no duckdb import at module scope -- see
+tests/test_ops_data_portal_validators.py for the same unguarded-import precedent. The guard
+would also break VP-step replay: pr-validate's requirements-fast.txt has no duckdb, so an
+importorskip-guarded module collects as a single skip node, and selecting a specific class by
+::node_id inside it then fails with pytest's "no collectors found" (exit 4, not a clean skip).
 """
 
 from __future__ import annotations
@@ -16,8 +24,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-duckdb = pytest.importorskip("duckdb")
 
 _BASE_FIELDS = {
     "title": "Acceptance discrimination boundary test recommendation",
