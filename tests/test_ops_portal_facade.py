@@ -214,7 +214,7 @@ class TestPatchInterception:
         "title": "Facade interception guard test recommendation",
         "file": "scripts/ops_data_portal.py",
         "context": "A sufficiently long context string so the write-time content validators are satisfied here.",
-        "acceptance": "grep -q ops_portal scripts/ops_data_portal.py",
+        "acceptance": "grep -q ops_portal scripts/ops_data_portal.py && grep -q file_rec scripts/ops_data_portal.py",
         "effort": "XS",
         "priority": "Low",
         "source": "planning",

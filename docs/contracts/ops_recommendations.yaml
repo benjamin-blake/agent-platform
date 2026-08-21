@@ -294,7 +294,8 @@ fields:
     semantics: >-
       The executor runs this as the acceptance test after implementing the recommendation.
       The consumer shim (step_runner.py, acceptance_lint.py) normalizes list[str] and
-      list[dict] at T0.12.5. Full typed-check dispatch by type deferred to T3.6.
+      list[dict] at T0.12.5. Full typed-check dispatch by type deferred to T3.6. file_rec
+      requires a discriminating probe shape (require_discrimination=True); not retroactive.
     populated_by: Caller-supplied on file_rec.
     dq_intent:
       not_null:
@@ -305,17 +306,16 @@ fields:
         change_class: type_widen
         summary: acceptance widened from str to str | list[TypedCheck] per CD.29
         migration_story: >-
-          Field shape ratified as str | list[TypedCheck] at T0.12.5. TypedCheck =
-          {type: str (CD.29 kernel primitives: command_exit_zero, command_output_matches,
-          file_exists), severity: str (required|quarantine), command?: str, ...}.
-          Scalar-string acceptance remains valid via the union (backward compat). Full
-          executor typed-check dispatch by type (e.g. file_exists -> test -f,
-          output_matches -> grep) deferred to T3.6; at T0.12.5, the consumer shim in
-          step_runner.py (run_acceptance, _extract_acceptance_command) and acceptance_lint.py
-          (validate_acceptance_feasibility, lint_acceptance_command) normalizes list[str]
-          (join with ' && ') and list[dict] TypedCheck (extract command field, join with
-          ' && '). Empty list treated as null.
-          field-shape-ratified-at: T0.12.5 / full-executor-typed-check-dispatch-deferred-to: T3.6.
+          Field shape ratified as str | list[TypedCheck] at T0.12.5 (TypedCheck = {type,
+          severity, command?, ...}, CD.29 kernel primitives). Scalar-string acceptance
+          remains valid via the union; full typed-check dispatch by type deferred to T3.6.
+      - date: "2026-08-21"
+        semantic_break: true
+        change_class: accepted_values_narrow
+        summary: file_rec acceptance lint now requires a discriminating probe shape (rec-3220).
+        migration_story: >-
+          lint_acceptance_command() gained a keyword-only require_discrimination parameter,
+          wired True only at the file_rec boundary (ops_data_portal.py:358); not retroactive.
 
   verification:
     type: str

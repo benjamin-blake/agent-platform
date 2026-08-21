@@ -76,7 +76,7 @@ class TestCiRcaSourceFileGate:
             "Runner IAM denied s3:GetObject on agent-logs/tmp/* during the upload-artifacts CI step. "
             "Error: AccessDeniedException was thrown. Fix: add s3:GetObject to the runner policy resource block."
         ),
-        "acceptance": "grep -q 'GetObject' terraform/ec2_runner.tf",
+        "acceptance": "grep -q 'GetObject' terraform/ec2_runner.tf && grep -q 's3' terraform/ec2_runner.tf",
         "effort": "S",
         "priority": "Critical",
         "source": "ci_rca",
@@ -205,6 +205,35 @@ class TestCiRcaSchemaEnforcement:
         assert rec_id == "rec-9002"
         assert any("CI_RCA_STRICT_MODE=warn" in r.message for r in caplog.records)
 
+    def test_deficient_context_v2_with_empty_context_builds_short_fallback_summary(self, tmp_path: Path) -> None:
+        """Warn mode continues past a context_v2_json missing all three summary-source fields
+        (proximate_cause/corrective_action/preventive_action) -- the composed summary is then
+        empty, the short-summary fallback text is appended, and (since fields["context"] is
+        also empty) that fallback overwrites it. The fallback text itself stays under 80 chars,
+        so _validate_context_length raises downstream -- this test's purpose is coverage of that
+        composition path, not a successful file."""
+        import scripts.ops_data_portal as p
+
+        deficient_ctx = {"schema_version": 1}
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: warn\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="context must be at least 80"):
+                p.file_rec({**_CI_RCA_FIELDS, "context": ""}, context_v2_json=deficient_ctx)
+
+    def test_deficient_context_v2_with_short_context_overwrites_via_elif_branch(self, tmp_path: Path) -> None:
+        """Same deficient-summary composition as above, but fields["context"] is present and
+        non-empty though under 80 chars -- exercises the elif branch (as opposed to the
+        not-fields.get("context") branch)."""
+        import scripts.ops_data_portal as p
+
+        deficient_ctx = {"schema_version": 1}
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: warn\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="context must be at least 80"):
+                p.file_rec({**_CI_RCA_FIELDS, "context": "too short"}, context_v2_json=deficient_ctx)
+
     def test_legacy_free_text_passes_with_deprecation_warning(self, tmp_path: Path, caplog) -> None:
         """file_rec(source=ci_rca) with no context_v2_json logs a deprecation warning and passes."""
         import scripts.ops_data_portal as p
@@ -311,7 +340,7 @@ class TestCiRcaSchemaEnforcement:
                     "validate_sloc_limits() raised on scripts/roadmap/product_roadmap.py: 810 SLOC exceeds 500 limit. "
                     "CI step 'validate' failed; resource: scripts/roadmap/product_roadmap.py.",
                     "--acceptance",
-                    "grep -q validate_sloc_limits scripts/validate.py",
+                    "grep -q validate_sloc_limits scripts/validate.py && grep -q main scripts/validate.py",
                     "--context-v2-json",
                     _json.dumps(_VALID_CONTEXT_V2),
                 ]
@@ -346,7 +375,7 @@ class TestCiRcaSchemaEnforcement:
                 "--context",
                 "validate_sloc_limits() raised: file is over limit. CI step failed; resource: scripts/foo.py.",
                 "--acceptance",
-                "grep -q validate scripts/validate.py",
+                "grep -q validate scripts/validate.py && grep -q main scripts/validate.py",
                 "--context-v2-json",
                 "{not: valid json",
             ]
@@ -387,7 +416,7 @@ class TestCiRcaSchemaEnforcement:
                     "--context",
                     "validate_sloc_limits() raised: file is over 500 SLOC. CI step failed; resource: scripts/foo.py.",
                     "--acceptance",
-                    "grep -q validate scripts/validate.py",
+                    "grep -q validate scripts/validate.py && grep -q main scripts/validate.py",
                 ]
             )
         assert rc == 0

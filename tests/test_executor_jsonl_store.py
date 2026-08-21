@@ -272,6 +272,14 @@ class TestCreatePostmortemRecommendation:
         assert call_fields["status"] == "open"
         assert "rec-001" in call_fields["title"]
 
+        # The composed acceptance string must itself pass the file_rec write-boundary lint
+        # (require_discrimination=True) -- code-review finding: this call site's acceptance
+        # was widened to a chained assertion specifically to keep clearing that boundary.
+        from scripts.executor.acceptance_lint import lint_acceptance_command
+
+        lint_ok, lint_msg = lint_acceptance_command(call_fields["acceptance"], require_discrimination=True)
+        assert lint_ok, lint_msg
+
     def test_silently_skips_on_portal_error(self, tmp_path: Path) -> None:
         with patch("scripts.ops_data_portal.file_rec", side_effect=Exception("portal error")):
             _create_postmortem_recommendation("rec-001", "agent/rec-001", ci_attempts=1)

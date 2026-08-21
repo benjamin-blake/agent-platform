@@ -16,6 +16,61 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+_LONE_GREP_HEAD_RE = re.compile(r"^(?:grep|rg)\b")
+_GREP_NEGATION_RE = re.compile(r"(?:^|\s)(-v|--invert-match|-L|--files-without-match)(?=\s|$)")
+_COMPARISON_ASSERTION_RE = re.compile(r"(-eq|-ne|-gt|-lt|-ge|-le|==|!=)")
+_PYTEST_BARE_PATH_RE = re.compile(r"\bpytest\s+(?:-\S+\s+)*[\"']?(tests/[^\s\"']+?\.py)(::[^\s\"']+)?[\"']?")
+
+
+def _classify_non_discriminating(cmd: str) -> tuple[bool, str]:
+    """Pure-string classification of a presumptively non-discriminating acceptance probe.
+
+    Never executes `cmd` (Decision 103: no new acceptance machinery). Returns (True, reason)
+    for either of two shapes that pass identically whether or not the underlying defect was
+    fixed:
+
+    (a) A LONE grep/rg invocation for a plain literal, carrying no negation flag
+        (-v/--invert-match/-L/--files-without-match), no comparison-style count assertion
+        (-eq/-ne/-gt/-lt/-ge/-le/==/!=), and no chained second assertion (&& or |).
+    (b) A bare `pytest <path>.py` invocation with no ::node_id, where <path> already exists on
+        disk -- a probe that re-runs an existing, already-passing file gains no new assertion.
+        A path that does NOT yet exist is legitimately discriminating (collection error before,
+        pass after) and is never flagged here. The path may optionally be wrapped in matching
+        single or double quotes; quoting alone does not confer discrimination.
+
+    A `-k <keyword>` selector is deliberately NOT treated as a discrimination signal equivalent
+    to ::node_id: tests/CLAUDE.md already bans -k selectors in acceptance commands outright
+    ("LLM-generated test names are unpredictable and rename between runs"; use grep to confirm
+    the test exists, then ::node_id), and unlike ::node_id a -k keyword can silently substring-
+    match an unrelated already-passing test, making it exactly as vacuous as a bare path. A
+    command carrying -k with no ::node_id and an existing bare path is correctly refused here,
+    steering toward the CLAUDE.md-endorsed ::node_id form rather than being special-cased through.
+    """
+    chain_parts = [p.strip() for p in cmd.split("&&") if p.strip()]
+    if len(chain_parts) == 1:
+        pipe_parts = [p.strip() for p in chain_parts[0].split("|") if p.strip()]
+        if len(pipe_parts) == 1 and _LONE_GREP_HEAD_RE.match(pipe_parts[0]):
+            head = pipe_parts[0]
+            if not _GREP_NEGATION_RE.search(head) and not _COMPARISON_ASSERTION_RE.search(head):
+                return True, (
+                    "a lone grep/rg for a plain literal, with no negation, count assertion or "
+                    "chained second assertion, passes identically whether or not the underlying "
+                    "defect is fixed"
+                )
+
+    pytest_match = _PYTEST_BARE_PATH_RE.search(cmd)
+    if pytest_match and pytest_match.group(2) is None:
+        test_path = pytest_match.group(1)
+        repo_root = Path(__file__).parent.parent.parent
+        if (repo_root / test_path).exists():
+            return True, (
+                f"a bare pytest path with no ::node_id against the already-existing {test_path} "
+                "passes identically whether or not a new assertion for this rec was ever added "
+                "to that file"
+            )
+
+    return False, ""
+
 
 class AcceptanceFeasibility(Enum):
     """Enum indicating feasibility status of an acceptance command."""
@@ -114,10 +169,17 @@ def validate_acceptance_feasibility(acceptance: object, action: str = "") -> tup
     return AcceptanceFeasibility.FEASIBLE, ""
 
 
-def lint_acceptance_command(acceptance: object) -> tuple[bool, Optional[str]]:
+def lint_acceptance_command(acceptance: object, *, require_discrimination: bool = False) -> tuple[bool, Optional[str]]:
     """Validate acceptance command for banned patterns and bash syntax.
 
     Accepts str | list[str] | list[dict] (CD.29 TypedCheck) per T0.12.5 shim.
+
+    Args:
+        acceptance: the acceptance command (or list) to validate.
+        require_discrimination: keyword-only, default False. When True, additionally rejects
+            presumptively non-discriminating probe shapes (see _classify_non_discriminating) --
+            a probe that would pass identically whether or not the rec's fix ever landed.
+            Default False keeps every existing caller's behaviour byte-for-byte unchanged.
 
     Returns:
         (True, None) if valid, (False, error_msg) if invalid.
@@ -137,6 +199,18 @@ def lint_acceptance_command(acceptance: object) -> tuple[bool, Optional[str]]:
             "'python scripts/validate.py --pre' instead.\n"
         )
         return False, error_msg
+
+    if require_discrimination:
+        non_discriminating, reason = _classify_non_discriminating(cmd)
+        if non_discriminating:
+            error_msg = (
+                "ERROR: acceptance probe does not discriminate the fixed tree from the unfixed one.\n"
+                f"  Command: {cmd}\n"
+                f"  Reason: {reason}\n"
+                "  FIX: add a ::node_id to a pytest path, assert a negation or count, or chain a "
+                "second assertion (e.g. 'grep -q old_string file && grep -q new_string file').\n"
+            )
+            return False, error_msg
 
     # Check for multi-word grep patterns with regex operators
     if "grep" in cmd:

@@ -15,7 +15,7 @@ VALID_FIELDS = {
     "title": "Test recommendation",
     "file": "scripts/ops_data_portal.py",
     "context": "This is a test rec context with enough detail to satisfy the 80-character minimum requirement.",
-    "acceptance": "grep -q 'ops_data_portal' scripts/ops_data_portal.py",
+    "acceptance": "grep -q 'ops_data_portal' scripts/ops_data_portal.py && grep -q 'file_rec' scripts/ops_data_portal.py",
     "effort": "XS",
     "priority": "Low",
     "source": "planning",

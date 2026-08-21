@@ -291,7 +291,10 @@ def _create_postmortem_recommendation(failed_rec_id: str, branch: str, ci_attemp
             f"Feature branch {branch} was cleaned up. "
             "Review logs/transcripts/ for detailed failure context."
         ),
-        "acceptance": f"grep -q '{failed_rec_id}' logs/.recommendations-log.jsonl",
+        "acceptance": (
+            f"grep -q '{failed_rec_id}' logs/.recommendations-log.jsonl "
+            "&& grep -q '\"source\"' logs/.recommendations-log.jsonl"
+        ),
     }
 
     try:

@@ -129,6 +129,123 @@ class TestLintAcceptanceCommand:
         assert msg is None
 
 
+class TestAcceptanceDiscrimination:
+    """require_discrimination=True (rec-3220 / PLAN-probe-discrimination-vacuity-alarm): reject
+    probe shapes that pass identically whether or not the underlying defect was ever fixed."""
+
+    def test_lone_grep_literal_rejected(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command("grep -n foo scripts/checks/registry.py", require_discrimination=True)
+        assert valid is False
+        assert "discriminate" in msg.lower()
+
+    def test_rec_2970_literal_rejected(self):
+        # The exact command that closed rec-2970 (2026-08-03) unfixed -- the historical escape
+        # this plan exists to refuse.
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "grep -n validate_test_coverage scripts/checks/registry.py",
+                require_discrimination=True,
+            )
+        assert valid is False
+
+    def test_bare_pytest_path_that_exists_rejected(self):
+        # rec-3220's own historical acceptance command -- the shape this plan targets.
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "bin/venv-python -m pytest tests/test_executor_acceptance_lint.py -q",
+                require_discrimination=True,
+            )
+        assert valid is False
+        assert "node_id" in msg
+
+    def test_bare_pytest_path_that_does_not_exist_accepted(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "bin/venv-python -m pytest tests/test_nonexistent_xyz_probe_discrimination.py -q",
+                require_discrimination=True,
+            )
+        assert valid is True
+        assert msg is None
+
+    def test_pytest_node_id_accepted_even_though_path_exists(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "bin/venv-python -m pytest tests/test_executor_acceptance_lint.py::TestAcceptanceDiscrimination -q",
+                require_discrimination=True,
+            )
+        assert valid is True
+
+    def test_double_quoted_bare_path_that_exists_rejected(self):
+        # Quoting alone must not bypass shape-(b) detection (code-review finding).
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                'bin/venv-python -m pytest "tests/test_executor_acceptance_lint.py" -q',
+                require_discrimination=True,
+            )
+        assert valid is False
+        assert "node_id" in msg
+
+    def test_single_quoted_bare_path_that_exists_rejected(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "bin/venv-python -m pytest 'tests/test_executor_acceptance_lint.py' -q",
+                require_discrimination=True,
+            )
+        assert valid is False
+        assert "node_id" in msg
+
+    def test_quoted_node_id_accepted_even_though_path_exists(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                'bin/venv-python -m pytest "tests/test_executor_acceptance_lint.py::TestAcceptanceDiscrimination" -q',
+                require_discrimination=True,
+            )
+        assert valid is True
+
+    def test_bare_path_with_k_selector_and_no_node_id_still_rejected(self):
+        # -k is deliberately NOT treated as discriminating: tests/CLAUDE.md already bans -k
+        # selectors in acceptance commands (unpredictable LLM-generated names), and unlike
+        # ::node_id a -k keyword can silently substring-match an unrelated already-passing test,
+        # so it carries no more discriminating power than the bare path alone.
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "bin/venv-python -m pytest tests/test_executor_acceptance_lint.py -k discrimination -q",
+                require_discrimination=True,
+            )
+        assert valid is False
+        assert "node_id" in msg
+
+    def test_grep_with_negation_accepted(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command("grep -v foo scripts/checks/registry.py", require_discrimination=True)
+        assert valid is True
+
+    def test_grep_with_count_assertion_accepted(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "test $(grep -c foo scripts/checks/registry.py) -eq 3", require_discrimination=True
+            )
+        assert valid is True
+
+    def test_chained_second_assertion_accepted(self):
+        with patch("shutil.which", return_value=None):
+            valid, msg = lint_acceptance_command(
+                "grep -q old scripts/checks/registry.py && grep -q new scripts/checks/registry.py",
+                require_discrimination=True,
+            )
+        assert valid is True
+
+    def test_require_discrimination_omitted_leaves_existing_verdicts_intact(self):
+        # Default-off path: both presumptively non-discriminating shapes stay VALID when the
+        # keyword is not passed -- byte-for-byte identical to today's behaviour.
+        with patch("shutil.which", return_value=None):
+            valid, _ = lint_acceptance_command("grep -n validate_test_coverage scripts/checks/registry.py")
+            assert valid is True
+            valid, _ = lint_acceptance_command("bin/venv-python -m pytest tests/test_executor_acceptance_lint.py -q")
+            assert valid is True
+
+
 class TestCheckoutMainSafely:
     """Tests for _checkout_main_safely."""
 
