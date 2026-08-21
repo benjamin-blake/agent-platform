@@ -409,7 +409,9 @@ def file_hotfix_rec(rec_id: str, hotfix_slug: str, description: str) -> str:
             f"Branch: agent/rec-{rec_id}-hotfix-{hotfix_slug}. "
             f"Description: {description}"
         ),
-        "acceptance": f"grep -q '{hotfix_slug}' scripts/execute_recommendation.py",
+        "acceptance": (
+            f"grep -q '{hotfix_slug}' scripts/execute_recommendation.py && grep -q import scripts/execute_recommendation.py"
+        ),
     }
 
     new_id = file_rec(hotfix_fields)

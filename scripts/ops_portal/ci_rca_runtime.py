@@ -424,7 +424,10 @@ def back_validate_ci_rca(
                     f"back_validate_ci_rca flagged parent {entry['id']} as non-conformant against the "
                     f"current CI_RCA_STRICT_MODE schema. Failing checks: {failing}."
                 ),
-                "acceptance": f"grep -q '{entry['id']}' logs/.recommendations-log.jsonl",
+                "acceptance": (
+                    f"grep -q '{entry['id']}' logs/.recommendations-log.jsonl "
+                    "&& grep -q '\"source\"' logs/.recommendations-log.jsonl"
+                ),
                 "effort": "XS",
                 "priority": "Low",
                 "source": "ci_rca_warn_period_audit",

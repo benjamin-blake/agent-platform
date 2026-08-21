@@ -82,4 +82,10 @@ ENTRIES: tuple[Entry, ...] = (
         pre_globs=("scripts/checks/**",),
         full_segment="full_after_lint",
     ),
+    Entry(
+        name="validate_vacuity_justified",
+        module="scripts.checks.hygiene.validate_vacuity_justified",
+        attr="validate_vacuity_justified",
+        full_segment="full_after_lint",
+    ),
 )

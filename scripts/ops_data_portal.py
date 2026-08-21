@@ -231,15 +231,15 @@ def file_rec(
         errors = _validate_ci_rca_dispute(context_v2_json)
         if errors:
             raise ValueError(f"[ci_rca_evidence_dispute] context_v2_json failed validation: {'; '.join(errors)}")
-        # Build >=80-char human summary for the legacy context column.
+        # Build >=80-char human summary for the legacy context column. CiRcaEvidenceDispute's
+        # evidence_for_dispute carries min_length=120 (enforced above), so the composed summary
+        # is always well over 80 chars -- no short-summary fallback is reachable here.
         disp = context_v2_json
         summary = (
             f"Dispute on {disp.get('disputed_field', '')}: "
             f"agent={disp.get('agent_value', '')!r} vs bundle={disp.get('bundle_value', '')!r}. "
             f"Evidence: {disp.get('evidence_for_dispute', '')[:200]}"
         )
-        if len(summary) < 80:
-            summary = summary + " [ci_rca_evidence_dispute -- see context_v2_json for full detail]"
         if not fields.get("context") or len((fields.get("context") or "").strip()) < 80:
             fields["context"] = summary
 
@@ -355,7 +355,7 @@ def file_rec(
     if not _migration_mode:
         _validate_file_path(fields["file"])
         _validate_context_length(fields["context"])
-        lint_ok, lint_msg = lint_acceptance_command(fields["acceptance"])
+        lint_ok, lint_msg = lint_acceptance_command(fields["acceptance"], require_discrimination=True)
         if not lint_ok:
             raise ValueError(lint_msg)
 

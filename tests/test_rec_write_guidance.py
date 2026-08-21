@@ -136,6 +136,22 @@ class TestGetRecWriteGuidance:
             assert "semantics" in col_data, f"{col_name} missing semantics"
 
 
+class TestAcceptanceSemanticsProjection:
+    """rec-3220 / PLAN-probe-discrimination-vacuity-alarm: the ops.yaml acceptance semantics
+    edit propagates through get_rec_write_guidance() WITHOUT scripts/executor/rec_write_guidance.py
+    being edited -- get_rec_write_guidance() is a pure projection of ops.yaml's per-column
+    description/semantics (Decision 65 canonical source; Decision 66 single-authority)."""
+
+    def test_acceptance_semantics_states_discrimination_rule(self) -> None:
+        from scripts.executor.rec_write_guidance import get_rec_write_guidance
+
+        guidance = get_rec_write_guidance()
+        semantics = guidance["acceptance"]["semantics"]
+        assert "require_discrimination" in semantics
+        assert "negation" in semantics
+        assert "node_id" in semantics
+
+
 class TestCiRcaGuidanceSchemaLockstep:
     """CIRCA-04/08/09: get_rec_write_guidance(source='ci_rca') text stays in lockstep with the
     CiRcaContext schema amendments (version-gated why_chain ceiling, typed terminus override,

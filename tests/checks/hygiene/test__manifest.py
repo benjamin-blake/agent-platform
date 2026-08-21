@@ -56,3 +56,15 @@ class TestValidateRootScopedDiffBaseDispatchedInBothTiers:
         full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
         assert "validate_root_scoped_diff_base" in pre_names
         assert "validate_root_scoped_diff_base" in full_names
+
+
+class TestValidateVacuityJustifiedDispatched:
+    """VP step 3: validate_vacuity_justified (rec-3163) is dispatched full-tier only -- it
+    adjudicates a full-tier check's own declaration, so it belongs in that check's segment, not
+    --pre (promoting coverage enforcement pre-merge is rec-3221's territory, not this plan's)."""
+
+    def test_registered_in_full_sequence_only(self) -> None:
+        pre_names = {step.name for step in registry.pre_sequence() if step.kind == "check"}
+        full_names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "validate_vacuity_justified" in full_names
+        assert "validate_vacuity_justified" not in pre_names

@@ -22,7 +22,7 @@ _VALID_FIELDS = {
     "title": "Incremental cache test recommendation",
     "file": "scripts/ops_data_portal.py",
     "context": "A sufficiently long context string so the write-time content validators are satisfied here.",
-    "acceptance": "grep -q upsert_cache_row scripts/sync/ops.py",
+    "acceptance": "grep -q upsert_cache_row scripts/sync/ops.py && grep -q merge_key scripts/sync/ops.py",
     "effort": "XS",
     "priority": "Low",
     "source": "planning",

@@ -122,7 +122,7 @@ def test_automatable_override_warning(caplog):
         "title": "Test boundary recommendation",
         "file": "scripts/executor/some_tool.py",  # boundary file -> compute_automatable returns False
         "context": long_context,
-        "acceptance": "grep -q 'pattern' scripts/executor/some_tool.py",
+        "acceptance": "grep -q 'pattern' scripts/executor/some_tool.py && grep -q 'other' scripts/executor/some_tool.py",
         "effort": "S",
         "priority": "Low",
         "source": "manual",

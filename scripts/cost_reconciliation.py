@@ -368,7 +368,16 @@ def build_rec_fields(trigger: TriggerResult, month: str, snapshot_path: str) -> 
 
 
 def _validate_rec_payload(fields: dict[str, Any]) -> None:
-    """Validate a rec payload with the exact write-time validator surface file_rec applies."""
+    """Validate a rec payload against file_rec's write-time validator surface.
+
+    Diverges from file_rec on one point (PLAN-probe-discrimination-vacuity-alarm): file_rec
+    passes require_discrimination=True to lint_acceptance_command(); this call keeps the
+    default False (Constraints: only the ops_data_portal.py:358 direct call opts in). The
+    acceptance command this module composes above (`bin/venv-python -m
+    scripts.cost_reconciliation --invoice ... --month ...`) is neither a lone grep/rg nor a bare
+    pytest path, so it is unaffected by the arm either way -- but this validator would not catch
+    a future acceptance shape that IS non-discriminating, since it never opts in.
+    """
     from scripts.executor.acceptance_lint import lint_acceptance_command  # noqa: PLC0415
     from scripts.executor.jsonl_store import Recommendation  # noqa: PLC0415
     from scripts.executor.rec_write_guidance import validate_source  # noqa: PLC0415

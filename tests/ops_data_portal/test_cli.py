@@ -40,7 +40,7 @@ class TestCLI:
                     "--context",
                     "Testing the CLI entrypoint for file_rec -- this context satisfies the 80-char minimum.",
                     "--acceptance",
-                    "grep -q ops_data_portal scripts/ops_data_portal.py",
+                    "grep -q ops_data_portal scripts/ops_data_portal.py && grep -q file_rec scripts/ops_data_portal.py",
                     "--effort",
                     "XS",
                     "--priority",

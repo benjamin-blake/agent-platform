@@ -240,6 +240,14 @@ class TestRefileAudit:
         assert "rec-nc-0" in fields["title"]
         assert "rec-nc-0" in fields["context"]
 
+        # The composed acceptance string must itself pass the file_rec write-boundary lint
+        # (require_discrimination=True) -- code-review finding: this call site's acceptance
+        # was widened to a chained assertion specifically to keep clearing that boundary.
+        from scripts.executor.acceptance_lint import lint_acceptance_command
+
+        lint_ok, lint_msg = lint_acceptance_command(fields["acceptance"], require_discrimination=True)
+        assert lint_ok, lint_msg
+
 
 class TestSourceRegistration:
     def test_validate_source_admits_ci_rca_warn_period_audit(self) -> None:
