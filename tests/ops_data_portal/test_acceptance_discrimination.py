@@ -15,15 +15,24 @@ tests/test_ops_data_portal_validators.py for the same unguarded-import precedent
 would also break VP-step replay: pr-validate's requirements-fast.txt has no duckdb, so an
 importorskip-guarded module collects as a single skip node, and selecting a specific class by
 ::node_id inside it then fails with pytest's "no collectors found" (exit 4, not a clean skip).
+
+The two success-path tests below also patch src.common.ducklake_runtime.mint_write_identity
+(file_rec's deferred-import identity minter, which itself deferred-imports `ulid`) rather than
+relying on the real python-ulid package -- that package is likewise absent from
+requirements-fast.txt, and mocking it keeps this module hermetic under the same constraint that
+motivated dropping the duckdb guard.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+
+_FAKE_WRITE_IDENTITY = SimpleNamespace(ulid="01FAKE0000000000000000000")
 
 _BASE_FIELDS = {
     "title": "Acceptance discrimination boundary test recommendation",
@@ -86,6 +95,7 @@ class TestFileRecRefusesNonDiscriminating:
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-8001"}) as mock_write,
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            patch("src.common.ducklake_runtime.mint_write_identity", return_value=_FAKE_WRITE_IDENTITY),
         ):
             from scripts.ops_data_portal import file_rec
 
@@ -108,6 +118,7 @@ class TestFileRecRefusesNonDiscriminating:
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-8002"}) as mock_write,
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            patch("src.common.ducklake_runtime.mint_write_identity", return_value=_FAKE_WRITE_IDENTITY),
         ):
             from scripts.ops_data_portal import file_rec
 
