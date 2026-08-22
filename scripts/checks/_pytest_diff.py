@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import importlib.util
+import json
 import re
 from pathlib import Path
 
@@ -49,6 +50,55 @@ _PYTEST_FLAGS = [
 # matters) -- running several concurrently is safe (separate processes, no shared state) and turns
 # a serial chain of per-process startup overheads into a bounded number of parallel batches.
 _REACTIVE_PROBE_MAX_WORKERS = 8
+
+# PLAN-premerge-diff-coverage-gate: coverage artifact + machine-readable deferral map emitted by
+# the ONE primary invocation below, consumed by scripts/checks/misc/validate_diff_coverage.py.
+# Both paths are gitignored (logs/debug/ -- Decision 55 debug-artifact convention, mirrors
+# scripts/checks/deps/affected_tests.py's selection-manifest.json). --cov-fail-under=0 overrides
+# pyproject.toml's fail_under=37 for THIS invocation only (a CLI --cov flag overrides the config
+# [tool.coverage.run] source, verified live) -- an affected-set run measuring well under 37% must
+# never redden the fast tier on a coverage floor that was designed for the full suite.
+COVERAGE_ARTIFACT_REL = "logs/debug/diff-coverage.json"
+DEFERRAL_MAP_REL = "logs/debug/diff-coverage-deferrals.json"
+
+# The reactive survivor re-run is deliberately NOT traced (no --cov flag at all -- pytest-cov only
+# activates coverage when at least one --cov flag is present, and pyproject.toml's addopts carries
+# none): only the ONE primary invocation is ever traced, per this plan's declared green-path levers.
+_COV_FLAGS = ["--cov=src", "--cov=scripts", "--cov-fail-under=0", f"--cov-report=json:{COVERAGE_ARTIFACT_REL}"]
+
+# Deferral-map state vocabulary: STATE_OK means the coverage artifact reflects the single primary
+# invocation's real measurement (whether or not that invocation's tests all passed -- coverage.py
+# records line execution independent of assertion outcomes). The other three are the "no usable
+# artifact" states this plan's classifier must recognise rather than silently misread:
+#   - EMPTY_AFFECTED_SET: changed_tests was empty -- no invocation was ever attempted.
+#   - ALL_DEFERRED: every changed test file deferred at collect-only (or reactive-probe) time --
+#     no primary invocation ran, so no coverage was ever collected.
+#   - TWO_INVOCATION_FAILURE: the primary invocation failed on an excluded-heavy-dep signature and
+#     a SECOND real invocation ran on the survivor subset. The primary run's coverage.json still
+#     exists on disk, but it measured a run that included files later found to need deferral (their
+#     partial, crash-truncated execution is not a reliable line-coverage signal) and does not
+#     reflect the actually-validated survivor set -- so it is not a usable diff-coverage snapshot.
+STATE_OK = "ok"
+STATE_EMPTY_AFFECTED_SET = "empty_affected_set"
+STATE_ALL_DEFERRED = "all_deferred"
+STATE_TWO_INVOCATION_FAILURE = "two_invocation_failure"
+NO_ARTIFACT_STATES = frozenset({STATE_EMPTY_AFFECTED_SET, STATE_ALL_DEFERRED, STATE_TWO_INVOCATION_FAILURE})
+
+
+def _write_deferral_map(state: str, file_reasons: dict[str, str], *, root: Path = _common.ROOT) -> None:
+    """Best-effort write of {"state": ..., "deferred": {test_file: reason}} (Decision 55: LOUD
+    skip on OSError, never raising -- mirrors scripts/checks/deps/affected_tests.py's
+    emit_manifest write style). `state` is one of the STATE_* constants above; `file_reasons`
+    covers BOTH the collect-only partition's deferred list and the reactive heavy-dep probe's
+    finds (previously printed and discarded, per this plan's acceptance criteria)."""
+    path = root / DEFERRAL_MAP_REL
+    payload = {"state": state, "deferred": file_reasons}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        print(f"Diff-coverage deferral map: local write to {path} failed -- loud skip (Decision 55): {exc!r}")
+
 
 # Curated dist-name -> import-name aliases for names that differ; default is
 # name.lower().replace("-", "_").
@@ -338,21 +388,25 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
     failure.
     """
     if not changed_tests:
+        _write_deferral_map(STATE_EMPTY_AFFECTED_SET, {})
         return
     runnable, deferred = partition_changed_tests_by_collectability(changed_tests)
     runnable = _expand_directory_test_targets(runnable)
+    file_reasons: dict[str, str] = dict(deferred)
     for test_file, missing_dep in deferred:
         _print_deferred_warning(test_file, missing_dep)
     if not runnable:
         print(f"\nAll {len(deferred)} changed test file(s) deferred to the full tier -- fast-tier gate not reddened.")
+        _write_deferral_map(STATE_ALL_DEFERRED, file_reasons)
         return
 
     print("\n=== Tests (pytest -- explicit changed files) ===")
-    cmd = [_common.PYTHON, "-m", "pytest", *runnable, "-m", "not integration", "-v", *_PYTEST_FLAGS]
+    cmd = [_common.PYTHON, "-m", "pytest", *runnable, "-m", "not integration", "-v", *_PYTEST_FLAGS, *_COV_FLAGS]
     result = _common.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT)
     print(result.stdout or "", end="")
     print(result.stderr or "", end="")
     if result.returncode == 0:
+        _write_deferral_map(STATE_OK, file_reasons)
         return
 
     excluded = _excluded_heavy_import_names()
@@ -360,7 +414,10 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
     if _reactive_heavy_dep_signature(combined, excluded) is None:
         # No excluded-heavy-dep signature in the failure output: a genuine failure, a non-heavy
         # collection/runtime error, or an unrelated shape -- redden immediately (fail-closed).
+        # The primary invocation was still the SOLE invocation, so its coverage.json remains a
+        # usable snapshot of that one run.
         failed.append("Tests (pytest)")
+        _write_deferral_map(STATE_OK, file_reasons)
         return
 
     probe_targets = _attribute_failed_test_files(combined, runnable)
@@ -377,16 +434,23 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
                 deferred_from_probe[test_file] = runtime_missing
     for test_file in sorted(deferred_from_probe):
         _print_deferred_warning(test_file, deferred_from_probe[test_file])
+    file_reasons.update(deferred_from_probe)
     survivors = [f for f in runnable if f not in deferred_from_probe]
     if not survivors:
         print(
             "\nAll remaining changed test file(s) deferred to the full tier on reactive "
             "detection -- fast-tier gate not reddened."
         )
+        _write_deferral_map(STATE_ALL_DEFERRED, file_reasons)
         return
 
     print("\n=== Tests (pytest -- reactive re-run on survivors) ===")
     rerun_cmd = [_common.PYTHON, "-m", "pytest", *survivors, "-m", "not integration", "-v", *_PYTEST_FLAGS]
     rerun_result = _common.run(rerun_cmd, cwd=_common.ROOT)
+    # Two real invocations happened (primary + this reactive re-run): the primary invocation's
+    # coverage.json is still on disk but no longer a trustworthy diff-coverage snapshot (see
+    # STATE_TWO_INVOCATION_FAILURE's docstring above) -- classify it as such regardless of this
+    # re-run's own outcome.
+    _write_deferral_map(STATE_TWO_INVOCATION_FAILURE, file_reasons)
     if rerun_result.returncode != 0:
         failed.append("Tests (pytest)")

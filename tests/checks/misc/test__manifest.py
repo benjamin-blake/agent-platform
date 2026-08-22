@@ -36,3 +36,27 @@ class TestMiscManifest:
     def test_registry_resolve_matches_the_manifest_entry(self, entry) -> None:
         module = importlib.import_module(entry.module)
         assert registry.resolve(entry.name) is getattr(module, entry.attr)
+
+
+class TestDiffCoveragePreTierOnlyDisposition:
+    """validate_diff_coverage (PLAN-premerge-diff-coverage-gate) is registered pre=True with NO
+    full_segment -- a DECLARED unsequenced-from-full disposition (misc sits in full_after_lint,
+    which the full-tier skeleton dispatches BEFORE the unit_tests scaffold, so a full-tier leg
+    would have no coverage artifact to read). This must be asserted, not assumed -- it fails
+    loudly if anyone later adds a full_segment to this Entry."""
+
+    def test_registered_pre_true(self) -> None:
+        entry = next(e for e in _manifest.ENTRIES if e.name == "validate_diff_coverage")
+        assert entry.pre is True
+
+    def test_declares_no_full_segment(self) -> None:
+        entry = next(e for e in _manifest.ENTRIES if e.name == "validate_diff_coverage")
+        assert entry.full_segment is None
+
+    def test_present_in_pre_sequence(self) -> None:
+        names = {step.name for step in registry.pre_sequence()}
+        assert "validate_diff_coverage" in names
+
+    def test_absent_from_full_sequence(self) -> None:
+        names = {step.name for step in registry.full_sequence() if step.kind == "check"}
+        assert "validate_diff_coverage" not in names
