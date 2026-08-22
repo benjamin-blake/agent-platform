@@ -1071,6 +1071,14 @@ candidate_decisions:
       - Prompt cache strategy on DeepSeek is hash-based and automatic -- no client breakpoint placement required. This simplifies Layer-3 (agent loop) compared to the Bedrock cachePoint design previously planned in INTENT.
       - Bedrock IAM policies in T0.3 (PlatformDev DailyOps `bedrock:InvokeModel`) become vestigial-but-harmless. Annotated as such in T0.3; not removed (avoids re-Terraform churn). Retirement is tracked under PLAN-retire-bedrock-code-paths in the follow-on plan inventory below.
       - Cost-projection numbers in this CD reference DeepSeek V3.2 pricing as of 2026-05-27 ($0.252 input / $0.378 output per 1M tokens; $0.0252 cache-hit input). Spot-check arithmetic at typical executor scale (100 recs/month, ~50K input + ~10K output tokens/rec, ~80% prefix cache-hit) yields ~91% cost reduction vs Bedrock-DeepSeek -- the headline ~75% figure in cost_projection is intentionally conservative; the realised savings should exceed it.
+      - "[Annotation 2026-08-19, Decision 173 -- the tiers above name ROLES: Tier 1 is the primary route,
+        Tier 2 the independent-vendor warm-fetched fallback. DeepSeek-direct and Anthropic-direct are the
+        then-current SELECTIONS, held in docs/contracts/inference-provider.yaml, not architecture. The
+        Tier-2 '>10% remaining pool' assertion above is the fixed-non-rollover-allowance INSTANCE of
+        Decision 173 clause 4's billing-shape rule; a metered fallback needs a credential-liveness probe
+        only, and a deferred tier declares not_applicable. No contract edit may fill a role from
+        retired_providers or fill both roles from one vendor. Every clause above is left verbatim and
+        unamended -- the reading belongs here, not in a quiet rewrite of the clause being read.]"
 
   - id: CD.29
     title: Validation suite is a graduated, deduplicated, machine-curated asset; verification graduates into validation; hard-gate by default behind a hermeticity precondition
@@ -7442,6 +7450,14 @@ tier_items:
       atomic IMPLEMENTATION plans -- one per persona node (a Lambda Durable Function under CD.27's
       incumbent layer-2 candidate; the T4.15 spike may re-point it) -- since STRATEGIC plan filing
       is blocked until CD.17 trigger fires, and THIS item is the trigger precondition.
+
+      [Annotation 2026-08-19, Decision 173 -- the tier and provider names above are the then-current
+      SELECTIONS, not the architecture: Tier 1 and Tier 2 are the primary and warm-fetched-fallback ROLES,
+      and which provider and model ids fill them is resolved from docs/contracts/inference-provider.yaml
+      (model_id_formats.litellm_tier_models, the sole provider-identity home). The LiteLLM transport this
+      item builds must read tier membership from that contract, so swapping a provider is a contract edit
+      and never a scripts/llm/client.py edit; each tier's cold-start assertion follows its declared
+      billing_shape. T4.17:c5 is the trackable criterion for that requirement.]
     depends_on: [T4.1, T3.4, T1.6, T4.9a, T4.10a, T4.15, T4.16]
     files_in_scope:
       - "per CD.27 (incumbent layer-2 candidate): the persona paths below are substrate-shaped"
@@ -8403,6 +8419,67 @@ tier_items:
       Created by PLAN-executor-two-plane-roadmap-encoding. MVP-critical rather than post-MVP because
       Decision 87 as amended separates RESIDENCY (a T4.2 prerequisite) from AUTHORITY (still timed to
       T4.6); the verb split itself stays with T4.5/T4.6.
+
+  - id: T4.17
+    tier: T4
+    name: Provider as a measured performance variable -- comparative inference-tier telemetry
+    intent: |
+      Decision 173 makes tier MEMBERSHIP configuration rather than architecture; this item is where the
+      consequence the operator named -- providers become a VARIABLE whose performance is measured --
+      gets an owner. It builds the measurement surface, not a swap: per-call telemetry dimensioned by
+      provider and model so two tier-1 candidates can be compared on one workload, plus the comparative
+      record naming the current selection for each ROLE and the evidence behind it. It SELECTS no
+      provider and changes no tier: a selection made against this item's evidence is a contract edit
+      under Decision 173 clause 2 and needs no Decision amendment. c5 additionally carries the
+      transport-side config-resolution requirement that Decision 173 clause 2 places on T4.2's
+      LiteLLM transport -- it is homed here, in structured form, because T4.2's own exit_criteria are
+      bare strings pinned by four live guards in tests/esb_text_fix/.
+    depends_on: [T4.2]
+    files_in_scope: []
+    exit_criteria:
+      - id: c1
+        text: >-
+          Every executor inference call emits provider AND model_id as telemetry dimensions alongside
+          tokens, cost and latency, so a per-provider comparison is a query rather than a re-run. A
+          record that cannot separate the provider dimension measures nothing about provider choice
+        status: open
+      - id: c2
+        text: >-
+          The comparative record scores at least two candidate primary-tier providers on the SAME
+          workload (identical prompts, identical effort band) and states cost per rec, latency and task
+          outcome per provider -- symmetric realism, neither arm stubbed
+        status: open
+      - id: c3
+        text: >-
+          The current selection for each ROLE (primary, warm-fetched fallback) is recorded in
+          docs/contracts/inference-provider.yaml together with the evidence that chose it, and changing
+          a selection is a contract edit alone -- no Decision amendment, per Decision 173 clause 2
+        status: open
+      - id: c4
+        text: >-
+          Each tier's declared billing_shape carries the cold-start assertion Decision 173 clause 4
+          requires for that shape (remaining-allowance for a fixed non-rollover allowance,
+          credential-liveness for a metered tier, not_applicable while deferred), and the assertion is
+          exercised, not merely declared
+        status: open
+      - id: c5
+        text: >-
+          Tier membership is resolved from docs/contracts/inference-provider.yaml at runtime by the
+          T4.2 LiteLLM transport -- swapping which provider or model fills the primary or fallback ROLE
+          requires no edit to scripts/llm/client.py -- and the transport refuses a configuration that
+          fills a role from retired_providers or fills both roles from one vendor (Decision 173 clause
+          2(a) and 2(b))
+        status: open
+    related_candidate_decisions: [CD.28]
+    related_decisions: [116, 122, 164, 173]
+    effort: M
+    strategic: false
+    status: not_started
+    note: >-
+      Created by PLAN-provider-agnostic-tier-model as the forward-intent home for the operator's
+      "providers will become a variable at a later date to measure performance metrics" directive
+      (Decision 86 routing: forward intent goes to a tier_item, never into a Decision body and never
+      into a new prose doc).
 
   # ----- T5: Decommissioning & cleanup -----
   - id: T5.1

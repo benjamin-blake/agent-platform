@@ -19,6 +19,20 @@ contract:
     check: validate_inference_provider_registry
 
 amendment_log:
+  - date: "2026-08-19"
+    semantic_break: false
+    change_class: schema_reshape_field_add_and_key_move
+    summary: >-
+      PLAN-provider-agnostic-tier-model (Decision 173): tier_model is re-keyed onto ROLES. Added
+      role / billing_shape / cold_start_assertion / selection_ref to every tier row, plus the
+      role_model, provider_identity_home, billing_shape_vocabulary, cold_start_assertion_rule and
+      selection_constraints (retired_providers_excluded, vendor_independence,
+      coupled_reversal_conditions) keys. REMOVED the bare `provider:` key from all three tier rows
+      -- its value moves into model_id_formats.litellm_tier_models, which becomes the SOLE
+      provider-identity home and gains a `provider:` key per tier plus a tier_3 row. RENAMED tier
+      3's name from openrouter to aggregator. provider_defaults.executor_path and
+      retired_providers are unchanged. semantic_break: false -- no code or config reads tier_model
+      or litellm_tier_models (model_registry.py reads the model_routing: block only).
   - date: "2026-08-17"
     semantic_break: false
     change_class: prose_improvement
@@ -43,6 +57,7 @@ ratified_at: "2026-07-05"
 ratified_via: "PLAN-inference-provider-yaml-conversion (T-1.14)"
 last_verified: "2026-07-05"
 decisions_cited:
+  - Decision-173
   - Decision-118
   - Decision-86
   - Decision-116
@@ -64,21 +79,58 @@ projects_to:
       bedrock provider) under this file's model_routing: key. model_registry.py reads it from
       here; no separate file remains.
 
-tier_model:  # CD.28 committed architecture
+tier_model:  # CD.28 committed architecture, role-keyed per Decision 173
+  role_model: >-
+    Decision 173: the tiers are ROLES, and provider identity is configuration, not architecture.
+    Tier 1 = primary route; Tier 2 = warm-fetched fallback on a provider INDEPENDENT of Tier 1's
+    (the Decision 47 lock-in escape hatch), validated at every harness cold start; Tier 3 =
+    deferred aggregator. Changing which provider or model fills a role is an edit to THIS file and
+    requires no Decision amendment.
+  provider_identity_home: >-
+    model_id_formats.litellm_tier_models -- the SOLE place a tier's provider and model ids are
+    named. The rows below carry the ROLE plus its billing/assertion shape and a selection_ref
+    pointer; they hold no second copy of a provider name (Decision 127: one home per value).
+  billing_shape_vocabulary: [metered_marginal, fixed_non_rollover_allowance]
+  cold_start_assertion_rule: >-
+    Decision 173 clause 4 -- a tier whose billing_shape is fixed_non_rollover_allowance REQUIRES
+    cold_start_assertion: remaining_allowance; a metered_marginal tier requires
+    cold_start_assertion: credential_liveness; a tier whose state is Deferred declares
+    not_applicable until it is committed.
+  selection_constraints:
+    retired_providers_excluded: >-
+      Decision 173 clause 2(a) -- no role may be filled by an id listed in retired_providers.
+      Restoring one requires a Decision superseding the entry that retired it (Decision 122/CD.28
+      for bedrock, Decision 116 for copilot-sdk and gemini_byok), never a contract edit.
+    vendor_independence: >-
+      Decision 173 clause 2(b) -- the primary and warm_fetched_escape_hatch roles MUST resolve to
+      DIFFERENT providers; a same-vendor pair is not an escape hatch (Decision 47).
+    coupled_reversal_conditions: >-
+      Decision 173 clause 2(c) -- a swap changing the vendor or billing shape under Decision 116's
+      shared-allowance coupling re-arms Decision 116's and Decision 164's reversal conditions and
+      owes a dated annotation on both entries in docs/DECISIONS.md.
   tiers:
     - tier: 1
       name: primary
-      provider: DeepSeek-direct
+      role: primary
+      billing_shape: metered_marginal
+      cold_start_assertion: credential_liveness
+      selection_ref: model_id_formats.litellm_tier_models.tier_1
       transport: LiteLLM
       state: "Committed; lands with T4.2's PLAN-llm-client-litellm-transport"
     - tier: 2
       name: warm_fetched_escape_hatch
-      provider: Anthropic-direct
+      role: warm_fetched_escape_hatch
+      billing_shape: fixed_non_rollover_allowance
+      cold_start_assertion: remaining_allowance
+      selection_ref: model_id_formats.litellm_tier_models.tier_2
       transport: LiteLLM
       state: "Committed; credential validated at every harness cold start"
     - tier: 3
-      name: openrouter
-      provider: OpenRouter
+      name: aggregator
+      role: aggregator
+      billing_shape: metered_marginal
+      cold_start_assertion: not_applicable
+      selection_ref: model_id_formats.litellm_tier_models.tier_3
       transport: LiteLLM
       state: Deferred
   note: >-
@@ -188,17 +240,27 @@ model_id_formats:
     version_requirement: "Preview (0.40.0+) required for Gemini 3 models. Install: npm install -g @google/gemini-cli@preview"
     routing: "docs/contracts/inference-provider.yaml (model_routing:) -> scripts/llm/model_registry.py -> scripts/llm/client._gemini_call()"
     cost: "Free tier (personal Google Pro plan). The gemini transport reports cost_usd=0.0."
-  litellm_tier_models:  # committed -- lands at T4.2
+  litellm_tier_models:  # committed -- lands at T4.2. SOLE home for tier provider/model identity
     tier_1:
+      provider: DeepSeek-direct   # CURRENT SELECTION for the primary role (Decision 173)
       models: ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"]
       notes: >-
-        Aliases remap to deepseek-v4-flash post-2026-07-24 per upstream deprecation;
-        native context caching is hash-based and automatic.
+        Aliases remap to deepseek-v4-flash post-2026-07-24 per upstream deprecation; native
+        context caching is hash-based and automatic. Selection under Decision 173 clause 2 --
+        changing it is a contract edit, not a Decision amendment.
     tier_2:
+      provider: Anthropic-direct  # CURRENT SELECTION for the warm-fetched fallback role
       models: ["Anthropic-direct Claude models via LiteLLM"]
       notes: >-
-        Funded by the Max x5 programmatic-pool credit; boot validation includes a usage-API
-        pool check (CD.28 discipline point).
+        Funded by a fixed non-rollover allowance credit; boot validation asserts REMAINING
+        ALLOWANCE per Decision 173 clause 4 -- CD.28's ">10% pool" figure is that rule's
+        fixed-allowance instance.
+    tier_3:
+      provider: OpenRouter        # CURRENT SELECTION for the deferred aggregator role
+      models: []
+      notes: >-
+        Deferred; no models selected, so the aggregator role declares cold_start_assertion:
+        not_applicable until it is committed (Decision 173 clause 4).
   copilot_sdk:  # legacy -- disabled scheduled agents
     format: "{provider}-{family}-{version} (e.g., claude-haiku-4.5, claude-sonnet-4.6)"
     note: "Differs from GitHub Models IDs (gpt-5-mini, openai/gpt-4.1) -- do not interchange. See Decision 49."

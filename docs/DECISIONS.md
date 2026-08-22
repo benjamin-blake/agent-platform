@@ -2,6 +2,104 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 173: Executor inference tiers are ROLES -- provider identity is configuration, and a tier's cold-start assertion follows its billing shape (amends Decisions 116, 122 and 164) (Decided)
+
+```yaml
+number: 173
+status: Decided
+decided_date: "2026-08-19"
+amends: [116, 122, 164]
+significance:
+  value: numbered_decision
+  justification: >-
+    Tier MEMBERSHIP becomes configuration -- a provider swap is a contract edit, never a Decision
+    amendment -- and three entries' reversal conditions are re-keyed onto role and billing shape. The
+    provider VALUES do route to inference-provider.yaml (this entry performs that re-homing), but no
+    contract note constrains how future DECISIONS are written; amendment_forms was rejected because
+    this amends THREE entries and adds rules none carried.
+```
+
+**Status:** Decided
+**Date:** 2026-08-19
+**Warehouse ID:** dec-173
+
+**Problem:**
+Decision 122 ratified the tier model in VENDOR terms -- DeepSeek model ids, the Anthropic "Max x5
+programmatic pool" -- and keyed its reversal conditions to one vendor's unit price and the other's
+pool utilization; Decision 164's rationale and Decision 116's shared-pool condition are anchored the
+same way. LiteLLM was adopted so models and providers can change as they ship, and provider is to
+become a measured performance VARIABLE later. Vendor identity as architecture inverts that, and
+duplicates `litellm_tier_models` in `docs/contracts/inference-provider.yaml`, content
+Decision 86/127 routes to the contract.
+
+**Intent:** Tier 1 and Tier 2 were the right SELECTIONS at ratification and EXAMPLES of a
+primary/fallback mechanism, never the architecture; the ROLES are the commitment.
+
+**Decision:**
+1. **The tiers are ROLES.** Tier 1 = primary route; Tier 2 = warm-fetched fallback on a provider
+   INDEPENDENT of Tier 1's (Decision 47's lock-in escape hatch), validated at every harness cold
+   start; Tier 3 = deferred aggregator. DeepSeek-direct and Anthropic-direct are the CURRENT
+   selections and examples of that mechanism; Decision 122's naming of them is a selection record.
+   Unchanged: LiteLLM as the sole Layer-1 inference surface (provider-SDK imports forbidden),
+   Bedrock's retirement, the role pair, and the Decision-121 reconciliation.
+2. **Provider VALUES live in the contract, not in prose.** Which provider and model ids fill a role
+   is stated in `docs/contracts/inference-provider.yaml`; changing it needs no amendment. Three
+   limits bound it: (a) no role may be filled by an id in that file's `retired_providers` --
+   restoring one requires a Decision superseding the entry that retired it (122/CD.28 for bedrock,
+   116 for copilot-sdk and gemini_byok); (b) primary and fallback must resolve to DIFFERENT providers
+   -- a same-vendor pair is no escape hatch; (c) a swap changing the vendor or billing shape under
+   Decision 116's shared-allowance coupling re-arms Decisions 116's and 164's reversal conditions and
+   owes a dated annotation on both. Untouched:
+   `provider_defaults.executor_path` and `model_registry.py`'s `_VALID_PROVIDERS` /
+   `_DEFAULT_EXECUTOR_PROVIDER`, the T4.2-owned interim transport set.
+3. **Decision 164's argument is restated as SHAPE claims**, which is what lets it survive a swap:
+   METERED marginal cost versus a FIXED, NON-ROLLOVER ALLOWANCE, and an HTTP transport
+   (runtime-agnostic) versus a CLI transport (needs a CLI-hosting runtime). Neither is a vendor
+   claim, so its conclusion and substrate-collapse obligation both survive. Its condition (c) is
+   re-read onto the PRIMARY role's metered unit price, and Decision 116's onto the fallback role's
+   fixed-allowance contention.
+4. **New rule, conditional on billing shape:** a tier billed as a FIXED, NON-ROLLOVER ALLOWANCE
+   requires a remaining-allowance assertion at cold start; a METERED tier, a credential-liveness
+   probe; a Deferred tier declares `not_applicable` until committed. This supersedes CD.28's ">10%
+   remaining Anthropic pool" wording, now that rule's fixed-allowance INSTANCE, and makes
+   `billing_shape` a contract field.
+5. **Provider-agnostic is the COMMITMENT; the implementation reaches it at T4.2.**
+   `scripts/llm/client.py` raises `LLMResponseError` for any provider but `gemini` and discards
+   `system_prompt`; no tier routing exists in code until T4.2's LiteLLM transport lands. It moves
+   no traffic and edits no transport. Disclosed per ESB-02
+   (`audits/executor-substrate-and-billing-shape-ad02653.yaml`), where a recorded-but-inoperative
+   control produced a false dismissal downstream.
+
+**Reversal conditions:** each reopens the QUESTION, never the answer; the price and utilization
+ones re-key Decisions 122's and 116's onto role and billing shape.
+
+```yaml reversal-conditions
+decision: 173
+review_by: 2026-11-19
+on_trigger: "re-decide via /plan whether the role model still holds; update or re-arm this stanza"
+conditions:
+  - id: fallback-billing-shape-change
+    kind: manual
+    description: "Fallback-role billing changes between metered and fixed-non-rollover-allowance -> re-derive clause 4's cold-start assertion"
+  - id: primary-unit-price-move
+    kind: manual
+    description: "The primary role's metered unit price moves >5x either way -> re-decide role membership"
+  - id: fixed-allowance-saturation
+    kind: manual
+    description: "A fixed-non-rollover-allowance fallback passes 70% utilization over 30 days, or contends with scheduled-agent draw on the same allowance (Decision 116's, re-keyed)"
+  - id: single-provider-collapse
+    kind: manual
+    description: "Only one provider stays reachable behind LiteLLM, or primary and fallback resolve to one vendor -> re-decide the role model"
+```
+
+**Related:** Decision 122 (amended -- ratification converted to roles), Decision 164 (amended --
+argument restated as shape claims; condition (c) re-read onto the primary role), Decision 116
+(amended -- its shared-allowance condition re-keyed onto the fallback role's billing shape; its
+routing unchanged), Decisions 121, 47 (archived), 86, 127, 133, 167, 84, 55, CD.28, tier_items
+T4.2 and T4.17.
+
+---
+
 ## Decision 172: GitHub's immutable OIDC subject-claim format governs post-rename repositories; trust additively, contract only with live proof (Decided)
 
 ```yaml
@@ -408,6 +506,17 @@ consciously), Decision 133 (the in-corpus precedent for a governance-record-only
 cited-as-given premise into a conscious, reversal-conditioned choice). CD.27 layer 2 (the substrate set a
 reopen would collapse), CD.28 (ratified as Decision 122), tier_items T4.2 and T4.12 (the executor and
 scheduled sides of the split).
+
+[Amendment 2026-08-19: Decision 173 restates this entry's rationale as SHAPE claims -- metered
+marginal cost versus a fixed, non-rollover allowance, and an HTTP transport (runtime-agnostic)
+versus a CLI transport (needs a CLI-hosting runtime) -- so the argument and its substrate-collapse
+pricing obligation survive a change of which provider fills either tier. The DeepSeek/Anthropic
+naming above is the then-current selection, not the premise. Two reversal conditions are re-read
+accordingly: (c)'s "DeepSeek-direct unit pricing" is read as the PRIMARY role's metered unit price,
+and (a)'s shared-Max-pool contention as contention on the FALLBACK role's fixed-non-rollover
+allowance. The conclusion -- personas route to the LiteLLM tiers rather than claude -p -- and the
+reopen-pricing obligation are unchanged. A swap changing the vendor or billing shape under either
+re-keyed condition re-arms it and owes a further dated annotation here.]
 
 ---
 
@@ -2956,6 +3065,17 @@ split rests on -- why T4.2's agentic personas route to these LiteLLM tiers even 
 116's agentic criterion reaches them on its face -- and records the substrate-set collapse a reopen
 would cause. Audit finding ESB-03. No tier, provider, or reversal condition in this entry changes.]
 
+[Amendment 2026-08-19: Decision 173 converts this entry's tier model from vendor-anchored to
+ROLE-based. Tier 1 and Tier 2 name the primary and warm-fetched-fallback ROLES; DeepSeek-direct and
+Anthropic-direct are recorded here as the then-current selections and as EXAMPLES of that mechanism,
+not as architecture. The model ids and provider values now live in
+docs/contracts/inference-provider.yaml (model_id_formats.litellm_tier_models, the sole home), and
+this entry's >5x-price and >70%-pool reversal conditions are re-keyed there onto the PRIMARY role's
+metered unit price and the FALLBACK role's fixed-non-rollover allowance. A contract edit may not
+fill a role from retired_providers, and may not fill both roles from one vendor. Nothing else in
+this entry changes: LiteLLM as the sole Layer-1 inference surface, Bedrock's retirement, and the
+Decision-121 layer reconciliation stand.]
+
 ---
 
 ## Decision 121: Retire docs/contracts/cli-json-output.md rather than convert it -- T-1.17 exempted from the CD.25 conversion wave (Decided)
@@ -3236,6 +3356,16 @@ scheduled agents. T4.2's executor personas are agentic tool-using loops by this 
 criterion but route to the Decision 122 LiteLLM tiers; Decision 164 records why, and records the
 substrate-set collapse a reopen would cause. Audit finding ESB-03. No scheduled-agent routing in
 this entry changes.]
+
+[Amendment 2026-08-19: Decision 173 re-keys this entry's reversal condition off vendor identity:
+"shared Anthropic Max-pool capacity contention between executor Tier-2 and scheduled-agent
+claude -p usage" is read as contention on whatever FIXED, NON-ROLLOVER ALLOWANCE fills the executor
+fallback ROLE, together with the scheduled-agent draw on that same allowance. The scheduled-agent
+split itself is unchanged -- routine/non-agentic to the primary tier, judgment/agentic to
+claude -p, realization still T4.3-owned -- and copilot-sdk and gemini stay retired: Decision 173
+clause 2(a) forbids filling any tier role from retired_providers, so no contract edit can restore
+them. A swap changing the vendor or billing shape under the coupling above re-arms this condition
+and owes a further dated annotation here.]
 
 ---
 
