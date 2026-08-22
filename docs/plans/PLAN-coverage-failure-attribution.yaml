@@ -1,0 +1,475 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "coverage-failure-attribution"
+intent: >-
+  Clear the red Main Canary by restoring validate_vacuity_justified.py to its 100% floor, and stop
+  per-file coverage failures being misattributed to unrelated open recs by carrying the failing
+  file's identity through the structured attribution channel into the CI-RCA v2 fingerprint.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-coverage-failure-attribution.yaml
+phase: >-
+  CI-RCA corrective plus the attribution defect that hid it. Adjacent to T3.7 (validation-suite
+  meta-validation, deferred_post_mvp) but claims none of its criteria. The PREVENTIVE half -- moving
+  coverage enforcement pre-merge -- is deliberately out of scope and is planned separately as
+  PLAN-premerge-diff-coverage-gate (owner rec-3221); see Context.
+scope:
+  - file: tests/checks/hygiene/test_validate_vacuity_justified.py
+    action: Modify
+    purpose: >-
+      CORRECTIVE. Add two cases driving _base_free_oracle over a diff containing (a) an excluded
+      basename (__init__.py / conftest.py) and (b) a .py outside src/ and scripts/, covering the
+      two filter `continue` branches at lines 68 and 70. Verified live at planning time: these two
+      cases take the file from 95.8% to 100.0%.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Add a `failure_detail(items)` declaration channel alongside examined()/skipped(), using the
+      same per-dispatch module-level slot reset by outcome_scope(). This is the structured route by
+      which a check hands its per-failure detail to the recorder instead of only a constant label.
+  - file: tests/checks/registry/test_accounting.py
+    action: Modify
+    purpose: Mirror test for failure_detail -- set, popped-and-cleared, and reset by outcome_scope.
+  - file: scripts/checks/validation_result.py
+    action: Modify
+    purpose: >-
+      Harvest the declared detail in dispatch_recording() and emit it on a NEW TOP-LEVEL
+      `failed_check_details` key -- deliberately NOT inside failed_check_attributions. Decision 170
+      clause 1 and docs/contracts/check-accounting.yaml's validation_result_schema_v3 pin
+      failed_checks and failed_check_attributions BYTE-FOR-BYTE; a sibling field keeps that pin
+      literally true. The schema enumeration in that contract is still amended to name the new key
+      -- the byte-for-byte pin and the schema-routing obligation are separate clauses.
+  - file: tests/checks/test_validation_result.py
+    action: Modify
+    purpose: >-
+      Prove failed_check_details is emitted when detail is declared and absent otherwise, and that
+      failed_checks and failed_check_attributions are byte-identical to today in BOTH cases -- the
+      existing exact-dict-equality assertion must survive unmodified.
+  - file: scripts/checks/misc/validate_test_coverage.py
+    action: Modify
+    purpose: >-
+      Declare the per-file coverage_errors list via registry.failure_detail() at the point it
+      appends the constant "Coverage below 100%" label. This is the one-line origin of the defect:
+      the failing filename is currently printed to stdout and never recorded.
+  - file: tests/checks/misc/test_validate_test_coverage.py
+    action: Modify
+    purpose: >-
+      Prove the check declares the failing-file detail, and that two runs failing on DIFFERENT
+      files declare different detail.
+  - file: scripts/ci_rca/fingerprint.py
+    action: Modify
+    purpose: >-
+      Add `signature_for_declared_detail(check, detail)` alongside the existing signature
+      derivations, which is where every other signature already lives. It MUST extract and preserve
+      the failing FILE PATH verbatim and must NOT route the detail through normalize_message_head:
+      that function's _PATH_RE collapses any multi-segment path to the literal token `<path>`, so
+      `scripts/checks/hygiene/validate_vacuity_justified.py` and `scripts/ci_rca/taxonomy.py` both
+      normalize to `scripts<path>` and would still collide (verified live at planning time).
+  - file: tests/test_ci_rca_fingerprint.py
+    action: Modify
+    purpose: >-
+      Prove signature_for_declared_detail is path-preserving: two NESTED paths at the SAME
+      percentage yield different signatures.
+  - file: scripts/ci_rca/taxonomy.py
+    action: Modify
+    purpose: >-
+      Add a `_load_check_details(validation_result_path)` loader returning {check: [detail, ...]}
+      read from the new top-level field. classify_failures' public return tuple KEEPS its current
+      3-tuple width -- detail travels on this separate channel, so the four existing taxonomy test
+      modules that unpack `cat, check, src` are untouched and stay out of scope.
+  - file: tests/ci_rca/taxonomy/test_priority_zero_and_refusal.py
+    action: Modify
+    purpose: Prove detail is carried when present and that absence degrades to today's behaviour.
+  - file: scripts/ci_rca/evidence/__init__.py
+    action: Modify
+    purpose: >-
+      In _resolve_error_signatures, prefer signature_for_declared_detail over the log-tail fallback
+      when the check declared detail, so distinct failing files yield distinct fingerprints.
+      Log-tail remains the fallback for detail-free checks. Note this file is NOT SLOC-gated and NOT
+      coverage-mapped (iter_gated_py_files skips every __init__.py; map_source_to_test returns
+      None), so the new case in tests/ci_rca/evidence/test_priority_zero.py is its ONLY guard.
+  - file: tests/ci_rca/evidence/test_priority_zero.py
+    action: Modify
+    purpose: >-
+      Prove two coverage failures on different files produce DIFFERENT fingerprints, and that a
+      detail-free failure still produces today's log-tail signature unchanged.
+  - file: docs/contracts/check-accounting.yaml
+    action: Modify
+    purpose: >-
+      Amend validation_result_schema_v3 to include the new top-level failed_check_details key and
+      append a dated amendment_log entry. That block enumerates the v3 field set exhaustively
+      ("Additive over schema_version 2: check_outcomes plus four rollup counts"), which a fifth key
+      falsifies. Decision 170 clause 1 routes this schema to this contract (Decision 86/127); the
+      obligation is discharged deliberately, since validate_contract_drift is diff-triggered and
+      would not force it.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Add the ONE graduated row VP step 2 owes: check_id
+      coverage-failure-fingerprint-discriminates-by-file, plan_slug coverage-failure-attribution,
+      primitive_slot test_selector, guard_target scripts/ci_rca/fingerprint.py, plus guard_symbol,
+      graduated_at and graduated_by. check_spec.node_id is fixed here rather than improvised, since
+      the differential admission outcome turns entirely on it:
+      tests/test_ci_rca_fingerprint.py::TestDeclaredDetailSignature::test_declared_detail_discriminates_nested_paths.
+      VP step 3 is waived, not graduated, so it owes no row (Decision 132 /
+      validate_graduation_completeness's implement leg fails the PR without a NEW-in-diff row whose
+      plan_slug and check_id match a graduate step's declared graduation_check_id).
+  - file: docs/contracts/ci-rca-lifecycle.yaml
+    action: Modify
+    purpose: >-
+      Amend fingerprint_v2.special_cases.non_pytest_fallback to document the detail-preferred
+      derivation, and append a dated amendment_log entry. Required routing per Decision 86 clause 2
+      (field/contract semantics live in contracts, not prose).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/checks/hygiene/validate_vacuity_justified.py measures 100.0% line coverage under its mapped test target, with an empty Missing column.
+  - >-
+    Two validate_test_coverage failures naming source files that BOTH carry at least two path
+    separators (both genuinely nested, e.g. scripts/checks/hygiene/x.py and scripts/ci_rca/y.py), at
+    the SAME measured percentage, produce two DIFFERENT v2 fingerprints. The fixture shape is part
+    of the criterion, not an implementation detail: normalize_message_head's _PATH_RE requires two
+    or more separators, so `scripts/validate.py` survives unscrubbed while
+    `scripts/checks/hygiene/x.py` collapses to `<path>` -- a fixture pairing those two is at
+    different depths yet still passes green under naive reuse while the real class collapses
+    (verified live).
+  - >-
+    A failure from a check that declares no detail produces a byte-identical fingerprint to today's,
+    proving the change is additive and cannot silently re-key unrelated historical failure classes.
+  - >-
+    validation-result.json keeps failed_checks and failed_check_attributions BYTE-FOR-BYTE identical
+    to today, satisfying Decision 170 clause 1 and check-accounting.yaml's validation_result_schema_v3
+    pin literally rather than by reinterpretation. The payload lands on a new top-level
+    failed_check_details key. The Decision 86/127 routing obligation IS discharged: check-accounting
+    .yaml's validation_result_schema_v3 enumeration is amended to name the new key, with a dated
+    amendment_log entry.
+  - docs/contracts/ci-rca-lifecycle.yaml carries the amended non_pytest_fallback text and a dated amendment_log entry.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      CORRECTIVE PROOF. Measure the previously-failing file against its floor. This is the step that
+      clears the canary red.
+    command: bin/venv-python -m pytest tests/checks/hygiene/test_validate_vacuity_justified.py --cov=scripts/checks/hygiene --cov-report=json:logs/debug/cov-vacuity.json --cov-fail-under=0 -q && bin/venv-python -c "import json;s=json.load(open('logs/debug/cov-vacuity.json'))['files']['scripts/checks/hygiene/validate_vacuity_justified.py']['summary'];assert s['missing_lines']==0,s;print('VACUITY_COVERAGE_100')"
+    expected: >-
+      Exit 0 and `VACUITY_COVERAGE_100` printed. The assertion is machine-checked against the JSON
+      report's missing_lines rather than a term-missing text row: coverage right-aligns its
+      percentage column, so a term-table literal is whitespace-fragile and would never match
+      (measured live). It is genuinely discriminating -- missing_lines is 2 on the pre-fix tree, so
+      the command EXITS 1 there and 0 only at 100%. --cov-fail-under=0 is also load-bearing:
+      pyproject.toml sets fail_under=37 and this directory-scoped run measures ~6%, so without it
+      the command exits 1 even on a perfect tree (measured: EXIT=1 without, EXIT=0 with).
+    fix_if: >-
+      Still 96% with 68/70 missing means the fixtures are not reaching the filter branches -- the
+      excluded-basename case must commit a file named __init__.py or conftest.py, and the
+      ineligible-top-level case a .py whose first path segment is neither src nor scripts.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The standing guard is validate_test_coverage's own 100% floor, which fires on any future diff
+      touching this file; a registry row asserting the same number would duplicate it. The step is
+      hermetic (3.3s, inside validate_vp_replay's 30s per-step budget) so CI re-executes it rather
+      than trusting the implementing agent's self-report.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      ROOT-CAUSE DISCRIMINATOR. Prove two coverage failures naming different files fingerprint
+      differently, and that a detail-free failure is unchanged.
+    command: bin/venv-python -m pytest tests/ci_rca/evidence/test_priority_zero.py tests/test_ci_rca_fingerprint.py tests/ci_rca/taxonomy/test_priority_zero_and_refusal.py -v
+    expected: >-
+      All pass, and ALL THREE new node names appear in the -v listing -- one per linked obligation:
+      `test_declared_detail_discriminates_nested_paths` (fingerprint),
+      `test_coverage_detail_fingerprints_differ_by_file` (evidence), and
+      `test_load_check_details_returns_detail_by_check` (taxonomy). One literal per obligation is
+      load-bearing: all three files pass on the current tree, so a single literal would leave the
+      other two obligations' cases undetected -- sharpest for evidence/__init__.py, which this plan
+      establishes has no other guard at all.
+    fix_if: >-
+      Equal fingerprints for different files means the detail is not reaching _resolve_error_
+      signatures -- trace registry.failure_detail -> dispatch_recording -> the top-level
+      failed_check_details key -> taxonomy._load_check_details -> _resolve_error_signatures. Do NOT
+      fix this by appending per-file labels to `failed`, and do NOT widen classify_failures' tuple:
+      both change shapes Decision 142/170 pin for the Priority-0 consumer.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: coverage-failure-fingerprint-discriminates-by-file
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove the v2 shape is preserved -- the additive-change guarantee the Priority-0 consumer
+      depends on.
+    command: bin/venv-python -m pytest tests/checks/test_validation_result.py tests/checks/registry/test_accounting.py tests/checks/misc/test_validate_test_coverage.py -v
+    expected: >-
+      All pass, and all three new node names appear in the -v listing -- one per linked obligation:
+      `test_failure_detail_declared_and_popped` (registry),
+      `test_failed_check_details_emitted_additively` (validation_result), and
+      `test_declares_failing_file_detail` (validate_test_coverage). failed_checks and
+      failed_check_attributions stay byte-identical to today in both the detail-declared and
+      detail-free cases; the payload appears only under the new top-level failed_check_details key.
+      The literals are load-bearing for the same reason as step 2: all three files pass on the
+      current tree, so exit 0 alone would stay green even if none of the cases were written.
+    fix_if: >-
+      A changed failed_checks shape is a hard stop, not a test to update -- rework the change to be
+      additive.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Non-differential by construction, so the graduation gate would refuse it. v2-shape
+      preservation is a property origin/main ALREADY satisfies -- this plan explicitly requires the
+      existing exact-dict assertion to survive unmodified -- so run_differential materializes the
+      row against origin/main, sees PASS where it requires FAIL, and rejects the row as
+      tautological, reddening --pre. The property is still guarded: it is asserted by the in-scope
+      test and re-executed by the hermetic replay this cycle.
+  - step: 4
+    phase: pre-deploy
+    action: Fast tier -- the authoritative pre-merge gate (Decision 73).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 within the 300s fast-tier budget.
+    fix_if: A budget breach means the new tests pulled a slow path into the affected set.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the fast tier; a tier cannot be a registry check inside itself.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Bare full tier, discharging handoff_policy.full_validation_required_before_commit and
+      Decision 163. Unlike a test-only diff, this plan touches scripts/ files, so
+      validate_test_coverage is NOT vacuous here -- it measures every changed source file.
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0. validate_test_coverage reports a non-zero source-file count and no file below 100%.
+    fix_if: >-
+      A new sub-100 file is a real regression in this diff -- fix the coverage, never register a
+      config/coverage_baseline.yaml entry to silence it (Decision 159/165 require a Decision that
+      authorizes the entry; none exists for this plan).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the full tier; a tier cannot be a registry check inside itself.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Prove the rec-3212 context correction actually landed. The Single Portal Invariant is
+      fail-loud; a plan that writes to an operational record must verify the write, not assume it.
+    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c 'import json;print(sum(1 for l in open("logs/.recommendations-log.jsonl",encoding="utf-8") if (d:=json.loads(l)).get("id")=="rec-3212" and "misattributed" in (d.get("context") or "")))'
+    expected: Prints 1.
+    fix_if: >-
+      0 means the portal write did not land. Re-issue it via --update-rec --context; never edit
+      logs/.recommendations-log.jsonl directly, which validate.py refuses.
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Re-run the exact full tier the Main Canary runs, against the merged main, so the incident is
+      closed on evidence rather than on the assumption that the branch result carries over.
+    command: git fetch origin main -q && git -c advice.detachedHead=false checkout -q origin/main && bin/venv-python -m scripts.validate
+    expected: >-
+      Exit 0, with validate_test_coverage reporting no file below 100%. This is the condition that
+      has failed on every scheduled run since 2026-08-21T18:23Z.
+    fix_if: >-
+      A still-red tier naming a DIFFERENT file is a separate regression -- and under this plan it now
+      gets its own fingerprint and its own rec rather than bumping an unrelated one, which is the
+      point. Triage it on its own merits; do not reopen this plan.
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: scripts/checks/registry.py
+    behavior: failure_detail is stored per dispatch, cleared by outcome_scope, and popped exactly once.
+    verification_step: 3
+    test_selector: tests/checks/registry/test_accounting.py
+    red_green_expectation: Red before -- failure_detail does not exist, so the selector errors on import. Green after.
+  - source: scripts/checks/validation_result.py
+    behavior: >-
+      Declared detail is emitted under the new top-level failed_check_details key; failed_checks and
+      failed_check_attributions stay byte-identical to today.
+    verification_step: 3
+    test_selector: tests/checks/test_validation_result.py
+    red_green_expectation: >-
+      Red before -- no failed_check_details key is emitted. Green after, with the pre-existing
+      exact-dict assertion on failed_check_attributions surviving UNMODIFIED and failing loudly if
+      anything is ever added inside a row.
+  - source: scripts/checks/misc/validate_test_coverage.py
+    behavior: The check declares the failing files it printed, so the identity is recorded not just logged.
+    verification_step: 3
+    test_selector: tests/checks/misc/test_validate_test_coverage.py
+    red_green_expectation: >-
+      Red before -- the check declares no detail, so two runs failing on different files are
+      indistinguishable in the record. Green after.
+  - source: scripts/ci_rca/fingerprint.py
+    behavior: >-
+      signature_for_declared_detail is path-preserving -- two nested paths at the same percentage
+      yield different signatures, so the derivation can never be silently routed back through
+      normalize_message_head.
+    verification_step: 2
+    test_selector: tests/test_ci_rca_fingerprint.py
+    red_green_expectation: >-
+      Red before -- the function does not exist, so the selector errors at collection. Green after,
+      and it re-reds immediately if a future edit reintroduces path scrubbing.
+  - source: docs/contracts/check-accounting.yaml
+    behavior: >-
+      validation_result_schema_v3's field enumeration names failed_check_details, and the change
+      carries a dated amendment_log entry.
+    verification_step: 4
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      validate_contract_drift adjudicates the amendment requirement for a changed contract during
+      the tier itself, and validate_check_accounting derive-and-asserts only status_vocabulary, not
+      the schema enumeration -- so there is no behaviour a mirror test could assert beyond what the
+      tier already checks. The obligation here is Decision 86/127 routing, discharged deliberately.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: >-
+      The ONE graduated row VP step 2 owes exists at
+      tests/test_ci_rca_fingerprint.py::TestDeclaredDetailSignature::test_declared_detail_discriminates_nested_paths
+      and is admitted by the differential gate. VP step 3 is waived, so it owes no row.
+    verification_step: 4
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      Registry rows are adjudicated by validate_verification_registry and
+      validate_graduation_completeness during the tier itself; a mirror test would assert the same
+      YAML twice.
+  - source: docs/contracts/ci-rca-lifecycle.yaml
+    behavior: The non_pytest_fallback prose matches the shipped derivation and carries a dated amendment_log entry.
+    verification_step: 4
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      validate_contract_drift adjudicates the amendment requirement during the tier itself; the
+      Class D evaluator validate_ci_rca_lifecycle_projection does not read this prose block, so
+      there is no behaviour a mirror test could assert beyond what the tier already checks.
+  - source: scripts/ci_rca/taxonomy.py
+    behavior: Detail is carried through Priority 0 when present and absent-detail degrades to today's behaviour.
+    verification_step: 2
+    test_selector: tests/ci_rca/taxonomy/test_priority_zero_and_refusal.py
+    red_green_expectation: Red before -- no detail is threaded. Green after, with the degradation case pinned.
+  - source: scripts/ci_rca/evidence/__init__.py
+    behavior: >-
+      Distinct failing files yield distinct fingerprints; a detail-free failure keeps today's
+      log-tail signature byte-identically.
+    verification_step: 2
+    test_selector: tests/ci_rca/evidence/test_priority_zero.py
+    red_green_expectation: >-
+      Red before -- both files produce the SAME fingerprint (reproduced live: rec-3212 absorbed six
+      occurrences of a different file's failure). Green after.
+  - source: tests/checks/hygiene/test_validate_vacuity_justified.py
+    behavior: The two filter branches of _base_free_oracle stay exercised.
+    verification_step: 1
+    test_selector: tests/checks/hygiene/test_validate_vacuity_justified.py
+    red_green_expectation: >-
+      Red before -- 95.8%, lines 68 and 70 missing (reproduced live at planning time). Green after --
+      100.0%, empty Missing column. The coverage number is itself the discriminator.
+constraints:
+  - >-
+    Do NOT add any key inside failed_check_attributions, and do NOT change failed_checks. Decision
+    170 clause 1 and docs/contracts/check-accounting.yaml pin BOTH byte-for-byte for the CI-RCA
+    Priority-0 consumer. Narrowing that pin to "the check/label keys" so a `detail` key can be added
+    inside a row would be a re-decision of a ratified invariant by reinterpretation -- use the new
+    top-level failed_check_details field instead. A detail-free failure must fingerprint
+    byte-identically to today.
+  - >-
+    Do NOT recover the failing filename by re-parsing free-text log lines. The structured
+    attribution channel exists precisely to replace text-derived identity, and log scraping is
+    brittle to any wording change in validate_test_coverage. This route was considered and rejected
+    at planning time (Decision 170 spirit flag).
+  - >-
+    Do NOT add a pre-merge coverage gate in this plan. That is PLAN-premerge-diff-coverage-gate /
+    rec-3221, which carries four plan-critique rounds of analysis.
+  - >-
+    Do NOT lower the coverage floor. Registering scripts/checks/hygiene/validate_vacuity_justified.py
+    in config/coverage_baseline.yaml to make the red go away is the explicitly forbidden path --
+    Decision 165 requires a `# baseline-lowered: dec-NNN` marker naming a Decision that AUTHORIZES
+    it, and no such Decision exists.
+  - >-
+    Do NOT implement rec-3212 as written. Its stated root cause is inverted; the already-merged
+    docs/plans/PLAN-coverage-gate-presubmit.yaml carries the corrected diagnosis for that separate
+    file. This plan does not touch scripts/platform_roadmap_state.py.
+  - >-
+    Land the signature derivation in scripts/ci_rca/fingerprint.py (211 SLOC), where every other
+    signature derivation already lives -- not inline in scripts/ci_rca/evidence/__init__.py. Note
+    the SLOC and coverage gates do NOT protect that file: iter_gated_py_files skips every
+    __init__.py, and map_source_to_test returns None for it, so it is neither SLOC-gated nor
+    coverage-mapped. Its only guard is the new case this plan adds to
+    tests/ci_rca/evidence/test_priority_zero.py -- write that case accordingly.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Incident. Main Canary has failed every scheduled run since 2026-08-21T18:23Z on 3ef3362 (#944).
+    The sole failing check is validate_test_coverage, and the sole failing file is
+    scripts/checks/hygiene/validate_vacuity_justified.py at 95.8% -- a file that PR #944 itself
+    introduced. Uncovered lines 68 and 70 are the two filter `continue` branches in
+    _base_free_oracle. Reproduced locally at planning time: 48 statements, 2 missed.
+  - >-
+    Why every gate passed. PR #944's plan DID declare a test obligation for this file, and
+    validate_plan_documents (which requires one per behaviour-capable scope row) passed correctly.
+    The implementing agent wrote a sound six-case behavioural matrix. Code review approved. The two
+    uncovered lines are incidental filter branches that did not exist at planning time, so no
+    plan-time declaration scheme could have named them. Coverage completeness is a property of code
+    that exists only after the code is written; only measurement catches it.
+  - >-
+    Attribution defect (this plan's root cause). CI RCA ran six times on 3ef3362 and filed nothing:
+    each run's fingerprint dedup guard matched open rec-3212 and bumped its occurrence_count to 6.
+    rec-3212 is about a DIFFERENT file (scripts/platform_roadmap_state.py at 98.6%). The v2
+    fingerprint is sha256(v2, workflow_slug, failure_category, error_signature), and for non-pytest
+    validate.py failures error_signature is "{check}::{normalized last log line}". Under Priority 0
+    that `check` component is the check NAME "validate_test_coverage" (taxonomy._classify_via_
+    attribution returns the attribution's check field, which dispatch_recording sets to the check
+    name) -- NOT the "Coverage below 100%" summary label. Either way it is constant across every
+    file, and the log-tail half is validate.py's constant closing line, so every per-file coverage
+    failure in a workflow collapses to ONE fingerprint -- defeating the v2 anti-masking property
+    (rec-2710) for this whole class. rec-2591 (open, Low) predicted exactly this false-collapse and deferred a fix
+    pending evidence of a non-trivial rate; this incident is that evidence. It proposed a Haiku
+    semantic judge; this plan instead removes the ambiguity deterministically, which is the
+    Decision 55-aligned route and leaves rec-2591's judge unnecessary for this class.
+  - >-
+    Mechanism, precisely. validate_test_coverage builds a per-file coverage_errors list, PRINTS it,
+    then appends the constant string "Coverage below 100%" to `failed`. dispatch_recording records
+    {check, label} from `failed` only. The failing filename is therefore logged but never recorded,
+    which is why BOTH the structured Priority-0 channel and the log-tail fallback are blind.
+  - >-
+    Detection gap, deliberately deferred (Decision 163 clause on structural enforcement). This plan
+    improves post-failure ATTRIBUTION; it does not prevent a sub-100% file reaching main. That
+    preventive is PLAN-premerge-diff-coverage-gate, owner rec-3221, planned in the same session.
+    Recorded here as an explicit judgement rather than an omission.
+  - >-
+    Deliberate deferral, recorded so the next reader does not read it as an oversight:
+    validate_test_coverage appends a SECOND constant label, "Test coverage check", for the
+    missing_tests branch, which carries the identical defect. It is out of scope here because no
+    incident has yet fired on it; the failure_detail channel this plan adds is the mechanism a
+    follow-up would reuse.
+  - >-
+    rec-3212's record is polluted -- occurrence_count 6, of which five occurrences belong to this
+    different file. Execution includes a bounded portal correction (Decision 103 governs relevance
+    as a first-class state; Decision 84 requires the ops portal, never a direct cache edit).
+  - >-
+    Decision-scout verdict + CITE list -- FLAGS_FOUND; CITE: Decision 142 (fingerprint v2; note its
+    reversal condition (a) governs the deepest-in-app-frame heuristic and message-head
+    normalization, NEITHER of which this plan touches -- the real routing lane is Decision 142's
+    delegation of fingerprint lifecycle semantics to docs/contracts/ci-rca-lifecycle.yaml, whose
+    non_pytest_fallback block this plan amends with a dated amendment_log entry), Decision 163, Decision 159, Decision 48,
+    Decision 131 (test homes, resolved via map_source_to_test), Decision 170, Decision 55,
+    Decision 72, Decision 132, Decision 165, Decision 128, Decision 86/168 (contract routing).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - tests/checks/hygiene/test_validate_vacuity_justified.py -- add the excluded-basename and ineligible-top-level cases; confirm 100% via VP step 1 before touching anything else, so the canary fix is independently landed and provable.
+  - scripts/checks/registry.py -- add failure_detail(items) using the existing per-dispatch slot pattern; reset in outcome_scope, cleared by the harvesting pop.
+  - 'scripts/checks/validation_result.py -- harvest the detail in dispatch_recording and emit it under a NEW TOP-LEVEL `failed_check_details` key. Do NOT add any key inside failed_check_attributions: constraint 1 makes that a hard stop, because Decision 170 clause 1 and check-accounting.yaml pin that field byte-for-byte for the Priority-0 consumer.'
+  - scripts/checks/misc/validate_test_coverage.py -- declare coverage_errors via registry.failure_detail() where the constant label is appended.
+  - 'scripts/ci_rca/taxonomy.py -- add a NEW `_load_check_details(validation_result_path)` loader returning {check: [detail, ...]} read from the top-level failed_check_details key. Do NOT widen _load_attributions'' or classify_failures'' return tuples: they are consumed by out-of-scope tests (test_classify_failures_plural.py, test_convergence.py, test_load_and_classify.py, test_failed_checks_block.py), and preserving the widths is what keeps them out of scope.'
+  - 'scripts/ci_rca/evidence/__init__.py -- in _resolve_error_signatures prefer declared detail over the log-tail fallback when composing error_signature; keep log-tail for detail-free checks. The derivation itself goes in fingerprint.py UNCONDITIONALLY (constraint 6), never inline here. Do not apply a SLOC caution to this file: iter_gated_py_files skips every __init__.py, so it is ungated.'
+  - Write the mirror tests named in test_obligations, including the two discriminating cases (different files differ; detail-free unchanged).
+  - docs/contracts/ci-rca-lifecycle.yaml -- amend non_pytest_fallback and append a dated amendment_log entry.
+  - 'Correct the polluted record via the portal: bin/venv-python -m scripts.ops_data_portal --update-rec rec-3212 --context "<existing context> NOTE 2026-08-22: five of six recorded occurrences were misattributed by the pre-fix fingerprint, which carried no failing-file identity; they belong to scripts/checks/hygiene/validate_vacuity_justified.py, not to this rec. Corrected under PLAN-coverage-failure-attribution." There is no --note flag; --context is the vehicle, and --resolution is meaningless on an open rec. VP step 6 proves the write landed. Never edit the local cache.'
+  - 'config/agent/verification_registry/registry.yaml -- write the ONE graduated row VP step 2 owes (check_id coverage-failure-fingerprint-discriminates-by-file, plan_slug coverage-failure-attribution, primitive_slot test_selector, guard_target scripts/ci_rca/fingerprint.py, check_spec.node_id tests/test_ci_rca_fingerprint.py::TestDeclaredDetailSignature::test_declared_detail_discriminates_nested_paths). Without this row validate_graduation_completeness hard-fails --pre.'
+  - 'docs/contracts/check-accounting.yaml -- amend validation_result_schema_v3''s field enumeration to name failed_check_details and append a dated amendment_log entry. Nothing fires if this is skipped (validate_contract_drift is diff-triggered), so it must be done deliberately -- acceptance criterion 4''s routing-discharge claim depends on it.'
+  - Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - 'Report: what was implemented, verification results, and the Main Canary conclusion on the merge commit.'
+rollback: >-
+  The attribution change is additive; reverting scripts/ci_rca/evidence/__init__.py's preference
+  restores the log-tail signature with no data migration, since fingerprints are recomputed per run
+  and never backfilled. The corrective half should not be reverted -- it is the canary fix.
