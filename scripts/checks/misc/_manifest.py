@@ -47,4 +47,18 @@ ENTRIES: tuple[Entry, ...] = (
         pre=True,
         full_segment="full_after_lint",
     ),
+    # PLAN-premerge-diff-coverage-gate: pre-tier-only, deliberately NO full_segment. `misc` sits
+    # in full_after_lint, which the full-tier skeleton runs BEFORE the unit_tests scaffold -- a
+    # full-tier leg here would dispatch before any coverage artifact exists and be permanently
+    # skipped (the silent-vacuity shape this plan exists to avoid). `misc` is also absent from
+    # every later segment's _FULL_SEGMENT_DOMAIN_ORDER tuple, so registering one there would fail
+    # OD-0. Precedent for this exact shape: validate_sloc_budget_raises, validate_prose_budget_
+    # raises, validate_vp_replay (pre=True, no full_segment) -- NOT validate_terraform_try, which
+    # is unsequenced (pre=False, no full_segment) and would never dispatch at all.
+    Entry(
+        name="validate_diff_coverage",
+        module="scripts.checks.misc.validate_diff_coverage",
+        attr="validate_diff_coverage",
+        pre=True,
+    ),
 )

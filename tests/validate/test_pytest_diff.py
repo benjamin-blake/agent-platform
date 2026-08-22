@@ -519,6 +519,7 @@ class TestRunPytestDiffSingleExecution:
         assert len(real_run_cmds) == 1, f"expected exactly one real pytest run, got: {real_run_cmds}"
         assert "tests/test_validate.py" in real_run_cmds[0]
         assert "tests/test_iceberg_reader.py" not in real_run_cmds[0]
+        assert "--cov=src" in real_run_cmds[0] and "--cov-fail-under=0" in real_run_cmds[0]
         assert failed == []
 
     def test_runs_pytest_exactly_once_when_all_runnable_pass(self) -> None:
@@ -540,6 +541,7 @@ class TestRunPytestDiffSingleExecution:
         assert len(real_run_cmds) == 1, f"expected exactly one real pytest run, got: {real_run_cmds}"
         assert "tests/test_a.py" in real_run_cmds[0]
         assert "tests/test_b.py" in real_run_cmds[0]
+        assert "--cov=src" in real_run_cmds[0] and "--cov-fail-under=0" in real_run_cmds[0]
         assert failed == []
 
 
