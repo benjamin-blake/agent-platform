@@ -1,0 +1,362 @@
+schema_version: 4
+handoff_policy:
+  full_validation_required_before_commit: true
+  timeout_disposition: blocked
+slug: "premerge-diff-coverage-gate"
+intent: >-
+  Move coverage enforcement of changed code from post-merge to pre-merge by replacing the per-file
+  whole-file measurement geometry with patch (diff-line) coverage derived in-repo from the pytest
+  run the fast tier already performs, so a coverage regression is refused at the PR instead of
+  landing on main and being caught hours later by the canary.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-premerge-diff-coverage-gate.yaml
+phase: >-
+  Preventive half of the coverage-gate escape class (five recurrences: rec-2970, rec-3043/3044,
+  rec-3147, rec-3211/3212, and the 2026-08-21 canary red). rec-3221 is the reviewed live owner and
+  is bundled. Sibling: PLAN-coverage-failure-attribution (the corrective plus the attribution fix),
+  planned in the same session; that plan improves diagnosis, this one prevents.
+scope:
+  - file: scripts/checks/_pytest_diff.py
+    action: Modify
+    purpose: >-
+      Collect coverage data during the run_pytest_diff pytest invocation the fast tier already
+      performs, and emit it to a known artifact path. Instrumentation only -- the adjudication
+      lives in the new check. 338 SLOC against the 500 limit; keep the addition small or decompose
+      per Decision 128, never raise.
+  - file: tests/validate/test_pytest_diff.py
+    action: Modify
+    purpose: >-
+      Prove coverage data is emitted for an instrumented run, that the existing heavy-dependency
+      deferral behaviour is unchanged, and that a run which collects nothing degrades loudly rather
+      than silently.
+  - file: scripts/checks/misc/validate_diff_coverage.py
+    action: Create
+    purpose: >-
+      The gate. Intersects the emitted coverage data with the added/modified executable lines of
+      `git diff origin/main...HEAD` IN-REPO (no third-party diff-coverage CLI, per Decision 80's
+      do-less direction and Decision 135's tool-free posture), classifying every changed line as
+      COVERED, UNCOVERED (fail-closed) or DEFERRED. Declares examined()/skipped() on every exit
+      path per Decision 170.
+  - file: tests/checks/misc/test_validate_diff_coverage.py
+    action: Create
+    purpose: >-
+      Mirror test. Must include the discriminating case -- an added, uncovered line FAILS -- and the
+      two false-positive guards below (capped/deferred selection, and heavy-dep files).
+  - file: scripts/checks/misc/_manifest.py
+    action: Modify
+    purpose: >-
+      Register validate_diff_coverage with pre=True plus a full_segment, using bare string literals
+      only (Decision 169). scripts/validate.py is deliberately NOT in scope -- dispatch resolves
+      through the manifest, never the retired facade.
+  - file: tests/checks/misc/test__manifest.py
+    action: Modify
+    purpose: Prove the new check is registered, dispatched, and reachable in the pre sequence.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Add the function_to_category row for validate_diff_coverage. Required for any new check module
+      -- without it validate_ci_rca_taxonomy fails, and a diff-coverage failure would carry no
+      failure_category for CI-RCA to classify.
+  - file: requirements-fast.txt
+    action: Modify
+    purpose: >-
+      Add pytest-cov (pure Python, no heavy transitive deps) so the pr-validate job can collect
+      coverage. No decision constrains additions here; the file's stated purpose is avoiding the
+      ~3GB torch/CUDA surface (Decision 148), which this does not approach.
+  - file: pyproject.toml
+    action: Modify
+    purpose: >-
+      Widen [tool.coverage.run] source from ["src"] to include "scripts", so scripts/** is measured
+      at all. DECOUPLED from the fail_under=37 aggregate gate, which is NOT changed in this plan --
+      widening the denominator would otherwise trip it for reasons unrelated to this change.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: Register the graduated standing check for VP step 2's discriminator.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 173, narrowing Decision 73 clause 2's check allocation and Decision 48's V2
+      coverage row, and explicitly REVISITING Decision 159 (whose own reversal clause says a
+      diff-line-coverage ratchet means that Decision "is revisited rather than extended"). Must
+      carry the Decision 167 yaml significance envelope and stay under the 6144-byte norm.
+bundled_recommendations:
+  - rec-3221
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A PR adding an executable source line with no covering test FAILS the fast tier. This is the
+    discriminating property -- a test that only asserts the check runs would pass on the pre-fix
+    tree and is explicitly insufficient.
+  - >-
+    A changed line whose covering test was CAPPED or DEFERRED by affected-set selection is
+    classified DEFERRED, never UNCOVERED. Decision 135 clause 1 caps the import closure at ~35
+    modules and defers the residue by design, so coverage derived from that selection under-measures
+    by construction; misreading that as uncovered would make the gate reject correct PRs.
+  - >-
+    A changed line in a file whose tests need an excluded heavy dependency is classified DEFERRED
+    with the absent distribution named, and enforced post-merge instead.
+  - >-
+    The DEFERRED classification is machine-derived from the selection manifest and the dependency
+    probe -- never author-declared, never a hand-maintained allowlist a future session can add to
+    (Decision 163's structural-enforcement principle).
+  - The instrumented fast tier stays within Decision 153 clause 1's 300s budget on an ordinary PR, measured not asserted.
+  - >-
+    The instrumented full_suite_forced path stays within Decision 153 clause 3's 1500s ceiling, or
+    coverage collection is gated off on that path as a declared DEFERRED classification. Measured on
+    a root-conftest-shaped diff.
+  - The existing per-file 100% floor and config/coverage_baseline.yaml remain functional in the full tier as the backstop for coverage lost on UNCHANGED lines, which diff coverage cannot see.
+  - rec-3221 is closed via the Resolves trailer.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Establish the false-positive rate against real history BEFORE the gate blocks anything. Replay
+      the classifier over the last N merged PRs and count how many would have been rejected on lines
+      that were in fact covered.
+    command: bin/venv-python -m scripts.checks.misc.validate_diff_coverage --replay-history 20 --report-only
+    expected: >-
+      A per-PR table of would-be verdicts with a false-positive count of zero. Any non-zero count is
+      a design finding, not a tuning knob.
+    fix_if: >-
+      False positives concentrated on capped/deferred selections mean the manifest consumption is
+      wrong. Do NOT resolve them by lowering the threshold below 100 -- that silently re-admits the
+      escape class this plan exists to close.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A historical replay is a one-time admission measurement over git history at a particular
+      point; it is not a standing regression property and would go stale immediately as a registry
+      row.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      THE DISCRIMINATOR. Prove an added uncovered line fails and an added covered line passes, on
+      fixture repos rather than the live tree.
+    command: bin/venv-python -m pytest tests/checks/misc/test_validate_diff_coverage.py tests/validate/test_pytest_diff.py tests/checks/misc/test__manifest.py -q
+    expected: >-
+      All pass, including the added-uncovered-line FAILS case, the added-covered-line PASSES case,
+      the capped/deferred DEFERRED case and the heavy-dependency DEFERRED case.
+    fix_if: >-
+      An added uncovered line that passes means the diff intersection is not reaching added lines --
+      check that the diff parse uses added/modified executable lines, not whole changed files.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: diff-coverage-rejects-uncovered-added-line
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Budget measurement on an ordinary PR-shaped diff -- Decision 153 clause 1's 300s fast-tier
+      budget, measured rather than assumed.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0, elapsed under 300s, with the coverage phase's own contribution printed.
+    fix_if: >-
+      A breach means coverage instrumentation is too costly on the shared pytest run; gate collection
+      by diff size before re-deriving any budget.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the fast tier; a tier cannot be a registry check inside itself.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Budget measurement on the forced-full-suite path -- Decision 153 clause 3's 1500s ceiling.
+      A root-conftest-shaped diff already runs the whole suite; instrumentation must not push it over.
+    command: bin/venv-python -m scripts.checks._pytest_diff --measure-forced-full-suite
+    expected: >-
+      Elapsed under the 1500s ceiling with instrumentation on, OR a printed declaration that
+      collection was gated off for this path with a DEFERRED classification.
+    fix_if: >-
+      A breach with collection on and no gate is a hard stop -- gate the path, never re-derive the
+      ceiling to fit.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A wall-clock measurement against a job-timeout-derived ceiling is environment-dependent and not
+      kernel-expressible as a deterministic primitive slot.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Prove the full-tier backstop still works -- the per-file floor must still catch coverage lost
+      on UNCHANGED lines, which this gate structurally cannot see.
+    command: bin/venv-python -m pytest tests/checks/misc/test_validate_test_coverage.py tests/checks/misc/test_coverage_baseline.py -q
+    expected: All pass; the per-file floor and the baseline roster are untouched in behaviour.
+    fix_if: A regression here means the plan weakened the backstop it promised to retain.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      These are pre-existing standing guards with their own registry coverage; re-graduating them
+      would duplicate existing rows.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Bare full tier, discharging handoff_policy.full_validation_required_before_commit and
+      Decision 163 clause 3.
+    command: bin/venv-python -m scripts.validate
+    expected: Exit 0, including the widened coverage source with the fail_under=37 aggregate gate unchanged and still passing.
+    fix_if: >-
+      An aggregate-gate failure means the pyproject widening was coupled to fail_under after all --
+      decouple it; do not lower the aggregate in this plan.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: This step IS the full tier; a tier cannot be a registry check inside itself.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Confirm rec-3221 closed via the Resolves trailer.
+    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c 'import json;print(sum(1 for l in open("logs/.recommendations-log.jsonl",encoding="utf-8") if (d:=json.loads(l)).get("id")=="rec-3221" and d.get("status")=="closed"))'
+    expected: Prints 1.
+    fix_if: >-
+      0 means rec-autoclose.yml did not fire; fall back to the documented ops_data_portal
+      --update-rec path (Decision 70). Use the portal, never scripts.sync.ops directly.
+    hermetic: false
+    graduation: not-applicable
+test_obligations:
+  - source: scripts/checks/_pytest_diff.py
+    behavior: Coverage data is emitted for an instrumented run; heavy-dependency deferral behaviour is unchanged.
+    verification_step: 2
+    test_selector: tests/validate/test_pytest_diff.py
+    red_green_expectation: >-
+      Red before -- no coverage artifact is produced by run_pytest_diff. Green after, with the
+      pre-existing deferral cases still passing unchanged.
+  - source: scripts/checks/misc/validate_diff_coverage.py
+    behavior: >-
+      An added uncovered executable line fails; capped/deferred and heavy-dependency lines are
+      DEFERRED rather than failed.
+    verification_step: 2
+    test_selector: tests/checks/misc/test_validate_diff_coverage.py
+    red_green_expectation: >-
+      Red before -- the module does not exist, so the selector errors at collection. Green after,
+      with the added-uncovered-line case failing loudly if the intersection stops working.
+  - source: scripts/checks/misc/_manifest.py
+    behavior: validate_diff_coverage is registered, dispatched, and present in the pre sequence.
+    verification_step: 2
+    test_selector: tests/checks/misc/test__manifest.py
+    red_green_expectation: Red before -- the check is absent from the manifest and the pre sequence. Green after.
+  - source: config/ci_rca_taxonomy.yaml
+    behavior: validate_diff_coverage carries a failure_category so a gate failure is classifiable by CI-RCA.
+    verification_step: 3
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      validate_ci_rca_taxonomy adjudicates this YAML during the tier itself by iterating
+      registry.all_checks(); a mirror test would assert the same mapping twice.
+  - source: requirements-fast.txt
+    behavior: The fast-tier dependency set can collect coverage.
+    verification_step: 3
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      A requirements pin has no behaviour of its own to guard; its effect is observed by VP step 3
+      running the instrumented fast tier successfully, and by VP step 2's collection cases.
+  - source: pyproject.toml
+    behavior: scripts/** is measured by the coverage run at all, without moving the aggregate gate.
+    verification_step: 6
+    command: bin/venv-python -m scripts.validate
+    waiver_reason: >-
+      A coverage-source config line has no independently testable behaviour; VP step 6 observes both
+      halves -- scripts measured, fail_under=37 unchanged and still passing.
+  - source: config/agent/verification_registry/registry.yaml
+    behavior: The graduated discriminator row exists and is admitted by the differential gate.
+    verification_step: 3
+    command: bin/venv-python -m scripts.validate --pre
+    waiver_reason: >-
+      Registry rows are validated by validate_verification_registry during the tier itself; a
+      separate mirror test would assert the same YAML twice.
+constraints:
+  - >-
+    Do NOT lower the diff-coverage threshold below 100 to make the gate pass. Every recurrence of
+    this escape class came from a coverage hole reaching main; admitting a percentage below 100 for
+    ADDED lines re-opens exactly that door. Classify honestly as DEFERRED instead.
+  - >-
+    The DEFERRED bucket must be machine-derived (selection manifest plus dependency probe) and never
+    author-declared or hand-rostered. Decision 163's principle is that an obligation nobody would
+    grant an exception to gets its exception path removed, not gated.
+  - >-
+    Do NOT add a third-party diff-coverage CLI. The intersection of coverage data with the diff is
+    computable in-repo, matching Decision 80's do-less direction and Decision 135's tool-free
+    (ast/networkx only) posture. pytest-cov is the one permitted addition, for collection only.
+  - >-
+    Do NOT touch scripts/validate.py to dispatch the new check. Decision 169 routes registration
+    through the per-domain manifest with bare string literals.
+  - >-
+    Do NOT change fail_under=37 in the same change as widening [tool.coverage.run] source. Widening
+    the denominator moves the aggregate for reasons unrelated to this plan; re-baselining is separate
+    work.
+  - >-
+    Do NOT delete or bypass map_source_to_test. It is channel (c) of Decision 135's affected-set
+    derivation as well as the per-file floor's mapping; this plan bypasses it for the PRE-MERGE gate
+    only.
+  - >-
+    scripts/checks/_pytest_diff.py measures 338 SLOC against the 500 limit. If the instrumentation
+    pushes it over, decompose per Decision 128 -- never raise the budget.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Root cause being closed. validate_test_coverage is registered full_segment="full_after_lint"
+    with no pre=True, so the 100%-per-file floor is enforced ONLY post-merge. Every coverage
+    regression is therefore structurally guaranteed to land on main before anyone sees it. Five
+    recurrences in three weeks. The 2026-08-21 canary red is the current instance.
+  - >-
+    Why the naive fix failed four times. Promoting the existing check to --pre is budget-infeasible
+    because it forks one pytest subprocess PER changed source file, measuring whole-file coverage
+    against that file's mapped test target at 141-197s each against a 300s budget. rec-3221 carries
+    that analysis across four plan-critique rounds and is bundled here so it is not re-derived.
+    This plan does not promote that check -- it changes the measurement geometry, which is what
+    dissolves the cost: one instrumented run instead of N subprocesses.
+  - >-
+    Industry grounding (Fable advice-consult, this session). Patch/diff coverage -- run the suite
+    once, intersect the coverage artifact with the PR diff, gate on added/modified lines -- is the
+    established pattern (Codecov's patch-vs-project split codifies it). Per-file floors enforced by
+    re-running mapped suites per file have the worst cost profile of the three approaches, which is
+    the wall this repo hit. The consult also judged the enforcement point, not the 100% policy, to be
+    the real defect: a hard floor enforced only by a main canary is a policy that plans to fail on
+    main.
+  - >-
+    Why an LLM reviewer was rejected as the instrument. The alternative considered was instructing
+    the code-review subagent to assert 100% coverage on diff files. Rejected: never ask a
+    probabilistic judge to assert a property that is cheaply and exactly computable. The 2026-08-21
+    incident is the counterexample -- an LLM review read that file, saw a sound six-case behavioural
+    matrix, and approved it at 95.8%, because the two uncovered lines were incidental filter branches
+    that look covered to a reader. The reviewer's remit stays on what no number captures: assertion
+    discrimination and mutation-sensitivity.
+  - >-
+    Why plan-time declaration is not the instrument either. PR #944's plan DID declare a test
+    obligation for the offending file and validate_plan_documents passed correctly. The uncovered
+    lines did not exist at planning time. Coverage completeness is a property of code that exists
+    only after the code is written, so no plan-time scheme can catch this class -- only measurement.
+  - >-
+    Decision 159 must be REVISITED, not extended. Its own reversal clause states that a
+    diff-line-coverage ratchet "would likely obsolete this mechanism outright, in which case this
+    Decision is revisited rather than extended." This plan builds that ratchet while retaining the
+    per-file floor and baseline as a full-tier backstop, so Decision 173 must adjudicate explicitly
+    why the baseline survives and state its retirement condition.
+  - >-
+    Known structural limit. Diff coverage cannot see coverage LOST on unchanged lines (a deleted
+    test, a refactor that stops exercising an old branch). That is precisely what the retained
+    full-tier per-file floor covers, which is why this plan keeps it rather than replacing it.
+  - >-
+    Decision-scout verdict + CITE list -- FLAGS_FOUND; CITE: Decision 73 (clause 2 narrowed),
+    Decision 150 and Decision 167 (significance envelope), Decision 159 (revisited), Decision 48
+    (V2 row re-narrowed), Decision 153 (clauses 1 and 3), Decision 135 (clause 1 capping),
+    Decision 169, Decision 170, Decision 131 and Decision 104, Decision 165, Decision 72.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - only the plan-cited decision sections
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - scripts/checks/_pytest_diff.py -- add coverage collection to the existing run_pytest_diff invocation and emit the artifact; leave the heavy-dependency deferral logic behaviourally unchanged.
+  - scripts/checks/misc/validate_diff_coverage.py -- implement the in-repo intersection of the coverage artifact with added/modified executable lines from git diff origin/main...HEAD; classify COVERED / UNCOVERED / DEFERRED; consume selection-manifest.json's capped and deferred sets so an under-measured line is DEFERRED, never UNCOVERED; declare examined()/skipped() on every exit path.
+  - Add --replay-history and --report-only modes so VP step 1 can measure the false-positive rate over merged history before the gate blocks anything.
+  - scripts/checks/misc/_manifest.py -- register the check with pre=True plus a full_segment, bare string literals only.
+  - requirements-fast.txt -- add pytest-cov. pyproject.toml -- widen [tool.coverage.run] source to include scripts, leaving fail_under=37 untouched.
+  - Write the mirror tests, including the added-uncovered-line discriminator and both DEFERRED cases.
+  - Run VP step 1 FIRST and land its false-positive finding before enabling the gate to block; if the count is non-zero, fix the classifier rather than relaxing the threshold.
+  - Draft Decision 173 in docs/DECISIONS.md -- narrow Decision 73 clause 2 and Decision 48's V2 row, explicitly revisit Decision 159 and state the baseline's retirement condition, carry the Decision 167 yaml significance envelope, stay under 6144 bytes. Re-check the current max Decision header at execution time; a concurrent PR may have claimed 173.
+  - config/agent/verification_registry/registry.yaml -- add the graduated discriminator row.
+  - Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - 'Report: what was implemented, verification results, the measured false-positive count, and both budget measurements.'
+rollback: >-
+  The gate is additive and its registration is a single manifest entry; removing pre=True demotes it
+  to full-tier-only and restores today's behaviour without data migration. The pyproject coverage
+  widening is independently revertible and affects reporting only, since fail_under is unchanged.
