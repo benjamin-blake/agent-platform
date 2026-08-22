@@ -51,20 +51,23 @@ scope:
     action: Create
     purpose: >-
       Mirror test. Includes the discriminator (an added, uncovered executable line is reported
-      UNCOVERED and an added covered line is not), all four DEFERRED classes, the absent-manifest
-      behaviour, and the Decision 124 unmapped-source behaviour.
+      UNCOVERED and an added covered line is not), the three DERIVED DEFERRED classes (a) affected-set capped/deferred, (b) heavy-dependency exclusion and (d) never-a-selection-candidate, PLUS the class-(c) residual asserted to land in UNCOVERED (not DEFERRED -- suppressing it would hide the false positives this plan exists to measure), the absent-manifest behaviour, and the
+      Decision 124 unmapped-source behaviour.
   - file: scripts/checks/misc/_manifest.py
     action: Modify
     purpose: >-
       Register validate_diff_coverage PRE-TIER-ONLY: pre=True with NO full_segment (a declared
       unsequenced Entry is legal per the Entry docstring; precedent validate_terraform_try). This is
-      deliberate, not an omission. The `misc` domain sits in full_after_lint, which
-      _FULL_TIER_SKELETON runs BEFORE the unit_tests scaffold, so a full-tier leg would dispatch
-      before any coverage artifact exists and be permanently skipped; the only later segment,
-      full_after_unit_tests, reads an artifact _build_unit_test_cmd produces with --cov=src only,
-      collecting nothing for scripts/** and reporting every changed scripts/ line UNCOVERED. Both
-      are the silent-vacuity shape this plan exists to avoid. Bare string literals only
-      (Decision 169); scripts/validate.py is NOT in scope -- dispatch resolves through the manifest.
+      deliberate, not an omission, on two independent grounds. (1) The `misc` domain sits in
+      full_after_lint, which _FULL_TIER_SKELETON runs BEFORE the unit_tests scaffold, so a full-tier
+      leg would dispatch before any coverage artifact exists and be permanently skipped -- the
+      silent-vacuity shape this plan exists to avoid. (2) `misc` is absent from EVERY later
+      segment's _FULL_SEGMENT_DOMAIN_ORDER tuple, so a misc entry in one would fail OD-0's
+      test_every_domain_appearing_in_a_segment_is_declared_in_its_order_tuple -- and neither
+      registry.py nor tests/checks/registry/test_sequences.py is in scope. Precedent for this exact
+      shape (pre=True, no full_segment) is validate_sloc_budget_raises / validate_prose_budget_raises
+      / validate_vp_replay -- NOT validate_terraform_try, which is unsequenced (pre=False) and would
+      never dispatch. Bare string literals only (Decision 169); scripts/validate.py is NOT in scope.
   - file: tests/checks/misc/test__manifest.py
     action: Modify
     purpose: Prove the check is registered, dispatched, and reachable in the pre sequence.
@@ -98,8 +101,9 @@ acceptance_criteria:
     run_pytest_diff invocation -- is a DECLARED KNOWN RESIDUAL, not a derived DEFERRED class.
     map_source_to_test returns the mirror test FILE and carries no marker information, so a line
     covered only by an integration-marked test inside a file that did run lands in UNCOVERED. The
-    report must state this residual explicitly and it must be adjudicated in the criterion-7
-    measurement, since it inflates the very false-positive rate this plan exists to measure.
+    report must state this residual explicitly and it must be adjudicated in the DELIVERABLE
+    MEASUREMENT criterion (the sink criterion below), since it inflates the very false-positive rate
+    this plan exists to measure.
   - >-
     A source file that map_source_to_test returns None for -- including the Decision 124 carve-outs
     scripts/executor/** and scripts/ops_portal/** -- is classified DEFERRED, not UNCOVERED. Those
@@ -118,24 +122,32 @@ acceptance_criteria:
     The check's registered disposition is the DECLARED one -- pre-tier-only, no full_segment -- and
     the absence of a full-tier leg is deliberate and recorded, not a silently skipped registration.
   - >-
-    The deliverable measurement exists and is DURABLE, via exactly one of two declared arms.
-    HISTORICAL ARM: the replay covers at least 20 merged PRs and its totals are filed. FORWARD ARM
-    (if replay proves impractical): a rec is filed via the portal naming the measurement window --
-    at least 20 merged PRs from the landing commit -- and the accumulated totals are appended to it.
-    Either way the report states the UNCOVERED count, the DEFERRED count, the DEFERRED-to-changed-
-    line ratio, the class-(c) residual, and for each UNCOVERED line whether it was genuinely
-    uncovered. A printed CI log is NOT a sink: without a filed rec the numbers are unrecoverable and
-    this plan would ship an instrument and no measurement. A DEFERRED ratio above 50% is itself a
-    reportable finding -- a check that defers most of what it sees would be vacuous if made blocking.
+    THIS PLAN'S COMPLETION OWNS THE SINK, NOT THE TOTALS. A measurement rec is filed via the portal
+    that names the arm taken, the measurement window, and the follow-on blocking plan's entry
+    condition. That is verifiable at landing. Under the HISTORICAL ARM the rec also carries the
+    totals at landing (replay over at least 20 merged PRs). Under the FORWARD ARM the totals
+    accumulate over the next 20 merged PRs and belong to the follow-on plan's entry condition, NOT
+    to this plan's acceptance -- a criterion demanding future totals at landing is either unmeetable
+    or invites a green mark against an empty rec. Whichever arm, a printed CI log is NOT a sink:
+    without the filed rec the numbers are unrecoverable and this plan ships an instrument and no
+    measurement. Before choosing the forward arm, evaluate config/coverage_baseline.yaml's per-file
+    entry movement over recent merges as a cheaper historical arm than a bespoke per-commit replay.
+  - >-
+    The totals, wherever they land, state the UNCOVERED count, the DEFERRED count, the
+    DEFERRED-to-changed-line ratio, the class-(c) residual, and for each UNCOVERED line whether it
+    was genuinely uncovered. A DEFERRED ratio above 50% is itself a reportable finding -- a check
+    that defers most of what it sees would be vacuous if made blocking.
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
       THE DISCRIMINATOR. On fixture trees, prove an added uncovered line is reported UNCOVERED, an
-      added covered line is not, and each of the four DEFERRED classes plus the absent-manifest and
-      unmapped-source cases lands in the right bucket.
+      added covered line is not, and that the three DERIVED DEFERRED classes (a) affected-set capped/deferred, (b) heavy-dependency exclusion and (d) never-a-selection-candidate, PLUS the class-(c) residual asserted to land in UNCOVERED (not DEFERRED -- suppressing it would hide the false positives this plan exists to measure), the absent-manifest case and the unmapped-source
+      case each land in the right bucket.
     command: bin/venv-python -m pytest tests/checks/misc/test_validate_diff_coverage.py tests/validate/test_pytest_diff.py tests/checks/misc/test__manifest.py -q
-    expected: All pass, including the added-uncovered-line case and all four DEFERRED classes.
+    expected: >-
+      All pass, including the added-uncovered-line case, the three derived DEFERRED classes, and
+      the class-(c) case asserting the residual lands in UNCOVERED.
     fix_if: >-
       An added uncovered line reported COVERED means the intersection is not reaching added lines --
       check the diff parse yields added/modified EXECUTABLE lines, not whole changed files. A
@@ -163,7 +175,11 @@ verification_plan:
       primary invocation is traced. Do NOT cheapen by narrowing --cov to the changed files:
       rec-943's finding, recorded in Decision 159 clause 2, is that a single-file or dotted --cov
       spec silently collects NO data -- which would look like a cheap pass and measure nothing.
-      --ignore-budget is forbidden in CI (Decision 153 clause 2).
+      --ignore-budget is forbidden in CI (Decision 153 clause 2). Note --no-cov on the reactive
+      survivor re-run does NOT help on the green path VP step 2 measures: that path makes exactly
+      one traced invocation. The green-path levers are, in order: drop the term-missing report and
+      emit only the machine-read format, then trace only the primary invocation, then descope to a
+      sampled measurement. Name which was taken in the report.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: This step IS the fast tier; a tier cannot be a registry check inside itself.
@@ -192,13 +208,36 @@ verification_plan:
     action: >-
       Bare full tier, discharging handoff_policy.full_validation_required_before_commit and
       Decision 163 clause 3.
-    command: bin/venv-python -m scripts.validate
-    expected: Exit 0, with the new check reporting and appending nothing.
-    fix_if: A failure here is in this diff's scope and must be fixed, never waived.
+    command: bin/venv-python -m scripts.validate && bin/venv-python -c "from scripts.checks import registry; assert 'validate_diff_coverage' not in {s.name for s in registry.full_sequence() if s.kind=='check'}; print('PRE_TIER_ONLY_CONFIRMED')"
+    expected: >-
+      Exit 0 and `PRE_TIER_ONLY_CONFIRMED` printed. The new check does NOT appear in the full-tier
+      sequence -- that is the DECLARED pre-tier-only disposition, not a skipped registration.
+    fix_if: >-
+      Do NOT "fix" an absent full-tier report by adding a full_segment: that would silently undo the
+      registration decision. misc is absent from every later segment's _FULL_SEGMENT_DOMAIN_ORDER
+      tuple, so a misc entry in one would fail OD-0's
+      test_every_domain_appearing_in_a_segment_is_declared_in_its_order_tuple. Any other failure is
+      in this diff's scope and must be fixed, never waived.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: This step IS the full tier; a tier cannot be a registry check inside itself.
   - step: 5
+    phase: post-deploy
+    action: >-
+      THE DELIVERABLE'S OWN PROOF. File the measurement sink rec and verify it landed. Without this
+      step the plan's central deliverable is the one thing the verification plan never checks --
+      every other step can pass green with the rec never filed.
+    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c 'import json;rows=[json.loads(l) for l in open("logs/.recommendations-log.jsonl",encoding="utf-8")];m=[r for r in rows if "diff-coverage measurement window" in (r.get("context") or "")];assert len(m)==1,len(m);print("MEASUREMENT_SINK_FILED")'
+    expected: >-
+      `MEASUREMENT_SINK_FILED` printed -- exactly one open rec carries the measurement window and
+      the follow-on blocking plan's entry condition.
+    fix_if: >-
+      0 matches means the sink rec was never filed and the plan has shipped an instrument with no
+      recoverable measurement. File it via the portal before considering this plan complete; never
+      edit the read cache.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
     phase: post-deploy
     action: >-
       Repair rec-3221's non-discriminating acceptance probe so the follow-on blocking plan can close
@@ -233,8 +272,9 @@ test_obligations:
       the deferral BEHAVIOUR those cases guard, not their literal argv expectations.
   - source: scripts/checks/misc/validate_diff_coverage.py
     behavior: >-
-      An added uncovered executable line is reported UNCOVERED; all four DEFERRED classes, the
-      absent manifest, and unmapped sources land in the right bucket; nothing is appended to failed.
+      An added uncovered executable line is reported UNCOVERED; the three derived DEFERRED classes,
+      the class-(c) residual (which lands in UNCOVERED), the absent manifest and unmapped sources
+      each land in the right bucket; nothing is appended to failed.
     verification_step: 1
     test_selector: tests/checks/misc/test_validate_diff_coverage.py
     red_green_expectation: Red before -- the module does not exist, so the selector errors at collection. Green after.
@@ -248,10 +288,16 @@ test_obligations:
       Red before -- the CLI surface does not exist. Green after, with a report emitted over a
       fixture history.
   - source: scripts/checks/misc/_manifest.py
-    behavior: validate_diff_coverage is registered, dispatched, and present in the pre sequence.
+    behavior: >-
+      validate_diff_coverage is registered, dispatched, present in the pre sequence AND ABSENT from
+      full_sequence() -- the absence is the discriminating half of the pre-tier-only disposition and
+      must be asserted, not assumed.
     verification_step: 1
     test_selector: tests/checks/misc/test__manifest.py
-    red_green_expectation: Red before -- absent from the manifest and the pre sequence. Green after.
+    red_green_expectation: >-
+      Red before -- absent from the manifest and the pre sequence. Green after, with a distinct
+      assertion that the name is not in the full-tier check set, which fails loudly if anyone later
+      adds a full_segment.
   - source: config/ci_rca_taxonomy.yaml
     behavior: validate_diff_coverage carries a failure_category so any future failure is classifiable.
     verification_step: 2
@@ -351,8 +397,12 @@ context:
     Decision narrowing Decision 73 clause 2 and Decision 48's V2 row (not owed while nothing blocks);
     the Decision 159 revisit its own reversal clause requires of a diff-line-coverage ratchet; the
     Decision 135 clause 5 narrowing that promoting the selection manifest to a gate input requires;
-    the Decision 124 carve-out adjudication; a DEFERRED-rate ceiling; and the Decision 153 clause 3
-    forced-full-suite budget measurement, which matters only once collection gates a merge.
+    the Decision 124 carve-out adjudication; a DEFERRED-rate ceiling; the Decision 153 clause 3
+    forced-full-suite budget measurement, which matters only once collection gates a merge; and
+    full-tier registration once _build_unit_test_cmd's --cov is widened to cover scripts/. That last
+    one is the recorded consequence of the pre-tier-only disposition: this check never runs
+    post-merge at all, so the classifier itself has no post-merge safety net until then. Acceptable
+    for an unarmed instrument whose diff is empty post-merge anyway; named so it is not inferred.
   - >-
     Report-only accounting is contract-legal but should be read with care:
     check-accounting.yaml's status_vocabulary_note adjudicates exactly this case -- a check that
@@ -386,7 +436,7 @@ execution_steps:
   - scripts/checks/misc/validate_diff_coverage.py -- implement the in-repo intersection over added/modified executable lines, diff base push_context_base(root) or "origin/main" with paired root threading; classify COVERED / UNCOVERED / DEFERRED at file granularity via map_source_to_test for the deferral classes; declare examined()/skipped() on every exit path; PRINT only, never append to failed.
   - Add --replay-history and --report-only modes for VP step 3's measurement.
   - 'scripts/checks/misc/_manifest.py -- register PRE-TIER-ONLY (pre=True, NO full_segment) and record why in a comment: misc sits in full_after_lint which runs before the unit_tests scaffold, so a full-tier leg would have no coverage artifact to read. Bare string literals only. config/ci_rca_taxonomy.yaml -- add the function_to_category row.'
-  - Write the mirror tests, including the added-uncovered-line discriminator, all four DEFERRED classes, the absent-manifest skip and the unmapped-source case. Watch tests/validate/test_pytest_diff.py's 37 SLOC of headroom and decompose when it crosses.
+  - Write the mirror tests, including the added-uncovered-line discriminator, the three derived DEFERRED classes, a class-(c) case asserting the residual lands in UNCOVERED, the absent-manifest skip and the unmapped-source case. Watch tests/validate/test_pytest_diff.py's 37 SLOC of headroom and decompose when it crosses.
   - config/agent/verification_registry/registry.yaml -- add the graduated row at node granularity.
   - Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
   - 'File the measurement sink: if the historical replay arm is taken, file a rec carrying its totals; if the forward arm is taken, file a rec naming the measurement window (at least 20 merged PRs from the landing commit) and the follow-on blocking plan''s entry condition, to be appended to as PRs accumulate. A printed CI log is not a sink.'

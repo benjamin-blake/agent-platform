@@ -107,9 +107,12 @@ scope:
   - file: config/agent/verification_registry/registry.yaml
     action: Modify
     purpose: >-
-      Add the graduated row VP step 2 owes, naming its primitive_slot (test_selector), guard_target,
-      guard_symbol, graduated_at, graduated_by and check_spec.node_id explicitly -- the differential
-      admission outcome turns entirely on the node_id, so it is fixed here rather than improvised.
+      Add the ONE graduated row VP step 2 owes: check_id
+      coverage-failure-fingerprint-discriminates-by-file, plan_slug coverage-failure-attribution,
+      primitive_slot test_selector, guard_target scripts/ci_rca/fingerprint.py, plus guard_symbol,
+      graduated_at and graduated_by. check_spec.node_id is fixed here rather than improvised, since
+      the differential admission outcome turns entirely on it:
+      tests/test_ci_rca_fingerprint.py::TestDeclaredDetailSignature::test_declared_detail_discriminates_nested_paths.
       VP step 3 is waived, not graduated, so it owes no row (Decision 132 /
       validate_graduation_completeness's implement leg fails the PR without a NEW-in-diff row whose
       plan_slug and check_id match a graduate step's declared graduation_check_id).
@@ -176,10 +179,13 @@ verification_plan:
       differently, and that a detail-free failure is unchanged.
     command: bin/venv-python -m pytest tests/ci_rca/evidence/test_priority_zero.py tests/test_ci_rca_fingerprint.py tests/ci_rca/taxonomy/test_priority_zero_and_refusal.py -v
     expected: >-
-      All pass, and `test_declared_detail_discriminates_nested_paths` appears in the -v node
-      listing. The node-name literal is load-bearing: all three files pass on the current tree, so
-      without it validate_vp_replay would assert exit 0 only and stay green even if the
-      discriminating case were never written.
+      All pass, and ALL THREE new node names appear in the -v listing -- one per linked obligation:
+      `test_declared_detail_discriminates_nested_paths` (fingerprint),
+      `test_coverage_detail_fingerprints_differ_by_file` (evidence), and
+      `test_load_check_details_returns_detail_by_check` (taxonomy). One literal per obligation is
+      load-bearing: all three files pass on the current tree, so a single literal would leave the
+      other two obligations' cases undetected -- sharpest for evidence/__init__.py, which this plan
+      establishes has no other guard at all.
     fix_if: >-
       Equal fingerprints for different files means the detail is not reaching _resolve_error_
       signatures -- trace registry.failure_detail -> dispatch_recording -> the top-level
@@ -194,13 +200,16 @@ verification_plan:
     action: >-
       Prove the v2 shape is preserved -- the additive-change guarantee the Priority-0 consumer
       depends on.
-    command: bin/venv-python -m pytest tests/checks/test_validation_result.py tests/checks/registry/test_accounting.py tests/checks/misc/test_validate_test_coverage.py -q
+    command: bin/venv-python -m pytest tests/checks/test_validation_result.py tests/checks/registry/test_accounting.py tests/checks/misc/test_validate_test_coverage.py -v
     expected: >-
-      All pass. failed_checks and failed_check_attributions are byte-identical to today in both the
-      detail-declared and detail-free cases; the payload appears only under the new top-level
-      failed_check_details key. No backtick literal is asserted here deliberately -- pytest -q emits
-      no assertion text on success, so any such literal would be unmatchable under every
-      implementation.
+      All pass, and all three new node names appear in the -v listing -- one per linked obligation:
+      `test_failure_detail_declared_and_popped` (registry),
+      `test_failed_check_details_emitted_additively` (validation_result), and
+      `test_declares_failing_file_detail` (validate_test_coverage). failed_checks and
+      failed_check_attributions stay byte-identical to today in both the detail-declared and
+      detail-free cases; the payload appears only under the new top-level failed_check_details key.
+      The literals are load-bearing for the same reason as step 2: all three files pass on the
+      current tree, so exit 0 alone would stay green even if none of the cases were written.
     fix_if: >-
       A changed failed_checks shape is a hard stop, not a test to update -- rework the change to be
       additive.
@@ -310,7 +319,10 @@ test_obligations:
       the schema enumeration -- so there is no behaviour a mirror test could assert beyond what the
       tier already checks. The obligation here is Decision 86/127 routing, discharged deliberately.
   - source: config/agent/verification_registry/registry.yaml
-    behavior: The two graduated rows exist and are admitted by the differential gate.
+    behavior: >-
+      The ONE graduated row VP step 2 owes exists at
+      tests/test_ci_rca_fingerprint.py::TestDeclaredDetailSignature::test_declared_detail_discriminates_nested_paths
+      and is admitted by the differential gate. VP step 3 is waived, so it owes no row.
     verification_step: 4
     command: bin/venv-python -m scripts.validate --pre
     waiver_reason: >-
@@ -429,8 +441,11 @@ context:
     different file. Execution includes a bounded portal correction (Decision 103 governs relevance
     as a first-class state; Decision 84 requires the ops portal, never a direct cache edit).
   - >-
-    Decision-scout verdict + CITE list -- FLAGS_FOUND; CITE: Decision 142 (fingerprint v2, reversal
-    condition (a) is the authorization lane for this change), Decision 163, Decision 159, Decision 48,
+    Decision-scout verdict + CITE list -- FLAGS_FOUND; CITE: Decision 142 (fingerprint v2; note its
+    reversal condition (a) governs the deepest-in-app-frame heuristic and message-head
+    normalization, NEITHER of which this plan touches -- the real routing lane is Decision 142's
+    delegation of fingerprint lifecycle semantics to docs/contracts/ci-rca-lifecycle.yaml, whose
+    non_pytest_fallback block this plan amends with a dated amendment_log entry), Decision 163, Decision 159, Decision 48,
     Decision 131 (test homes, resolved via map_source_to_test), Decision 170, Decision 55,
     Decision 72, Decision 132, Decision 165, Decision 128, Decision 86/168 (contract routing).
   - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
@@ -446,10 +461,12 @@ execution_steps:
   - 'scripts/checks/validation_result.py -- harvest the detail in dispatch_recording and emit it under a NEW TOP-LEVEL `failed_check_details` key. Do NOT add any key inside failed_check_attributions: constraint 1 makes that a hard stop, because Decision 170 clause 1 and check-accounting.yaml pin that field byte-for-byte for the Priority-0 consumer.'
   - scripts/checks/misc/validate_test_coverage.py -- declare coverage_errors via registry.failure_detail() where the constant label is appended.
   - 'scripts/ci_rca/taxonomy.py -- add a NEW `_load_check_details(validation_result_path)` loader returning {check: [detail, ...]} read from the top-level failed_check_details key. Do NOT widen _load_attributions'' or classify_failures'' return tuples: they are consumed by out-of-scope tests (test_classify_failures_plural.py, test_convergence.py, test_load_and_classify.py, test_failed_checks_block.py), and preserving the widths is what keeps them out of scope.'
-  - scripts/ci_rca/evidence/__init__.py -- in _resolve_error_signatures prefer declared detail over the log-tail fallback when composing error_signature; keep log-tail for detail-free checks. Watch the 417-SLOC ceiling and land derivation helpers in fingerprint.py if needed.
+  - 'scripts/ci_rca/evidence/__init__.py -- in _resolve_error_signatures prefer declared detail over the log-tail fallback when composing error_signature; keep log-tail for detail-free checks. The derivation itself goes in fingerprint.py UNCONDITIONALLY (constraint 6), never inline here. Do not apply a SLOC caution to this file: iter_gated_py_files skips every __init__.py, so it is ungated.'
   - Write the mirror tests named in test_obligations, including the two discriminating cases (different files differ; detail-free unchanged).
   - docs/contracts/ci-rca-lifecycle.yaml -- amend non_pytest_fallback and append a dated amendment_log entry.
   - 'Correct the polluted record via the portal: bin/venv-python -m scripts.ops_data_portal --update-rec rec-3212 --context "<existing context> NOTE 2026-08-22: five of six recorded occurrences were misattributed by the pre-fix fingerprint, which carried no failing-file identity; they belong to scripts/checks/hygiene/validate_vacuity_justified.py, not to this rec. Corrected under PLAN-coverage-failure-attribution." There is no --note flag; --context is the vehicle, and --resolution is meaningless on an open rec. VP step 6 proves the write landed. Never edit the local cache.'
+  - 'config/agent/verification_registry/registry.yaml -- write the ONE graduated row VP step 2 owes (check_id coverage-failure-fingerprint-discriminates-by-file, plan_slug coverage-failure-attribution, primitive_slot test_selector, guard_target scripts/ci_rca/fingerprint.py, check_spec.node_id tests/test_ci_rca_fingerprint.py::TestDeclaredDetailSignature::test_declared_detail_discriminates_nested_paths). Without this row validate_graduation_completeness hard-fails --pre.'
+  - 'docs/contracts/check-accounting.yaml -- amend validation_result_schema_v3''s field enumeration to name failed_check_details and append a dated amendment_log entry. Nothing fires if this is skipped (validate_contract_drift is diff-triggered), so it must be done deliberately -- acceptance criterion 4''s routing-discharge claim depends on it.'
   - Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
   - 'Report: what was implemented, verification results, and the Main Canary conclusion on the merge commit.'
 rollback: >-
